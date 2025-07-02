@@ -1,0 +1,11 @@
+{
+    "stages": [
+        {
+            "$ref": "ref_stage.json"
+        },
+        {
+            "name": "Another test",
+            "data": 43
+        }
+    ]
+}

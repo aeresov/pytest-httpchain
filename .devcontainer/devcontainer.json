@@ -1,0 +1,28 @@
+{
+    "name": "Python w/uv",
+    "image": "mcr.microsoft.com/devcontainers/python:3",
+    "features": {},
+    "remoteEnv": {
+        "UV_LINK_MODE": "copy"
+    },
+    "runArgs": ["--network=host"],
+    "remoteUser": "vscode",
+    "mounts": [],
+    "postCreateCommand": {
+        "home": "sudo chown --recursive $(whoami): /home/$(whoami)",
+        "uv": "pipx install uv"
+    },
+    "postAttachCommand": {
+        "uv": "uv sync"
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "-ms-python.autopep8",
+                "charliermarsh.ruff",
+                "tamasfe.even-better-toml",
+                "esbenp.prettier-vscode"
+            ]
+        }
+    }
+}

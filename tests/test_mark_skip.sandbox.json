@@ -1,0 +1,9 @@
+{
+    "marks": ["skip(reason='test should be skipped')"],
+    "stages": [
+        {
+            "name": "test_should_be_skipped",
+            "data": 999
+        }
+    ]
+} 
