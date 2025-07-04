@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -10,7 +12,7 @@ class Structure(BaseModel):
 
 class Stage(BaseModel):
     name: str = Field()
-    data: int = Field()
+    data: Any = Field()
 
 
 class Test(BaseModel):

@@ -20,13 +20,27 @@ HTTP_TEST_PATTERN = re.compile(r"^test_(?P<name>.*)\.http\.json$")
 
 
 def json_test_function(test_text: str, path: Path, **fixtures):
-    test_data = jsonref.loads(test_text, base_uri=path.as_uri())
     try:
+        substituted_json = substitute_variables(test_text, fixtures)
+        test_data = jsonref.loads(substituted_json, base_uri=path.as_uri())
         test_model = Test.model_validate(test_data)
         logging.info(f"Test model: {test_model}")
         logging.info(f"Available fixtures: {fixtures}")
     except ValidationError as e:
         pytest.fail(f"Validation error: {e}")
+    except json.JSONDecodeError as e:
+        pytest.fail(f"JSON decode error after variable substitution: {e}")
+    except Exception as e:
+        pytest.fail(f"Variable substitution error: {e}")
+
+
+def substitute_variables(json_text: str, fixtures: dict) -> str:
+    """Replace $variable patterns with JSON-serialized fixture values."""
+    for name, value in fixtures.items():
+        placeholder = f'"${name}"'  # Include quotes to match JSON string
+        json_value = json.dumps(value)
+        json_text = json_text.replace(placeholder, json_value)
+    return json_text
 
 
 class JSONFile(pytest.File):

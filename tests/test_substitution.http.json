@@ -1,0 +1,21 @@
+{
+    "fixtures": ["base_value", "multiplier", "test_name", "enabled", "config"],
+    "stages": [
+        {
+            "name": "$test_name",
+            "data": "$base_value"
+        },
+        {
+            "name": "multiplied_result",
+            "data": "$multiplier"
+        },
+        {
+            "name": "boolean_test",
+            "data": "$enabled"
+        },
+        {
+            "name": "config_test",
+            "data": "$config"
+        }
+    ]
+} 
