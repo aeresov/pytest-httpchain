@@ -1,0 +1,10 @@
+---
+description: Python code style
+globs: *.py
+alwaysApply: true
+---
+
+- use mininum comments, prefer descriptive naming
+- use type hints where possible
+- prefer minimalistic and streamlined coding style, avoid deep nesting
+- use functional programming style where possible

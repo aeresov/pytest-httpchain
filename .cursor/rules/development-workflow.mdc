@@ -1,0 +1,17 @@
+---
+description: Development workflow
+globs:
+alwaysApply: true
+---
+
+# tooling
+
+- use `uv` package manager
+- use `ruff` for all linting and formatting
+- use `pytest` for running unit tests
+
+# playground rules
+
+- use existing settings in `pyproject.toml`, make changes only when necessary
+- do not edit dependencies directly in `pyproject.toml`, use package manager
+- do not lint and format code directly, use tools

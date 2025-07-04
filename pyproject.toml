@@ -1,17 +1,17 @@
 [project]
-name = "sandbox"
+name = "pytest-http"
 version = "0.1.0"
-description = "Sandbox."
+description = "pytest plugin for HTTP testing using JSON files"
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [
-    { name = "Alexander Eresov", email = "Alexander.Eresov@soundunited.com" },
+    { name = "Alexander Eresov", email = "aeresov@gmail.com" },
 ]
 dependencies = [
-    "pydantic>=2.11.7",
     "pytest>=8.0.0",
     "jsonref>=1.1.0",
     "jinja2>=3.1.6",
+    "pydantic-settings>=2.10.1",
 ]
 
 [dependency-groups]
@@ -24,10 +24,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.entry-points.pytest11]
-sandbox = "sandbox.pytest_plugin"
+pytest_http = "pytest_http.pytest_plugin"
 
 [tool.hatch.build]
-packages = ["sandbox"]
+packages = ["pytest_http"]
 
 [tool.ruff]
 line-length = 180
