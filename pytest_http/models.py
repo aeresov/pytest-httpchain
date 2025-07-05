@@ -15,7 +15,7 @@ class Stage(BaseModel):
     data: Any = Field()
 
 
-class Test(BaseModel):
+class Scenario(BaseModel):
     stages: list[Stage] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="ignore")

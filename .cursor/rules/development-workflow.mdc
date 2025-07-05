@@ -7,12 +7,12 @@ alwaysApply: true
 # tooling
 
 - use `uv` package manager
-- use `ruff` for all linting and formatting
-- use `pytest` for running unit tests
+- use `uv run ruff` for all linting and formatting
+- use `uv run pytest` for running unit tests
 
 # guidelines
 
-- add unit tests for code edits
+- when editing code, check for unit test coverage and add or edit relevant unit tests
 
 # playground rules
 

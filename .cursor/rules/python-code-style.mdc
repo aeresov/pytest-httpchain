@@ -4,7 +4,8 @@ globs: *.py
 alwaysApply: true
 ---
 
-- prefer descriptive naming, only use comments when absolutely necessary
+- prefer descriptive naming
+- avoid using docstrings and comments unless critical
 - use type hints where possible
 - prefer minimalistic and streamlined coding style, avoid deep nesting
 - use functional programming style where possible

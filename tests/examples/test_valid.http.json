@@ -1,0 +1,8 @@
+{
+    "stages": [
+        {
+            "name": "valid_test",
+            "data": 42
+        }
+    ]
+}

@@ -1,0 +1,12 @@
+{
+    "fixtures": [
+        "string_value",
+        "number_value"
+    ],
+    "stages": [
+        {
+            "name": "fixture_test",
+            "data": "will be substituted"
+        }
+    ]
+}

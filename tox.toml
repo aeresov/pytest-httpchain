@@ -1,0 +1,12 @@
+requires = ["tox>=4.2"]
+env_list = ["3.13", "lint"]
+
+[env_run_base]
+description = "Run tests under {base_python}"
+deps = ["pytest>=8", "jsonref>=1", "pydantic-settings>=2"]
+commands = [["pytest"]]
+
+[env.lint]
+description = "run linting"
+deps = ["ruff>=0.12"]
+commands = [["ruff", "check", "."], ["ruff", "format", "--check", "."]]

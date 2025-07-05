@@ -57,6 +57,8 @@ log_cli_level = "INFO"
 markers = [
     "test: generic marker",
 ]
+norecursedirs = ["examples"]
+pytester_example_dir = "tests/examples"
 
 [tool.pyright]
 exclude = ["cdk.out/"]

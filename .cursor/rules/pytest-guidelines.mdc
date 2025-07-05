@@ -1,0 +1,12 @@
+---
+description: Pytest guidelines
+globs: /tests/**/*.py
+alwaysApply: true
+---
+
+- avoid using docstrings and comments unless critical
+- avoid using classes, prefer functional approach
+- create submodules for decomposition
+- use fixtures and parametrization where fits
+- share fixtures between tests where possible
+- test functions do not require return type hints

@@ -1,4 +1,0 @@
-{
-  "name": "This should not be collected as a test",
-  "reason": "Doesn't start with 'test_'"
-} 

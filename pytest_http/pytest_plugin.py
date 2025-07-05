@@ -14,9 +14,13 @@ from _pytest.nodes import Collector, Item
 from _pytest.python import Function
 from pydantic import ValidationError
 
-from pytest_http.models import Structure, Test
+from pytest_http.models import Scenario, Structure
+from pytest_http.settings import Settings
 
-HTTP_TEST_PATTERN = re.compile(r"^test_(?P<name>.*)\.http\.json$")
+
+def get_test_name_pattern():
+    settings = Settings()
+    return re.compile(rf"^test_(?P<name>.*)\.{re.escape(settings.suffix)}\.json$")
 
 
 class VariableSubstitutionError(Exception):
@@ -38,7 +42,7 @@ def json_test_function(test_text: str, path: Path, **fixtures):
     try:
         substituted_json = substitute_variables(test_text, fixtures)
         test_data = jsonref.loads(substituted_json, base_uri=path.as_uri())
-        test_model = Test.model_validate(test_data)
+        test_model = Scenario.model_validate(test_data)
         logging.info(f"Test model: {test_model}")
         logging.info(f"Available fixtures: {fixtures}")
     except VariableSubstitutionError as e:
@@ -92,6 +96,6 @@ class FailedValidationItem(pytest.Item):
 
 
 def pytest_collect_file(file_path: Path, parent: Collector) -> JSONFile | None:
-    if match := HTTP_TEST_PATTERN.match(file_path.name):
+    if match := get_test_name_pattern().match(file_path.name):
         return JSONFile.from_parent(parent, path=file_path, name=match.group("name"))
     return None

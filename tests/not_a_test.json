@@ -1,4 +1,0 @@
-{
-  "name": "This should not be collected as a test",
-  "reason": "Missing '.sandbox' in filename"
-} 

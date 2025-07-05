@@ -1,0 +1,11 @@
+{
+    "marks": [
+        "skip(reason='test skipped for demo')"
+    ],
+    "stages": [
+        {
+            "name": "skipped_test",
+            "data": 42
+        }
+    ]
+}

@@ -1,0 +1,11 @@
+{
+    "fixtures": [
+        "dict_value"
+    ],
+    "stages": [
+        {
+            "name": "substitution_test",
+            "data": "$dict_value"
+        }
+    ]
+}

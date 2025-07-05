@@ -10,7 +10,7 @@ alwaysApply: true
 
 # guidelines
 
-- file naming must follow the pattern `test_<name>.http.json`
+- file naming must follow the pattern `test_<name>.<suffix>.json`
 - file contents use `$ref` for referencing blocks, including other files content (via jsonref)
 - file contents is validated against Pydantic models in steps:
     - general test settings: `pytest-http/models:Structure`
