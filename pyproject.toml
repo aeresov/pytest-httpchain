@@ -10,7 +10,7 @@ authors = [
 dependencies = [
     "pytest>=8.0.0",
     "jsonref>=1.1.0",
-    "pydantic-settings>=2.10.1",
+    "pydantic>=2.11.0",
 ]
 
 [dependency-groups]
