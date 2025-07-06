@@ -41,10 +41,10 @@ class Structure(BaseModel):
 class Stage(BaseModel):
     name: str = Field()
     data: Any = Field()
+    save: dict[ValidPythonVariableName, JMESPathExpression] | None = Field(default=None)
 
 
 class Scenario(BaseModel):
     stages: list[Stage] = Field(default_factory=list)
-    save: dict[ValidPythonVariableName, JMESPathExpression] | None = Field(default=None)
 
     model_config = ConfigDict(extra="ignore")
