@@ -61,11 +61,12 @@ def substitute_variables(json_text: str, fixtures: dict[str, Any]) -> str:
         raise VariableSubstitutionError(f"Failed to substitute variables: {e}") from e
 
 
-def json_test_function(test_text: str, path: Path, **fixtures: Any) -> None:
+def json_test_function(test_data: dict[str, Any], path: Path, **fixtures: Any) -> None:
     try:
-        substituted_json: str = substitute_variables(test_text, fixtures)
-        test_data: dict[str, Any] = jsonref.loads(substituted_json, base_uri=path.as_uri())
-        test_model: Scenario = Scenario.model_validate(test_data)
+        json_text: str = json.dumps(test_data)
+        substituted_json: str = substitute_variables(json_text, fixtures)
+        processed_data: dict[str, Any] = jsonref.loads(substituted_json, base_uri=path.as_uri())
+        test_model: Scenario = Scenario.model_validate(processed_data)
         logging.info(f"Test model: {test_model}")
         logging.info(f"Available fixtures: {fixtures}")
     except VariableSubstitutionError as e:
@@ -82,11 +83,12 @@ class JSONFile(pytest.File):
     def collect(self) -> Iterable[Item | Collector]:
         try:
             test_text: str = self.path.read_text()
-            structure: Structure = Structure.model_validate(json.loads(test_text))
+            test_data: dict[str, Any] = json.loads(test_text)
+            structure: Structure = Structure.model_validate(test_data)
             fixtures: list[str] = list(structure.fixtures or [])
 
             def test_func(**kwargs: Any) -> None:
-                return json_test_function(test_text, self.path, **{name: kwargs[name] for name in fixtures if name in kwargs})
+                return json_test_function(test_data, self.path, **{name: kwargs[name] for name in fixtures if name in kwargs})
 
             test_func.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in fixtures])
             test_func.__name__ = f"test_{self.name}"
@@ -95,6 +97,8 @@ class JSONFile(pytest.File):
 
             yield Function.from_parent(self, name=self.name, callobj=test_func)
 
+        except json.JSONDecodeError as e:
+            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Invalid JSON: {e}")
         except ValidationError as e:
             yield FailedValidationItem.from_parent(self, name=self.name, error=f"Invalid JSON: {e}")
         except (SyntaxError, NameError, AttributeError) as e:
