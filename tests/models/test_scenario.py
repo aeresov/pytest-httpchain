@@ -150,24 +150,26 @@ def test_scenario_save_invalid_jmespath_expression_unmatched_brackets():
 
 
 def test_scenario_save_invalid_python_keywords():
-    """Test that Python keywords are rejected as variable names."""
-    # Test common Python keywords
     keywords_to_test = ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as"]
 
     for keyword in keywords_to_test:
-        data = {"stages": [{"name": "test", "data": "data"}], "save": {keyword: "user.id"}}
+        data = {
+            "stages": [{"name": "test", "data": "data"}],
+            "save": {keyword: "user.id"}
+        }
         with pytest.raises(ValidationError) as exc_info:
             Scenario.model_validate(data)
         assert f"'{keyword}' is a Python keyword and cannot be used as a variable name" in str(exc_info.value)
 
 
 def test_scenario_save_invalid_soft_keywords():
-    """Test that soft keywords are also rejected."""
-    # Test Python soft keywords (context-dependent keywords)
     soft_keywords_to_test = ["match", "case", "_", "type"]
 
     for soft_keyword in soft_keywords_to_test:
-        data = {"stages": [{"name": "test", "data": "data"}], "save": {soft_keyword: "user.id"}}
+        data = {
+            "stages": [{"name": "test", "data": "data"}],
+            "save": {soft_keyword: "user.id"}
+        }
         with pytest.raises(ValidationError) as exc_info:
             Scenario.model_validate(data)
         assert f"'{soft_keyword}' is a Python keyword and cannot be used as a variable name" in str(exc_info.value)
@@ -176,7 +178,12 @@ def test_scenario_save_invalid_soft_keywords():
 def test_scenario_save_valid_underscore_variable_names():
     data = {
         "stages": [{"name": "test", "data": "data"}],
-        "save": {"__": "user.double_underscore", "___": "user.triple_underscore", "_private": "user.private", "__private__": "user.dunder_private"},
+        "save": {
+            "__": "user.double_underscore",
+            "___": "user.triple_underscore",
+            "_private": "user.private",
+            "__private__": "user.dunder_private"
+        }
     }
     scenario = Scenario.model_validate(data)
     assert scenario.save["__"] == "user.double_underscore"
@@ -195,8 +202,8 @@ def test_scenario_save_valid_complex_jmespath_expressions():
             "nested_access": "data.nested.deeply.nested.value",
             "pipe_expression": "users | [0]",
             "function_call": "length(users)",
-            "conditional": "users[0] || `default`",
-        },
+            "conditional": "users[0] || `default`"
+        }
     }
     scenario = Scenario.model_validate(data)
     assert scenario.save["filtered_users"] == "users[?age > `18`]"
@@ -212,30 +219,26 @@ def test_scenario_save_multiple_validation_errors():
     data = {
         "stages": [{"name": "test", "data": "data"}],
         "save": {
-            "1invalid": "user.id",  # Invalid variable name
-            "valid_name": "user.[invalid}",  # Invalid JMESPath
-        },
+            "1invalid": "user.id",
+            "valid_name": "user.[invalid}"
+        }
     }
     with pytest.raises(ValidationError) as exc_info:
         Scenario.model_validate(data)
-    # Should fail on the first validation error encountered
     assert "'1invalid' is not a valid Python variable name" in str(exc_info.value)
 
 
 def test_scenario_save_keyword_vs_invalid_variable_error_precedence():
-    """Test that basic identifier validation happens before keyword validation."""
     data = {
         "stages": [{"name": "test", "data": "data"}],
-        "save": {"1class": "user.id"},  # Invalid identifier that starts with digit
+        "save": {"1class": "user.id"}
     }
     with pytest.raises(ValidationError) as exc_info:
         Scenario.model_validate(data)
-    # Should get the identifier error first, not the keyword error
     assert "'1class' is not a valid Python variable name" in str(exc_info.value)
 
 
 def test_scenario_save_valid_non_keyword_identifiers():
-    """Test that valid non-keyword identifiers are still accepted."""
     data = {
         "stages": [{"name": "test", "data": "data"}],
         "save": {
@@ -245,9 +248,9 @@ def test_scenario_save_valid_non_keyword_identifiers():
             "user123": "user.id",
             "_user": "user.private",
             "__internal__": "user.internal",
-            "MyClass": "user.class_name",  # This is fine, not the keyword 'class'
-            "for_user": "user.for_field",  # This is fine, contains 'for' but isn't the keyword
-        },
+            "MyClass": "user.class_name",
+            "for_user": "user.for_field",
+        }
     }
     scenario = Scenario.model_validate(data)
     assert len(scenario.save) == 8
@@ -257,7 +260,6 @@ def test_scenario_save_valid_non_keyword_identifiers():
 
 
 def test_individual_annotated_types():
-    """Test that the individual annotated types can be used standalone."""
     from pydantic import BaseModel
 
     from pytest_http.models import JMESPathExpression, ValidPythonVariableName
@@ -266,18 +268,15 @@ def test_individual_annotated_types():
         var_name: ValidPythonVariableName
         jmes_expr: JMESPathExpression
 
-    # Test valid data
     valid_data = {"var_name": "valid_name", "jmes_expr": "user.id"}
     model = TestModel.model_validate(valid_data)
     assert model.var_name == "valid_name"
     assert model.jmes_expr == "user.id"
 
-    # Test invalid variable name
     with pytest.raises(ValidationError) as exc_info:
         TestModel.model_validate({"var_name": "1invalid", "jmes_expr": "user.id"})
     assert "'1invalid' is not a valid Python variable name" in str(exc_info.value)
 
-    # Test invalid JMESPath
     with pytest.raises(ValidationError) as exc_info:
         TestModel.model_validate({"var_name": "valid_name", "jmes_expr": "user.[invalid}"})
     assert "is not a valid JMESPath expression" in str(exc_info.value)
