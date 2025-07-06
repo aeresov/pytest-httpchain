@@ -1,7 +1,26 @@
-from typing import Any
+from typing import Annotated, Any
 
 import jmespath
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+
+
+def validate_save_field(v: dict[str, str] | None) -> dict[str, str] | None:
+    """Validate save field dictionary keys and values."""
+    if v is None:
+        return v
+
+    for key, value in v.items():
+        # Validate that key is a valid Python variable name
+        if not key.isidentifier():
+            raise ValueError(f"Key '{key}' is not a valid Python variable name")
+
+        # Validate that value is a valid JMESPath expression
+        try:
+            jmespath.compile(value)
+        except Exception as e:
+            raise ValueError(f"Value '{value}' is not a valid JMESPath expression: {e}") from e
+
+    return v
 
 
 class Structure(BaseModel):
@@ -18,25 +37,6 @@ class Stage(BaseModel):
 
 class Scenario(BaseModel):
     stages: list[Stage] = Field(default_factory=list)
-    save: dict[str, str] | None = Field(default=None)
+    save: Annotated[dict[str, str] | None, AfterValidator(validate_save_field)] = Field(default=None)
 
     model_config = ConfigDict(extra="ignore")
-
-    @field_validator("save")
-    @classmethod
-    def validate_save(cls, v: dict[str, str] | None) -> dict[str, str] | None:
-        if v is None:
-            return v
-
-        for key, value in v.items():
-            # Validate that key is a valid Python variable name
-            if not key.isidentifier():
-                raise ValueError(f"Key '{key}' is not a valid Python variable name")
-
-            # Validate that value is a valid JMESPath expression
-            try:
-                jmespath.compile(value)
-            except Exception as e:
-                raise ValueError(f"Value '{value}' is not a valid JMESPath expression: {e}") from e
-
-        return v
