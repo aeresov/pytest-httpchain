@@ -14,16 +14,13 @@ def test_scenario_with_stages():
     assert scenario.stages[1].data == 42
 
 
-def test_scenario_empty():
-    data = {}
+@pytest.mark.parametrize("data,expected_stages", [
+    ({}, []),
+    ({"stages": []}, []),
+])
+def test_scenario_empty_stages(data, expected_stages):
     scenario = Scenario.model_validate(data)
-    assert scenario.stages == []
-
-
-def test_scenario_empty_stages():
-    data = {"stages": []}
-    scenario = Scenario.model_validate(data)
-    assert scenario.stages == []
+    assert scenario.stages == expected_stages
 
 
 def test_scenario_with_extra_fields():
@@ -75,104 +72,60 @@ def test_scenario_with_valid_save_field():
     assert scenario.save["complex_path"] == "users[*].profile.name"
 
 
+@pytest.mark.parametrize("save_value,expected", [
+    (None, None),
+    ({}, {}),
+])
+def test_scenario_save_field_optional_states(save_value, expected):
+    data = {"stages": [{"name": "test", "data": "data"}], "save": save_value}
+    scenario = Scenario.model_validate(data)
+    assert scenario.save == expected
+
+
 def test_scenario_without_save_field():
     data = {"stages": [{"name": "test", "data": "data"}]}
     scenario = Scenario.model_validate(data)
     assert scenario.save is None
 
 
-def test_scenario_with_empty_save_field():
-    data = {"stages": [{"name": "test", "data": "data"}], "save": {}}
-    scenario = Scenario.model_validate(data)
-    assert scenario.save == {}
-
-
-def test_scenario_with_save_field_none():
-    data = {"stages": [{"name": "test", "data": "data"}], "save": None}
-    scenario = Scenario.model_validate(data)
-    assert scenario.save is None
-
-
-def test_scenario_save_invalid_python_variable_name_starts_with_digit():
-    data = {"stages": [{"name": "test", "data": "data"}], "save": {"1invalid": "user.id"}}
+@pytest.mark.parametrize("invalid_key,expected_error", [
+    ("1invalid", "'1invalid' is not a valid Python variable name"),
+    ("user-id", "'user-id' is not a valid Python variable name"),
+    ("user id", "'user id' is not a valid Python variable name"),
+    ("user@id", "'user@id' is not a valid Python variable name"),
+    ("", "'' is not a valid Python variable name"),
+])
+def test_scenario_save_invalid_python_variable_names(invalid_key, expected_error):
+    data = {"stages": [{"name": "test", "data": "data"}], "save": {invalid_key: "user.id"}}
     with pytest.raises(ValidationError) as exc_info:
         Scenario.model_validate(data)
-    assert "'1invalid' is not a valid Python variable name" in str(exc_info.value)
+    assert expected_error in str(exc_info.value)
 
 
-def test_scenario_save_invalid_python_variable_name_contains_special_chars():
-    data = {"stages": [{"name": "test", "data": "data"}], "save": {"user-id": "user.id"}}
-    with pytest.raises(ValidationError) as exc_info:
-        Scenario.model_validate(data)
-    assert "'user-id' is not a valid Python variable name" in str(exc_info.value)
-
-
-def test_scenario_save_invalid_python_variable_name_contains_space():
-    data = {"stages": [{"name": "test", "data": "data"}], "save": {"user id": "user.id"}}
-    with pytest.raises(ValidationError) as exc_info:
-        Scenario.model_validate(data)
-    assert "'user id' is not a valid Python variable name" in str(exc_info.value)
-
-
-def test_scenario_save_invalid_python_variable_name_special_symbols():
-    data = {"stages": [{"name": "test", "data": "data"}], "save": {"user@id": "user.id"}}
-    with pytest.raises(ValidationError) as exc_info:
-        Scenario.model_validate(data)
-    assert "'user@id' is not a valid Python variable name" in str(exc_info.value)
-
-
-def test_scenario_save_invalid_python_variable_name_empty_string():
-    data = {"stages": [{"name": "test", "data": "data"}], "save": {"": "user.id"}}
-    with pytest.raises(ValidationError) as exc_info:
-        Scenario.model_validate(data)
-    assert "'' is not a valid Python variable name" in str(exc_info.value)
-
-
-def test_scenario_save_invalid_jmespath_expression():
-    data = {"stages": [{"name": "test", "data": "data"}], "save": {"user_id": "user.[invalid}"}}
+@pytest.mark.parametrize("invalid_jmespath", [
+    "user.[invalid}",
+    "user.",
+    "users[0",
+])
+def test_scenario_save_invalid_jmespath_expressions(invalid_jmespath):
+    data = {"stages": [{"name": "test", "data": "data"}], "save": {"user_id": invalid_jmespath}}
     with pytest.raises(ValidationError) as exc_info:
         Scenario.model_validate(data)
     assert "is not a valid JMESPath expression" in str(exc_info.value)
 
 
-def test_scenario_save_invalid_jmespath_expression_incomplete():
-    data = {"stages": [{"name": "test", "data": "data"}], "save": {"user_id": "user."}}
+@pytest.mark.parametrize("keyword", [
+    "class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as",
+    "match", "case", "_", "type"
+])
+def test_scenario_save_invalid_keywords(keyword):
+    data = {
+        "stages": [{"name": "test", "data": "data"}],
+        "save": {keyword: "user.id"}
+    }
     with pytest.raises(ValidationError) as exc_info:
         Scenario.model_validate(data)
-    assert "is not a valid JMESPath expression" in str(exc_info.value)
-
-
-def test_scenario_save_invalid_jmespath_expression_unmatched_brackets():
-    data = {"stages": [{"name": "test", "data": "data"}], "save": {"user_id": "users[0"}}
-    with pytest.raises(ValidationError) as exc_info:
-        Scenario.model_validate(data)
-    assert "is not a valid JMESPath expression" in str(exc_info.value)
-
-
-def test_scenario_save_invalid_python_keywords():
-    keywords_to_test = ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as"]
-
-    for keyword in keywords_to_test:
-        data = {
-            "stages": [{"name": "test", "data": "data"}],
-            "save": {keyword: "user.id"}
-        }
-        with pytest.raises(ValidationError) as exc_info:
-            Scenario.model_validate(data)
-        assert f"'{keyword}' is a Python keyword and cannot be used as a variable name" in str(exc_info.value)
-
-
-def test_scenario_save_invalid_soft_keywords():
-    soft_keywords_to_test = ["match", "case", "_", "type"]
-
-    for soft_keyword in soft_keywords_to_test:
-        data = {
-            "stages": [{"name": "test", "data": "data"}],
-            "save": {soft_keyword: "user.id"}
-        }
-        with pytest.raises(ValidationError) as exc_info:
-            Scenario.model_validate(data)
-        assert f"'{soft_keyword}' is a Python keyword and cannot be used as a variable name" in str(exc_info.value)
+    assert f"'{keyword}' is a Python keyword and cannot be used as a variable name" in str(exc_info.value)
 
 
 def test_scenario_save_valid_underscore_variable_names():
