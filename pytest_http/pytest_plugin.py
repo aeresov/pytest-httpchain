@@ -61,59 +61,71 @@ def substitute_variables(json_text: str, fixtures: dict[str, Any]) -> str:
         raise VariableSubstitutionError(f"Failed to substitute variables: {e}") from e
 
 
-def json_test_function(test_data: dict[str, Any], **fixtures: Any) -> None:
+def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
     try:
+        # Dump original data to JSON string
+        json_text: str = json.dumps(original_data, default=str)
+
+        # Substitute variables
         if fixtures:
-            json_text: str = json.dumps(test_data, default=str)
             substituted_json: str = substitute_variables(json_text, fixtures)
             processed_data: dict[str, Any] = json.loads(substituted_json)
         else:
-            processed_data = test_data
+            processed_data = original_data
 
+        # Pydantic validation with substituted variables
         test_model: TestSpec = TestSpec.model_validate(processed_data)
         logging.info(f"Test model: {test_model}")
         logging.info(f"Available fixtures: {fixtures}")
     except VariableSubstitutionError as e:
         pytest.fail(f"Variable substitution error: {e}")
     except json.JSONDecodeError as e:
-        pytest.fail(f"JSON decode error: {e}")
+        pytest.fail(f"JSON decode error after substitution: {e}")
     except ValidationError as e:
         pytest.fail(f"Validation error: {e}")
     except Exception as e:
         pytest.fail(f"Unexpected error: {e}")
 
 
-def extract_fixtures_and_marks(data: dict[str, Any]) -> tuple[list[str], list[str]]:
-    fixtures = data.get("fixtures", [])
-    marks = data.get("marks", [])
-
-    if fixtures is None:
-        fixtures = []
-    if marks is None:
-        marks = []
-
-    if not isinstance(fixtures, list):
-        fixtures = []
-    if not isinstance(marks, list):
-        marks = []
-
-    return fixtures, marks
-
-
 class JSONFile(pytest.File):
     def collect(self) -> Iterable[Item | Collector]:
         try:
+            # Load JSON (catch general JSON formatting errors)
             test_text: str = self.path.read_text()
             test_data: dict[str, Any] = json.loads(test_text)
+        except json.JSONDecodeError as e:
+            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Invalid JSON: {e}")
+            return
+        except Exception as e:
+            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Error reading file: {e}")
+            return
+
+        try:
+            # JSONRef (catch more JSON errors)
             processed_data: dict[str, Any] = jsonref.replace_refs(test_data, base_uri=self.path.as_uri())
+        except Exception as e:
+            yield FailedValidationItem.from_parent(self, name=self.name, error=f"JSONRef error: {e}")
+            return
 
-            try:
-                test_spec: TestSpec = TestSpec.model_validate(processed_data)
-                fixtures: list[str] = list(test_spec.fixtures)
-                marks: list[str] = list(test_spec.marks)
-            except ValidationError:
-                fixtures, marks = extract_fixtures_and_marks(processed_data)
+        try:
+            # Pydantic validation without variable substitution (catch validation errors)
+            test_spec: TestSpec = TestSpec.model_validate(processed_data)
+        except ValidationError as e:
+            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Validation error: {e}")
+            return
+        except Exception as e:
+            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Unexpected validation error: {e}")
+            return
 
+        try:
+            # Extract fixtures and marks (catch specific errors)
+            fixtures: list[str] = list(test_spec.fixtures)
+            marks: list[str] = list(test_spec.marks)
+        except Exception as e:
+            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Error extracting fixtures/marks: {e}")
+            return
+
+        try:
             def test_func(**kwargs: Any) -> None:
                 return json_test_function(processed_data, **{name: kwargs[name] for name in fixtures if name in kwargs})
 
@@ -123,13 +135,10 @@ class JSONFile(pytest.File):
             test_func = reduce(lambda func, mark: eval(f"pytest.mark.{mark}", {"pytest": pytest, "sys": sys})(func), marks or [], test_func)
 
             yield Function.from_parent(self, name=self.name, callobj=test_func)
-
-        except json.JSONDecodeError as e:
-            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Invalid JSON: {e}")
         except (SyntaxError, NameError, AttributeError) as e:
             yield FailedValidationItem.from_parent(self, name=self.name, error=f"Failed to apply marker: {e}")
         except Exception as e:
-            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Error reading file: {e}")
+            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Error creating test function: {e}")
 
 
 class FailedValidationItem(pytest.Item):
