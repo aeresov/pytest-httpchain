@@ -149,23 +149,36 @@ def test_scenario_save_invalid_jmespath_expression_unmatched_brackets():
     assert "is not a valid JMESPath expression" in str(exc_info.value)
 
 
-def test_scenario_save_valid_python_keywords_as_variable_names():
-    # Note: isidentifier() returns True for Python keywords, but they're still valid identifiers
-    # from a syntactic perspective, even though they can't be used as variable names in code
-    data = {"stages": [{"name": "test", "data": "data"}], "save": {"class": "user.class", "for": "user.for_value", "if": "user.if_value"}}
-    scenario = Scenario.model_validate(data)
-    assert scenario.save["class"] == "user.class"
-    assert scenario.save["for"] == "user.for_value"
-    assert scenario.save["if"] == "user.if_value"
+def test_scenario_save_invalid_python_keywords():
+    """Test that Python keywords are rejected as variable names."""
+    # Test common Python keywords
+    keywords_to_test = ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as"]
+
+    for keyword in keywords_to_test:
+        data = {"stages": [{"name": "test", "data": "data"}], "save": {keyword: "user.id"}}
+        with pytest.raises(ValidationError) as exc_info:
+            Scenario.model_validate(data)
+        assert f"Key '{keyword}' is a Python keyword and cannot be used as a variable name" in str(exc_info.value)
+
+
+def test_scenario_save_invalid_soft_keywords():
+    """Test that soft keywords are also rejected."""
+    # Test Python soft keywords (context-dependent keywords)
+    soft_keywords_to_test = ["match", "case", "_", "type"]
+
+    for soft_keyword in soft_keywords_to_test:
+        data = {"stages": [{"name": "test", "data": "data"}], "save": {soft_keyword: "user.id"}}
+        with pytest.raises(ValidationError) as exc_info:
+            Scenario.model_validate(data)
+        assert f"Key '{soft_keyword}' is a Python keyword and cannot be used as a variable name" in str(exc_info.value)
 
 
 def test_scenario_save_valid_underscore_variable_names():
     data = {
         "stages": [{"name": "test", "data": "data"}],
-        "save": {"_": "user.single_underscore", "__": "user.double_underscore", "___": "user.triple_underscore", "_private": "user.private", "__private__": "user.dunder_private"},
+        "save": {"__": "user.double_underscore", "___": "user.triple_underscore", "_private": "user.private", "__private__": "user.dunder_private"},
     }
     scenario = Scenario.model_validate(data)
-    assert scenario.save["_"] == "user.single_underscore"
     assert scenario.save["__"] == "user.double_underscore"
     assert scenario.save["___"] == "user.triple_underscore"
     assert scenario.save["_private"] == "user.private"
@@ -207,3 +220,37 @@ def test_scenario_save_multiple_validation_errors():
         Scenario.model_validate(data)
     # Should fail on the first validation error encountered
     assert "Key '1invalid' is not a valid Python variable name" in str(exc_info.value)
+
+
+def test_scenario_save_keyword_vs_invalid_variable_error_precedence():
+    """Test that basic identifier validation happens before keyword validation."""
+    data = {
+        "stages": [{"name": "test", "data": "data"}],
+        "save": {"1class": "user.id"},  # Invalid identifier that starts with digit
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        Scenario.model_validate(data)
+    # Should get the identifier error first, not the keyword error
+    assert "Key '1class' is not a valid Python variable name" in str(exc_info.value)
+
+
+def test_scenario_save_valid_non_keyword_identifiers():
+    """Test that valid non-keyword identifiers are still accepted."""
+    data = {
+        "stages": [{"name": "test", "data": "data"}],
+        "save": {
+            "user_id": "user.id",
+            "userName": "user.name",
+            "USER_NAME": "user.name",
+            "user123": "user.id",
+            "_user": "user.private",
+            "__internal__": "user.internal",
+            "MyClass": "user.class_name",  # This is fine, not the keyword 'class'
+            "for_user": "user.for_field",  # This is fine, contains 'for' but isn't the keyword
+        },
+    }
+    scenario = Scenario.model_validate(data)
+    assert len(scenario.save) == 8
+    assert scenario.save["user_id"] == "user.id"
+    assert scenario.save["MyClass"] == "user.class_name"
+    assert scenario.save["for_user"] == "user.for_field"

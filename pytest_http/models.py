@@ -1,3 +1,4 @@
+import keyword
 from typing import Annotated, Any
 
 import jmespath
@@ -13,6 +14,14 @@ def validate_save_field(v: dict[str, str] | None) -> dict[str, str] | None:
         # Validate that key is a valid Python variable name
         if not key.isidentifier():
             raise ValueError(f"Key '{key}' is not a valid Python variable name")
+
+        # Validate that key is not a Python keyword (hard keywords)
+        if keyword.iskeyword(key):
+            raise ValueError(f"Key '{key}' is a Python keyword and cannot be used as a variable name")
+
+        # Validate that key is not a Python soft keyword (context-dependent keywords)
+        if hasattr(keyword, "softkwlist") and key in keyword.softkwlist:
+            raise ValueError(f"Key '{key}' is a Python keyword and cannot be used as a variable name")
 
         # Validate that value is a valid JMESPath expression
         try:
