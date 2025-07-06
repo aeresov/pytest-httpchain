@@ -42,3 +42,5 @@ def test_structure_invalid_marks_type():
     data = {"marks": 123}
     with pytest.raises(ValidationError):
         Structure.model_validate(data)
+
+

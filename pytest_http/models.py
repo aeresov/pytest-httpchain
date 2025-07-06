@@ -2,7 +2,7 @@ import keyword
 from typing import Annotated, Any
 
 import jmespath
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 
 def validate_python_variable_name(v: str) -> str:
@@ -31,6 +31,12 @@ ValidPythonVariableName = Annotated[str, AfterValidator(validate_python_variable
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
 
 
+class Stage(BaseModel):
+    name: str = Field()
+    data: Any = Field()
+    save: dict[ValidPythonVariableName, JMESPathExpression] | None = Field(default=None)
+
+
 class Structure(BaseModel):
     fixtures: list[str] = Field(default_factory=list)
     marks: list[str] = Field(default_factory=list)
@@ -38,13 +44,30 @@ class Structure(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
-class Stage(BaseModel):
-    name: str = Field()
-    data: Any = Field()
-    save: dict[ValidPythonVariableName, JMESPathExpression] | None = Field(default=None)
-
-
 class Scenario(BaseModel):
     stages: list[Stage] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="ignore")
+
+
+class TestDefinition(BaseModel):
+    fixtures: list[str] = Field(default_factory=list)
+    marks: list[str] = Field(default_factory=list)
+    stages: list[Stage] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="after")
+    def validate_save_variables_not_fixtures(self) -> "TestDefinition":
+        if not self.fixtures:
+            return self
+        
+        fixture_names = set(self.fixtures)
+        
+        for stage in self.stages:
+            if stage.save:
+                for var_name in stage.save.keys():
+                    if var_name in fixture_names:
+                        raise ValueError(f"Variable name '{var_name}' conflicts with fixture name")
+        
+        return self
