@@ -1,6 +1,3 @@
-
-
-
 def test_basic_json_test_collection_and_execution(pytester):
     pytester.copy_example("test_basic.http.json")
     result = pytester.runpytest()

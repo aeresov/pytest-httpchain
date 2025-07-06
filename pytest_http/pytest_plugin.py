@@ -16,7 +16,7 @@ from _pytest.nodes import Collector, Item
 from _pytest.python import Function
 from pydantic import ValidationError
 
-from pytest_http.models import TestSpec
+from pytest_http.models import Scenario
 
 
 def pytest_addoption(parser: Parser):
@@ -74,7 +74,7 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
             processed_data = original_data
 
         # Pydantic validation with substituted variables
-        test_model: TestSpec = TestSpec.model_validate(processed_data)
+        test_model: Scenario = Scenario.model_validate(processed_data)
         logging.info(f"Test model: {test_model}")
         logging.info(f"Available fixtures: {fixtures}")
     except VariableSubstitutionError as e:
@@ -109,7 +109,7 @@ class JSONFile(pytest.File):
 
         try:
             # Pydantic validation without variable substitution (catch validation errors)
-            test_spec: TestSpec = TestSpec.model_validate(processed_data)
+            test_spec: Scenario = Scenario.model_validate(processed_data)
         except ValidationError as e:
             yield FailedValidationItem.from_parent(self, name=self.name, error=f"Validation error: {e}")
             return
@@ -126,6 +126,7 @@ class JSONFile(pytest.File):
             return
 
         try:
+
             def test_func(**kwargs: Any) -> None:
                 return json_test_function(processed_data, **{name: kwargs[name] for name in fixtures if name in kwargs})
 

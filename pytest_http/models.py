@@ -37,7 +37,7 @@ class Stage(BaseModel):
     save: dict[ValidPythonVariableName, JMESPathExpression] | None = Field(default=None)
 
 
-class TestSpec(BaseModel):
+class Scenario(BaseModel):
     fixtures: list[str] = Field(default_factory=list)
     marks: list[str] = Field(default_factory=list)
     stages: list[Stage] = Field(default_factory=list)
@@ -52,7 +52,7 @@ class TestSpec(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_save_variables_not_fixtures(self) -> "TestSpec":
+    def validate_save_variables_not_fixtures(self) -> "Scenario":
         if not self.fixtures:
             return self
 

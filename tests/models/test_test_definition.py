@@ -1,12 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
-from pytest_http.models import TestSpec
+from pytest_http.models import Scenario
 
 
 def test_test_definition_empty():
     data = {}
-    test_spec = TestSpec.model_validate(data)
+    test_spec = Scenario.model_validate(data)
     assert test_spec.fixtures == []
     assert test_spec.marks == []
     assert test_spec.stages == []
@@ -18,7 +18,7 @@ def test_test_definition_with_all_fields():
         "marks": ["slow", "integration"],
         "stages": [{"name": "test_stage", "data": {"key": "value"}}, {"name": "another_stage", "data": "simple_data"}],
     }
-    test_spec = TestSpec.model_validate(data)
+    test_spec = Scenario.model_validate(data)
     assert test_spec.fixtures == ["user_id", "api_key"]
     assert test_spec.marks == ["slow", "integration"]
     assert len(test_spec.stages) == 2
@@ -33,7 +33,7 @@ def test_test_definition_cross_field_validator_no_conflict():
             {"name": "test", "data": "data", "save": {"result": "user.id", "status": "response.status"}},
         ],
     }
-    test_spec = TestSpec.model_validate(data)
+    test_spec = Scenario.model_validate(data)
     assert test_spec.fixtures == ["user_id", "api_key"]
     assert len(test_spec.stages) == 1
     assert test_spec.stages[0].save["result"] == "user.id"
@@ -48,7 +48,7 @@ def test_test_definition_cross_field_validator_conflict():
         ],
     }
     with pytest.raises(ValidationError) as exc_info:
-        TestSpec.model_validate(data)
+        Scenario.model_validate(data)
     assert "Variable name 'user_id' conflicts with fixture name" in str(exc_info.value)
 
 
@@ -60,7 +60,7 @@ def test_test_definition_cross_field_validator_multiple_conflicts():
         ],
     }
     with pytest.raises(ValidationError) as exc_info:
-        TestSpec.model_validate(data)
+        Scenario.model_validate(data)
     assert "Variable name 'api_key' conflicts with fixture name" in str(exc_info.value)
 
 
@@ -70,7 +70,7 @@ def test_test_definition_cross_field_validator_no_fixtures():
             {"name": "test", "data": "data", "save": {"user_id": "user.id"}},
         ]
     }
-    test_spec = TestSpec.model_validate(data)
+    test_spec = Scenario.model_validate(data)
     assert test_spec.fixtures == []
     assert len(test_spec.stages) == 1
     assert test_spec.stages[0].save["user_id"] == "user.id"
@@ -83,7 +83,7 @@ def test_test_definition_cross_field_validator_no_save_fields():
             {"name": "test", "data": "data"},
         ],
     }
-    test_spec = TestSpec.model_validate(data)
+    test_spec = Scenario.model_validate(data)
     assert test_spec.fixtures == ["user_id", "api_key"]
     assert len(test_spec.stages) == 1
     assert test_spec.stages[0].save is None
@@ -96,7 +96,7 @@ def test_test_definition_cross_field_validator_empty_save_fields():
             {"name": "test", "data": "data", "save": {}},
         ],
     }
-    test_spec = TestSpec.model_validate(data)
+    test_spec = Scenario.model_validate(data)
     assert test_spec.fixtures == ["user_id", "api_key"]
     assert len(test_spec.stages) == 1
     assert test_spec.stages[0].save == {}
@@ -111,7 +111,7 @@ def test_test_definition_cross_field_validator_mixed_stages():
             {"name": "test3", "data": "data3", "save": {"status": "response.status"}},
         ],
     }
-    test_spec = TestSpec.model_validate(data)
+    test_spec = Scenario.model_validate(data)
     assert test_spec.fixtures == ["user_id", "api_key"]
     assert len(test_spec.stages) == 3
     assert test_spec.stages[0].save["result"] == "user.id"
@@ -121,7 +121,7 @@ def test_test_definition_cross_field_validator_mixed_stages():
 
 def test_test_definition_with_extra_fields():
     data = {"fixtures": ["user_id"], "marks": ["slow"], "stages": [{"name": "test", "data": "data"}], "extra_field": "ignored"}
-    test_spec = TestSpec.model_validate(data)
+    test_spec = Scenario.model_validate(data)
     assert test_spec.fixtures == ["user_id"]
     assert test_spec.marks == ["slow"]
     assert len(test_spec.stages) == 1
