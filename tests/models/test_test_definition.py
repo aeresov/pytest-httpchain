@@ -1,5 +1,6 @@
 import pytest
 from pydantic import ValidationError
+
 from pytest_http.models import TestSpec
 
 
@@ -15,10 +16,7 @@ def test_test_definition_with_all_fields():
     data = {
         "fixtures": ["user_id", "api_key"],
         "marks": ["slow", "integration"],
-        "stages": [
-            {"name": "test_stage", "data": {"key": "value"}},
-            {"name": "another_stage", "data": "simple_data"}
-        ]
+        "stages": [{"name": "test_stage", "data": {"key": "value"}}, {"name": "another_stage", "data": "simple_data"}],
     }
     test_spec = TestSpec.model_validate(data)
     assert test_spec.fixtures == ["user_id", "api_key"]
@@ -33,7 +31,7 @@ def test_test_definition_cross_field_validator_no_conflict():
         "fixtures": ["user_id", "api_key"],
         "stages": [
             {"name": "test", "data": "data", "save": {"result": "user.id", "status": "response.status"}},
-        ]
+        ],
     }
     test_spec = TestSpec.model_validate(data)
     assert test_spec.fixtures == ["user_id", "api_key"]
@@ -47,7 +45,7 @@ def test_test_definition_cross_field_validator_conflict():
         "fixtures": ["user_id", "api_key"],
         "stages": [
             {"name": "test", "data": "data", "save": {"user_id": "user.id"}},
-        ]
+        ],
     }
     with pytest.raises(ValidationError) as exc_info:
         TestSpec.model_validate(data)
@@ -59,7 +57,7 @@ def test_test_definition_cross_field_validator_multiple_conflicts():
         "fixtures": ["user_id", "api_key"],
         "stages": [
             {"name": "test", "data": "data", "save": {"api_key": "app.key"}},
-        ]
+        ],
     }
     with pytest.raises(ValidationError) as exc_info:
         TestSpec.model_validate(data)
@@ -83,7 +81,7 @@ def test_test_definition_cross_field_validator_no_save_fields():
         "fixtures": ["user_id", "api_key"],
         "stages": [
             {"name": "test", "data": "data"},
-        ]
+        ],
     }
     test_spec = TestSpec.model_validate(data)
     assert test_spec.fixtures == ["user_id", "api_key"]
@@ -96,7 +94,7 @@ def test_test_definition_cross_field_validator_empty_save_fields():
         "fixtures": ["user_id", "api_key"],
         "stages": [
             {"name": "test", "data": "data", "save": {}},
-        ]
+        ],
     }
     test_spec = TestSpec.model_validate(data)
     assert test_spec.fixtures == ["user_id", "api_key"]
@@ -111,7 +109,7 @@ def test_test_definition_cross_field_validator_mixed_stages():
             {"name": "test1", "data": "data1", "save": {"result": "user.id"}},
             {"name": "test2", "data": "data2"},
             {"name": "test3", "data": "data3", "save": {"status": "response.status"}},
-        ]
+        ],
     }
     test_spec = TestSpec.model_validate(data)
     assert test_spec.fixtures == ["user_id", "api_key"]
@@ -122,12 +120,7 @@ def test_test_definition_cross_field_validator_mixed_stages():
 
 
 def test_test_definition_with_extra_fields():
-    data = {
-        "fixtures": ["user_id"],
-        "marks": ["slow"],
-        "stages": [{"name": "test", "data": "data"}],
-        "extra_field": "ignored"
-    }
+    data = {"fixtures": ["user_id"], "marks": ["slow"], "stages": [{"name": "test", "data": "data"}], "extra_field": "ignored"}
     test_spec = TestSpec.model_validate(data)
     assert test_spec.fixtures == ["user_id"]
     assert test_spec.marks == ["slow"]

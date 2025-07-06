@@ -1,15 +1,11 @@
 import pytest
 from pydantic import ValidationError
+
 from pytest_http.models import TestSpec
 
 
 def test_scenario_with_stages():
-    data = {
-        "stages": [
-            {"name": "stage1", "data": "test_data1"},
-            {"name": "stage2", "data": "test_data2"}
-        ]
-    }
+    data = {"stages": [{"name": "stage1", "data": "test_data1"}, {"name": "stage2", "data": "test_data2"}]}
 
     test_spec = TestSpec.model_validate(data)
     assert len(test_spec.stages) == 2
@@ -19,20 +15,20 @@ def test_scenario_with_stages():
     assert test_spec.stages[1].data == "test_data2"
 
 
-@pytest.mark.parametrize("data,expected_stages", [
-    ({"stages": []}, []),
-    ({"stages": None}, []),
-])
+@pytest.mark.parametrize(
+    "data,expected_stages",
+    [
+        ({"stages": []}, []),
+        ({"stages": None}, []),
+    ],
+)
 def test_scenario_empty_stages(data, expected_stages):
     test_spec = TestSpec.model_validate(data)
     assert test_spec.stages == expected_stages
 
 
 def test_scenario_with_extra_fields():
-    data = {
-        "stages": [{"name": "stage1", "data": "test_data"}],
-        "extra_field": "should_be_ignored"
-    }
+    data = {"stages": [{"name": "stage1", "data": "test_data"}], "extra_field": "should_be_ignored"}
 
     test_spec = TestSpec.model_validate(data)
     assert len(test_spec.stages) == 1
@@ -49,12 +45,7 @@ def test_scenario_invalid_stages_type():
 
 
 def test_scenario_invalid_stage_structure():
-    data = {
-        "stages": [
-            {"name": "stage1", "data": "test_data"},
-            {"invalid": "structure"}
-        ]
-    }
+    data = {"stages": [{"name": "stage1", "data": "test_data"}, {"invalid": "structure"}]}
 
     with pytest.raises(ValidationError) as exc_info:
         TestSpec.model_validate(data)
@@ -69,7 +60,7 @@ def test_scenario_with_complex_stages():
             {"name": "dict_stage", "data": {"key": "value", "nested": {"inner": "data"}}},
             {"name": "list_stage", "data": ["item1", "item2", {"nested": "object"}]},
             {"name": "boolean_stage", "data": True},
-            {"name": "null_stage", "data": None}
+            {"name": "null_stage", "data": None},
         ]
     }
 
@@ -84,15 +75,7 @@ def test_scenario_with_complex_stages():
 
 
 def test_scenario_with_stages_containing_save_field():
-    data = {
-        "stages": [
-            {
-                "name": "stage_with_save",
-                "data": {"test": "data"},
-                "save": {"result": "response.result", "status": "response.status"}
-            }
-        ]
-    }
+    data = {"stages": [{"name": "stage_with_save", "data": {"test": "data"}, "save": {"result": "response.result", "status": "response.status"}}]}
 
     test_spec = TestSpec.model_validate(data)
     assert len(test_spec.stages) == 1

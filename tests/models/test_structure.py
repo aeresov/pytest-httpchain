@@ -1,14 +1,11 @@
 import pytest
 from pydantic import ValidationError
+
 from pytest_http.models import TestSpec
 
 
 def test_structure_with_fixtures_and_marks():
-    data = {
-        "fixtures": ["user_id", "api_key"],
-        "marks": ["slow", "integration"],
-        "stages": [{"name": "test", "data": "test_data"}]
-    }
+    data = {"fixtures": ["user_id", "api_key"], "marks": ["slow", "integration"], "stages": [{"name": "test", "data": "test_data"}]}
 
     test_spec = TestSpec.model_validate(data)
     assert test_spec.fixtures == ["user_id", "api_key"]
@@ -26,12 +23,7 @@ def test_structure_empty():
 
 
 def test_structure_with_extra_fields():
-    data = {
-        "fixtures": ["user_id"],
-        "marks": ["slow"],
-        "stages": [{"name": "test", "data": "test_data"}],
-        "extra_field": "ignored"
-    }
+    data = {"fixtures": ["user_id"], "marks": ["slow"], "stages": [{"name": "test", "data": "test_data"}], "extra_field": "ignored"}
 
     test_spec = TestSpec.model_validate(data)
     assert test_spec.fixtures == ["user_id"]
@@ -40,11 +32,7 @@ def test_structure_with_extra_fields():
 
 
 def test_structure_with_none_values():
-    data = {
-        "fixtures": None,
-        "marks": None,
-        "stages": None
-    }
+    data = {"fixtures": None, "marks": None, "stages": None}
 
     test_spec = TestSpec.model_validate(data)
     assert test_spec.fixtures == []
@@ -53,11 +41,7 @@ def test_structure_with_none_values():
 
 
 def test_structure_invalid_fixtures_type():
-    data = {
-        "fixtures": "not_a_list",
-        "marks": ["slow"],
-        "stages": [{"name": "test", "data": "test_data"}]
-    }
+    data = {"fixtures": "not_a_list", "marks": ["slow"], "stages": [{"name": "test", "data": "test_data"}]}
 
     with pytest.raises(ValidationError) as exc_info:
         TestSpec.model_validate(data)
@@ -65,14 +49,8 @@ def test_structure_invalid_fixtures_type():
 
 
 def test_structure_invalid_marks_type():
-    data = {
-        "fixtures": ["user_id"],
-        "marks": "not_a_list",
-        "stages": [{"name": "test", "data": "test_data"}]
-    }
+    data = {"fixtures": ["user_id"], "marks": "not_a_list", "stages": [{"name": "test", "data": "test_data"}]}
 
     with pytest.raises(ValidationError) as exc_info:
         TestSpec.model_validate(data)
     assert "Input should be a valid list" in str(exc_info.value)
-
-

@@ -69,7 +69,7 @@ def json_test_function(test_data: dict[str, Any], **fixtures: Any) -> None:
             processed_data: dict[str, Any] = json.loads(substituted_json)
         else:
             processed_data = test_data
-        
+
         test_model: TestSpec = TestSpec.model_validate(processed_data)
         logging.info(f"Test model: {test_model}")
         logging.info(f"Available fixtures: {fixtures}")
@@ -83,15 +83,36 @@ def json_test_function(test_data: dict[str, Any], **fixtures: Any) -> None:
         pytest.fail(f"Unexpected error: {e}")
 
 
+def extract_fixtures_and_marks(data: dict[str, Any]) -> tuple[list[str], list[str]]:
+    fixtures = data.get("fixtures", [])
+    marks = data.get("marks", [])
+
+    if fixtures is None:
+        fixtures = []
+    if marks is None:
+        marks = []
+
+    if not isinstance(fixtures, list):
+        fixtures = []
+    if not isinstance(marks, list):
+        marks = []
+
+    return fixtures, marks
+
+
 class JSONFile(pytest.File):
     def collect(self) -> Iterable[Item | Collector]:
         try:
             test_text: str = self.path.read_text()
             test_data: dict[str, Any] = json.loads(test_text)
             processed_data: dict[str, Any] = jsonref.replace_refs(test_data, base_uri=self.path.as_uri())
-            
-            fixtures: list[str] = list(processed_data.get("fixtures", []))
-            marks: list[str] = list(processed_data.get("marks", []))
+
+            try:
+                test_spec: TestSpec = TestSpec.model_validate(processed_data)
+                fixtures: list[str] = list(test_spec.fixtures)
+                marks: list[str] = list(test_spec.marks)
+            except ValidationError:
+                fixtures, marks = extract_fixtures_and_marks(processed_data)
 
             def test_func(**kwargs: Any) -> None:
                 return json_test_function(processed_data, **{name: kwargs[name] for name in fixtures if name in kwargs})

@@ -56,10 +56,13 @@ def test_stage_with_valid_save_field():
     assert stage.save["complex_path"] == "users[*].profile.name"
 
 
-@pytest.mark.parametrize("save_value,expected", [
-    (None, None),
-    ({}, {}),
-])
+@pytest.mark.parametrize(
+    "save_value,expected",
+    [
+        (None, None),
+        ({}, {}),
+    ],
+)
 def test_stage_save_field_optional_states(save_value, expected):
     data = {"name": "test", "data": "data", "save": save_value}
     stage = Stage.model_validate(data)
@@ -72,13 +75,16 @@ def test_stage_without_save_field():
     assert stage.save is None
 
 
-@pytest.mark.parametrize("invalid_key,expected_error", [
-    ("1invalid", "'1invalid' is not a valid Python variable name"),
-    ("user-id", "'user-id' is not a valid Python variable name"),
-    ("user id", "'user id' is not a valid Python variable name"),
-    ("user@id", "'user@id' is not a valid Python variable name"),
-    ("", "'' is not a valid Python variable name"),
-])
+@pytest.mark.parametrize(
+    "invalid_key,expected_error",
+    [
+        ("1invalid", "'1invalid' is not a valid Python variable name"),
+        ("user-id", "'user-id' is not a valid Python variable name"),
+        ("user id", "'user id' is not a valid Python variable name"),
+        ("user@id", "'user@id' is not a valid Python variable name"),
+        ("", "'' is not a valid Python variable name"),
+    ],
+)
 def test_stage_save_invalid_python_variable_names(invalid_key, expected_error):
     data = {"name": "test", "data": "data", "save": {invalid_key: "user.id"}}
     with pytest.raises(ValidationError) as exc_info:
@@ -86,11 +92,14 @@ def test_stage_save_invalid_python_variable_names(invalid_key, expected_error):
     assert expected_error in str(exc_info.value)
 
 
-@pytest.mark.parametrize("invalid_jmespath", [
-    "user.[invalid}",
-    "user.",
-    "users[0",
-])
+@pytest.mark.parametrize(
+    "invalid_jmespath",
+    [
+        "user.[invalid}",
+        "user.",
+        "users[0",
+    ],
+)
 def test_stage_save_invalid_jmespath_expressions(invalid_jmespath):
     data = {"name": "test", "data": "data", "save": {"user_id": invalid_jmespath}}
     with pytest.raises(ValidationError) as exc_info:
@@ -98,16 +107,9 @@ def test_stage_save_invalid_jmespath_expressions(invalid_jmespath):
     assert "is not a valid JMESPath expression" in str(exc_info.value)
 
 
-@pytest.mark.parametrize("keyword", [
-    "class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as",
-    "match", "case", "_", "type"
-])
+@pytest.mark.parametrize("keyword", ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"])
 def test_stage_save_invalid_keywords(keyword):
-    data = {
-        "name": "test",
-        "data": "data",
-        "save": {keyword: "user.id"}
-    }
+    data = {"name": "test", "data": "data", "save": {keyword: "user.id"}}
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
     assert f"'{keyword}' is a Python keyword and cannot be used as a variable name" in str(exc_info.value)
@@ -117,12 +119,7 @@ def test_stage_save_valid_underscore_variable_names():
     data = {
         "name": "test",
         "data": "data",
-        "save": {
-            "__": "user.double_underscore",
-            "___": "user.triple_underscore",
-            "_private": "user.private",
-            "__private__": "user.dunder_private"
-        }
+        "save": {"__": "user.double_underscore", "___": "user.triple_underscore", "_private": "user.private", "__private__": "user.dunder_private"},
     }
     stage = Stage.model_validate(data)
     assert stage.save["__"] == "user.double_underscore"
@@ -142,8 +139,8 @@ def test_stage_save_valid_complex_jmespath_expressions():
             "nested_access": "data.nested.deeply.nested.value",
             "pipe_expression": "users | [0]",
             "function_call": "length(users)",
-            "conditional": "users[0] || `default`"
-        }
+            "conditional": "users[0] || `default`",
+        },
     }
     stage = Stage.model_validate(data)
     assert stage.save["filtered_users"] == "users[?age > `18`]"
@@ -156,25 +153,14 @@ def test_stage_save_valid_complex_jmespath_expressions():
 
 
 def test_stage_save_multiple_validation_errors():
-    data = {
-        "name": "test",
-        "data": "data",
-        "save": {
-            "1invalid": "user.id",
-            "valid_name": "user.[invalid}"
-        }
-    }
+    data = {"name": "test", "data": "data", "save": {"1invalid": "user.id", "valid_name": "user.[invalid}"}}
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
     assert "'1invalid' is not a valid Python variable name" in str(exc_info.value)
 
 
 def test_stage_save_keyword_vs_invalid_variable_error_precedence():
-    data = {
-        "name": "test",
-        "data": "data",
-        "save": {"1class": "user.id"}
-    }
+    data = {"name": "test", "data": "data", "save": {"1class": "user.id"}}
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
     assert "'1class' is not a valid Python variable name" in str(exc_info.value)
@@ -193,7 +179,7 @@ def test_stage_save_valid_non_keyword_identifiers():
             "__internal__": "user.internal",
             "MyClass": "user.class_name",
             "for_user": "user.for_field",
-        }
+        },
     }
     stage = Stage.model_validate(data)
     assert len(stage.save) == 8
@@ -203,7 +189,6 @@ def test_stage_save_valid_non_keyword_identifiers():
 
 
 def test_individual_annotated_types():
-
     from pytest_http.models import validate_jmespath_expression, validate_python_variable_name
 
     valid_var_name = "valid_name"

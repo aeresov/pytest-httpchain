@@ -55,13 +55,13 @@ class TestSpec(BaseModel):
     def validate_save_variables_not_fixtures(self) -> "TestSpec":
         if not self.fixtures:
             return self
-        
+
         fixture_names = set(self.fixtures)
-        
+
         for stage in self.stages:
             if stage.save:
                 for var_name in stage.save.keys():
                     if var_name in fixture_names:
                         raise ValueError(f"Variable name '{var_name}' conflicts with fixture name")
-        
+
         return self
