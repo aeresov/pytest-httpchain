@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from pytest_http.models import Stage
+from pytest_http.models import Stage, validate_jmespath_expression, validate_python_variable_name
 
 
 @pytest.mark.parametrize(
@@ -22,15 +22,15 @@ def test_stage_with_different_data_types(name: str, data, expected_name: str, ex
     assert stage.data == expected_data
 
 
-def test_stage_missing_name():
-    data = {"data": "some_data"}
-    with pytest.raises(ValidationError, match="name"):
-        Stage.model_validate(data)
-
-
-def test_stage_missing_data():
-    data = {"name": "test_stage"}
-    with pytest.raises(ValidationError, match="data"):
+@pytest.mark.parametrize(
+    "data,expected_error",
+    [
+        ({"data": "some_data"}, "name"),
+        ({"name": "test_stage"}, "data"),
+    ],
+)
+def test_stage_missing_required_fields(data, expected_error):
+    with pytest.raises(ValidationError, match=expected_error):
         Stage.model_validate(data)
 
 
@@ -188,19 +188,25 @@ def test_stage_save_valid_non_keyword_identifiers():
     assert stage.save["for_user"] == "user.for_field"
 
 
-def test_individual_annotated_types():
-    from pytest_http.models import validate_jmespath_expression, validate_python_variable_name
+@pytest.mark.parametrize(
+    "validator_func,valid_input,expected_output",
+    [
+        (validate_python_variable_name, "valid_name", "valid_name"),
+        (validate_jmespath_expression, "user.id", "user.id"),
+    ],
+)
+def test_individual_annotated_types_valid(validator_func, valid_input, expected_output):
+    assert validator_func(valid_input) == expected_output
 
-    valid_var_name = "valid_name"
-    valid_jmes_expr = "user.id"
 
-    assert validate_python_variable_name(valid_var_name) == "valid_name"
-    assert validate_jmespath_expression(valid_jmes_expr) == "user.id"
-
+@pytest.mark.parametrize(
+    "validator_func,invalid_input,expected_error",
+    [
+        (validate_python_variable_name, "1invalid", "'1invalid' is not a valid Python variable name"),
+        (validate_jmespath_expression, "user.[invalid}", "is not a valid JMESPath expression"),
+    ],
+)
+def test_individual_annotated_types_invalid(validator_func, invalid_input, expected_error):
     with pytest.raises(ValueError) as exc_info:
-        validate_python_variable_name("1invalid")
-    assert "'1invalid' is not a valid Python variable name" in str(exc_info.value)
-
-    with pytest.raises(ValueError) as exc_info:
-        validate_jmespath_expression("user.[invalid}")
-    assert "is not a valid JMESPath expression" in str(exc_info.value)
+        validator_func(invalid_input)
+    assert expected_error in str(exc_info.value)

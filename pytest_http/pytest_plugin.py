@@ -43,7 +43,7 @@ def pytest_configure(config: Config):
 
 def get_test_name_pattern(config: Config) -> re.Pattern[str]:
     suffix: str = getattr(config, "pytest_http_suffix", "http")
-    return re.compile(rf"^test_(?P<name>.*)\.{re.escape(suffix)}\.json$")
+    return re.compile(rf"^test_(?P<name>.+)\.{re.escape(suffix)}\.json$")
 
 
 class VariableSubstitutionError(Exception):
