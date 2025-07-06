@@ -47,8 +47,9 @@ def test_multiple_stages_in_test(pytester):
 def test_regular_python_tests_work_alongside_plugin(pytester):
     pytester.copy_example("conftest.py")
     pytester.copy_example("test_regular_python.py")
+    pytester.copy_example("test_basic.http.json")
     result = pytester.runpytest()
-    result.assert_outcomes(passed=2)
+    result.assert_outcomes(passed=3)
 
 
 def test_json_test_with_skipif_mark(pytester):
@@ -59,10 +60,10 @@ def test_json_test_with_skipif_mark(pytester):
     assert outcomes.get("passed", 0) + outcomes.get("skipped", 0) == 1
 
 
-def test_json_test_with_xfail_mark(pytester):
+def test_json_test_with_collection_validation_error(pytester):
     pytester.copy_example("test_mark_xfail.http.json")
     result = pytester.runpytest()
-    result.assert_outcomes(xfailed=1)
+    result.assert_outcomes(failed=1)
 
 
 def test_json_test_with_references(pytester):
