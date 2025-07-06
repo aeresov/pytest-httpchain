@@ -203,23 +203,19 @@ def test_stage_save_valid_non_keyword_identifiers():
 
 
 def test_individual_annotated_types():
-    from pydantic import BaseModel
 
-    from pytest_http.models import JMESPathExpression, ValidPythonVariableName
+    from pytest_http.models import validate_jmespath_expression, validate_python_variable_name
 
-    class TestModel(BaseModel):
-        var_name: ValidPythonVariableName
-        jmes_expr: JMESPathExpression
+    valid_var_name = "valid_name"
+    valid_jmes_expr = "user.id"
 
-    valid_data = {"var_name": "valid_name", "jmes_expr": "user.id"}
-    model = TestModel.model_validate(valid_data)
-    assert model.var_name == "valid_name"
-    assert model.jmes_expr == "user.id"
+    assert validate_python_variable_name(valid_var_name) == "valid_name"
+    assert validate_jmespath_expression(valid_jmes_expr) == "user.id"
 
-    with pytest.raises(ValidationError) as exc_info:
-        TestModel.model_validate({"var_name": "1invalid", "jmes_expr": "user.id"})
+    with pytest.raises(ValueError) as exc_info:
+        validate_python_variable_name("1invalid")
     assert "'1invalid' is not a valid Python variable name" in str(exc_info.value)
 
-    with pytest.raises(ValidationError) as exc_info:
-        TestModel.model_validate({"var_name": "valid_name", "jmes_expr": "user.[invalid}"})
+    with pytest.raises(ValueError) as exc_info:
+        validate_jmespath_expression("user.[invalid}")
     assert "is not a valid JMESPath expression" in str(exc_info.value)
