@@ -1,98 +1,124 @@
-from pytest_http.models import Scenario, Structure, TestDefinition
+from pytest_http.models import TestSpec
 
 
 def test_complete_test_structure():
-    data = {
-        "fixtures": ["user_data", "config"],
+    test_data = {
+        "fixtures": ["user_id", "api_key"],
         "marks": ["slow", "integration"],
         "stages": [
-            {"name": "setup_user", "data": {"username": "testuser", "email": "test@example.com"}},
-            {"name": "perform_action", "data": ["action1", "action2"]},
-            {"name": "verify_result", "data": 42},
-        ],
+            {
+                "name": "login",
+                "data": {"username": "test", "password": "secret"},
+                "save": {"token": "response.token", "profile_id": "response.user.id"}
+            },
+            {
+                "name": "get_profile",
+                "data": {"user_id": "$user_id"},
+                "save": {"profile": "response.profile"}
+            }
+        ]
     }
 
-    structure = Structure.model_validate(data)
-    scenario = Scenario.model_validate(data)
-
-    assert structure.fixtures == ["user_data", "config"]
-    assert structure.marks == ["slow", "integration"]
-    
-    assert len(scenario.stages) == 3
-    assert scenario.stages[0].name == "setup_user"
-    assert scenario.stages[2].data == 42
+    test_spec = TestSpec.model_validate(test_data)
+    assert test_spec.fixtures == ["user_id", "api_key"]
+    assert test_spec.marks == ["slow", "integration"]
+    assert len(test_spec.stages) == 2
+    assert test_spec.stages[0].name == "login"
+    assert test_spec.stages[0].save == {"token": "response.token", "profile_id": "response.user.id"}
+    assert test_spec.stages[1].name == "get_profile"
+    assert test_spec.stages[1].save == {"profile": "response.profile"}
 
 
 def test_test_definition_save_variables_not_conflicting_with_fixtures():
-    data = {
-        "fixtures": ["user_data", "config"],
+    test_data = {
+        "fixtures": ["user_id", "api_key"],
         "stages": [
-            {"name": "test", "data": "data", "save": {"result": "user.id", "status": "response.status"}},
-        ],
+            {
+                "name": "test_stage",
+                "data": {"test": "data"},
+                "save": {"token": "response.token", "profile": "response.profile"}
+            }
+        ]
     }
-    
-    test_def = TestDefinition.model_validate(data)
-    assert test_def.fixtures == ["user_data", "config"]
-    assert len(test_def.stages) == 1
-    assert test_def.stages[0].save["result"] == "user.id"
-    assert test_def.stages[0].save["status"] == "response.status"
+
+    test_spec = TestSpec.model_validate(test_data)
+    assert test_spec.fixtures == ["user_id", "api_key"]
+    assert len(test_spec.stages) == 1
+    assert test_spec.stages[0].save == {"token": "response.token", "profile": "response.profile"}
 
 
 def test_test_definition_save_variables_conflicting_with_fixtures():
-    from pydantic import ValidationError
-    import pytest
-    
-    data = {
-        "fixtures": ["user_data", "config"],
+    test_data = {
+        "fixtures": ["user_id", "api_key"],
         "stages": [
-            {"name": "test", "data": "data", "save": {"user_data": "user.id"}},
-        ],
+            {
+                "name": "test_stage",
+                "data": {"test": "data"},
+                "save": {"user_id": "response.user.id", "token": "response.token"}
+            }
+        ]
     }
-    
-    with pytest.raises(ValidationError) as exc_info:
-        TestDefinition.model_validate(data)
-    assert "Variable name 'user_data' conflicts with fixture name" in str(exc_info.value)
+
+    try:
+        TestSpec.model_validate(test_data)
+        assert False, "Expected ValidationError"
+    except Exception as e:
+        assert "Variable name 'user_id' conflicts with fixture name" in str(e)
 
 
 def test_test_definition_multiple_stages_with_fixture_conflicts():
-    from pydantic import ValidationError
-    import pytest
-    
-    data = {
-        "fixtures": ["user_data", "config"],
+    test_data = {
+        "fixtures": ["user_id", "api_key"],
         "stages": [
-            {"name": "test1", "data": "data1", "save": {"result": "user.id"}},
-            {"name": "test2", "data": "data2", "save": {"config": "app.config"}},
-        ],
+            {
+                "name": "stage1",
+                "data": {"test": "data"},
+                "save": {"token": "response.token"}
+            },
+            {
+                "name": "stage2",
+                "data": {"test": "data"},
+                "save": {"api_key": "response.key", "profile": "response.profile"}
+            }
+        ]
     }
-    
-    with pytest.raises(ValidationError) as exc_info:
-        TestDefinition.model_validate(data)
-    assert "Variable name 'config' conflicts with fixture name" in str(exc_info.value)
+
+    try:
+        TestSpec.model_validate(test_data)
+        assert False, "Expected ValidationError"
+    except Exception as e:
+        assert "Variable name 'api_key' conflicts with fixture name" in str(e)
 
 
 def test_test_definition_no_fixtures_no_validation():
-    data = {
+    test_data = {
         "stages": [
-            {"name": "test", "data": "data", "save": {"anything": "user.id"}},
-        ],
+            {
+                "name": "test_stage",
+                "data": {"test": "data"},
+                "save": {"user_id": "response.user.id", "token": "response.token"}
+            }
+        ]
     }
-    
-    test_def = TestDefinition.model_validate(data)
-    assert test_def.fixtures == []
-    assert len(test_def.stages) == 1
-    assert test_def.stages[0].save["anything"] == "user.id"
+
+    test_spec = TestSpec.model_validate(test_data)
+    assert test_spec.fixtures == []
+    assert len(test_spec.stages) == 1
+    assert test_spec.stages[0].save == {"user_id": "response.user.id", "token": "response.token"}
 
 
 def test_test_definition_stages_without_save_field():
-    data = {
-        "fixtures": ["user_data", "config"],
+    test_data = {
+        "fixtures": ["user_id", "api_key"],
         "stages": [
-            {"name": "test", "data": "data"},
-        ],
+            {
+                "name": "test_stage",
+                "data": {"test": "data"}
+            }
+        ]
     }
-    
-    test_def = TestDefinition.model_validate(data)
-    assert test_def.fixtures == ["user_data", "config"]
-    assert len(test_def.stages) == 1
-    assert test_def.stages[0].save is None
+
+    test_spec = TestSpec.model_validate(test_data)
+    assert test_spec.fixtures == ["user_id", "api_key"]
+    assert len(test_spec.stages) == 1
+    assert test_spec.stages[0].save is None

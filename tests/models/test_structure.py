@@ -1,46 +1,78 @@
 import pytest
 from pydantic import ValidationError
-
-from pytest_http.models import Structure
+from pytest_http.models import TestSpec
 
 
 def test_structure_with_fixtures_and_marks():
-    data = {"fixtures": ["fixture1", "fixture2"], "marks": ["mark1", "mark2"]}
-    structure = Structure.model_validate(data)
-    assert structure.fixtures == ["fixture1", "fixture2"]
-    assert structure.marks == ["mark1", "mark2"]
+    data = {
+        "fixtures": ["user_id", "api_key"],
+        "marks": ["slow", "integration"],
+        "stages": [{"name": "test", "data": "test_data"}]
+    }
+
+    test_spec = TestSpec.model_validate(data)
+    assert test_spec.fixtures == ["user_id", "api_key"]
+    assert test_spec.marks == ["slow", "integration"]
+    assert len(test_spec.stages) == 1
 
 
 def test_structure_empty():
     data = {}
-    structure = Structure.model_validate(data)
-    assert structure.fixtures == []
-    assert structure.marks == []
+
+    test_spec = TestSpec.model_validate(data)
+    assert test_spec.fixtures == []
+    assert test_spec.marks == []
+    assert test_spec.stages == []
 
 
 def test_structure_with_extra_fields():
-    data = {"fixtures": ["fixture1"], "marks": ["mark1"], "unknown_field": "should_be_ignored"}
-    structure = Structure.model_validate(data)
-    assert structure.fixtures == ["fixture1"]
-    assert structure.marks == ["mark1"]
-    assert not hasattr(structure, "unknown_field")
+    data = {
+        "fixtures": ["user_id"],
+        "marks": ["slow"],
+        "stages": [{"name": "test", "data": "test_data"}],
+        "extra_field": "ignored"
+    }
+
+    test_spec = TestSpec.model_validate(data)
+    assert test_spec.fixtures == ["user_id"]
+    assert test_spec.marks == ["slow"]
+    assert len(test_spec.stages) == 1
 
 
 def test_structure_with_none_values():
-    data = {"fixtures": None, "marks": None}
-    with pytest.raises(ValidationError):
-        Structure.model_validate(data)
+    data = {
+        "fixtures": None,
+        "marks": None,
+        "stages": None
+    }
+
+    test_spec = TestSpec.model_validate(data)
+    assert test_spec.fixtures == []
+    assert test_spec.marks == []
+    assert test_spec.stages == []
 
 
 def test_structure_invalid_fixtures_type():
-    data = {"fixtures": "not_a_list"}
-    with pytest.raises(ValidationError):
-        Structure.model_validate(data)
+    data = {
+        "fixtures": "not_a_list",
+        "marks": ["slow"],
+        "stages": [{"name": "test", "data": "test_data"}]
+    }
+
+    with pytest.raises(ValidationError) as exc_info:
+        TestSpec.model_validate(data)
+    assert "Input should be a valid list" in str(exc_info.value)
 
 
 def test_structure_invalid_marks_type():
-    data = {"marks": 123}
-    with pytest.raises(ValidationError):
-        Structure.model_validate(data)
+    data = {
+        "fixtures": ["user_id"],
+        "marks": "not_a_list",
+        "stages": [{"name": "test", "data": "test_data"}]
+    }
+
+    with pytest.raises(ValidationError) as exc_info:
+        TestSpec.model_validate(data)
+    assert "Input should be a valid list" in str(exc_info.value)
 
 

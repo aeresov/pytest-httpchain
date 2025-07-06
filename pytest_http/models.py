@@ -2,7 +2,7 @@ import keyword
 from typing import Annotated, Any
 
 import jmespath
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def validate_python_variable_name(v: str) -> str:
@@ -37,28 +37,22 @@ class Stage(BaseModel):
     save: dict[ValidPythonVariableName, JMESPathExpression] | None = Field(default=None)
 
 
-class Structure(BaseModel):
-    fixtures: list[str] = Field(default_factory=list)
-    marks: list[str] = Field(default_factory=list)
-
-    model_config = ConfigDict(extra="ignore")
-
-
-class Scenario(BaseModel):
-    stages: list[Stage] = Field(default_factory=list)
-
-    model_config = ConfigDict(extra="ignore")
-
-
-class TestDefinition(BaseModel):
+class TestSpec(BaseModel):
     fixtures: list[str] = Field(default_factory=list)
     marks: list[str] = Field(default_factory=list)
     stages: list[Stage] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="ignore")
+
+    @field_validator("fixtures", "marks", "stages", mode="before")
+    @classmethod
+    def convert_none_to_empty_list(cls, v):
+        if v is None:
+            return []
+        return v
 
     @model_validator(mode="after")
-    def validate_save_variables_not_fixtures(self) -> "TestDefinition":
+    def validate_save_variables_not_fixtures(self) -> "TestSpec":
         if not self.fixtures:
             return self
         
