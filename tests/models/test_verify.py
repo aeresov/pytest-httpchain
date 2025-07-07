@@ -47,13 +47,13 @@ def test_verify_model_invalid_status():
 
 
 def test_stage_with_verify_field():
-    stage = Stage(name="test_stage", data={}, verify=Verify(status=HTTPStatus.OK))
+    stage = Stage(name="test_stage", verify=Verify(status=HTTPStatus.OK))
     assert stage.verify is not None
     assert stage.verify.status == HTTPStatus.OK
 
 
 def test_stage_with_verify_dict():
-    stage = Stage(name="test_stage", data={}, verify={"status": 200})
+    stage = Stage(name="test_stage", verify={"status": 200})
     assert stage.verify is not None
     assert stage.verify.status == HTTPStatus.OK
 

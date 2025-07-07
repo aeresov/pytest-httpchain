@@ -9,7 +9,7 @@ from pytest_http.models import Scenario
     [
         ({"stages": []}, []),
         ({"stages": None}, []),
-        ({"stages": [{"name": "stage1", "data": "test_data1"}, {"name": "stage2", "data": "test_data2"}]}, 2),
+        ({"stages": [{"name": "stage1"}, {"name": "stage2"}]}, 2),
     ],
 )
 def test_scenario_stages_handling(data, expected_stages):
@@ -17,9 +17,7 @@ def test_scenario_stages_handling(data, expected_stages):
     if isinstance(expected_stages, int):
         assert len(scenario.stages) == expected_stages
         assert scenario.stages[0].name == "stage1"
-        assert scenario.stages[0].data == "test_data1"
         assert scenario.stages[1].name == "stage2"
-        assert scenario.stages[1].data == "test_data2"
     else:
         assert scenario.stages == expected_stages
 
@@ -41,27 +39,27 @@ def test_scenario_fixtures_and_marks(data, expected_fixtures, expected_marks):
 def test_scenario_with_complex_stages():
     data = {
         "stages": [
-            {"name": "string_stage", "data": "simple_string"},
-            {"name": "number_stage", "data": 42},
-            {"name": "dict_stage", "data": {"key": "value", "nested": {"inner": "data"}}},
-            {"name": "list_stage", "data": ["item1", "item2", {"nested": "object"}]},
-            {"name": "boolean_stage", "data": True},
-            {"name": "null_stage", "data": None},
+            {"name": "string_stage"},
+            {"name": "number_stage"},
+            {"name": "dict_stage"},
+            {"name": "list_stage"},
+            {"name": "boolean_stage"},
+            {"name": "null_stage"},
         ]
     }
 
     scenario = Scenario.model_validate(data)
     assert len(scenario.stages) == 6
-    assert scenario.stages[0].data == "simple_string"
-    assert scenario.stages[1].data == 42
-    assert scenario.stages[2].data == {"key": "value", "nested": {"inner": "data"}}
-    assert scenario.stages[3].data == ["item1", "item2", {"nested": "object"}]
-    assert scenario.stages[4].data is True
-    assert scenario.stages[5].data is None
+    assert scenario.stages[0].name == "string_stage"
+    assert scenario.stages[1].name == "number_stage"
+    assert scenario.stages[2].name == "dict_stage"
+    assert scenario.stages[3].name == "list_stage"
+    assert scenario.stages[4].name == "boolean_stage"
+    assert scenario.stages[5].name == "null_stage"
 
 
 def test_scenario_with_stages_containing_save_field():
-    data = {"stages": [{"name": "stage_with_save", "data": {"test": "data"}, "save": {"result": "response.result", "status": "response.status"}}]}
+    data = {"stages": [{"name": "stage_with_save", "save": {"result": "response.result", "status": "response.status"}}]}
 
     scenario = Scenario.model_validate(data)
     assert len(scenario.stages) == 1
@@ -74,7 +72,7 @@ def test_scenario_with_stages_containing_save_field():
         ({"stages": "not_a_list"}, "Input should be a valid list"),
         ({"fixtures": "not_a_list"}, "Input should be a valid list"),
         ({"marks": "not_a_list"}, "Input should be a valid list"),
-        ({"stages": [{"name": "stage1", "data": "test_data"}, {"invalid": "structure"}]}, "Field required"),
+        ({"stages": [{"name": "stage1"}, {"invalid": "structure"}]}, "Field required"),
     ],
 )
 def test_scenario_validation_errors(data, expected_error):
@@ -84,7 +82,7 @@ def test_scenario_validation_errors(data, expected_error):
 
 
 def test_scenario_ignores_extra_fields():
-    data = {"stages": [{"name": "stage1", "data": "test_data"}], "fixtures": ["user_id"], "marks": ["slow"], "extra_field": "should_be_ignored"}
+    data = {"stages": [{"name": "stage1"}], "fixtures": ["user_id"], "marks": ["slow"], "extra_field": "should_be_ignored"}
 
     scenario = Scenario.model_validate(data)
     assert len(scenario.stages) == 1
@@ -97,7 +95,7 @@ def test_scenario_cross_field_validator_no_conflict():
     data = {
         "fixtures": ["user_id", "api_key"],
         "stages": [
-            {"name": "test", "data": "data", "save": {"result": "user.id", "status": "response.status"}},
+            {"name": "test", "save": {"result": "user.id", "status": "response.status"}},
         ],
     }
     scenario = Scenario.model_validate(data)
@@ -119,7 +117,7 @@ def test_scenario_cross_field_validator_conflicts(fixtures, save_vars, expected_
     data = {
         "fixtures": fixtures,
         "stages": [
-            {"name": "test", "data": "data", "save": save_vars},
+            {"name": "test", "save": save_vars},
         ],
     }
     with pytest.raises(ValidationError) as exc_info:
@@ -130,9 +128,9 @@ def test_scenario_cross_field_validator_conflicts(fixtures, save_vars, expected_
 @pytest.mark.parametrize(
     "data",
     [
-        {"stages": [{"name": "test", "data": "data", "save": {"user_id": "user.id"}}]},
-        {"fixtures": ["user_id", "api_key"], "stages": [{"name": "test", "data": "data"}]},
-        {"fixtures": ["user_id", "api_key"], "stages": [{"name": "test", "data": "data", "save": {}}]},
+        {"stages": [{"name": "test", "save": {"user_id": "user.id"}}]},
+        {"fixtures": ["user_id", "api_key"], "stages": [{"name": "test"}]},
+        {"fixtures": ["user_id", "api_key"], "stages": [{"name": "test", "save": {}}]},
     ],
 )
 def test_scenario_cross_field_validator_no_validation_needed(data):
@@ -144,9 +142,9 @@ def test_scenario_cross_field_validator_mixed_stages():
     data = {
         "fixtures": ["user_id", "api_key"],
         "stages": [
-            {"name": "test1", "data": "data1", "save": {"result": "user.id"}},
-            {"name": "test2", "data": "data2"},
-            {"name": "test3", "data": "data3", "save": {"status": "response.status"}},
+            {"name": "test1", "save": {"result": "user.id"}},
+            {"name": "test2"},
+            {"name": "test3", "save": {"status": "response.status"}},
         ],
     }
     scenario = Scenario.model_validate(data)
@@ -162,8 +160,8 @@ def test_scenario_complete_integration():
         "fixtures": ["user_id", "api_key"],
         "marks": ["slow", "integration"],
         "stages": [
-            {"name": "login", "data": {"username": "test", "password": "secret"}, "save": {"token": "response.token", "profile_id": "response.user.id"}},
-            {"name": "get_profile", "data": {"user_id": "$user_id"}, "save": {"profile": "response.profile"}},
+            {"name": "login", "save": {"token": "response.token", "profile_id": "response.user.id"}},
+            {"name": "get_profile", "save": {"profile": "response.profile"}},
         ],
     }
 
