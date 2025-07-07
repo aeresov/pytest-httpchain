@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "pytest-http": {
+      "command": "python",
+      "args": ["/workspace/mcp_server.py"],
+      "env": {
+        "PYTHONPATH": "/workspace"
+      },
+      "description": "pytest-http MCP Server - Provides tools for creating, validating, and running HTTP tests in JSON format"
+    }
+  }
+}
