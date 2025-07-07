@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import Mock
+
+import pytest
 
 from pytest_http.pytest_plugin import get_test_name_pattern
 
