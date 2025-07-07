@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from pytest_http.pytest_plugin import VariableSubstitutionError, substitute_variables
+from pytest_http.pytest_plugin import VariableSubstitutionError, substitute_variables, substitute_stage_variables
 
 
 @pytest.mark.parametrize(
@@ -97,3 +97,136 @@ def test_substitute_variables_partial_match():
     result = substitute_variables(json_text, fixtures)
     parsed_result = json.loads(result)
     assert parsed_result == {"var": "short", "variable": "long_value"}
+
+
+# Tests for stage-by-stage variable substitution
+
+def test_substitute_stage_variables_basic():
+    """Test basic stage variable substitution."""
+    stage_data = {
+        "name": "test_stage",
+        "url": "https://api.example.com/users/$user_id",
+        "data": {"message": "$greeting"}
+    }
+    variables = {"user_id": 123, "greeting": "Hello"}
+    
+    result = substitute_stage_variables(stage_data, variables)
+    
+    expected = {
+        "name": "test_stage",
+        "url": "https://api.example.com/users/123",
+        "data": {"message": "Hello"}
+    }
+    assert result == expected
+
+
+def test_substitute_stage_variables_mixed_fixtures_and_saved():
+    """Test stage substitution with both fixture variables and saved variables."""
+    stage_data = {
+        "name": "second_stage",
+        "url": "https://api.example.com/users/$user_id/posts",
+        "headers": {"Authorization": "Bearer $token"},
+        "params": {"limit": "$page_size"}
+    }
+    variables = {
+        "user_id": 456,  # from previous stage
+        "token": "abc123",  # from fixture
+        "page_size": 10  # from fixture
+    }
+    
+    result = substitute_stage_variables(stage_data, variables)
+    
+    expected = {
+        "name": "second_stage", 
+        "url": "https://api.example.com/users/456/posts",
+        "headers": {"Authorization": "Bearer abc123"},
+        "params": {"limit": 10}
+    }
+    assert result == expected
+
+
+def test_substitute_stage_variables_nested_data():
+    """Test stage substitution with nested data structures."""
+    stage_data = {
+        "name": "complex_stage",
+        "data": {
+            "user": {
+                "id": "$user_id",
+                "profile": "$user_profile"
+            },
+            "settings": {
+                "theme": "$theme",
+                "notifications": "$notifications"
+            }
+        }
+    }
+    variables = {
+        "user_id": 789,
+        "user_profile": {"name": "John", "email": "john@example.com"},
+        "theme": "dark",
+        "notifications": True
+    }
+    
+    result = substitute_stage_variables(stage_data, variables)
+    
+    expected = {
+        "name": "complex_stage",
+        "data": {
+            "user": {
+                "id": 789,
+                "profile": {"name": "John", "email": "john@example.com"}
+            },
+            "settings": {
+                "theme": "dark",
+                "notifications": True
+            }
+        }
+    }
+    assert result == expected
+
+
+def test_substitute_stage_variables_no_variables():
+    """Test stage substitution when no variables are provided."""
+    stage_data = {
+        "name": "static_stage",
+        "url": "https://api.example.com/status",
+        "data": {"check": "health"}
+    }
+    variables = {}
+    
+    result = substitute_stage_variables(stage_data, variables)
+    
+    assert result == stage_data
+
+
+def test_substitute_stage_variables_partial_substitution():
+    """Test stage substitution where only some variables are available."""
+    stage_data = {
+        "name": "partial_stage",
+        "url": "https://api.example.com/users/$user_id",
+        "data": {"message": "$missing_var"}
+    }
+    variables = {"user_id": 123}
+    
+    result = substitute_stage_variables(stage_data, variables)
+    
+    expected = {
+        "name": "partial_stage",
+        "url": "https://api.example.com/users/123",
+        "data": {"message": "$missing_var"}  # This variable is not substituted
+    }
+    assert result == expected
+
+
+def test_substitute_stage_variables_error_handling():
+    """Test error handling in stage variable substitution."""
+    stage_data = {"data": "$invalid"}
+    
+    class UnserializableObject:
+        def __repr__(self):
+            raise Exception("Cannot serialize")
+
+    variables = {"invalid": UnserializableObject()}
+
+    with pytest.raises(VariableSubstitutionError, match="Failed to substitute variables in stage"):
+        substitute_stage_variables(stage_data, variables)

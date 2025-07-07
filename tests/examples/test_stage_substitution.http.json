@@ -1,0 +1,51 @@
+{
+    "fixtures": [
+        "base_url"
+    ],
+    "stages": [
+        {
+            "name": "get_first_user",
+            "url": "$base_url/users",
+            "headers": {
+                "Accept": "application/json"
+            },
+            "data": {},
+            "save": {
+                "first_user_id": "json[0].id",
+                "first_user_name": "json[0].name"
+            }
+        },
+        {
+            "name": "get_user_details",
+            "url": "$base_url/users/$first_user_id",
+            "headers": {
+                "Accept": "application/json",
+                "X-User-Name": "$first_user_name"
+            },
+            "data": {},
+            "save": {
+                "user_email": "json.email",
+                "user_company": "json.company.name"
+            }
+        },
+        {
+            "name": "search_company_users",
+            "url": "$base_url/users",
+            "params": {
+                "company": "$user_company"
+            },
+            "headers": {
+                "Accept": "application/json"
+            },
+            "data": {
+                "search_criteria": {
+                    "company": "$user_company",
+                    "primary_contact": "$user_email"
+                }
+            },
+            "save": {
+                "company_user_count": "length(json)"
+            }
+        }
+    ]
+}

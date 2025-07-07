@@ -14,3 +14,8 @@ def number_value():
 @pytest.fixture
 def dict_value():
     return {"key": "value", "number": 42}
+
+
+@pytest.fixture
+def base_url():
+    return "https://jsonplaceholder.typicode.com"
