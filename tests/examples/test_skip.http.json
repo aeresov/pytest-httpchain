@@ -4,8 +4,7 @@
     ],
     "stages": [
         {
-            "name": "skipped_test",
-            "data": 42
+            "name": "skipped_test"
         }
     ]
 }

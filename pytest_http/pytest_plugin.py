@@ -64,71 +64,70 @@ def substitute_variables(json_text: str, fixtures: dict[str, Any]) -> str:
 
 def substitute_stage_variables(stage_data: dict[str, Any], variables: dict[str, Any]) -> dict[str, Any]:
     try:
-        # Convert stage to JSON string for substitution
         json_text: str = json.dumps(stage_data, default=str)
 
-        # Substitute all available variables
         for name, value in variables.items():
-            # Handle standalone variable placeholders (quoted)
             quoted_placeholder: str = f'"${name}"'
             json_value: str = json.dumps(value)
             json_text = json_text.replace(quoted_placeholder, json_value)
 
-            # Handle variables within strings (unquoted)
             unquoted_placeholder: str = f"${name}"
             string_value: str = str(value)
             json_text = json_text.replace(unquoted_placeholder, string_value)
 
-        # Convert back to dict
         return json.loads(json_text)
     except Exception as e:
         raise VariableSubstitutionError(f"Failed to substitute variables in stage: {e}") from e
 
 
 def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
-    # Initialize variable context with fixtures
     variable_context: dict[str, Any] = dict(fixtures)
 
     try:
-        # Initial validation without variable substitution to get basic structure
         test_model: Scenario = Scenario.model_validate(original_data)
         logging.info(f"Test model: {test_model}")
         logging.info(f"Available fixtures: {fixtures}")
 
-        # Execute each stage with progressive variable substitution
         for stage_index, original_stage in enumerate(test_model.stages):
             logging.info(f"Executing stage {stage_index}: {original_stage.name}")
             logging.info(f"Current variable context: {variable_context}")
 
-            # Apply variable substitution to this stage
             stage_dict = original_stage.model_dump()
             substituted_stage_dict = substitute_stage_variables(stage_dict, variable_context)
 
-            # Re-validate the stage after substitution
             try:
                 stage = Stage.model_validate(substituted_stage_dict)
             except ValidationError as e:
                 pytest.fail(f"Stage '{original_stage.name}' validation failed after variable substitution: {e}")
 
-            # Make HTTP request if URL is provided
             if stage.url:
                 logging.info(f"Making HTTP request to: {stage.url}")
 
-                # Prepare request parameters
                 request_params = {}
                 if stage.params:
                     request_params["params"] = stage.params
                 if stage.headers:
                     request_params["headers"] = stage.headers
 
-                # Make GET request (for now, could be extended to support other methods)
-                response = requests.get(stage.url, **request_params)
+                try:
+                    response = requests.get(stage.url, **request_params)
+                except requests.Timeout:
+                    pytest.fail(f"HTTP request timed out for stage '{stage.name}' to URL: {stage.url}")
+                except requests.ConnectionError as e:
+                    pytest.fail(f"HTTP connection error for stage '{stage.name}' to URL: {stage.url} - {e}")
+                except requests.RequestException as e:
+                    pytest.fail(f"HTTP request failed for stage '{stage.name}' to URL: {stage.url} - {e}")
 
-                # Log response details
                 logging.info(f"Response status: {response.status_code}")
                 logging.info(f"Response headers: {dict(response.headers)}")
 
-                # Store response data for potential saving
+                if stage.verify and stage.verify.status is not None:
+                    expected_status = stage.verify.status.value
+                    actual_status = response.status_code
+                    if actual_status != expected_status:
+                        pytest.fail(f"Status code verification failed for stage '{stage.name}': expected {expected_status}, got {actual_status}")
+                    logging.info(f"Status code verification passed: {actual_status}")
+
                 response_data = {
                     "status_code": response.status_code,
                     "headers": dict(response.headers),
@@ -136,7 +135,6 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                     "json": response.json() if response.headers.get("content-type", "").startswith("application/json") else None,
                 }
 
-                # Save variables if specified
                 if stage.save:
                     import jmespath
 
@@ -150,26 +148,12 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
             else:
                 logging.info(f"No URL provided for stage '{stage.name}', skipping HTTP request")
 
-                # For stages without HTTP requests, still allow saving data variables
-                if stage.save:
-                    import jmespath
-
-                    for var_name, jmespath_expr in stage.save.items():
-                        try:
-                            saved_value = jmespath.search(jmespath_expr, stage.data)
-                            variable_context[var_name] = saved_value
-                            logging.info(f"Saved variable '{var_name}' = {saved_value} from stage data")
-                        except Exception as e:
-                            pytest.fail(f"Error saving variable '{var_name}' from stage data: {e}")
-
     except VariableSubstitutionError as e:
         pytest.fail(f"Variable substitution error: {e}")
     except json.JSONDecodeError as e:
         pytest.fail(f"JSON decode error after substitution: {e}")
     except ValidationError as e:
         pytest.fail(f"Validation error: {e}")
-    except requests.RequestException as e:
-        pytest.fail(f"HTTP request error: {e}")
     except Exception as e:
         pytest.fail(f"Unexpected error: {e}")
 
@@ -177,7 +161,6 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
 class JSONFile(pytest.File):
     def collect(self) -> Iterable[Item | Collector]:
         try:
-            # Load JSON (catch general JSON formatting errors)
             test_text: str = self.path.read_text()
             test_data: dict[str, Any] = json.loads(test_text)
         except json.JSONDecodeError as e:
@@ -188,14 +171,12 @@ class JSONFile(pytest.File):
             return
 
         try:
-            # JSONRef (catch more JSON errors)
             processed_data: dict[str, Any] = jsonref.replace_refs(test_data, base_uri=self.path.as_uri())
         except Exception as e:
             yield FailedValidationItem.from_parent(self, name=self.name, error=f"JSONRef error: {e}")
             return
 
         try:
-            # Pydantic validation without variable substitution (catch validation errors)
             test_spec: Scenario = Scenario.model_validate(processed_data)
         except ValidationError as e:
             yield FailedValidationItem.from_parent(self, name=self.name, error=f"Validation error: {e}")
@@ -205,7 +186,6 @@ class JSONFile(pytest.File):
             return
 
         try:
-            # Extract fixtures and marks (catch specific errors)
             fixtures: list[str] = list(test_spec.fixtures)
             marks: list[str] = list(test_spec.marks)
         except Exception as e:

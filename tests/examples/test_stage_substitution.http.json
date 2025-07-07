@@ -9,7 +9,6 @@
             "headers": {
                 "Accept": "application/json"
             },
-            "data": {},
             "save": {
                 "first_user_id": "json[0].id",
                 "first_user_name": "json[0].name"
@@ -22,7 +21,6 @@
                 "Accept": "application/json",
                 "X-User-Name": "$first_user_name"
             },
-            "data": {},
             "save": {
                 "user_email": "json.email",
                 "user_company": "json.company.name"
@@ -36,12 +34,6 @@
             },
             "headers": {
                 "Accept": "application/json"
-            },
-            "data": {
-                "search_criteria": {
-                    "company": "$user_company",
-                    "primary_contact": "$user_email"
-                }
             },
             "save": {
                 "company_user_count": "length(json)"

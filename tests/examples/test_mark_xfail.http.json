@@ -2,7 +2,6 @@
     "marks": ["xfail(reason='stage is misconfigured, test should fail')"],
     "stages": [
         {
-            "data": 999
         }
     ]
 } 

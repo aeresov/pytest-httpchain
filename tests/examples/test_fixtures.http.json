@@ -5,8 +5,7 @@
     ],
     "stages": [
         {
-            "name": "fixture_test",
-            "data": "will be substituted"
+            "name": "fixture_test"
         }
     ]
 }

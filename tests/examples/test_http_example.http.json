@@ -10,7 +10,6 @@
                 "Accept": "application/json",
                 "User-Agent": "pytest-http/0.1.0"
             },
-            "data": {},
             "save": {
                 "user_count": "length(@)",
                 "first_user_id": "[0].id",
@@ -23,7 +22,6 @@
             "headers": {
                 "Accept": "application/json"
             },
-            "data": {},
             "save": {
                 "user_email": "json.email",
                 "user_website": "json.website"
