@@ -4,8 +4,7 @@
     ],
     "stages": [
         {
-            "name": "substitution_test",
-            "data": "$dict_value"
+            "name": "substitution_test"
         }
     ]
 }

@@ -2,8 +2,7 @@
     "marks": ["skipif(sys.platform == 'win32', reason='Not supported on Windows')"],
     "stages": [
         {
-            "name": "test_unix_only_feature",
-            "data": 42
+            "name": "test_unix_only_feature"
         }
     ]
 } 

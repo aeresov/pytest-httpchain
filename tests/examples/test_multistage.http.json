@@ -1,16 +1,13 @@
 {
     "stages": [
         {
-            "name": "first_stage",
-            "data": 1
+            "name": "first_stage"
         },
         {
-            "name": "second_stage",
-            "data": 2
+            "name": "second_stage"
         },
         {
-            "name": "third_stage",
-            "data": 3
+            "name": "third_stage"
         }
     ]
 }

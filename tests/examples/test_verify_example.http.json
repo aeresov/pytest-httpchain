@@ -6,7 +6,6 @@
             "headers": {
                 "Accept": "application/json"
             },
-            "data": {},
             "verify": {
                 "status": 200
             },
@@ -20,7 +19,6 @@
             "headers": {
                 "Accept": "application/json"
             },
-            "data": {},
             "verify": {
                 "status": 404
             }

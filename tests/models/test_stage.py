@@ -53,22 +53,20 @@ def test_stage_with_valid_save_field():
 
 
 @pytest.mark.parametrize(
-    "save_value,expected",
+    "save_value,expected,description",
     [
-        (None, None),
-        ({}, {}),
+        (None, None, "with_none"),
+        ({}, {}, "with_empty_dict"),
+        ("no_save", None, "without_save_field"),
     ],
 )
-def test_stage_save_field_optional_states(save_value, expected):
-    data = {"name": "test", "save": save_value}
+def test_stage_save_field_optional_states(save_value, expected, description):
+    if description == "without_save_field":
+        data = {"name": "test"}
+    else:
+        data = {"name": "test", "save": save_value}
     stage = Stage.model_validate(data)
     assert stage.save == expected
-
-
-def test_stage_without_save_field():
-    data = {"name": "test"}
-    stage = Stage.model_validate(data)
-    assert stage.save is None
 
 
 @pytest.mark.parametrize(
@@ -89,18 +87,18 @@ def test_stage_save_invalid_python_variable_names(invalid_key, expected_error):
 
 
 @pytest.mark.parametrize(
-    "invalid_jmespath",
+    "invalid_jmespath,expected_error",
     [
-        "user.[invalid}",
-        "user.",
-        "users[0",
+        ("user.[invalid}", "is not a valid JMESPath expression"),
+        ("user.", "is not a valid JMESPath expression"),
+        ("users[0", "is not a valid JMESPath expression"),
     ],
 )
-def test_stage_save_invalid_jmespath_expressions(invalid_jmespath):
+def test_stage_save_invalid_jmespath_expressions(invalid_jmespath, expected_error):
     data = {"name": "test", "save": {"user_id": invalid_jmespath}}
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
-    assert "is not a valid JMESPath expression" in str(exc_info.value)
+    assert expected_error in str(exc_info.value)
 
 
 @pytest.mark.parametrize("keyword", ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"])

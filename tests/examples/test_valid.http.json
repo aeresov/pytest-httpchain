@@ -1,8 +1,7 @@
 {
     "stages": [
         {
-            "name": "valid_test",
-            "data": 42
+            "name": "valid_test"
         }
     ]
 }

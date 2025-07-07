@@ -6,19 +6,20 @@ from pydantic import ValidationError
 from pytest_http.models import Stage, Verify
 
 
-def test_verify_model_with_status():
-    verify = Verify(status=HTTPStatus.OK)
-    assert verify.status == HTTPStatus.OK
-
-
-def test_verify_model_without_status():
-    verify = Verify()
-    assert verify.status is None
-
-
-def test_verify_model_with_none_status():
-    verify = Verify(status=None)
-    assert verify.status is None
+@pytest.mark.parametrize(
+    "status_input,expected_status,description",
+    [
+        (HTTPStatus.OK, HTTPStatus.OK, "with_status"),
+        (None, None, "with_none"),
+        ("no_args", None, "without_args"),
+    ],
+)
+def test_verify_model_status_handling(status_input, expected_status, description):
+    if description == "without_args":
+        verify = Verify()
+    else:
+        verify = Verify(status=status_input)
+    assert verify.status == expected_status
 
 
 def test_verify_model_with_different_status_codes():
@@ -46,42 +47,37 @@ def test_verify_model_invalid_status():
         Verify(status=999)  # Invalid HTTP status code
 
 
-def test_stage_with_verify_field():
-    stage = Stage(name="test_stage", verify=Verify(status=HTTPStatus.OK))
-    assert stage.verify is not None
-    assert stage.verify.status == HTTPStatus.OK
+@pytest.mark.parametrize(
+    "verify_input,expected_verify_exists,expected_status",
+    [
+        (Verify(status=HTTPStatus.OK), True, HTTPStatus.OK),
+        ({"status": 200}, True, HTTPStatus.OK),
+        (None, False, None),
+        ({}, True, None),
+        ("no_verify", False, None),
+    ],
+)
+def test_stage_verify_field_handling(verify_input, expected_verify_exists, expected_status):
+    if verify_input == "no_verify":
+        stage = Stage(name="test_stage")
+    else:
+        stage = Stage(name="test_stage", verify=verify_input)
 
-
-def test_stage_with_verify_dict():
-    stage = Stage(name="test_stage", verify={"status": 200})
-    assert stage.verify is not None
-    assert stage.verify.status == HTTPStatus.OK
-
-
-def test_stage_without_verify():
-    stage = Stage(name="test_stage", data={})
-    assert stage.verify is None
-
-
-def test_stage_with_none_verify():
-    stage = Stage(name="test_stage", data={}, verify=None)
-    assert stage.verify is None
-
-
-def test_stage_with_empty_verify():
-    stage = Stage(name="test_stage", data={}, verify={})
-    assert stage.verify is not None
-    assert stage.verify.status is None
+    if expected_verify_exists:
+        assert stage.verify is not None
+        assert stage.verify.status == expected_status
+    else:
+        assert stage.verify is None
 
 
 def test_stage_verify_field_optional():
-    stage_data = {"name": "test_stage", "data": {}}
+    stage_data = {"name": "test_stage"}
     stage = Stage.model_validate(stage_data)
     assert stage.verify is None
 
 
 def test_stage_with_complete_verify_data():
-    stage_data = {"name": "test_stage", "data": {}, "url": "https://api.example.com/test", "verify": {"status": 201}}
+    stage_data = {"name": "test_stage", "url": "https://api.example.com/test", "verify": {"status": 201}}
     stage = Stage.model_validate(stage_data)
     assert stage.verify is not None
     assert stage.verify.status == HTTPStatus.CREATED
