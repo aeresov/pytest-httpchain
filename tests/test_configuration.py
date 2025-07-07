@@ -1,5 +1,3 @@
-from unittest.mock import Mock
-
 import pytest
 
 from pytest_http.pytest_plugin import pytest_configure, validate_suffix
@@ -25,9 +23,14 @@ def test_validate_suffix_invalid(suffix: str):
 
 
 def test_pytest_configure_stores_validated_suffix():
-    config = Mock()
-    config.getini.return_value = "custom"
+    class MockConfig:
+        def __init__(self):
+            self.pytest_http_suffix = None
 
+        def getini(self, name):
+            return "custom"
+
+    config = MockConfig()
     pytest_configure(config)
 
     assert hasattr(config, "pytest_http_suffix")
@@ -35,8 +38,11 @@ def test_pytest_configure_stores_validated_suffix():
 
 
 def test_pytest_configure_validates_suffix():
-    config = Mock()
-    config.getini.return_value = "invalid.suffix"
+    class MockConfig:
+        def getini(self, name):
+            return "invalid.suffix"
+
+    config = MockConfig()
 
     with pytest.raises(ValueError, match="suffix must contain only alphanumeric characters, underscores, and hyphens"):
         pytest_configure(config)
