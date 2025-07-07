@@ -100,12 +100,7 @@ def test_substitute_stage_variables_nested_data():
 
 def test_substitute_variables_error_handling():
     json_text = '{"data": "$invalid"}'
-
-    class UnserializableObject:
-        def __repr__(self):
-            raise Exception("Cannot serialize")
-
-    fixtures = {"invalid": UnserializableObject()}
+    fixtures = {"invalid": object()}  # Simple object that can't be JSON serialized
 
     with pytest.raises(VariableSubstitutionError, match="Failed to substitute variables"):
         substitute_variables(json_text, fixtures)
@@ -113,12 +108,7 @@ def test_substitute_variables_error_handling():
 
 def test_substitute_stage_variables_error_handling():
     stage_data = {"data": "$invalid"}
-
-    class UnserializableObject:
-        def __repr__(self):
-            raise Exception("Cannot serialize")
-
-    variables = {"invalid": UnserializableObject()}
+    variables = {"invalid": object()}  # Simple object that can't be JSON serialized
 
     with pytest.raises(VariableSubstitutionError, match="Failed to substitute variables in stage"):
         substitute_stage_variables(stage_data, variables)
