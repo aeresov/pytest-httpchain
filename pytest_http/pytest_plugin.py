@@ -63,23 +63,22 @@ def substitute_variables(json_text: str, fixtures: dict[str, Any]) -> str:
 
 
 def substitute_stage_variables(stage_data: dict[str, Any], variables: dict[str, Any]) -> dict[str, Any]:
-    """Substitute variables in a single stage using current variable context."""
     try:
         # Convert stage to JSON string for substitution
         json_text: str = json.dumps(stage_data, default=str)
-        
+
         # Substitute all available variables
         for name, value in variables.items():
             # Handle standalone variable placeholders (quoted)
             quoted_placeholder: str = f'"${name}"'
             json_value: str = json.dumps(value)
             json_text = json_text.replace(quoted_placeholder, json_value)
-            
+
             # Handle variables within strings (unquoted)
-            unquoted_placeholder: str = f'${name}'
+            unquoted_placeholder: str = f"${name}"
             string_value: str = str(value)
             json_text = json_text.replace(unquoted_placeholder, string_value)
-        
+
         # Convert back to dict
         return json.loads(json_text)
     except Exception as e:
@@ -104,7 +103,7 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
             # Apply variable substitution to this stage
             stage_dict = original_stage.model_dump()
             substituted_stage_dict = substitute_stage_variables(stage_dict, variable_context)
-            
+
             # Re-validate the stage after substitution
             try:
                 stage = Stage.model_validate(substituted_stage_dict)
@@ -150,11 +149,11 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                             pytest.fail(f"Error saving variable '{var_name}': {e}")
             else:
                 logging.info(f"No URL provided for stage '{stage.name}', skipping HTTP request")
-                
+
                 # For stages without HTTP requests, still allow saving data variables
                 if stage.save:
                     import jmespath
-                    
+
                     for var_name, jmespath_expr in stage.save.items():
                         try:
                             saved_value = jmespath.search(jmespath_expr, stage.data)
