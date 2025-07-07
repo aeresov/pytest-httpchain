@@ -20,6 +20,9 @@ dev = [
     "responses>=0.25.7",
     "ruff>=0.12.1",
 ]
+mcp = [
+    "mcp>=1.0.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -27,6 +30,9 @@ build-backend = "hatchling.build"
 
 [project.entry-points.pytest11]
 pytest_http = "pytest_http.pytest_plugin"
+
+[project.entry-points.console_scripts]
+pytest-http-mcp = "pytest_http.mcp_server:main"
 
 [tool.hatch.build]
 packages = ["pytest_http"]
