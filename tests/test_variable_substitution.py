@@ -13,6 +13,10 @@ from pytest_http.pytest_plugin import VariableSubstitutionError, substitute_stag
         ('{"enabled": "$flag", "name": "test"}', {"flag": True}, {"enabled": True, "name": "test"}),
         ('{"config": "$settings", "version": 1}', {"settings": {"host": "localhost", "port": 8080}}, {"config": {"host": "localhost", "port": 8080}, "version": 1}),
         ('{"items": "$list_data", "total": 3}', {"list_data": ["a", "b", "c"]}, {"items": ["a", "b", "c"], "total": 3}),
+        ('{"name": "$name", "age": "$age", "city": "$city"}', {"name": "Bob", "age": 30, "city": "New York"}, {"name": "Bob", "age": 30, "city": "New York"}),
+        ('{"data": "$nullable", "id": 1}', {"nullable": None}, {"data": None, "id": 1}),
+        ('{"message": "$greeting", "symbol": "@"}', {"greeting": "Hello, World!"}, {"message": "Hello, World!", "symbol": "@"}),
+        ('{"var": "$var", "variable": "$variable"}', {"var": "short", "variable": "long_value"}, {"var": "short", "variable": "long_value"}),
     ],
 )
 def test_substitute_variables_with_different_types(json_text: str, fixtures: dict, expected: dict):
@@ -21,36 +25,17 @@ def test_substitute_variables_with_different_types(json_text: str, fixtures: dic
     assert parsed_result == expected
 
 
-def test_substitute_variables_multiple_substitutions():
-    json_text = '{"name": "$name", "age": "$age", "city": "$city"}'
-    fixtures = {"name": "Bob", "age": 30, "city": "New York"}
+@pytest.mark.parametrize(
+    "json_text,fixtures,expected",
+    [
+        ('{"name": "static", "value": 123}', {"unused": "value"}, {"name": "static", "value": 123}),
+        ('{"name": "test", "value": 42}', {}, {"name": "test", "value": 42}),
+    ],
+)
+def test_substitute_variables_no_substitutions(json_text: str, fixtures: dict, expected: dict):
     result = substitute_variables(json_text, fixtures)
     parsed_result = json.loads(result)
-    assert parsed_result == {"name": "Bob", "age": 30, "city": "New York"}
-
-
-def test_substitute_variables_no_substitutions():
-    json_text = '{"name": "static", "value": 123}'
-    fixtures = {"unused": "value"}
-    result = substitute_variables(json_text, fixtures)
-    parsed_result = json.loads(result)
-    assert parsed_result == {"name": "static", "value": 123}
-
-
-def test_substitute_variables_empty_fixtures():
-    json_text = '{"name": "test", "value": 42}'
-    fixtures = {}
-    result = substitute_variables(json_text, fixtures)
-    parsed_result = json.loads(result)
-    assert parsed_result == {"name": "test", "value": 42}
-
-
-def test_substitute_variables_with_none_value():
-    json_text = '{"data": "$nullable", "id": 1}'
-    fixtures = {"nullable": None}
-    result = substitute_variables(json_text, fixtures)
-    parsed_result = json.loads(result)
-    assert parsed_result == {"data": None, "id": 1}
+    assert parsed_result == expected
 
 
 def test_substitute_variables_complex_nested():
@@ -70,59 +55,33 @@ def test_substitute_variables_complex_nested():
     assert parsed_result == expected
 
 
-def test_substitute_variables_with_special_characters():
-    json_text = '{"message": "$greeting", "symbol": "@"}'
-    fixtures = {"greeting": "Hello, World!"}
-    result = substitute_variables(json_text, fixtures)
-    parsed_result = json.loads(result)
-    assert parsed_result == {"message": "Hello, World!", "symbol": "@"}
-
-
-def test_substitute_variables_error_handling():
-    json_text = '{"data": "$invalid"}'
-
-    class UnserializableObject:
-        def __repr__(self):
-            raise Exception("Cannot serialize")
-
-    fixtures = {"invalid": UnserializableObject()}
-
-    with pytest.raises(VariableSubstitutionError, match="Failed to substitute variables"):
-        substitute_variables(json_text, fixtures)
-
-
-def test_substitute_variables_partial_match():
-    json_text = '{"var": "$var", "variable": "$variable"}'
-    fixtures = {"var": "short", "variable": "long_value"}
-    result = substitute_variables(json_text, fixtures)
-    parsed_result = json.loads(result)
-    assert parsed_result == {"var": "short", "variable": "long_value"}
-
-
-# Tests for stage-by-stage variable substitution
-
-
-def test_substitute_stage_variables_basic():
-    stage_data = {"name": "test_stage", "url": "https://api.example.com/users/$user_id", "data": {"message": "$greeting"}}
-    variables = {"user_id": 123, "greeting": "Hello"}
-
+@pytest.mark.parametrize(
+    "stage_data,variables,expected",
+    [
+        (
+            {"name": "test_stage", "url": "https://api.example.com/users/$user_id", "data": {"message": "$greeting"}},
+            {"user_id": 123, "greeting": "Hello"},
+            {"name": "test_stage", "url": "https://api.example.com/users/123", "data": {"message": "Hello"}},
+        ),
+        (
+            {"name": "second_stage", "url": "https://api.example.com/users/$user_id/posts", "headers": {"Authorization": "Bearer $token"}, "params": {"limit": "$page_size"}},
+            {"user_id": 456, "token": "abc123", "page_size": 10},
+            {"name": "second_stage", "url": "https://api.example.com/users/456/posts", "headers": {"Authorization": "Bearer abc123"}, "params": {"limit": 10}},
+        ),
+        (
+            {"name": "static_stage", "url": "https://api.example.com/status", "data": {"check": "health"}},
+            {},
+            {"name": "static_stage", "url": "https://api.example.com/status", "data": {"check": "health"}},
+        ),
+        (
+            {"name": "partial_stage", "url": "https://api.example.com/users/$user_id", "data": {"message": "$missing_var"}},
+            {"user_id": 123},
+            {"name": "partial_stage", "url": "https://api.example.com/users/123", "data": {"message": "$missing_var"}},
+        ),
+    ],
+)
+def test_substitute_stage_variables(stage_data: dict, variables: dict, expected: dict):
     result = substitute_stage_variables(stage_data, variables)
-
-    expected = {"name": "test_stage", "url": "https://api.example.com/users/123", "data": {"message": "Hello"}}
-    assert result == expected
-
-
-def test_substitute_stage_variables_mixed_fixtures_and_saved():
-    stage_data = {"name": "second_stage", "url": "https://api.example.com/users/$user_id/posts", "headers": {"Authorization": "Bearer $token"}, "params": {"limit": "$page_size"}}
-    variables = {
-        "user_id": 456,  # from previous stage
-        "token": "abc123",  # from fixture
-        "page_size": 10,  # from fixture
-    }
-
-    result = substitute_stage_variables(stage_data, variables)
-
-    expected = {"name": "second_stage", "url": "https://api.example.com/users/456/posts", "headers": {"Authorization": "Bearer abc123"}, "params": {"limit": 10}}
     assert result == expected
 
 
@@ -139,27 +98,17 @@ def test_substitute_stage_variables_nested_data():
     assert result == expected
 
 
-def test_substitute_stage_variables_no_variables():
-    stage_data = {"name": "static_stage", "url": "https://api.example.com/status", "data": {"check": "health"}}
-    variables = {}
+def test_substitute_variables_error_handling():
+    json_text = '{"data": "$invalid"}'
 
-    result = substitute_stage_variables(stage_data, variables)
+    class UnserializableObject:
+        def __repr__(self):
+            raise Exception("Cannot serialize")
 
-    assert result == stage_data
+    fixtures = {"invalid": UnserializableObject()}
 
-
-def test_substitute_stage_variables_partial_substitution():
-    stage_data = {"name": "partial_stage", "url": "https://api.example.com/users/$user_id", "data": {"message": "$missing_var"}}
-    variables = {"user_id": 123}
-
-    result = substitute_stage_variables(stage_data, variables)
-
-    expected = {
-        "name": "partial_stage",
-        "url": "https://api.example.com/users/123",
-        "data": {"message": "$missing_var"},  # This variable is not substituted
-    }
-    assert result == expected
+    with pytest.raises(VariableSubstitutionError, match="Failed to substitute variables"):
+        substitute_variables(json_text, fixtures)
 
 
 def test_substitute_stage_variables_error_handling():

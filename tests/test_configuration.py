@@ -25,7 +25,6 @@ def test_validate_suffix_invalid(suffix: str):
 
 
 def test_pytest_configure_stores_validated_suffix():
-    """Test that pytest_configure stores the validated suffix in config."""
     config = Mock()
     config.getini.return_value = "custom"
 
@@ -36,7 +35,6 @@ def test_pytest_configure_stores_validated_suffix():
 
 
 def test_pytest_configure_validates_suffix():
-    """Test that pytest_configure validates the suffix and raises error for invalid ones."""
     config = Mock()
     config.getini.return_value = "invalid.suffix"
 
