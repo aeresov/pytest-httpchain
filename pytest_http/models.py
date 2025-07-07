@@ -38,7 +38,6 @@ class Verify(BaseModel):
 
 class Stage(BaseModel):
     name: str = Field()
-    data: Any = Field()
     url: str | None = Field(default=None)
     params: dict[str, Any] | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)

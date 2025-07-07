@@ -165,18 +165,6 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
             else:
                 logging.info(f"No URL provided for stage '{stage.name}', skipping HTTP request")
 
-                # For stages without HTTP requests, still allow saving data variables
-                if stage.save:
-                    import jmespath
-
-                    for var_name, jmespath_expr in stage.save.items():
-                        try:
-                            saved_value = jmespath.search(jmespath_expr, stage.data)
-                            variable_context[var_name] = saved_value
-                            logging.info(f"Saved variable '{var_name}' = {saved_value} from stage data")
-                        except Exception as e:
-                            pytest.fail(f"Error saving variable '{var_name}' from stage data: {e}")
-
     except VariableSubstitutionError as e:
         pytest.fail(f"Variable substitution error: {e}")
     except json.JSONDecodeError as e:
