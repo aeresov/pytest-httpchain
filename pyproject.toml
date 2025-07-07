@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2.11.0",
     "jmespath>=1.0.1",
     "requests>=2.32.4",
+    "mcp>=1.0.0",
 ]
 
 [dependency-groups]
@@ -27,6 +28,9 @@ build-backend = "hatchling.build"
 
 [project.entry-points.pytest11]
 pytest_http = "pytest_http.pytest_plugin"
+
+[project.scripts]
+pytest-http-mcp = "pytest_http.mcp_server:main"
 
 [tool.hatch.build]
 packages = ["pytest_http"]

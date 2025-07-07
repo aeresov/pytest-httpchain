@@ -1,0 +1,77 @@
+{
+  "description": "MCP Configuration for pytest-http plugin",
+  "mcpServers": {
+    "pytest-http": {
+      "command": "uv",
+      "args": [
+        "run",
+        "pytest-http-mcp"
+      ],
+      "env": {},
+      "description": "pytest-http MCP server for creating and managing HTTP test scenarios"
+    }
+  },
+  "instructions": {
+    "cursor": {
+      "description": "For Cursor IDE users",
+      "steps": [
+        "1. Copy the 'pytest-http' server configuration above",
+        "2. Open Cursor Settings",  
+        "3. Navigate to MCP section",
+        "4. Add this server configuration",
+        "5. Restart Cursor",
+        "6. Test by asking: 'List all HTTP test scenarios'"
+      ]
+    },
+    "claude_desktop": {
+      "description": "For Claude Desktop users", 
+      "config_location": {
+        "macos": "~/Library/Application Support/Claude/claude_desktop_config.json",
+        "windows": "%APPDATA%/Claude/claude_desktop_config.json"
+      },
+      "steps": [
+        "1. Open the claude_desktop_config.json file",
+        "2. Add the entire 'mcpServers' configuration above",
+        "3. Save the file",
+        "4. Restart Claude Desktop",
+        "5. Test by asking: 'Create a basic HTTP test scenario'"
+      ]
+    }
+  },
+  "example_prompts": [
+    "Create a test scenario for the JSONPlaceholder API that gets all posts and then fetches details for the first post",
+    "Generate a multi-stage authentication test that logs in and then accesses a protected resource",
+    "List all existing HTTP test scenarios in this project", 
+    "Create a test template for API endpoint testing",
+    "Validate this test scenario: {...}",
+    "Generate a test that uses pytest fixtures"
+  ],
+  "available_tools": [
+    {
+      "name": "create_test_scenario",
+      "description": "Create a new HTTP test scenario file",
+      "example": "Create a test scenario named 'user_api' that tests user registration and login"
+    },
+    {
+      "name": "list_test_scenarios", 
+      "description": "List all existing HTTP test scenarios",
+      "example": "Show me all the HTTP test scenarios in this project"
+    },
+    {
+      "name": "validate_test_scenario",
+      "description": "Validate a test scenario against the schema",
+      "example": "Check if this test scenario is valid: {...}"
+    },
+    {
+      "name": "create_stage",
+      "description": "Create a test stage configuration",
+      "example": "Create a stage that makes a POST request to /api/users"
+    },
+    {
+      "name": "generate_test_template",
+      "description": "Generate templates for common test patterns",
+      "templates": ["basic", "api_test", "multi_stage", "with_fixtures"],
+      "example": "Generate an API test template for testing REST endpoints"
+    }
+  ]
+}
