@@ -121,12 +121,27 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                 if stage.headers:
                     request_params["headers"] = stage.headers
 
-                # Make GET request (for now, could be extended to support other methods)
-                response = requests.get(stage.url, **request_params)
+                # Make GET request with error handling
+                try:
+                    response = requests.get(stage.url, **request_params)
+                except requests.Timeout:
+                    pytest.fail(f"HTTP request timed out for stage '{stage.name}' to URL: {stage.url}")
+                except requests.ConnectionError as e:
+                    pytest.fail(f"HTTP connection error for stage '{stage.name}' to URL: {stage.url} - {e}")
+                except requests.RequestException as e:
+                    pytest.fail(f"HTTP request failed for stage '{stage.name}' to URL: {stage.url} - {e}")
 
                 # Log response details
                 logging.info(f"Response status: {response.status_code}")
                 logging.info(f"Response headers: {dict(response.headers)}")
+
+                # Verify status code if specified
+                if stage.verify and stage.verify.status is not None:
+                    expected_status = stage.verify.status.value
+                    actual_status = response.status_code
+                    if actual_status != expected_status:
+                        pytest.fail(f"Status code verification failed for stage '{stage.name}': expected {expected_status}, got {actual_status}")
+                    logging.info(f"Status code verification passed: {actual_status}")
 
                 # Store response data for potential saving
                 response_data = {
@@ -168,8 +183,6 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
         pytest.fail(f"JSON decode error after substitution: {e}")
     except ValidationError as e:
         pytest.fail(f"Validation error: {e}")
-    except requests.RequestException as e:
-        pytest.fail(f"HTTP request error: {e}")
     except Exception as e:
         pytest.fail(f"Unexpected error: {e}")
 

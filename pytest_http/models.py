@@ -1,4 +1,5 @@
 import keyword
+from http import HTTPStatus
 from typing import Annotated, Any
 
 import jmespath
@@ -31,6 +32,10 @@ ValidPythonVariableName = Annotated[str, AfterValidator(validate_python_variable
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
 
 
+class Verify(BaseModel):
+    status: HTTPStatus | None = Field(default=None)
+
+
 class Stage(BaseModel):
     name: str = Field()
     data: Any = Field()
@@ -38,6 +43,7 @@ class Stage(BaseModel):
     params: dict[str, Any] | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)
     save: dict[ValidPythonVariableName, JMESPathExpression] | None = Field(default=None)
+    verify: Verify | None = Field(default=None)
 
 
 class Scenario(BaseModel):
