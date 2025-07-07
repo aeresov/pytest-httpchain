@@ -17,7 +17,7 @@ from _pytest.nodes import Collector, Item
 from _pytest.python import Function
 from pydantic import ValidationError
 
-from pytest_http.models import Scenario
+from pytest_http.models import Scenario, Stage
 
 
 def pytest_addoption(parser: Parser):
@@ -62,28 +62,53 @@ def substitute_variables(json_text: str, fixtures: dict[str, Any]) -> str:
         raise VariableSubstitutionError(f"Failed to substitute variables: {e}") from e
 
 
+def substitute_stage_variables(stage_data: dict[str, Any], variables: dict[str, Any]) -> dict[str, Any]:
+    try:
+        # Convert stage to JSON string for substitution
+        json_text: str = json.dumps(stage_data, default=str)
+
+        # Substitute all available variables
+        for name, value in variables.items():
+            # Handle standalone variable placeholders (quoted)
+            quoted_placeholder: str = f'"${name}"'
+            json_value: str = json.dumps(value)
+            json_text = json_text.replace(quoted_placeholder, json_value)
+
+            # Handle variables within strings (unquoted)
+            unquoted_placeholder: str = f"${name}"
+            string_value: str = str(value)
+            json_text = json_text.replace(unquoted_placeholder, string_value)
+
+        # Convert back to dict
+        return json.loads(json_text)
+    except Exception as e:
+        raise VariableSubstitutionError(f"Failed to substitute variables in stage: {e}") from e
+
+
 def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
-    saved_variables: dict[str, Any] = {}
+    # Initialize variable context with fixtures
+    variable_context: dict[str, Any] = dict(fixtures)
 
     try:
-        # Dump original data to JSON string
-        json_text: str = json.dumps(original_data, default=str)
-
-        # Substitute variables
-        if fixtures:
-            substituted_json: str = substitute_variables(json_text, fixtures)
-            processed_data: dict[str, Any] = json.loads(substituted_json)
-        else:
-            processed_data = original_data
-
-        # Pydantic validation with substituted variables
-        test_model: Scenario = Scenario.model_validate(processed_data)
+        # Initial validation without variable substitution to get basic structure
+        test_model: Scenario = Scenario.model_validate(original_data)
         logging.info(f"Test model: {test_model}")
         logging.info(f"Available fixtures: {fixtures}")
 
-        # Execute each stage
-        for stage in test_model.stages:
-            logging.info(f"Executing stage: {stage.name}")
+        # Execute each stage with progressive variable substitution
+        for stage_index, original_stage in enumerate(test_model.stages):
+            logging.info(f"Executing stage {stage_index}: {original_stage.name}")
+            logging.info(f"Current variable context: {variable_context}")
+
+            # Apply variable substitution to this stage
+            stage_dict = original_stage.model_dump()
+            substituted_stage_dict = substitute_stage_variables(stage_dict, variable_context)
+
+            # Re-validate the stage after substitution
+            try:
+                stage = Stage.model_validate(substituted_stage_dict)
+            except ValidationError as e:
+                pytest.fail(f"Stage '{original_stage.name}' validation failed after variable substitution: {e}")
 
             # Make HTTP request if URL is provided
             if stage.url:
@@ -118,12 +143,24 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                     for var_name, jmespath_expr in stage.save.items():
                         try:
                             saved_value = jmespath.search(jmespath_expr, response_data)
-                            saved_variables[var_name] = saved_value
+                            variable_context[var_name] = saved_value
                             logging.info(f"Saved variable '{var_name}' = {saved_value}")
                         except Exception as e:
                             pytest.fail(f"Error saving variable '{var_name}': {e}")
             else:
                 logging.info(f"No URL provided for stage '{stage.name}', skipping HTTP request")
+
+                # For stages without HTTP requests, still allow saving data variables
+                if stage.save:
+                    import jmespath
+
+                    for var_name, jmespath_expr in stage.save.items():
+                        try:
+                            saved_value = jmespath.search(jmespath_expr, stage.data)
+                            variable_context[var_name] = saved_value
+                            logging.info(f"Saved variable '{var_name}' = {saved_value} from stage data")
+                        except Exception as e:
+                            pytest.fail(f"Error saving variable '{var_name}' from stage data: {e}")
 
     except VariableSubstitutionError as e:
         pytest.fail(f"Variable substitution error: {e}")
