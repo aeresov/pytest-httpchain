@@ -10,6 +10,7 @@ from typing import Any
 
 import jsonref
 import pytest
+import requests
 from _pytest.config import Config
 from _pytest.config.argparsing import Parser
 from _pytest.nodes import Collector, Item
@@ -62,6 +63,8 @@ def substitute_variables(json_text: str, fixtures: dict[str, Any]) -> str:
 
 
 def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
+    saved_variables: dict[str, Any] = {}
+
     try:
         # Dump original data to JSON string
         json_text: str = json.dumps(original_data, default=str)
@@ -77,12 +80,59 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
         test_model: Scenario = Scenario.model_validate(processed_data)
         logging.info(f"Test model: {test_model}")
         logging.info(f"Available fixtures: {fixtures}")
+
+        # Execute each stage
+        for stage in test_model.stages:
+            logging.info(f"Executing stage: {stage.name}")
+
+            # Make HTTP request if URL is provided
+            if stage.url:
+                logging.info(f"Making HTTP request to: {stage.url}")
+
+                # Prepare request parameters
+                request_params = {}
+                if stage.params:
+                    request_params["params"] = stage.params
+                if stage.headers:
+                    request_params["headers"] = stage.headers
+
+                # Make GET request (for now, could be extended to support other methods)
+                response = requests.get(stage.url, **request_params)
+
+                # Log response details
+                logging.info(f"Response status: {response.status_code}")
+                logging.info(f"Response headers: {dict(response.headers)}")
+
+                # Store response data for potential saving
+                response_data = {
+                    "status_code": response.status_code,
+                    "headers": dict(response.headers),
+                    "text": response.text,
+                    "json": response.json() if response.headers.get("content-type", "").startswith("application/json") else None,
+                }
+
+                # Save variables if specified
+                if stage.save:
+                    import jmespath
+
+                    for var_name, jmespath_expr in stage.save.items():
+                        try:
+                            saved_value = jmespath.search(jmespath_expr, response_data)
+                            saved_variables[var_name] = saved_value
+                            logging.info(f"Saved variable '{var_name}' = {saved_value}")
+                        except Exception as e:
+                            pytest.fail(f"Error saving variable '{var_name}': {e}")
+            else:
+                logging.info(f"No URL provided for stage '{stage.name}', skipping HTTP request")
+
     except VariableSubstitutionError as e:
         pytest.fail(f"Variable substitution error: {e}")
     except json.JSONDecodeError as e:
         pytest.fail(f"JSON decode error after substitution: {e}")
     except ValidationError as e:
         pytest.fail(f"Validation error: {e}")
+    except requests.RequestException as e:
+        pytest.fail(f"HTTP request error: {e}")
     except Exception as e:
         pytest.fail(f"Unexpected error: {e}")
 

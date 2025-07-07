@@ -34,6 +34,9 @@ JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)
 class Stage(BaseModel):
     name: str = Field()
     data: Any = Field()
+    url: str | None = Field(default=None)
+    params: dict[str, Any] | None = Field(default=None)
+    headers: dict[str, str] | None = Field(default=None)
     save: dict[ValidPythonVariableName, JMESPathExpression] | None = Field(default=None)
 
 

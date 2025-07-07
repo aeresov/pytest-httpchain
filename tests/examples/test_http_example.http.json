@@ -1,0 +1,33 @@
+{
+    "stages": [
+        {
+            "name": "get_users",
+            "url": "https://jsonplaceholder.typicode.com/users",
+            "params": {
+                "limit": 5
+            },
+            "headers": {
+                "Accept": "application/json",
+                "User-Agent": "pytest-http/0.1.0"
+            },
+            "data": {},
+            "save": {
+                "user_count": "length(@)",
+                "first_user_id": "[0].id",
+                "first_user_name": "[0].name"
+            }
+        },
+        {
+            "name": "get_specific_user",
+            "url": "https://jsonplaceholder.typicode.com/users/1",
+            "headers": {
+                "Accept": "application/json"
+            },
+            "data": {},
+            "save": {
+                "user_email": "json.email",
+                "user_website": "json.website"
+            }
+        }
+    ]
+}
