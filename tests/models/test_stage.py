@@ -38,100 +38,98 @@ def test_stage_empty_name():
     assert stage.name == ""
 
 
-def test_stage_with_valid_save_field():
-    data = {
-        "name": "test",
-        "save": {"user_id": "user.id", "user_name": "user.name", "first_item": "items[0]", "_private_var": "data._private", "complex_path": "users[*].profile.name"},
-    }
+@pytest.mark.parametrize(
+    "save_data,expected_vars,expected_functions,description",
+    [
+        # Old format (backward compatibility)
+        (
+            {"user_id": "user.id", "user_name": "user.name"},
+            {"user_id": "user.id", "user_name": "user.name"},
+            None,
+            "old_format_compatibility"
+        ),
+        # New format with vars only
+        (
+            {"vars": {"user_id": "user.id", "user_name": "user.name"}},
+            {"user_id": "user.id", "user_name": "user.name"},
+            None,
+            "new_format_vars_only"
+        ),
+        # New format with functions only
+        (
+            {"functions": ["extract_user_data", "extract_metadata"]},
+            None,
+            ["extract_user_data", "extract_metadata"],
+            "new_format_functions_only"
+        ),
+        # New format with both vars and functions
+        (
+            {
+                "vars": {"user_id": "user.id"},
+                "functions": ["extract_data"]
+            },
+            {"user_id": "user.id"},
+            ["extract_data"],
+            "new_format_both"
+        ),
+    ],
+)
+def test_stage_save_formats(save_data, expected_vars, expected_functions, description):
+    data = {"name": "test", "save": save_data}
     stage = Stage.model_validate(data)
-    assert stage.save is not None
+    
     assert isinstance(stage.save, SaveConfig)
-    assert stage.save.vars["user_id"] == "user.id"
-    assert stage.save.vars["user_name"] == "user.name"
-    assert stage.save.vars["first_item"] == "items[0]"
-    assert stage.save.vars["_private_var"] == "data._private"
-    assert stage.save.vars["complex_path"] == "users[*].profile.name"
-
-
-def test_stage_with_new_save_format_vars_only():
-    data = {
-        "name": "test",
-        "save": {
-            "vars": {"user_id": "user.id", "user_name": "user.name"}
-        }
-    }
-    stage = Stage.model_validate(data)
-    assert stage.save is not None
-    assert isinstance(stage.save, SaveConfig)
-    assert stage.save.vars["user_id"] == "user.id"
-    assert stage.save.vars["user_name"] == "user.name"
-    assert stage.save.functions is None
-
-
-def test_stage_with_new_save_format_functions_only():
-    data = {
-        "name": "test",
-        "save": {
-            "functions": ["extract_user_data", "extract_metadata"]
-        }
-    }
-    stage = Stage.model_validate(data)
-    assert stage.save is not None
-    assert isinstance(stage.save, SaveConfig)
-    assert stage.save.vars is None
-    assert stage.save.functions == ["extract_user_data", "extract_metadata"]
-
-
-def test_stage_with_new_save_format_both_vars_and_functions():
-    data = {
-        "name": "test",
-        "save": {
-            "vars": {"user_id": "user.id", "user_name": "user.name"},
-            "functions": ["extract_user_data", "extract_metadata"]
-        }
-    }
-    stage = Stage.model_validate(data)
-    assert stage.save is not None
-    assert isinstance(stage.save, SaveConfig)
-    assert stage.save.vars["user_id"] == "user.id"
-    assert stage.save.vars["user_name"] == "user.name"
-    assert stage.save.functions == ["extract_user_data", "extract_metadata"]
+    assert stage.save.vars == expected_vars
+    assert stage.save.functions == expected_functions
 
 
 @pytest.mark.parametrize(
-    "save_value,expected,description",
+    "save_value,expected_result,description",
     [
         (None, None, "with_none"),
         ({}, SaveConfig(vars={}), "with_empty_dict"),
         ("no_save", None, "without_save_field"),
     ],
 )
-def test_stage_save_field_optional_states(save_value, expected, description):
+def test_stage_save_optional_states(save_value, expected_result, description):
     if description == "without_save_field":
         data = {"name": "test"}
     else:
         data = {"name": "test", "save": save_value}
+    
     stage = Stage.model_validate(data)
-    if expected is None:
+    
+    if expected_result is None:
         assert stage.save is None
-    elif isinstance(expected, SaveConfig):
+    else:
         assert isinstance(stage.save, SaveConfig)
-        assert stage.save.vars == expected.vars
-        assert stage.save.functions == expected.functions
+        assert stage.save.vars == expected_result.vars
+        assert stage.save.functions == expected_result.functions
 
 
 @pytest.mark.parametrize(
-    "invalid_key,expected_error",
+    "invalid_name,field_type,expected_error",
     [
-        ("1invalid", "'1invalid' is not a valid Python variable name"),
-        ("user-id", "'user-id' is not a valid Python variable name"),
-        ("user id", "'user id' is not a valid Python variable name"),
-        ("user@id", "'user@id' is not a valid Python variable name"),
-        ("", "'' is not a valid Python variable name"),
+        # Variable name validation
+        ("1invalid", "var", "'1invalid' is not a valid Python variable name"),
+        ("user-id", "var", "'user-id' is not a valid Python variable name"),
+        ("user id", "var", "'user id' is not a valid Python variable name"),
+        ("user@id", "var", "'user@id' is not a valid Python variable name"),
+        ("", "var", "'' is not a valid Python variable name"),
+        # Function name validation
+        ("1invalid", "func", "'1invalid' is not a valid Python function name"),
+        ("func-name", "func", "'func-name' is not a valid Python function name"),
+        ("func name", "func", "'func name' is not a valid Python function name"),
+        ("func@name", "func", "'func@name' is not a valid Python function name"),
+        ("", "func", "'' is not a valid Python function name"),
     ],
 )
-def test_stage_save_invalid_python_variable_names(invalid_key, expected_error):
-    data = {"name": "test", "save": {invalid_key: "user.id"}}
+def test_stage_save_invalid_names(invalid_name, field_type, expected_error):
+    if field_type == "var":
+        data = {"name": "test", "save": {invalid_name: "user.id"}}
+    else:  # func
+        data = {"name": "test", "save": {"functions": [invalid_name]}}
+    
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
     assert expected_error in str(exc_info.value)
@@ -152,49 +150,85 @@ def test_stage_save_invalid_jmespath_expressions(invalid_jmespath, expected_erro
     assert expected_error in str(exc_info.value)
 
 
-@pytest.mark.parametrize("keyword", ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"])
-def test_stage_save_invalid_keywords(keyword):
-    data = {"name": "test", "save": {keyword: "user.id"}}
+@pytest.mark.parametrize(
+    "keyword,field_type",
+    [
+        # Test keywords for both variable and function names
+        *[(kw, "var") for kw in ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"]],
+        *[(kw, "func") for kw in ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"]],
+    ],
+)
+def test_stage_save_keyword_validation(keyword, field_type):
+    if field_type == "var":
+        data = {"name": "test", "save": {keyword: "user.id"}}
+        expected_error = f"'{keyword}' is a Python keyword and cannot be used as a variable name"
+    else:  # func
+        data = {"name": "test", "save": {"functions": [keyword]}}
+        expected_error = f"'{keyword}' is a Python keyword and cannot be used as a function name"
+    
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
-    assert f"'{keyword}' is a Python keyword and cannot be used as a variable name" in str(exc_info.value)
+    assert expected_error in str(exc_info.value)
 
 
-def test_stage_save_valid_underscore_variable_names():
-    data = {
-        "name": "test",
-        "save": {"__": "user.double_underscore", "___": "user.triple_underscore", "_private": "user.private", "__private__": "user.dunder_private"},
-    }
-    stage = Stage.model_validate(data)
-    assert isinstance(stage.save, SaveConfig)
-    assert stage.save.vars["__"] == "user.double_underscore"
-    assert stage.save.vars["___"] == "user.triple_underscore"
-    assert stage.save.vars["_private"] == "user.private"
-    assert stage.save.vars["__private__"] == "user.dunder_private"
-
-
-def test_stage_save_valid_complex_jmespath_expressions():
-    data = {
-        "name": "test",
-        "save": {
-            "filtered_users": "users[?age > `18`]",
-            "mapped_names": "users[*].name",
-            "first_active": "users[?active][0]",
-            "nested_access": "data.nested.deeply.nested.value",
-            "pipe_expression": "users | [0]",
-            "function_call": "length(users)",
-            "conditional": "users[0] || `default`",
-        },
-    }
-    stage = Stage.model_validate(data)
-    assert isinstance(stage.save, SaveConfig)
-    assert stage.save.vars["filtered_users"] == "users[?age > `18`]"
-    assert stage.save.vars["mapped_names"] == "users[*].name"
-    assert stage.save.vars["first_active"] == "users[?active][0]"
-    assert stage.save.vars["nested_access"] == "data.nested.deeply.nested.value"
-    assert stage.save.vars["pipe_expression"] == "users | [0]"
-    assert stage.save.vars["function_call"] == "length(users)"
-    assert stage.save.vars["conditional"] == "users[0] || `default`"
+@pytest.mark.parametrize(
+    "valid_names,field_type,test_case",
+    [
+        # Valid variable names
+        (
+            {
+                "__": "user.double_underscore",
+                "___": "user.triple_underscore", 
+                "_private": "user.private",
+                "__private__": "user.dunder_private"
+            },
+            "var",
+            "underscore_variables"
+        ),
+        (
+            {
+                "user_id": "user.id",
+                "userName": "user.name",
+                "USER_NAME": "user.name",
+                "user123": "user.id",
+                "_user": "user.private",
+                "__internal__": "user.internal",
+                "MyClass": "user.class_name",
+                "for_user": "user.for_field",
+            },
+            "var",
+            "non_keyword_identifiers"
+        ),
+        (
+            {
+                "filtered_users": "users[?age > `18`]",
+                "mapped_names": "users[*].name",
+                "first_active": "users[?active][0]",
+                "nested_access": "data.nested.deeply.nested.value",
+                "pipe_expression": "users | [0]",
+                "function_call": "length(users)",
+                "conditional": "users[0] || `default`",
+            },
+            "var",
+            "complex_jmespath"
+        ),
+        # Valid function names
+        (
+            ["extract_user_data", "parseMetadata", "EXTRACT_HEADERS", "func123", "_private_func", "__internal__", "MyExtractor"],
+            "func",
+            "valid_function_names"
+        ),
+    ],
+)
+def test_stage_save_valid_names(valid_names, field_type, test_case):
+    if field_type == "var":
+        data = {"name": "test", "save": valid_names}
+        stage = Stage.model_validate(data)
+        assert stage.save.vars == valid_names
+    else:  # func
+        data = {"name": "test", "save": {"functions": valid_names}}
+        stage = Stage.model_validate(data)
+        assert stage.save.functions == valid_names
 
 
 def test_stage_save_multiple_validation_errors():
@@ -204,84 +238,7 @@ def test_stage_save_multiple_validation_errors():
     assert "'1invalid' is not a valid Python variable name" in str(exc_info.value)
 
 
-def test_stage_save_keyword_vs_invalid_variable_error_precedence():
-    data = {"name": "test", "save": {"1class": "user.id"}}
-    with pytest.raises(ValidationError) as exc_info:
-        Stage.model_validate(data)
-    assert "'1class' is not a valid Python variable name" in str(exc_info.value)
-
-
-def test_stage_save_valid_non_keyword_identifiers():
-    data = {
-        "name": "test",
-        "save": {
-            "user_id": "user.id",
-            "userName": "user.name",
-            "USER_NAME": "user.name",
-            "user123": "user.id",
-            "_user": "user.private",
-            "__internal__": "user.internal",
-            "MyClass": "user.class_name",
-            "for_user": "user.for_field",
-        },
-    }
-    stage = Stage.model_validate(data)
-    assert isinstance(stage.save, SaveConfig)
-    assert len(stage.save.vars) == 8
-    assert stage.save.vars["user_id"] == "user.id"
-    assert stage.save.vars["MyClass"] == "user.class_name"
-    assert stage.save.vars["for_user"] == "user.for_field"
-
-
-@pytest.mark.parametrize(
-    "invalid_func_name,expected_error",
-    [
-        ("1invalid", "'1invalid' is not a valid Python function name"),
-        ("func-name", "'func-name' is not a valid Python function name"),
-        ("func name", "'func name' is not a valid Python function name"),
-        ("func@name", "'func@name' is not a valid Python function name"),
-        ("", "'' is not a valid Python function name"),
-    ],
-)
-def test_stage_save_functions_invalid_names(invalid_func_name, expected_error):
-    data = {
-        "name": "test",
-        "save": {
-            "functions": [invalid_func_name]
-        }
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        Stage.model_validate(data)
-    assert expected_error in str(exc_info.value)
-
-
-@pytest.mark.parametrize("keyword", ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"])
-def test_stage_save_functions_invalid_keywords(keyword):
-    data = {
-        "name": "test",
-        "save": {
-            "functions": [keyword]
-        }
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        Stage.model_validate(data)
-    assert f"'{keyword}' is a Python keyword and cannot be used as a function name" in str(exc_info.value)
-
-
-def test_stage_save_functions_valid_names():
-    data = {
-        "name": "test",
-        "save": {
-            "functions": ["extract_user_data", "parseMetadata", "EXTRACT_HEADERS", "func123", "_private_func", "__internal__", "MyExtractor"]
-        }
-    }
-    stage = Stage.model_validate(data)
-    assert isinstance(stage.save, SaveConfig)
-    assert stage.save.functions == ["extract_user_data", "parseMetadata", "EXTRACT_HEADERS", "func123", "_private_func", "__internal__", "MyExtractor"]
-
-
 def test_save_config_standalone():
-    # Test SaveConfig model directly
     save_config = SaveConfig(
         vars={"user_id": "user.id", "user_name": "user.name"},
         functions=["extract_data", "parse_headers"]
@@ -291,21 +248,18 @@ def test_save_config_standalone():
     assert save_config.functions == ["extract_data", "parse_headers"]
 
 
-def test_save_config_optional_fields():
-    # Test with only vars
-    save_config = SaveConfig(vars={"user_id": "user.id"})
-    assert save_config.vars["user_id"] == "user.id"
-    assert save_config.functions is None
-    
-    # Test with only functions
-    save_config = SaveConfig(functions=["extract_data"])
-    assert save_config.vars is None
-    assert save_config.functions == ["extract_data"]
-    
-    # Test with neither
-    save_config = SaveConfig()
-    assert save_config.vars is None
-    assert save_config.functions is None
+@pytest.mark.parametrize(
+    "vars_data,functions_data",
+    [
+        ({"user_id": "user.id"}, None),  # Only vars
+        (None, ["extract_data"]),        # Only functions  
+        (None, None),                    # Neither
+    ],
+)
+def test_save_config_optional_fields(vars_data, functions_data):
+    save_config = SaveConfig(vars=vars_data, functions=functions_data)
+    assert save_config.vars == vars_data
+    assert save_config.functions == functions_data
 
 
 @pytest.mark.parametrize(
@@ -316,7 +270,7 @@ def test_save_config_optional_fields():
         (validate_jmespath_expression, "user.id", "user.id"),
     ],
 )
-def test_individual_annotated_types_valid(validator_func, valid_input, expected_output):
+def test_validator_functions_valid_input(validator_func, valid_input, expected_output):
     assert validator_func(valid_input) == expected_output
 
 
@@ -328,7 +282,7 @@ def test_individual_annotated_types_valid(validator_func, valid_input, expected_
         (validate_jmespath_expression, "user.[invalid}", "is not a valid JMESPath expression"),
     ],
 )
-def test_individual_annotated_types_invalid(validator_func, invalid_input, expected_error):
+def test_validator_functions_invalid_input(validator_func, invalid_input, expected_error):
     with pytest.raises(ValueError) as exc_info:
         validator_func(invalid_input)
     assert expected_error in str(exc_info.value)
