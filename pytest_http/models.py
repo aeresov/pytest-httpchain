@@ -31,30 +31,15 @@ def validate_jmespath_expression(v: str) -> str:
 def validate_python_function_name(v: str) -> str:
     # Require module:function syntax
     if ":" not in v:
-        raise ValueError(f"'{v}' is not a valid Python function name - must use 'module:function' syntax")
+        raise ValueError(f"'{v}' must use 'module:function' syntax")
     
     module_path, function_name = v.rsplit(":", 1)
     
-    # Validate module path (can contain dots)
     if not module_path:
-        raise ValueError(f"'{v}' is not a valid Python function name - missing module path")
+        raise ValueError(f"'{v}' is missing module path")
     
-    # Module path parts should be valid identifiers
-    for part in module_path.split("."):
-        if not part.isidentifier():
-            raise ValueError(f"'{v}' is not a valid Python function name - invalid module part '{part}'")
-        if keyword.iskeyword(part):
-            raise ValueError(f"'{v}' is not a valid Python function name - module part '{part}' is a keyword")
-    
-    # Validate function name part
-    if not function_name.isidentifier():
-        raise ValueError(f"'{v}' is not a valid Python function name - invalid function name '{function_name}'")
-    
-    if keyword.iskeyword(function_name):
-        raise ValueError(f"'{v}' is a Python keyword and cannot be used as a function name")
-    
-    if hasattr(keyword, "softkwlist") and function_name in keyword.softkwlist:
-        raise ValueError(f"'{v}' is a Python keyword and cannot be used as a function name")
+    if not function_name:
+        raise ValueError(f"'{v}' is missing function name")
 
     return v
 
@@ -81,23 +66,6 @@ class Stage(BaseModel):
     headers: dict[str, str] | None = Field(default=None)
     save: SaveConfig | None = Field(default=None)
     verify: Verify | None = Field(default=None)
-
-    @field_validator("save", mode="before")
-    @classmethod
-    def normalize_save_field(cls, v):
-        if v is None:
-            return None
-        
-        # If it's already a SaveConfig or dict with vars/functions keys, leave it as is
-        if isinstance(v, dict):
-            # Check if this is the new format with vars/functions keys
-            if "vars" in v or "functions" in v:
-                return v
-            # Otherwise, treat it as the old format (direct var mapping)
-            else:
-                return {"vars": v}
-        
-        return v
 
 
 class Scenario(BaseModel):

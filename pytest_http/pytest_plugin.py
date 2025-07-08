@@ -161,24 +161,19 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                     if stage.save.functions:
                         for func_name in stage.save.functions:
                             try:
-                                # Parse module:function syntax
-                                if ":" not in func_name:
-                                    pytest.fail(f"Function '{func_name}' must use 'module:function' syntax for stage '{stage.name}'")
-                                
+                                # Get function and validate it exists
                                 module_path, function_name = func_name.rsplit(":", 1)
+                                import importlib
                                 
-                                # Import module and get function
                                 try:
-                                    import importlib
                                     module = importlib.import_module(module_path)
-                                    if not hasattr(module, function_name):
-                                        pytest.fail(f"Function '{function_name}' not found in module '{module_path}' for stage '{stage.name}'")
-                                    
-                                    func = getattr(module, function_name)
                                 except ImportError as e:
                                     pytest.fail(f"Cannot import module '{module_path}' for function '{func_name}' in stage '{stage.name}': {e}")
                                 
-                                # Check if it's callable
+                                if not hasattr(module, function_name):
+                                    pytest.fail(f"Function '{function_name}' not found in module '{module_path}' for stage '{stage.name}'")
+                                
+                                func = getattr(module, function_name)
                                 if not callable(func):
                                     pytest.fail(f"'{func_name}' is not a callable function for stage '{stage.name}'")
                                 

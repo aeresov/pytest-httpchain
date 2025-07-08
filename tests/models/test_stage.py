@@ -57,19 +57,19 @@ def test_stage_empty_name():
         ),
         # New format with functions only
         (
-            {"functions": ["helpers:extract_user_data", "utils:extract_metadata"]},
+            {"functions": ["json:loads", "os:getcwd"]},
             None,
-            ["helpers:extract_user_data", "utils:extract_metadata"],
+            ["json:loads", "os:getcwd"],
             "new_format_functions_only"
         ),
         # New format with both vars and functions
         (
             {
                 "vars": {"user_id": "user.id"},
-                "functions": ["helpers:extract_data"]
+                "functions": ["json:dumps"]
             },
             {"user_id": "user.id"},
-            ["helpers:extract_data"],
+            ["json:dumps"],
             "new_format_both"
         ),
     ],
@@ -125,10 +125,7 @@ def test_stage_save_optional_states(save_value, expected_result, description):
          ("", "func", "must use 'module:function' syntax"),
          # Invalid module:function syntax
          (":function", "func", "missing module path"),
-         ("module:", "func", "invalid function name"),
-         ("1module:function", "func", "invalid module part"),
-         ("module:1function", "func", "invalid function name"),
-         ("module.1sub:function", "func", "invalid module part"),
+         ("module:", "func", "missing function name"),
     ],
 )
 def test_stage_save_invalid_names(invalid_name, field_type, expected_error):
@@ -158,25 +155,13 @@ def test_stage_save_invalid_jmespath_expressions(invalid_jmespath, expected_erro
 
 
 @pytest.mark.parametrize(
-    "keyword,field_type",
-    [
-        # Test keywords for variable names
-        *[(kw, "var") for kw in ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"]],
-        # Test keywords in module:function syntax for function names
-        *[(f"module:{kw}", "func") for kw in ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"]],
-        *[(f"{kw}:function", "func") for kw in ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"]],
-    ],
+    "keyword",
+    ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"],
 )
-def test_stage_save_keyword_validation(keyword, field_type):
-    if field_type == "var":
-        data = {"name": "test", "save": {keyword: "user.id"}}
-        expected_error = f"'{keyword}' is a Python keyword and cannot be used as a variable name"
-    else:  # func
-        data = {"name": "test", "save": {"functions": [keyword]}}
-        if keyword.startswith("module:"):
-            expected_error = f"'{keyword.split(':')[1]}' is a Python keyword and cannot be used as a function name"
-        else:  # keyword:function format
-            expected_error = f"module part '{keyword.split(':')[0]}' is a keyword"
+def test_stage_save_keyword_validation(keyword):
+    # Test keywords for variable names
+    data = {"name": "test", "save": {keyword: "user.id"}}
+    expected_error = f"'{keyword}' is a Python keyword and cannot be used as a variable name"
     
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
@@ -226,7 +211,7 @@ def test_stage_save_keyword_validation(keyword, field_type):
         ),
                  # Valid module:function names (only format allowed)
          (
-             ["module:function", "package.submodule:func_name", "my_package.utils:extract_data", "test_helpers:process_response"],
+             ["json:loads", "json:dumps", "os:getcwd", "sys:exit"],
              "func", 
              "valid_module_function_names"
          ),
@@ -253,18 +238,18 @@ def test_stage_save_multiple_validation_errors():
 def test_save_config_standalone():
     save_config = SaveConfig(
         vars={"user_id": "user.id", "user_name": "user.name"},
-        functions=["helpers:extract_data", "utils:parse_headers"]
+        functions=["json:loads", "os:getcwd"]
     )
     assert save_config.vars["user_id"] == "user.id"
     assert save_config.vars["user_name"] == "user.name"
-    assert save_config.functions == ["helpers:extract_data", "utils:parse_headers"]
+    assert save_config.functions == ["json:loads", "os:getcwd"]
 
 
 @pytest.mark.parametrize(
     "vars_data,functions_data",
     [
         ({"user_id": "user.id"}, None),  # Only vars
-        (None, ["helpers:extract_data"]),        # Only functions  
+        (None, ["json:loads"]),        # Only functions  
         (None, None),                    # Neither
     ],
 )
@@ -303,10 +288,10 @@ def test_validator_functions_invalid_input(validator_func, invalid_input, expect
 @pytest.mark.parametrize(
     "function_name",
     [
-        "module:function_name", 
-        "package.submodule:extract_data",
-        "my_helpers.utils:process_response",
-        "deeply.nested.module.path:complex_function"
+        "json:loads", 
+        "json:dumps",
+        "os:getcwd",
+        "sys:exit"
     ],
 )
 def test_module_function_validation_success(function_name):
@@ -319,12 +304,7 @@ def test_module_function_validation_success(function_name):
     [
         ("simple_function", "must use 'module:function' syntax"),
         (":no_module", "missing module path"),
-        ("module:", "invalid function name"),
-        ("1module:function", "invalid module part"),
-        ("module:1function", "invalid function name"),
-        ("module.1invalid:function", "invalid module part"),
-        ("module:for", "keyword"),
-        ("for:function", "keyword"),
+        ("module:", "missing function name"),
     ],
 )
 def test_module_function_validation_failure(invalid_function_name, expected_error_fragment):
