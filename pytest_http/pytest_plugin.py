@@ -81,6 +81,74 @@ def substitute_stage_variables(stage_data: dict[str, Any], variables: dict[str, 
         raise VariableSubstitutionError(f"Failed to substitute variables in stage: {e}") from e
 
 
+def _import_and_get_function(func_name: str) -> Any:
+    """Import and return a function by its module:function specification."""
+    module_path, function_name = func_name.rsplit(":", 1)
+    import importlib
+    module = importlib.import_module(module_path)
+    return getattr(module, function_name)
+
+
+def _handle_http_request_errors(stage_name: str, url: str, e: Exception) -> None:
+    """Handle HTTP request errors with consistent error messages."""
+    if isinstance(e, requests.Timeout):
+        pytest.fail(f"HTTP request timed out for stage '{stage_name}' to URL: {url}")
+    elif isinstance(e, requests.ConnectionError):
+        pytest.fail(f"HTTP connection error for stage '{stage_name}' to URL: {url} - {e}")
+    elif isinstance(e, requests.RequestException):
+        pytest.fail(f"HTTP request failed for stage '{stage_name}' to URL: {url} - {e}")
+    else:
+        pytest.fail(f"Unexpected HTTP error for stage '{stage_name}' to URL: {url} - {e}")
+
+
+def _execute_verify_function(func_name: str, response: requests.Response, stage_name: str) -> None:
+    """Execute a verify function and handle the result."""
+    try:
+        func = _import_and_get_function(func_name)
+        verification_result = func(response)
+
+        if not isinstance(verification_result, bool):
+            pytest.fail(f"Verify function '{func_name}' must return a boolean, got {type(verification_result)} for stage '{stage_name}'")
+
+        if not verification_result:
+            pytest.fail(f"Verify function '{func_name}' failed for stage '{stage_name}'")
+
+        logging.info(f"Verify function '{func_name}' passed for stage '{stage_name}'")
+
+    except Exception as e:
+        pytest.fail(f"Error executing verify function '{func_name}' for stage '{stage_name}': {e}")
+
+
+def _execute_save_function(func_name: str, response: requests.Response, stage_name: str, variable_context: dict[str, Any]) -> None:
+    """Execute a save function and handle the returned variables."""
+    try:
+        func = _import_and_get_function(func_name)
+        returned_vars = func(response)
+
+        if not isinstance(returned_vars, dict):
+            pytest.fail(f"Function '{func_name}' must return a dictionary of variables, got {type(returned_vars)} for stage '{stage_name}'")
+
+        for var_name, var_value in returned_vars.items():
+            if not var_name.isidentifier():
+                pytest.fail(f"Function '{func_name}' returned invalid variable name '{var_name}' for stage '{stage_name}'")
+
+            variable_context[var_name] = var_value
+            logging.info(f"Function '{func_name}' saved variable '{var_name}' = {var_value}")
+
+    except Exception as e:
+        pytest.fail(f"Error executing function '{func_name}' for stage '{stage_name}': {e}")
+
+
+def _build_response_data(response: requests.Response) -> dict[str, Any]:
+    """Build standardized response data dictionary."""
+    return {
+        "status_code": response.status_code,
+        "headers": dict(response.headers),
+        "text": response.text,
+        "json": response.json() if response.headers.get("content-type", "").startswith("application/json") else None,
+    }
+
+
 def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
     variable_context: dict[str, Any] = dict(fixtures)
 
@@ -112,12 +180,8 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
 
                 try:
                     response = requests.get(stage.url, **request_params)
-                except requests.Timeout:
-                    pytest.fail(f"HTTP request timed out for stage '{stage.name}' to URL: {stage.url}")
-                except requests.ConnectionError as e:
-                    pytest.fail(f"HTTP connection error for stage '{stage.name}' to URL: {stage.url} - {e}")
-                except requests.RequestException as e:
-                    pytest.fail(f"HTTP request failed for stage '{stage.name}' to URL: {stage.url} - {e}")
+                except (requests.Timeout, requests.ConnectionError, requests.RequestException) as e:
+                    _handle_http_request_errors(stage.name, stage.url, e)
 
                 logging.info(f"Response status: {response.status_code}")
                 logging.info(f"Response headers: {dict(response.headers)}")
@@ -129,12 +193,7 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                         pytest.fail(f"Status code verification failed for stage '{stage.name}': expected {expected_status}, got {actual_status}")
                     logging.info(f"Status code verification passed: {actual_status}")
 
-                response_data = {
-                    "status_code": response.status_code,
-                    "headers": dict(response.headers),
-                    "text": response.text,
-                    "json": response.json() if response.headers.get("content-type", "").startswith("application/json") else None,
-                }
+                response_data = _build_response_data(response)
 
                 if stage.verify and stage.verify.json_data is not None:
                     for jmespath_expr, expected_value in stage.verify.json_data.items():
@@ -149,28 +208,7 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                 # Handle verify functions
                 if stage.verify and stage.verify.functions:
                     for func_name in stage.verify.functions:
-                        try:
-                            # Get function (validation already confirmed it exists and is callable)
-                            module_path, function_name = func_name.rsplit(":", 1)
-                            import importlib
-                            module = importlib.import_module(module_path)
-                            func = getattr(module, function_name)
-
-                            # Call the function with the response and get the verification result
-                            verification_result = func(response)
-
-                            # Validate that the function returns a boolean
-                            if not isinstance(verification_result, bool):
-                                pytest.fail(f"Verify function '{func_name}' must return a boolean, got {type(verification_result)} for stage '{stage.name}'")
-
-                            # If verification fails, fail the test
-                            if not verification_result:
-                                pytest.fail(f"Verify function '{func_name}' failed for stage '{stage.name}'")
-
-                            logging.info(f"Verify function '{func_name}' passed for stage '{stage.name}'")
-
-                        except Exception as e:
-                            pytest.fail(f"Error executing verify function '{func_name}' for stage '{stage.name}': {e}")
+                        _execute_verify_function(func_name, response, stage.name)
 
                 if stage.save:
                     # Handle vars
@@ -186,31 +224,7 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                     # Handle functions
                     if stage.save.functions:
                         for func_name in stage.save.functions:
-                            try:
-                                # Get function (validation already confirmed it exists and is callable)
-                                module_path, function_name = func_name.rsplit(":", 1)
-                                import importlib
-                                module = importlib.import_module(module_path)
-                                func = getattr(module, function_name)
-
-                                # Call the function with the response and get the returned variables
-                                returned_vars = func(response)
-
-                                # Validate that the function returns a dictionary
-                                if not isinstance(returned_vars, dict):
-                                    pytest.fail(f"Function '{func_name}' must return a dictionary of variables, got {type(returned_vars)} for stage '{stage.name}'")
-
-                                # Add the returned variables to the context
-                                for var_name, var_value in returned_vars.items():
-                                    # Validate that variable names are valid Python identifiers
-                                    if not var_name.isidentifier():
-                                        pytest.fail(f"Function '{func_name}' returned invalid variable name '{var_name}' for stage '{stage.name}'")
-
-                                    variable_context[var_name] = var_value
-                                    logging.info(f"Function '{func_name}' saved variable '{var_name}' = {var_value}")
-
-                            except Exception as e:
-                                pytest.fail(f"Error executing function '{func_name}' for stage '{stage.name}': {e}")
+                            _execute_save_function(func_name, response, stage.name, variable_context)
             else:
                 logging.info(f"No URL provided for stage '{stage.name}', skipping HTTP request")
 
