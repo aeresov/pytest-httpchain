@@ -1,0 +1,16 @@
+{
+    "fixtures": [
+        "dict_value"
+    ],
+    "stages": [
+        {
+            "name": "test_functions_feature",
+            "save": {
+                "vars": {
+                    "test_var": "key"
+                },
+                "functions": ["extract_test_data"]
+            }
+        }
+    ]
+}

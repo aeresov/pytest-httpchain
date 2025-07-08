@@ -71,3 +71,13 @@ def test_json_test_with_references(pytester):
     pytester.copy_example("ref_stage.json")
     result = pytester.runpytest()
     result.assert_outcomes(passed=1)
+
+
+def test_json_test_with_functions(pytester):
+    pytester.copy_example("conftest_functions.py")
+    pytester.copy_example("test_functions.http.json")
+    # Rename conftest_functions.py to conftest.py in the test directory
+    import shutil
+    shutil.move(str(pytester.path / "conftest_functions.py"), str(pytester.path / "conftest.py"))
+    result = pytester.runpytest("-v")
+    result.assert_outcomes(passed=1)
