@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from pytest_http.models import Scenario
+from pytest_http.models import Scenario, SaveConfig
 
 
 @pytest.mark.parametrize(
@@ -63,7 +63,9 @@ def test_scenario_with_stages_containing_save_field():
 
     scenario = Scenario.model_validate(data)
     assert len(scenario.stages) == 1
-    assert scenario.stages[0].save == {"result": "response.result", "status": "response.status"}
+    assert isinstance(scenario.stages[0].save, SaveConfig)
+    assert scenario.stages[0].save.vars["result"] == "response.result"
+    assert scenario.stages[0].save.vars["status"] == "response.status"
 
 
 @pytest.mark.parametrize(
@@ -101,8 +103,9 @@ def test_scenario_cross_field_validator_no_conflict():
     scenario = Scenario.model_validate(data)
     assert scenario.fixtures == ["user_id", "api_key"]
     assert len(scenario.stages) == 1
-    assert scenario.stages[0].save["result"] == "user.id"
-    assert scenario.stages[0].save["status"] == "response.status"
+    assert isinstance(scenario.stages[0].save, SaveConfig)
+    assert scenario.stages[0].save.vars["result"] == "user.id"
+    assert scenario.stages[0].save.vars["status"] == "response.status"
 
 
 @pytest.mark.parametrize(
@@ -150,9 +153,11 @@ def test_scenario_cross_field_validator_mixed_stages():
     scenario = Scenario.model_validate(data)
     assert scenario.fixtures == ["user_id", "api_key"]
     assert len(scenario.stages) == 3
-    assert scenario.stages[0].save["result"] == "user.id"
+    assert isinstance(scenario.stages[0].save, SaveConfig)
+    assert scenario.stages[0].save.vars["result"] == "user.id"
     assert scenario.stages[1].save is None
-    assert scenario.stages[2].save["status"] == "response.status"
+    assert isinstance(scenario.stages[2].save, SaveConfig)
+    assert scenario.stages[2].save.vars["status"] == "response.status"
 
 
 def test_scenario_complete_integration():
@@ -170,6 +175,9 @@ def test_scenario_complete_integration():
     assert scenario.marks == ["slow", "integration"]
     assert len(scenario.stages) == 2
     assert scenario.stages[0].name == "login"
-    assert scenario.stages[0].save == {"token": "response.token", "profile_id": "response.user.id"}
+    assert isinstance(scenario.stages[0].save, SaveConfig)
+    assert scenario.stages[0].save.vars["token"] == "response.token"
+    assert scenario.stages[0].save.vars["profile_id"] == "response.user.id"
     assert scenario.stages[1].name == "get_profile"
-    assert scenario.stages[1].save == {"profile": "response.profile"}
+    assert isinstance(scenario.stages[1].save, SaveConfig)
+    assert scenario.stages[1].save.vars["profile"] == "response.profile"

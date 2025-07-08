@@ -147,13 +147,87 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                             pytest.fail(f"Error during JSON verification for stage '{stage.name}' with JMESPath '{jmespath_expr}': {e}")
 
                 if stage.save:
-                    for var_name, jmespath_expr in stage.save.items():
-                        try:
-                            saved_value = jmespath.search(jmespath_expr, response_data)
-                            variable_context[var_name] = saved_value
-                            logging.info(f"Saved variable '{var_name}' = {saved_value}")
-                        except Exception as e:
-                            pytest.fail(f"Error saving variable '{var_name}': {e}")
+                    # Handle both old format (dict) and new format (SaveConfig)
+                    from pytest_http.models import SaveConfig
+                    
+                    if isinstance(stage.save, dict):
+                        # Old format - direct variable mapping
+                        for var_name, jmespath_expr in stage.save.items():
+                            try:
+                                saved_value = jmespath.search(jmespath_expr, response_data)
+                                variable_context[var_name] = saved_value
+                                logging.info(f"Saved variable '{var_name}' = {saved_value}")
+                            except Exception as e:
+                                pytest.fail(f"Error saving variable '{var_name}': {e}")
+                    elif isinstance(stage.save, SaveConfig):
+                        # New format - handle vars
+                        if stage.save.vars:
+                            for var_name, jmespath_expr in stage.save.vars.items():
+                                try:
+                                    saved_value = jmespath.search(jmespath_expr, response_data)
+                                    variable_context[var_name] = saved_value
+                                    logging.info(f"Saved variable '{var_name}' = {saved_value}")
+                                except Exception as e:
+                                    pytest.fail(f"Error saving variable '{var_name}': {e}")
+                        
+                        # New format - handle functions
+                        if stage.save.functions:
+                            for func_name in stage.save.functions:
+                                try:
+                                    # Get the function from multiple possible sources
+                                    func = None
+                                    
+                                    # Try to get from the calling frame's globals
+                                    import inspect
+                                    frame = inspect.currentframe()
+                                    try:
+                                        # Go up the stack to find a frame that has the function
+                                        for _ in range(10):  # Limit to prevent infinite loops
+                                            frame = frame.f_back
+                                            if frame is None:
+                                                break
+                                            if func_name in frame.f_globals:
+                                                func = frame.f_globals[func_name]
+                                                break
+                                    finally:
+                                        del frame  # Avoid reference cycles
+                                    
+                                    # If not found in frame globals, try the current module's globals
+                                    if func is None and func_name in globals():
+                                        func = globals()[func_name]
+                                    
+                                    # If still not found, try sys.modules
+                                    if func is None:
+                                        for module_name, module in sys.modules.items():
+                                            if hasattr(module, func_name):
+                                                func = getattr(module, func_name)
+                                                break
+                                    
+                                    if func is None:
+                                        pytest.fail(f"Function '{func_name}' not found in any accessible namespace for stage '{stage.name}'")
+                                    
+                                    # Check if it's callable
+                                    if not callable(func):
+                                        pytest.fail(f"'{func_name}' is not a callable function for stage '{stage.name}'")
+                                    
+                                    # Call the function with the response and get the returned variables
+                                    returned_vars = func(response)
+                                    
+                                    # Validate that the function returns a dictionary
+                                    if not isinstance(returned_vars, dict):
+                                        pytest.fail(f"Function '{func_name}' must return a dictionary of variables, got {type(returned_vars)} for stage '{stage.name}'")
+                                    
+                                    # Add the returned variables to the context
+                                    for var_name, var_value in returned_vars.items():
+                                        # Validate that variable names are valid Python identifiers
+                                        if not var_name.isidentifier():
+                                            pytest.fail(f"Function '{func_name}' returned invalid variable name '{var_name}' for stage '{stage.name}'")
+                                        
+                                        variable_context[var_name] = var_value
+                                        logging.info(f"Function '{func_name}' saved variable '{var_name}' = {var_value}")
+                                        
+                                except Exception as e:
+                                    pytest.fail(f"Error executing function '{func_name}' for stage '{stage.name}': {e}")
             else:
                 logging.info(f"No URL provided for stage '{stage.name}', skipping HTTP request")
 
