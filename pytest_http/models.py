@@ -1,6 +1,6 @@
 import keyword
 from http import HTTPStatus
-from typing import Annotated, Any, Union
+from typing import Annotated, Any
 
 import jmespath
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -61,7 +61,7 @@ class Stage(BaseModel):
     url: str | None = Field(default=None)
     params: dict[str, Any] | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)
-    save: Union[dict[ValidPythonVariableName, JMESPathExpression], SaveConfig, None] = Field(default=None)
+    save: SaveConfig | None = Field(default=None)
     verify: Verify | None = Field(default=None)
 
     @field_validator("save", mode="before")
@@ -104,17 +104,8 @@ class Scenario(BaseModel):
         fixture_names = set(self.fixtures)
 
         for stage in self.stages:
-            if stage.save:
-                # Handle both old format (dict) and new format (SaveConfig)
-                var_names = set()
-                if isinstance(stage.save, dict):
-                    # Old format - direct variable mapping
-                    var_names = set(stage.save.keys())
-                elif isinstance(stage.save, SaveConfig) and stage.save.vars:
-                    # New format - vars field
-                    var_names = set(stage.save.vars.keys())
-                
-                for var_name in var_names:
+            if stage.save and stage.save.vars:
+                for var_name in stage.save.vars.keys():
                     if var_name in fixture_names:
                         raise ValueError(f"Variable name '{var_name}' conflicts with fixture name")
 

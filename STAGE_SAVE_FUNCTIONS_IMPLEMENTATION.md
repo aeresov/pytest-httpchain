@@ -9,12 +9,13 @@ Successfully implemented support for two optional fields in `Stage.save`: **"var
 ### 1. Model Updates (`pytest_http/models.py`)
 
 - **Added `SaveConfig` model** with optional `vars` and `functions` fields
-- **Enhanced `Stage.save` field** to support both old format (dict) and new format (SaveConfig)
+- **Changed `Stage.save` field** to be `SaveConfig | None` (simplified from Union type)
 - **Added validation** for Python function names using `validate_python_function_name()`
-- **Maintained backward compatibility** with automatic conversion of old format to new format
+- **Maintained backward compatibility** with automatic conversion of old format to new format via field validator
 
 ### 2. Execution Logic (`pytest_http/pytest_plugin.py`)
 
+- **Simplified execution flow** - Stage.save is always SaveConfig, no type checking needed
 - **Enhanced function lookup mechanism** to find functions across multiple namespaces
 - **Added function execution** with HTTP response as argument
 - **Implemented validation** for function return values (must be dict with valid variable names)
@@ -128,4 +129,12 @@ This allows functions to be defined in test files, imported modules, or any acce
 
 ## Summary
 
-The implementation successfully extends the Stage.save functionality while maintaining full backward compatibility. Users can now leverage both JMESPath expressions for simple data extraction and custom Python functions for complex processing logic, providing a powerful and flexible variable extraction system.
+The implementation successfully extends the Stage.save functionality while maintaining full backward compatibility. The simplified design makes `Stage.save` always a `SaveConfig` object (or `None`), eliminating the need for union types and complex type checking in the execution logic.
+
+Key benefits of the simplified approach:
+- **Cleaner code**: No isinstance checks needed in execution logic
+- **Type safety**: Always know `stage.save` is `SaveConfig | None`
+- **Backward compatibility**: Old dict format automatically converts via field validator
+- **Flexibility**: Users can leverage both JMESPath expressions for simple data extraction and custom Python functions for complex processing logic
+
+This provides a powerful and flexible variable extraction system with a clean, maintainable implementation.
