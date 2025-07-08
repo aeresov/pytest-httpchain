@@ -34,6 +34,7 @@ JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)
 
 class Verify(BaseModel):
     status: HTTPStatus | None = Field(default=None)
+    json_data: dict[JMESPathExpression, Any] | None = Field(default=None, alias="json")
 
 
 class Stage(BaseModel):

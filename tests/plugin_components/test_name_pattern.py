@@ -5,6 +5,7 @@ from pytest_http.pytest_plugin import get_test_name_pattern
 
 class SimpleConfig:
     """Simple config object for testing."""
+
     def __init__(self, suffix="http"):
         self.pytest_http_suffix = suffix
 
