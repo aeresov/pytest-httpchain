@@ -258,7 +258,7 @@ def test_save_config_optional_fields(vars_data, functions_data):
     "validator_func,valid_input,expected_output",
     [
         (validate_python_variable_name, "valid_name", "valid_name"),
-        (validate_python_function_name, "module:valid_function", "module:valid_function"),
+        (validate_python_function_name, "json:loads", "json:loads"),
         (validate_jmespath_expression, "user.id", "user.id"),
     ],
 )

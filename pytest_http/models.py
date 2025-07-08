@@ -68,10 +68,6 @@ class SaveConfig(BaseModel):
     functions: list[ValidPythonFunctionName] | None = Field(default=None)
 
 
-class VerifyConfig(BaseModel):
-    functions: list[ValidPythonFunctionName] | None = Field(default=None)
-
-
 class Verify(BaseModel):
     status: HTTPStatus | None = Field(default=None)
     json_data: dict[JMESPathExpression, Any] | None = Field(default=None, alias="json")
