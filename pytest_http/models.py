@@ -1,3 +1,4 @@
+import importlib
 import keyword
 from http import HTTPStatus
 from typing import Annotated, Any
@@ -40,6 +41,19 @@ def validate_python_function_name(v: str) -> str:
     
     if not function_name:
         raise ValueError(f"'{v}' is missing function name")
+
+    # Actually verify the function exists and is callable
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError as e:
+        raise ValueError(f"Cannot import module '{module_path}': {e}")
+    
+    if not hasattr(module, function_name):
+        raise ValueError(f"Function '{function_name}' not found in module '{module_path}'")
+    
+    func = getattr(module, function_name)
+    if not callable(func):
+        raise ValueError(f"'{function_name}' in module '{module_path}' is not callable")
 
     return v
 

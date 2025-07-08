@@ -161,21 +161,11 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                     if stage.save.functions:
                         for func_name in stage.save.functions:
                             try:
-                                # Get function and validate it exists
+                                # Get function (validation already confirmed it exists and is callable)
                                 module_path, function_name = func_name.rsplit(":", 1)
                                 import importlib
-                                
-                                try:
-                                    module = importlib.import_module(module_path)
-                                except ImportError as e:
-                                    pytest.fail(f"Cannot import module '{module_path}' for function '{func_name}' in stage '{stage.name}': {e}")
-                                
-                                if not hasattr(module, function_name):
-                                    pytest.fail(f"Function '{function_name}' not found in module '{module_path}' for stage '{stage.name}'")
-                                
+                                module = importlib.import_module(module_path)
                                 func = getattr(module, function_name)
-                                if not callable(func):
-                                    pytest.fail(f"'{func_name}' is not a callable function for stage '{stage.name}'")
                                 
                                 # Call the function with the response and get the returned variables
                                 returned_vars = func(response)

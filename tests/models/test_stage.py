@@ -119,6 +119,8 @@ def test_stage_save_optional_states(save_value, expected_result, description):
          # Invalid module:function syntax
          (":function", "func", "missing module path"),
          ("module:", "func", "missing function name"),
+         ("nonexistent_module:function", "func", "Cannot import module 'nonexistent_module'"),
+         ("json:nonexistent_function", "func", "Function 'nonexistent_function' not found in module 'json'"),
     ],
 )
 def test_stage_save_invalid_names(invalid_name, field_type, expected_error):
@@ -298,6 +300,8 @@ def test_module_function_validation_success(function_name):
         ("simple_function", "must use 'module:function' syntax"),
         (":no_module", "missing module path"),
         ("module:", "missing function name"),
+        ("nonexistent_module:function", "Cannot import module 'nonexistent_module'"),
+        ("json:nonexistent_function", "Function 'nonexistent_function' not found in module 'json'"),
     ],
 )
 def test_module_function_validation_failure(invalid_function_name, expected_error_fragment):
