@@ -8,6 +8,7 @@ from functools import reduce
 from pathlib import Path
 from typing import Any
 
+import jmespath
 import jsonref
 import pytest
 import requests
@@ -136,8 +137,6 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                 }
 
                 if stage.verify and stage.verify.json_data is not None:
-                    import jmespath
-
                     for jmespath_expr, expected_value in stage.verify.json_data.items():
                         try:
                             actual_value = jmespath.search(jmespath_expr, response_data)
@@ -148,8 +147,6 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                             pytest.fail(f"Error during JSON verification for stage '{stage.name}' with JMESPath '{jmespath_expr}': {e}")
 
                 if stage.save:
-                    import jmespath
-
                     for var_name, jmespath_expr in stage.save.items():
                         try:
                             saved_value = jmespath.search(jmespath_expr, response_data)
