@@ -116,12 +116,18 @@ def test_stage_save_optional_states(save_value, expected_result, description):
         ("user id", "var", "'user id' is not a valid Python variable name"),
         ("user@id", "var", "'user@id' is not a valid Python variable name"),
         ("", "var", "'' is not a valid Python variable name"),
-        # Function name validation
-        ("1invalid", "func", "'1invalid' is not a valid Python function name"),
-        ("func-name", "func", "'func-name' is not a valid Python function name"),
-        ("func name", "func", "'func name' is not a valid Python function name"),
-        ("func@name", "func", "'func@name' is not a valid Python function name"),
-        ("", "func", "'' is not a valid Python function name"),
+                 # Function name validation
+         ("1invalid", "func", "'1invalid' is not a valid Python function name"),
+         ("func-name", "func", "'func-name' is not a valid Python function name"),
+         ("func name", "func", "'func name' is not a valid Python function name"),
+         ("func@name", "func", "'func@name' is not a valid Python function name"),
+         ("", "func", "'' is not a valid Python function name"),
+         # Invalid module:function syntax
+         (":function", "func", "missing module path"),
+         ("module:", "func", "invalid function name"),
+         ("1module:function", "func", "invalid module part"),
+         ("module:1function", "func", "invalid function name"),
+         ("module.1sub:function", "func", "invalid module part"),
     ],
 )
 def test_stage_save_invalid_names(invalid_name, field_type, expected_error):
@@ -218,6 +224,12 @@ def test_stage_save_keyword_validation(keyword, field_type):
             "func",
             "valid_function_names"
         ),
+        # Valid module:function names
+        (
+            ["module:function", "package.submodule:func_name", "my_package.utils:extract_data", "test_helpers:process_response"],
+            "func", 
+            "valid_module_function_names"
+        ),
     ],
 )
 def test_stage_save_valid_names(valid_names, field_type, test_case):
@@ -286,3 +298,36 @@ def test_validator_functions_invalid_input(validator_func, invalid_input, expect
     with pytest.raises(ValueError) as exc_info:
         validator_func(invalid_input)
     assert expected_error in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    [
+        "simple_function",
+        "module:function_name", 
+        "package.submodule:extract_data",
+        "my_helpers.utils:process_response",
+        "deeply.nested.module.path:complex_function"
+    ],
+)
+def test_module_function_validation_success(function_name):
+    result = validate_python_function_name(function_name)
+    assert result == function_name
+
+
+@pytest.mark.parametrize(
+    "invalid_function_name,expected_error_fragment",
+    [
+        (":no_module", "missing module path"),
+        ("module:", "invalid function name"),
+        ("1module:function", "invalid module part"),
+        ("module:1function", "invalid function name"),
+        ("module.1invalid:function", "invalid module part"),
+        ("module:for", "keyword"),
+        ("for:function", "keyword"),
+    ],
+)
+def test_module_function_validation_failure(invalid_function_name, expected_error_fragment):
+    with pytest.raises(ValueError) as exc_info:
+        validate_python_function_name(invalid_function_name)
+    assert expected_error_fragment in str(exc_info.value)

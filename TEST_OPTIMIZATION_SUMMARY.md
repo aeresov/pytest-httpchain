@@ -112,6 +112,12 @@ Comprehensive refactoring of unit tests to eliminate duplication, improve parame
 
 - ✅ **Removed Unused Files**: Deleted `tests/examples/test_functions_example.http.json` (not used by any tests, referenced non-existent functions)
 
+## New Test Added
+
+- ✅ **Functions Integration Test**: Added `test_json_test_with_functions()` to verify the functions feature works correctly in the pytester environment
+- ✅ **Enhanced Function Validation**: Updated validation to support `module:function` syntax and added comprehensive test cases
+- ✅ **Updated Execution Logic**: Enhanced function resolution to import modules and call functions with proper error handling
+
 ## Future Recommendations
 
 1. **Continue Parameterization**: Apply same patterns to new tests

@@ -164,34 +164,48 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                                 # Get the function from multiple possible sources
                                 func = None
                                 
-                                # Try to get from the calling frame's globals
-                                import inspect
-                                frame = inspect.currentframe()
-                                try:
-                                    # Go up the stack to find a frame that has the function
-                                    for _ in range(10):  # Limit to prevent infinite loops
-                                        frame = frame.f_back
-                                        if frame is None:
-                                            break
-                                        if func_name in frame.f_globals:
-                                            func = frame.f_globals[func_name]
-                                            break
-                                finally:
-                                    del frame  # Avoid reference cycles
-                                
-                                # If not found in frame globals, try the current module's globals
-                                if func is None and func_name in globals():
-                                    func = globals()[func_name]
-                                
-                                # If still not found, try sys.modules
-                                if func is None:
-                                    for module_name, module in sys.modules.items():
-                                        if hasattr(module, func_name):
-                                            func = getattr(module, func_name)
-                                            break
-                                
-                                if func is None:
-                                    pytest.fail(f"Function '{func_name}' not found in any accessible namespace for stage '{stage.name}'")
+                                # Handle module:function syntax
+                                if ":" in func_name:
+                                    module_path, function_name = func_name.rsplit(":", 1)
+                                    try:
+                                        import importlib
+                                        module = importlib.import_module(module_path)
+                                        if hasattr(module, function_name):
+                                            func = getattr(module, function_name)
+                                        else:
+                                            pytest.fail(f"Function '{function_name}' not found in module '{module_path}' for stage '{stage.name}'")
+                                    except ImportError as e:
+                                        pytest.fail(f"Cannot import module '{module_path}' for function '{func_name}' in stage '{stage.name}': {e}")
+                                else:
+                                    # Original logic for simple function names
+                                    # Try to get from the calling frame's globals
+                                    import inspect
+                                    frame = inspect.currentframe()
+                                    try:
+                                        # Go up the stack to find a frame that has the function
+                                        for _ in range(10):  # Limit to prevent infinite loops
+                                            frame = frame.f_back
+                                            if frame is None:
+                                                break
+                                            if func_name in frame.f_globals:
+                                                func = frame.f_globals[func_name]
+                                                break
+                                    finally:
+                                        del frame  # Avoid reference cycles
+                                    
+                                    # If not found in frame globals, try the current module's globals
+                                    if func is None and func_name in globals():
+                                        func = globals()[func_name]
+                                    
+                                    # If still not found, try sys.modules
+                                    if func is None:
+                                        for module_name, module in sys.modules.items():
+                                            if hasattr(module, func_name):
+                                                func = getattr(module, func_name)
+                                                break
+                                    
+                                    if func is None:
+                                        pytest.fail(f"Function '{func_name}' not found in any accessible namespace for stage '{stage.name}'")
                                 
                                 # Check if it's callable
                                 if not callable(func):

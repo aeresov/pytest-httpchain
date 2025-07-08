@@ -29,14 +29,40 @@ def validate_jmespath_expression(v: str) -> str:
 
 
 def validate_python_function_name(v: str) -> str:
-    if not v.isidentifier():
-        raise ValueError(f"'{v}' is not a valid Python function name")
+    # Support module:function syntax
+    if ":" in v:
+        module_path, function_name = v.rsplit(":", 1)
+        
+        # Validate module path (can contain dots)
+        if not module_path:
+            raise ValueError(f"'{v}' is not a valid Python function name - missing module path")
+        
+        # Module path parts should be valid identifiers
+        for part in module_path.split("."):
+            if not part.isidentifier():
+                raise ValueError(f"'{v}' is not a valid Python function name - invalid module part '{part}'")
+            if keyword.iskeyword(part):
+                raise ValueError(f"'{v}' is not a valid Python function name - module part '{part}' is a keyword")
+        
+        # Validate function name part
+        if not function_name.isidentifier():
+            raise ValueError(f"'{v}' is not a valid Python function name - invalid function name '{function_name}'")
+        
+        if keyword.iskeyword(function_name):
+            raise ValueError(f"'{v}' is a Python keyword and cannot be used as a function name")
+        
+        if hasattr(keyword, "softkwlist") and function_name in keyword.softkwlist:
+            raise ValueError(f"'{v}' is a Python keyword and cannot be used as a function name")
+    else:
+        # Original validation for simple function names
+        if not v.isidentifier():
+            raise ValueError(f"'{v}' is not a valid Python function name")
 
-    if keyword.iskeyword(v):
-        raise ValueError(f"'{v}' is a Python keyword and cannot be used as a function name")
+        if keyword.iskeyword(v):
+            raise ValueError(f"'{v}' is a Python keyword and cannot be used as a function name")
 
-    if hasattr(keyword, "softkwlist") and v in keyword.softkwlist:
-        raise ValueError(f"'{v}' is a Python keyword and cannot be used as a function name")
+        if hasattr(keyword, "softkwlist") and v in keyword.softkwlist:
+            raise ValueError(f"'{v}' is a Python keyword and cannot be used as a function name")
 
     return v
 
