@@ -1,10 +1,9 @@
-import pytest
 
 
 def test_verify_functions_integration(pytester):
     """Test that verify functions work correctly in integration."""
     # Create helper functions that will be available
-    helper_file = pytester.makefile(
+    pytester.makefile(
         ".py",
         test_verify_helpers="""
         def verify_response_status_200(response):
@@ -25,7 +24,7 @@ def test_verify_functions_integration(pytester):
             return "application/json" in content_type.lower()
         """,
     )
-    
+
     # Create test file
     test_file = pytester.makefile(
         ".http.json",
@@ -75,7 +74,7 @@ def test_verify_functions_integration(pytester):
         }
         """,
     )
-    
+
     result = pytester.runpytest(str(test_file), "-v")
     result.assert_outcomes(passed=4)
 
@@ -98,7 +97,7 @@ def test_verify_functions_with_invalid_function(pytester):
         }
         """,
     )
-    
+
     result = pytester.runpytest(str(test_file), "-v")
     result.assert_outcomes(failed=1)
 
@@ -106,14 +105,14 @@ def test_verify_functions_with_invalid_function(pytester):
 def test_verify_functions_returning_non_boolean(pytester):
     """Test that verify functions must return boolean values."""
     # Create a helper function that returns non-boolean
-    helper_file = pytester.makefile(
+    pytester.makefile(
         ".py",
         test_verify_helpers="""
         def invalid_verify_function(response):
             return "not a boolean"
         """,
     )
-    
+
     test_file = pytester.makefile(
         ".http.json",
         test_invalid_return="""
@@ -130,7 +129,7 @@ def test_verify_functions_returning_non_boolean(pytester):
         }
         """,
     )
-    
+
     result = pytester.runpytest(str(test_file), "-v")
     result.assert_outcomes(failed=1)
 
@@ -138,14 +137,14 @@ def test_verify_functions_returning_non_boolean(pytester):
 def test_verify_functions_failing_verification(pytester):
     """Test that failing verify functions properly fail the test."""
     # Create a helper function that always returns False
-    helper_file = pytester.makefile(
+    pytester.makefile(
         ".py",
         test_verify_helpers="""
         def failing_verify_function(response):
             return False
         """,
     )
-    
+
     test_file = pytester.makefile(
         ".http.json",
         test_failing_verify="""
@@ -162,7 +161,7 @@ def test_verify_functions_failing_verification(pytester):
         }
         """,
     )
-    
+
     result = pytester.runpytest(str(test_file), "-v")
     result.assert_outcomes(failed=1)
 
@@ -170,14 +169,14 @@ def test_verify_functions_failing_verification(pytester):
 def test_verify_functions_with_exception(pytester):
     """Test that verify functions that raise exceptions are properly handled."""
     # Create a helper function that raises an exception
-    helper_file = pytester.makefile(
+    pytester.makefile(
         ".py",
         test_verify_helpers="""
         def exception_verify_function(response):
             raise ValueError("Test exception")
         """,
     )
-    
+
     test_file = pytester.makefile(
         ".http.json",
         test_exception_verify="""
@@ -194,7 +193,7 @@ def test_verify_functions_with_exception(pytester):
         }
         """,
     )
-    
+
     result = pytester.runpytest(str(test_file), "-v")
     result.assert_outcomes(failed=1)
 
@@ -202,7 +201,7 @@ def test_verify_functions_with_exception(pytester):
 def test_verify_functions_combined_with_status_and_json(pytester):
     """Test that verify functions work correctly with status and JSON verification."""
     # Create helper functions
-    helper_file = pytester.makefile(
+    pytester.makefile(
         ".py",
         test_verify_helpers="""
         def verify_response_status_200(response):
@@ -216,7 +215,7 @@ def test_verify_functions_combined_with_status_and_json(pytester):
                 return False
         """,
     )
-    
+
     test_file = pytester.makefile(
         ".http.json",
         test_combined_verify="""
@@ -240,6 +239,6 @@ def test_verify_functions_combined_with_status_and_json(pytester):
         }
         """,
     )
-    
+
     result = pytester.runpytest(str(test_file), "-v")
     result.assert_outcomes(passed=1)

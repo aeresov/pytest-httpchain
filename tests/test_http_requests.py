@@ -1,4 +1,5 @@
 import pytest
+import requests
 import responses
 
 from pytest_http.models import Scenario, Stage
@@ -16,8 +17,8 @@ from pytest_http.pytest_plugin import json_test_function
         ),
         (
             {
-                "name": "get_user", 
-                "url": "https://api.example.com/users", 
+                "name": "get_user",
+                "url": "https://api.example.com/users",
                 "params": {"id": 1, "format": "json"}
             },
             "https://api.example.com/users",
@@ -26,8 +27,8 @@ from pytest_http.pytest_plugin import json_test_function
         ),
         (
             {
-                "name": "get_users", 
-                "url": "https://api.example.com/users", 
+                "name": "get_users",
+                "url": "https://api.example.com/users",
                 "headers": {"Authorization": "Bearer token123", "Accept": "application/json"}
             },
             "https://api.example.com/users",
@@ -36,8 +37,8 @@ from pytest_http.pytest_plugin import json_test_function
         ),
         (
             {
-                "name": "get_user", 
-                "url": "https://api.example.com/user/1", 
+                "name": "get_user",
+                "url": "https://api.example.com/user/1",
                 "save": {"vars": {"user_id": "json.id", "user_name": "json.name", "status": "status_code"}}
             },
             "https://api.example.com/user/1",
@@ -70,15 +71,15 @@ def test_http_request_configurations(stage_config, expected_url, expected_assert
     json_test_function(test_data)
 
     assert len(responses.calls) == 1
-    
+
     # Verify specific assertions based on test case
     if "url" in expected_assertions:
         assert responses.calls[0].request.url == expected_assertions["url"]
-    
+
     if "url_contains" in expected_assertions:
         for substring in expected_assertions["url_contains"]:
             assert substring in responses.calls[0].request.url
-    
+
     if "headers" in expected_assertions:
         for header_name, header_value in expected_assertions["headers"].items():
             assert responses.calls[0].request.headers[header_name] == header_value
@@ -107,15 +108,15 @@ def test_multiple_stages_scenarios(stages_config, expected_calls, description):
     # Setup responses for HTTP stages
     if description == "multiple_http_stages":
         responses.add(
-            responses.GET, 
-            "https://api.example.com/users", 
-            json={"users": [{"id": 1, "name": "John"}]}, 
+            responses.GET,
+            "https://api.example.com/users",
+            json={"users": [{"id": 1, "name": "John"}]},
             status=200
         )
         responses.add(
-            responses.GET, 
-            "https://api.example.com/user/1", 
-            json={"id": 1, "name": "John", "details": "Additional info"}, 
+            responses.GET,
+            "https://api.example.com/user/1",
+            json={"id": 1, "name": "John", "details": "Additional info"},
             status=200
         )
 
@@ -138,19 +139,19 @@ def test_multiple_stages_scenarios(stages_config, expected_calls, description):
 @responses.activate
 def test_http_request_error_handling(response_status, expected_behavior):
     responses.add(
-        responses.GET, 
-        "https://api.example.com/users", 
-        json={"error": "Not found"} if response_status >= 400 else {"data": "success"}, 
+        responses.GET,
+        "https://api.example.com/users",
+        json={"error": "Not found"} if response_status >= 400 else {"data": "success"},
         status=response_status
     )
 
     test_data = {"stages": [{"name": "get_users", "url": "https://api.example.com/users"}]}
-    
+
     if expected_behavior == "should_pass":
         json_test_function(test_data)
         assert len(responses.calls) == 1
     else:
-        with pytest.raises(Exception):
+        with pytest.raises((requests.RequestException, ValueError)):
             json_test_function(test_data)
 
 
@@ -159,9 +160,9 @@ def test_http_request_error_handling(response_status, expected_behavior):
     [
         (
             {
-                "name": "test_stage", 
-                "url": "https://api.example.com/test", 
-                "params": {"key": "value"}, 
+                "name": "test_stage",
+                "url": "https://api.example.com/test",
+                "params": {"key": "value"},
                 "headers": {"Content-Type": "application/json"}
             },
             {
@@ -184,7 +185,7 @@ def test_http_request_error_handling(response_status, expected_behavior):
 )
 def test_stage_model_validation(stage_data, expected_attrs):
     stage = Stage(**stage_data)
-    
+
     for attr_name, expected_value in expected_attrs.items():
         assert getattr(stage, attr_name) == expected_value
 
@@ -193,9 +194,9 @@ def test_scenario_model_validation():
     scenario = Scenario(
         stages=[
             {
-                "name": "http_stage", 
-                "url": "https://api.example.com/test", 
-                "params": {"key": "value"}, 
+                "name": "http_stage",
+                "url": "https://api.example.com/test",
+                "params": {"key": "value"},
                 "headers": {"Authorization": "Bearer token"}
             },
             {"name": "no_http_stage"},

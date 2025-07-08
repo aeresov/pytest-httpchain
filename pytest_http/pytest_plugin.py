@@ -155,20 +155,20 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                             import importlib
                             module = importlib.import_module(module_path)
                             func = getattr(module, function_name)
-                            
+
                             # Call the function with the response and get the verification result
                             verification_result = func(response)
-                            
+
                             # Validate that the function returns a boolean
                             if not isinstance(verification_result, bool):
                                 pytest.fail(f"Verify function '{func_name}' must return a boolean, got {type(verification_result)} for stage '{stage.name}'")
-                            
+
                             # If verification fails, fail the test
                             if not verification_result:
                                 pytest.fail(f"Verify function '{func_name}' failed for stage '{stage.name}'")
-                            
+
                             logging.info(f"Verify function '{func_name}' passed for stage '{stage.name}'")
-                                
+
                         except Exception as e:
                             pytest.fail(f"Error executing verify function '{func_name}' for stage '{stage.name}': {e}")
 
@@ -182,7 +182,7 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                                 logging.info(f"Saved variable '{var_name}' = {saved_value}")
                             except Exception as e:
                                 pytest.fail(f"Error saving variable '{var_name}': {e}")
-                    
+
                     # Handle functions
                     if stage.save.functions:
                         for func_name in stage.save.functions:
@@ -192,23 +192,23 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                                 import importlib
                                 module = importlib.import_module(module_path)
                                 func = getattr(module, function_name)
-                                
+
                                 # Call the function with the response and get the returned variables
                                 returned_vars = func(response)
-                                
+
                                 # Validate that the function returns a dictionary
                                 if not isinstance(returned_vars, dict):
                                     pytest.fail(f"Function '{func_name}' must return a dictionary of variables, got {type(returned_vars)} for stage '{stage.name}'")
-                                
+
                                 # Add the returned variables to the context
                                 for var_name, var_value in returned_vars.items():
                                     # Validate that variable names are valid Python identifiers
                                     if not var_name.isidentifier():
                                         pytest.fail(f"Function '{func_name}' returned invalid variable name '{var_name}' for stage '{stage.name}'")
-                                    
+
                                     variable_context[var_name] = var_value
                                     logging.info(f"Function '{func_name}' saved variable '{var_name}' = {var_value}")
-                                    
+
                             except Exception as e:
                                 pytest.fail(f"Error executing function '{func_name}' for stage '{stage.name}': {e}")
             else:

@@ -54,7 +54,7 @@ def test_verify_functions_validation(invalid_function_name, expected_error):
 )
 def test_stage_verify_functions_handling(stage_data, expected_functions):
     stage = Stage.model_validate(stage_data)
-    
+
     if expected_functions is not None:
         assert stage.verify is not None
         assert stage.verify.functions == expected_functions
@@ -73,7 +73,7 @@ def test_verify_functions_with_status_and_json():
         }
     }
     stage = Stage.model_validate(stage_data)
-    
+
     assert stage.verify is not None
     assert stage.verify.status.value == 200
     assert stage.verify.json_data == {"json.some_field": "expected_value"}
@@ -89,7 +89,7 @@ def test_verify_functions_optional_field():
 def test_verify_functions_invalid_function_name():
     invalid_name = "invalid_function"
     data = {"name": "test", "verify": {"functions": [invalid_name]}}
-    
+
     with pytest.raises(ValidationError):
         Stage.model_validate(data)
 
@@ -98,7 +98,7 @@ def test_verify_functions_valid_function_names():
     valid_names = ["json:loads", "os:getcwd"]
     data = {"name": "test", "verify": {"functions": valid_names}}
     stage = Stage.model_validate(data)
-    
+
     assert stage.verify is not None
     assert stage.verify.functions == valid_names
 
@@ -113,7 +113,7 @@ def test_verify_functions_valid_function_names():
 )
 def test_verify_functions_optional_fields(functions_data):
     verify = Verify(functions=functions_data)
-    
+
     if functions_data is None:
         assert verify.functions is None
     else:
