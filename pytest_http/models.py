@@ -1,3 +1,4 @@
+import importlib
 import keyword
 from http import HTTPStatus
 from typing import Annotated, Any
@@ -28,8 +29,43 @@ def validate_jmespath_expression(v: str) -> str:
     return v
 
 
+def validate_python_function_name(v: str) -> str:
+    # Require module:function syntax
+    if ":" not in v:
+        raise ValueError(f"'{v}' must use 'module:function' syntax")
+    
+    module_path, function_name = v.rsplit(":", 1)
+    
+    if not module_path:
+        raise ValueError(f"'{v}' is missing module path")
+    
+    if not function_name:
+        raise ValueError(f"'{v}' is missing function name")
+
+    # Actually verify the function exists and is callable
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError as e:
+        raise ValueError(f"Cannot import module '{module_path}': {e}")
+    
+    if not hasattr(module, function_name):
+        raise ValueError(f"Function '{function_name}' not found in module '{module_path}'")
+    
+    func = getattr(module, function_name)
+    if not callable(func):
+        raise ValueError(f"'{function_name}' in module '{module_path}' is not callable")
+
+    return v
+
+
 ValidPythonVariableName = Annotated[str, AfterValidator(validate_python_variable_name)]
+ValidPythonFunctionName = Annotated[str, AfterValidator(validate_python_function_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
+
+
+class SaveConfig(BaseModel):
+    vars: dict[ValidPythonVariableName, JMESPathExpression] | None = Field(default=None)
+    functions: list[ValidPythonFunctionName] | None = Field(default=None)
 
 
 class Verify(BaseModel):
@@ -42,7 +78,7 @@ class Stage(BaseModel):
     url: str | None = Field(default=None)
     params: dict[str, Any] | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)
-    save: dict[ValidPythonVariableName, JMESPathExpression] | None = Field(default=None)
+    save: SaveConfig | None = Field(default=None)
     verify: Verify | None = Field(default=None)
 
 
@@ -68,8 +104,8 @@ class Scenario(BaseModel):
         fixture_names = set(self.fixtures)
 
         for stage in self.stages:
-            if stage.save:
-                for var_name in stage.save.keys():
+            if stage.save and stage.save.vars:
+                for var_name in stage.save.vars.keys():
                     if var_name in fixture_names:
                         raise ValueError(f"Variable name '{var_name}' conflicts with fixture name")
 

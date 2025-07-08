@@ -71,3 +71,11 @@ def test_json_test_with_references(pytester):
     pytester.copy_example("ref_stage.json")
     result = pytester.runpytest()
     result.assert_outcomes(passed=1)
+
+
+def test_json_test_with_functions(pytester):
+    pytester.copy_example("conftest.py")
+    pytester.copy_example("test_helpers.py")
+    pytester.copy_example("test_functions.http.json")
+    result = pytester.runpytest("-p", "pytest_http.pytest_plugin", "-v")
+    result.assert_outcomes(passed=1)

@@ -1,0 +1,17 @@
+{
+    "fixtures": [
+        "dict_value"
+    ],
+    "stages": [
+        {
+            "name": "test_functions_feature",
+            "url": "https://httpbin.org/json",
+            "save": {
+                "vars": {
+                    "test_var": "json.slideshow.title"
+                },
+                "functions": ["test_helpers:extract_test_data"]
+            }
+        }
+    ]
+}
