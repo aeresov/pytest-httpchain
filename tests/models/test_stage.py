@@ -116,12 +116,13 @@ def test_stage_save_optional_states(save_value, expected_result, description):
         ("user id", "var", "'user id' is not a valid Python variable name"),
         ("user@id", "var", "'user@id' is not a valid Python variable name"),
         ("", "var", "'' is not a valid Python variable name"),
-                 # Function name validation
-         ("1invalid", "func", "'1invalid' is not a valid Python function name"),
-         ("func-name", "func", "'func-name' is not a valid Python function name"),
-         ("func name", "func", "'func name' is not a valid Python function name"),
-         ("func@name", "func", "'func@name' is not a valid Python function name"),
-         ("", "func", "'' is not a valid Python function name"),
+                 # Function name validation - must use module:function syntax
+         ("simple_function", "func", "must use 'module:function' syntax"),
+         ("1invalid", "func", "must use 'module:function' syntax"),
+         ("func-name", "func", "must use 'module:function' syntax"),
+         ("func name", "func", "must use 'module:function' syntax"),
+         ("func@name", "func", "must use 'module:function' syntax"),
+         ("", "func", "must use 'module:function' syntax"),
          # Invalid module:function syntax
          (":function", "func", "missing module path"),
          ("module:", "func", "invalid function name"),
@@ -159,9 +160,11 @@ def test_stage_save_invalid_jmespath_expressions(invalid_jmespath, expected_erro
 @pytest.mark.parametrize(
     "keyword,field_type",
     [
-        # Test keywords for both variable and function names
+        # Test keywords for variable names
         *[(kw, "var") for kw in ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"]],
-        *[(kw, "func") for kw in ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"]],
+        # Test keywords in module:function syntax for function names
+        *[(f"module:{kw}", "func") for kw in ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"]],
+        *[(f"{kw}:function", "func") for kw in ["class", "for", "if", "else", "while", "def", "return", "try", "except", "import", "from", "as", "match", "case", "_", "type"]],
     ],
 )
 def test_stage_save_keyword_validation(keyword, field_type):
@@ -170,7 +173,10 @@ def test_stage_save_keyword_validation(keyword, field_type):
         expected_error = f"'{keyword}' is a Python keyword and cannot be used as a variable name"
     else:  # func
         data = {"name": "test", "save": {"functions": [keyword]}}
-        expected_error = f"'{keyword}' is a Python keyword and cannot be used as a function name"
+        if keyword.startswith("module:"):
+            expected_error = f"'{keyword.split(':')[1]}' is a Python keyword and cannot be used as a function name"
+        else:  # keyword:function format
+            expected_error = f"module part '{keyword.split(':')[0]}' is a keyword"
     
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
@@ -218,18 +224,12 @@ def test_stage_save_keyword_validation(keyword, field_type):
             "var",
             "complex_jmespath"
         ),
-        # Valid function names
-        (
-            ["extract_user_data", "parseMetadata", "EXTRACT_HEADERS", "func123", "_private_func", "__internal__", "MyExtractor"],
-            "func",
-            "valid_function_names"
-        ),
-        # Valid module:function names
-        (
-            ["module:function", "package.submodule:func_name", "my_package.utils:extract_data", "test_helpers:process_response"],
-            "func", 
-            "valid_module_function_names"
-        ),
+                 # Valid module:function names (only format allowed)
+         (
+             ["module:function", "package.submodule:func_name", "my_package.utils:extract_data", "test_helpers:process_response"],
+             "func", 
+             "valid_module_function_names"
+         ),
     ],
 )
 def test_stage_save_valid_names(valid_names, field_type, test_case):
@@ -303,7 +303,6 @@ def test_validator_functions_invalid_input(validator_func, invalid_input, expect
 @pytest.mark.parametrize(
     "function_name",
     [
-        "simple_function",
         "module:function_name", 
         "package.submodule:extract_data",
         "my_helpers.utils:process_response",
@@ -318,6 +317,7 @@ def test_module_function_validation_success(function_name):
 @pytest.mark.parametrize(
     "invalid_function_name,expected_error_fragment",
     [
+        ("simple_function", "must use 'module:function' syntax"),
         (":no_module", "missing module path"),
         ("module:", "invalid function name"),
         ("1module:function", "invalid module part"),
