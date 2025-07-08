@@ -9,7 +9,7 @@ from pytest_http.pytest_plugin import json_test_function
     "stage_config,expected_url,expected_assertions,description",
     [
         (
-            {"name": "get_users", "url": "https://api.example.com/users", "data": {}},
+            {"name": "get_users", "url": "https://api.example.com/users"},
             "https://api.example.com/users",
             {"url": "https://api.example.com/users"},
             "basic_url"
@@ -18,8 +18,7 @@ from pytest_http.pytest_plugin import json_test_function
             {
                 "name": "get_user", 
                 "url": "https://api.example.com/users", 
-                "params": {"id": 1, "format": "json"}, 
-                "data": {}
+                "params": {"id": 1, "format": "json"}
             },
             "https://api.example.com/users",
             {"url_contains": ["id=1", "format=json"]},
@@ -29,8 +28,7 @@ from pytest_http.pytest_plugin import json_test_function
             {
                 "name": "get_users", 
                 "url": "https://api.example.com/users", 
-                "headers": {"Authorization": "Bearer token123", "Accept": "application/json"}, 
-                "data": {}
+                "headers": {"Authorization": "Bearer token123", "Accept": "application/json"}
             },
             "https://api.example.com/users",
             {"headers": {"Authorization": "Bearer token123", "Accept": "application/json"}},
@@ -40,8 +38,7 @@ from pytest_http.pytest_plugin import json_test_function
             {
                 "name": "get_user", 
                 "url": "https://api.example.com/user/1", 
-                "data": {}, 
-                "save": {"user_id": "json.id", "user_name": "json.name", "status": "status_code"}
+                "save": {"vars": {"user_id": "json.id", "user_name": "json.name", "status": "status_code"}}
             },
             "https://api.example.com/user/1",
             {"url": "https://api.example.com/user/1"},
@@ -92,14 +89,14 @@ def test_http_request_configurations(stage_config, expected_url, expected_assert
     [
         (
             [
-                {"name": "get_users", "url": "https://api.example.com/users", "data": {}},
-                {"name": "get_user_details", "url": "https://api.example.com/user/1", "data": {}}
+                {"name": "get_users", "url": "https://api.example.com/users"},
+                {"name": "get_user_details", "url": "https://api.example.com/user/1"}
             ],
             ["https://api.example.com/users", "https://api.example.com/user/1"],
             "multiple_http_stages"
         ),
         (
-            [{"name": "no_http_stage", "data": {"some": "data"}}],
+            [{"name": "no_http_stage"}],
             [],
             "no_http_stage"
         ),
@@ -147,7 +144,7 @@ def test_http_request_error_handling(response_status, expected_behavior):
         status=response_status
     )
 
-    test_data = {"stages": [{"name": "get_users", "url": "https://api.example.com/users", "data": {}}]}
+    test_data = {"stages": [{"name": "get_users", "url": "https://api.example.com/users"}]}
     
     if expected_behavior == "should_pass":
         json_test_function(test_data)
@@ -163,7 +160,6 @@ def test_http_request_error_handling(response_status, expected_behavior):
         (
             {
                 "name": "test_stage", 
-                "data": {"test": "data"}, 
                 "url": "https://api.example.com/test", 
                 "params": {"key": "value"}, 
                 "headers": {"Content-Type": "application/json"}
@@ -176,7 +172,7 @@ def test_http_request_error_handling(response_status, expected_behavior):
             }
         ),
         (
-            {"name": "no_http_stage", "data": {"test": "data"}},
+            {"name": "no_http_stage"},
             {
                 "name": "no_http_stage",
                 "url": None,
@@ -198,12 +194,11 @@ def test_scenario_model_validation():
         stages=[
             {
                 "name": "http_stage", 
-                "data": {}, 
                 "url": "https://api.example.com/test", 
                 "params": {"key": "value"}, 
                 "headers": {"Authorization": "Bearer token"}
             },
-            {"name": "no_http_stage", "data": {"some": "data"}},
+            {"name": "no_http_stage"},
         ]
     )
 

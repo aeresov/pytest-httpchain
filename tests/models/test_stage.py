@@ -41,28 +41,21 @@ def test_stage_empty_name():
 @pytest.mark.parametrize(
     "save_data,expected_vars,expected_functions,description",
     [
-        # Old format (backward compatibility)
-        (
-            {"user_id": "user.id", "user_name": "user.name"},
-            {"user_id": "user.id", "user_name": "user.name"},
-            None,
-            "old_format_compatibility"
-        ),
-        # New format with vars only
+        # Format with vars only
         (
             {"vars": {"user_id": "user.id", "user_name": "user.name"}},
             {"user_id": "user.id", "user_name": "user.name"},
             None,
-            "new_format_vars_only"
+            "vars_only"
         ),
-        # New format with functions only
+        # Format with functions only
         (
             {"functions": ["json:loads", "os:getcwd"]},
             None,
             ["json:loads", "os:getcwd"],
-            "new_format_functions_only"
+            "functions_only"
         ),
-        # New format with both vars and functions
+        # Format with both vars and functions
         (
             {
                 "vars": {"user_id": "user.id"},
@@ -70,7 +63,7 @@ def test_stage_empty_name():
             },
             {"user_id": "user.id"},
             ["json:dumps"],
-            "new_format_both"
+            "both_vars_and_functions"
         ),
     ],
 )
@@ -87,7 +80,7 @@ def test_stage_save_formats(save_data, expected_vars, expected_functions, descri
     "save_value,expected_result,description",
     [
         (None, None, "with_none"),
-        ({}, SaveConfig(vars={}), "with_empty_dict"),
+        ({"vars": {}}, SaveConfig(vars={}), "with_empty_vars"),
         ("no_save", None, "without_save_field"),
     ],
 )
@@ -130,7 +123,7 @@ def test_stage_save_optional_states(save_value, expected_result, description):
 )
 def test_stage_save_invalid_names(invalid_name, field_type, expected_error):
     if field_type == "var":
-        data = {"name": "test", "save": {invalid_name: "user.id"}}
+        data = {"name": "test", "save": {"vars": {invalid_name: "user.id"}}}
     else:  # func
         data = {"name": "test", "save": {"functions": [invalid_name]}}
     
@@ -148,7 +141,7 @@ def test_stage_save_invalid_names(invalid_name, field_type, expected_error):
     ],
 )
 def test_stage_save_invalid_jmespath_expressions(invalid_jmespath, expected_error):
-    data = {"name": "test", "save": {"user_id": invalid_jmespath}}
+    data = {"name": "test", "save": {"vars": {"user_id": invalid_jmespath}}}
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
     assert expected_error in str(exc_info.value)
@@ -160,7 +153,7 @@ def test_stage_save_invalid_jmespath_expressions(invalid_jmespath, expected_erro
 )
 def test_stage_save_keyword_validation(keyword):
     # Test keywords for variable names
-    data = {"name": "test", "save": {keyword: "user.id"}}
+    data = {"name": "test", "save": {"vars": {keyword: "user.id"}}}
     expected_error = f"'{keyword}' is a Python keyword and cannot be used as a variable name"
     
     with pytest.raises(ValidationError) as exc_info:
@@ -219,7 +212,7 @@ def test_stage_save_keyword_validation(keyword):
 )
 def test_stage_save_valid_names(valid_names, field_type, test_case):
     if field_type == "var":
-        data = {"name": "test", "save": valid_names}
+        data = {"name": "test", "save": {"vars": valid_names}}
         stage = Stage.model_validate(data)
         assert stage.save.vars == valid_names
     else:  # func
@@ -229,7 +222,7 @@ def test_stage_save_valid_names(valid_names, field_type, test_case):
 
 
 def test_stage_save_multiple_validation_errors():
-    data = {"name": "test", "save": {"1invalid": "user.id", "valid_name": "user.[invalid}"}}
+    data = {"name": "test", "save": {"vars": {"1invalid": "user.id", "valid_name": "user.[invalid}"}}}
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
     assert "'1invalid' is not a valid Python variable name" in str(exc_info.value)

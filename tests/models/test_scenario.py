@@ -56,9 +56,9 @@ def test_scenario_with_multiple_stages(stage_names, expected_count):
 @pytest.mark.parametrize(
     "save_data,expected_vars",
     [
-        ({"result": "response.result", "status": "response.status"}, {"result": "response.result", "status": "response.status"}),
+        ({"vars": {"result": "response.result", "status": "response.status"}}, {"result": "response.result", "status": "response.status"}),
         ({"vars": {"token": "response.token"}}, {"token": "response.token"}),
-        ({}, {}),
+        ({"vars": {}}, {}),
     ],
 )
 def test_scenario_stages_with_save_field(save_data, expected_vars):
@@ -100,9 +100,9 @@ def test_scenario_ignores_extra_fields():
 @pytest.mark.parametrize(
     "fixtures,save_vars,expected_conflict",
     [
-        (["user_id", "api_key"], {"user_id": "user.id"}, "user_id"),
-        (["user_id", "api_key"], {"api_key": "app.key"}, "api_key"),
-        (["user_id"], {"user_id": "user.id", "api_key": "app.key"}, "user_id"),
+        (["user_id", "api_key"], {"vars": {"user_id": "user.id"}}, "user_id"),
+        (["user_id", "api_key"], {"vars": {"api_key": "app.key"}}, "api_key"),
+        (["user_id"], {"vars": {"user_id": "user.id", "api_key": "app.key"}}, "user_id"),
     ],
 )
 def test_scenario_fixture_variable_conflicts(fixtures, save_vars, expected_conflict):
@@ -116,9 +116,9 @@ def test_scenario_fixture_variable_conflicts(fixtures, save_vars, expected_confl
 @pytest.mark.parametrize(
     "data,description",
     [
-        ({"stages": [{"name": "test", "save": {"user_id": "user.id"}}]}, "no_fixtures"),
+        ({"stages": [{"name": "test", "save": {"vars": {"user_id": "user.id"}}}]}, "no_fixtures"),
         ({"fixtures": ["user_id", "api_key"], "stages": [{"name": "test"}]}, "no_save"),
-        ({"fixtures": ["user_id", "api_key"], "stages": [{"name": "test", "save": {}}]}, "empty_save"),
+        ({"fixtures": ["user_id", "api_key"], "stages": [{"name": "test", "save": {"vars": {}}}]}, "empty_save"),
     ],
 )
 def test_scenario_no_fixture_conflicts(data, description):
@@ -132,9 +132,9 @@ def test_scenario_no_fixture_conflicts(data, description):
         (
             ["user_id", "api_key"],
             [
-                {"name": "test1", "save": {"result": "user.id"}},
+                {"name": "test1", "save": {"vars": {"result": "user.id"}}},
                 {"name": "test2"},
-                {"name": "test3", "save": {"status": "response.status"}},
+                {"name": "test3", "save": {"vars": {"status": "response.status"}}},
             ],
             [{"result": "user.id"}, None, {"status": "response.status"}]
         ),
@@ -159,8 +159,8 @@ def test_scenario_complete_integration():
         "fixtures": ["user_id", "api_key"],
         "marks": ["slow", "integration"],
         "stages": [
-            {"name": "login", "save": {"token": "response.token", "profile_id": "response.user.id"}},
-            {"name": "get_profile", "save": {"profile": "response.profile"}},
+            {"name": "login", "save": {"vars": {"token": "response.token", "profile_id": "response.user.id"}}},
+            {"name": "get_profile", "save": {"vars": {"profile": "response.profile"}}},
         ],
     }
 
