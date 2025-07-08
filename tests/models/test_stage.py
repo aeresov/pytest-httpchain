@@ -57,19 +57,19 @@ def test_stage_empty_name():
         ),
         # New format with functions only
         (
-            {"functions": ["extract_user_data", "extract_metadata"]},
+            {"functions": ["helpers:extract_user_data", "utils:extract_metadata"]},
             None,
-            ["extract_user_data", "extract_metadata"],
+            ["helpers:extract_user_data", "utils:extract_metadata"],
             "new_format_functions_only"
         ),
         # New format with both vars and functions
         (
             {
                 "vars": {"user_id": "user.id"},
-                "functions": ["extract_data"]
+                "functions": ["helpers:extract_data"]
             },
             {"user_id": "user.id"},
-            ["extract_data"],
+            ["helpers:extract_data"],
             "new_format_both"
         ),
     ],
@@ -253,18 +253,18 @@ def test_stage_save_multiple_validation_errors():
 def test_save_config_standalone():
     save_config = SaveConfig(
         vars={"user_id": "user.id", "user_name": "user.name"},
-        functions=["extract_data", "parse_headers"]
+        functions=["helpers:extract_data", "utils:parse_headers"]
     )
     assert save_config.vars["user_id"] == "user.id"
     assert save_config.vars["user_name"] == "user.name"
-    assert save_config.functions == ["extract_data", "parse_headers"]
+    assert save_config.functions == ["helpers:extract_data", "utils:parse_headers"]
 
 
 @pytest.mark.parametrize(
     "vars_data,functions_data",
     [
         ({"user_id": "user.id"}, None),  # Only vars
-        (None, ["extract_data"]),        # Only functions  
+        (None, ["helpers:extract_data"]),        # Only functions  
         (None, None),                    # Neither
     ],
 )
@@ -278,7 +278,7 @@ def test_save_config_optional_fields(vars_data, functions_data):
     "validator_func,valid_input,expected_output",
     [
         (validate_python_variable_name, "valid_name", "valid_name"),
-        (validate_python_function_name, "valid_function", "valid_function"),
+        (validate_python_function_name, "module:valid_function", "module:valid_function"),
         (validate_jmespath_expression, "user.id", "user.id"),
     ],
 )
@@ -290,7 +290,7 @@ def test_validator_functions_valid_input(validator_func, valid_input, expected_o
     "validator_func,invalid_input,expected_error",
     [
         (validate_python_variable_name, "1invalid", "'1invalid' is not a valid Python variable name"),
-        (validate_python_function_name, "1invalid", "'1invalid' is not a valid Python function name"),
+        (validate_python_function_name, "1invalid", "must use 'module:function' syntax"),
         (validate_jmespath_expression, "user.[invalid}", "is not a valid JMESPath expression"),
     ],
 )

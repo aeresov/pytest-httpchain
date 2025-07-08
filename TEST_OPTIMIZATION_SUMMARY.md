@@ -118,6 +118,28 @@ Comprehensive refactoring of unit tests to eliminate duplication, improve parame
 - ✅ **Simplified Function Validation**: Requires `module:function` syntax for all function names, eliminating complex search logic
 - ✅ **Clean Execution Logic**: Uses only `importlib` for function resolution - simple, reliable, and explicit
 - ✅ **Proper Pytester Usage**: Replaced unnecessary `shutil` usage and `pytester.makeconftest()` with standard `pytester.copy_example()` pattern
+- ✅ **Updated Unit Tests**: Revised all tests to use current model patterns with `module:function` syntax for functions
+
+## Test Model Updates
+
+### **Fixed Function Names**
+- ✅ `["extract_user_data", "extract_metadata"]` → `["helpers:extract_user_data", "utils:extract_metadata"]`
+- ✅ `["extract_data"]` → `["helpers:extract_data"]` 
+- ✅ `functions=["extract_data", "parse_headers"]` → `functions=["helpers:extract_data", "utils:parse_headers"]`
+
+### **Corrected Validation Tests**
+- ✅ `(validate_python_function_name, "valid_function", "valid_function")` → `(validate_python_function_name, "module:valid_function", "module:valid_function")`
+- ✅ Updated error message expectations: `"'1invalid' is not a valid Python function name"` → `"must use 'module:function' syntax"`
+
+### **Updated SaveConfig Tests**
+- ✅ All SaveConfig instantiation tests now use proper module:function syntax
+- ✅ Parametrized tests updated to reflect new validation requirements
+- ✅ All test assertions updated to match new function name patterns
+
+### **Maintained Test Coverage**
+- ✅ All original test scenarios preserved with corrected syntax
+- ✅ No reduction in validation coverage
+- ✅ All edge cases still tested with proper module:function format
 
 ## Future Recommendations
 
