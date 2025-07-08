@@ -74,33 +74,8 @@ def test_json_test_with_references(pytester):
 
 
 def test_json_test_with_functions(pytester):
+    pytester.copy_example("conftest.py")
     pytester.copy_example("test_helpers.py")
     pytester.copy_example("test_functions.http.json")
-    
-    # Create conftest.py with the required fixtures and functions
-    pytester.makeconftest("""
-import pytest
-
-
-@pytest.fixture
-def string_value():
-    return "test_value"
-
-
-@pytest.fixture
-def number_value():
-    return 123
-
-
-@pytest.fixture
-def dict_value():
-    return {"key": "value", "number": 42}
-
-
-@pytest.fixture
-def base_url():
-    return "https://jsonplaceholder.typicode.com"
-    """)
-    
     result = pytester.runpytest("-p", "pytest_http.pytest_plugin", "-v")
     result.assert_outcomes(passed=1)
