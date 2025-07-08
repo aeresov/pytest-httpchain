@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from pytest_http.models import Scenario, SaveConfig
+from pytest_http.models import Scenario
 
 
 @pytest.mark.parametrize(
@@ -47,7 +47,7 @@ def test_scenario_fixtures_and_marks(data, expected_fixtures, expected_marks):
 def test_scenario_with_multiple_stages(stage_names, expected_count):
     data = {"stages": [{"name": name} for name in stage_names]}
     scenario = Scenario.model_validate(data)
-    
+
     assert len(scenario.stages) == expected_count
     for i, expected_name in enumerate(stage_names):
         assert scenario.stages[i].name == expected_name
@@ -64,7 +64,7 @@ def test_scenario_with_multiple_stages(stage_names, expected_count):
 def test_scenario_stages_with_save_field(save_data, expected_vars):
     data = {"stages": [{"name": "stage_with_save", "save": save_data}]}
     scenario = Scenario.model_validate(data)
-    
+
     assert len(scenario.stages) == 1
     if expected_vars:
         assert scenario.stages[0].save.vars == expected_vars
@@ -90,7 +90,7 @@ def test_scenario_validation_errors(data, expected_error):
 def test_scenario_ignores_extra_fields():
     data = {"stages": [{"name": "stage1"}], "fixtures": ["user_id"], "marks": ["slow"], "extra_field": "should_be_ignored"}
     scenario = Scenario.model_validate(data)
-    
+
     assert len(scenario.stages) == 1
     assert scenario.fixtures == ["user_id"]
     assert scenario.marks == ["slow"]
@@ -107,7 +107,7 @@ def test_scenario_ignores_extra_fields():
 )
 def test_scenario_fixture_variable_conflicts(fixtures, save_vars, expected_conflict):
     data = {"fixtures": fixtures, "stages": [{"name": "test", "save": save_vars}]}
-    
+
     with pytest.raises(ValidationError) as exc_info:
         Scenario.model_validate(data)
     assert f"Variable name '{expected_conflict}' conflicts with fixture name" in str(exc_info.value)
@@ -143,10 +143,10 @@ def test_scenario_no_fixture_conflicts(data, description):
 def test_scenario_mixed_stages_validation(fixtures, stages_data, expected_saves):
     data = {"fixtures": fixtures, "stages": stages_data}
     scenario = Scenario.model_validate(data)
-    
+
     assert scenario.fixtures == fixtures
     assert len(scenario.stages) == len(stages_data)
-    
+
     for i, expected_save in enumerate(expected_saves):
         if expected_save is None:
             assert scenario.stages[i].save is None
@@ -168,12 +168,12 @@ def test_scenario_complete_integration():
     assert scenario.fixtures == ["user_id", "api_key"]
     assert scenario.marks == ["slow", "integration"]
     assert len(scenario.stages) == 2
-    
+
     # Verify first stage
     assert scenario.stages[0].name == "login"
     assert scenario.stages[0].save.vars["token"] == "response.token"
     assert scenario.stages[0].save.vars["profile_id"] == "response.user.id"
-    
+
     # Verify second stage
     assert scenario.stages[1].name == "get_profile"
     assert scenario.stages[1].save.vars["profile"] == "response.profile"

@@ -33,12 +33,12 @@ def validate_python_function_name(v: str) -> str:
     # Require module:function syntax
     if ":" not in v:
         raise ValueError(f"'{v}' must use 'module:function' syntax")
-    
+
     module_path, function_name = v.rsplit(":", 1)
-    
+
     if not module_path:
         raise ValueError(f"'{v}' is missing module path")
-    
+
     if not function_name:
         raise ValueError(f"'{v}' is missing function name")
 
@@ -46,11 +46,11 @@ def validate_python_function_name(v: str) -> str:
     try:
         module = importlib.import_module(module_path)
     except ImportError as e:
-        raise ValueError(f"Cannot import module '{module_path}': {e}")
-    
+        raise ValueError(f"Cannot import module '{module_path}': {e}") from e
+
     if not hasattr(module, function_name):
         raise ValueError(f"Function '{function_name}' not found in module '{module_path}'")
-    
+
     func = getattr(module, function_name)
     if not callable(func):
         raise ValueError(f"'{function_name}' in module '{module_path}' is not callable")
@@ -71,6 +71,7 @@ class SaveConfig(BaseModel):
 class Verify(BaseModel):
     status: HTTPStatus | None = Field(default=None)
     json_data: dict[JMESPathExpression, Any] | None = Field(default=None, alias="json")
+    functions: list[ValidPythonFunctionName] | None = Field(default=None)
 
 
 class Stage(BaseModel):

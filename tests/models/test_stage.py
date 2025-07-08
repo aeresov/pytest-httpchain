@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from pytest_http.models import Stage, SaveConfig, validate_jmespath_expression, validate_python_variable_name, validate_python_function_name
+from pytest_http.models import SaveConfig, Stage, validate_jmespath_expression, validate_python_function_name, validate_python_variable_name
 
 
 @pytest.mark.parametrize(
@@ -70,7 +70,7 @@ def test_stage_empty_name():
 def test_stage_save_formats(save_data, expected_vars, expected_functions, description):
     data = {"name": "test", "save": save_data}
     stage = Stage.model_validate(data)
-    
+
     assert isinstance(stage.save, SaveConfig)
     assert stage.save.vars == expected_vars
     assert stage.save.functions == expected_functions
@@ -89,9 +89,9 @@ def test_stage_save_optional_states(save_value, expected_result, description):
         data = {"name": "test"}
     else:
         data = {"name": "test", "save": save_value}
-    
+
     stage = Stage.model_validate(data)
-    
+
     if expected_result is None:
         assert stage.save is None
     else:
@@ -128,7 +128,7 @@ def test_stage_save_invalid_names(invalid_name, field_type, expected_error):
         data = {"name": "test", "save": {"vars": {invalid_name: "user.id"}}}
     else:  # func
         data = {"name": "test", "save": {"functions": [invalid_name]}}
-    
+
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
     assert expected_error in str(exc_info.value)
@@ -157,7 +157,7 @@ def test_stage_save_keyword_validation(keyword):
     # Test keywords for variable names
     data = {"name": "test", "save": {"vars": {keyword: "user.id"}}}
     expected_error = f"'{keyword}' is a Python keyword and cannot be used as a variable name"
-    
+
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
     assert expected_error in str(exc_info.value)
@@ -170,7 +170,7 @@ def test_stage_save_keyword_validation(keyword):
         (
             {
                 "__": "user.double_underscore",
-                "___": "user.triple_underscore", 
+                "___": "user.triple_underscore",
                 "_private": "user.private",
                 "__private__": "user.dunder_private"
             },
@@ -207,7 +207,7 @@ def test_stage_save_keyword_validation(keyword):
                  # Valid module:function names (only format allowed)
          (
              ["json:loads", "json:dumps", "os:getcwd", "sys:exit"],
-             "func", 
+             "func",
              "valid_module_function_names"
          ),
     ],
@@ -244,7 +244,7 @@ def test_save_config_standalone():
     "vars_data,functions_data",
     [
         ({"user_id": "user.id"}, None),  # Only vars
-        (None, ["json:loads"]),        # Only functions  
+        (None, ["json:loads"]),        # Only functions
         (None, None),                    # Neither
     ],
 )
@@ -258,7 +258,7 @@ def test_save_config_optional_fields(vars_data, functions_data):
     "validator_func,valid_input,expected_output",
     [
         (validate_python_variable_name, "valid_name", "valid_name"),
-        (validate_python_function_name, "module:valid_function", "module:valid_function"),
+        (validate_python_function_name, "json:loads", "json:loads"),
         (validate_jmespath_expression, "user.id", "user.id"),
     ],
 )
@@ -283,7 +283,7 @@ def test_validator_functions_invalid_input(validator_func, invalid_input, expect
 @pytest.mark.parametrize(
     "function_name",
     [
-        "json:loads", 
+        "json:loads",
         "json:dumps",
         "os:getcwd",
         "sys:exit"

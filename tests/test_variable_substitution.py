@@ -39,17 +39,17 @@ def test_substitute_variables_complex_nested():
     }
     """
     fixtures = {
-        "user_name": "Alice", 
-        "profile": {"age": 25, "email": "alice@example.com"}, 
+        "user_name": "Alice",
+        "profile": {"age": 25, "email": "alice@example.com"},
         "config": {"theme": "dark", "notifications": True}
     }
     result = substitute_variables(json_text, fixtures)
     parsed_result = json.loads(result)
     expected = {
         "user": {
-            "name": "Alice", 
+            "name": "Alice",
             "profile": {"age": 25, "email": "alice@example.com"}
-        }, 
+        },
         "settings": {"theme": "dark", "notifications": True}
     }
     assert parsed_result == expected
@@ -65,16 +65,16 @@ def test_substitute_variables_complex_nested():
         ),
         (
             {
-                "name": "auth_stage", 
-                "url": "https://api.example.com/users/$user_id/posts", 
-                "headers": {"Authorization": "Bearer $token"}, 
+                "name": "auth_stage",
+                "url": "https://api.example.com/users/$user_id/posts",
+                "headers": {"Authorization": "Bearer $token"},
                 "params": {"limit": "$page_size"}
             },
             {"user_id": 456, "token": "abc123", "page_size": 10},
             {
-                "name": "auth_stage", 
-                "url": "https://api.example.com/users/456/posts", 
-                "headers": {"Authorization": "Bearer abc123"}, 
+                "name": "auth_stage",
+                "url": "https://api.example.com/users/456/posts",
+                "headers": {"Authorization": "Bearer abc123"},
                 "params": {"limit": 10}
             },
         ),
@@ -99,16 +99,16 @@ def test_substitute_stage_variables_basic_cases(stage_data: dict, variables: dic
 
 def test_substitute_stage_variables_complex_nested():
     stage_data = {
-        "name": "complex_stage", 
+        "name": "complex_stage",
         "data": {
-            "user": {"id": "$user_id", "profile": "$user_profile"}, 
+            "user": {"id": "$user_id", "profile": "$user_profile"},
             "settings": {"theme": "$theme", "notifications": "$notifications"}
         }
     }
     variables = {
-        "user_id": 789, 
-        "user_profile": {"name": "John", "email": "john@example.com"}, 
-        "theme": "dark", 
+        "user_id": 789,
+        "user_profile": {"name": "John", "email": "john@example.com"},
+        "theme": "dark",
         "notifications": True
     }
 
@@ -117,7 +117,7 @@ def test_substitute_stage_variables_complex_nested():
     expected = {
         "name": "complex_stage",
         "data": {
-            "user": {"id": 789, "profile": {"name": "John", "email": "john@example.com"}}, 
+            "user": {"id": 789, "profile": {"name": "John", "email": "john@example.com"}},
             "settings": {"theme": "dark", "notifications": True}
         },
     }
@@ -134,7 +134,7 @@ def test_substitute_stage_variables_complex_nested():
             "Failed to substitute variables"
         ),
         (
-            "substitute_stage_variables", 
+            "substitute_stage_variables",
             {"data": "$invalid"},
             {"invalid": object()},
             "Failed to substitute variables in stage"
@@ -146,7 +146,7 @@ def test_substitution_error_handling(function_name, data, variables, expected_er
         "substitute_variables": substitute_variables,
         "substitute_stage_variables": substitute_stage_variables,
     }
-    
+
     func = function_map[function_name]
     with pytest.raises(VariableSubstitutionError, match=expected_error):
         func(data, variables)
