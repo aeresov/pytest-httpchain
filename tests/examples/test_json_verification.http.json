@@ -1,0 +1,36 @@
+{
+    "stages": [
+        {
+            "name": "get_users_with_json_verification",
+            "url": "https://jsonplaceholder.typicode.com/users",
+            "headers": {
+                "Accept": "application/json"
+            },
+            "verify": {
+                "status": 200,
+                "json": {
+                    "length(json)": 10,
+                    "json[0].name": "Leanne Graham",
+                    "json[0].email": "Sincere@april.biz",
+                    "json[0].address.city": "Gwenborough"
+                }
+            }
+        },
+        {
+            "name": "get_single_user_with_json_verification",
+            "url": "https://jsonplaceholder.typicode.com/users/1",
+            "headers": {
+                "Accept": "application/json"
+            },
+            "verify": {
+                "status": 200,
+                "json": {
+                    "json.id": 1,
+                    "json.name": "Leanne Graham",
+                    "json.username": "Bret",
+                    "json.address.geo.lat": "-37.3159"
+                }
+            }
+        }
+    ]
+}

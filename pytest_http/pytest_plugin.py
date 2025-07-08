@@ -92,7 +92,7 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
             logging.info(f"Executing stage {stage_index}: {original_stage.name}")
             logging.info(f"Current variable context: {variable_context}")
 
-            stage_dict = original_stage.model_dump()
+            stage_dict = original_stage.model_dump(by_alias=True)
             substituted_stage_dict = substitute_stage_variables(stage_dict, variable_context)
 
             try:
@@ -134,6 +134,18 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                     "text": response.text,
                     "json": response.json() if response.headers.get("content-type", "").startswith("application/json") else None,
                 }
+
+                if stage.verify and stage.verify.json_data is not None:
+                    import jmespath
+
+                    for jmespath_expr, expected_value in stage.verify.json_data.items():
+                        try:
+                            actual_value = jmespath.search(jmespath_expr, response_data)
+                            if actual_value != expected_value:
+                                pytest.fail(f"JSON verification failed for stage '{stage.name}' with JMESPath '{jmespath_expr}': expected {expected_value}, got {actual_value}")
+                            logging.info(f"JSON verification passed for JMESPath '{jmespath_expr}': {actual_value}")
+                        except Exception as e:
+                            pytest.fail(f"Error during JSON verification for stage '{stage.name}' with JMESPath '{jmespath_expr}': {e}")
 
                 if stage.save:
                     import jmespath
