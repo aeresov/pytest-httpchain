@@ -18,7 +18,7 @@ from _pytest.nodes import Collector, Item
 from _pytest.python import Function
 from pydantic import ValidationError
 
-from pytest_http.models import Scenario, Stage
+from pytest_http.models import FunctionCall, Scenario, Stage
 
 
 def pytest_addoption(parser: Parser):
@@ -79,6 +79,24 @@ def substitute_stage_variables(stage_data: dict[str, Any], variables: dict[str, 
         return json.loads(json_text)
     except Exception as e:
         raise VariableSubstitutionError(f"Failed to substitute variables in stage: {e}") from e
+
+
+def call_function_with_kwargs(func_name: str, response: requests.Response, kwargs: dict[str, Any] | None = None) -> Any:
+    """Call a function with the response and optional kwargs."""
+    try:
+        # Get function (validation already confirmed it exists and is callable)
+        module_path, function_name = func_name.rsplit(":", 1)
+        import importlib
+        module = importlib.import_module(module_path)
+        func = getattr(module, function_name)
+
+        # Call the function with the response and kwargs
+        if kwargs:
+            return func(response, **kwargs)
+        else:
+            return func(response)
+    except Exception as e:
+        raise Exception(f"Error executing function '{func_name}': {e}")
 
 
 def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
@@ -148,16 +166,19 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
 
                 # Handle verify functions
                 if stage.verify and stage.verify.functions:
-                    for func_name in stage.verify.functions:
+                    for func_item in stage.verify.functions:
                         try:
-                            # Get function (validation already confirmed it exists and is callable)
-                            module_path, function_name = func_name.rsplit(":", 1)
-                            import importlib
-                            module = importlib.import_module(module_path)
-                            func = getattr(module, function_name)
+                            if isinstance(func_item, str):
+                                # Backward compatibility: string function name
+                                func_name = func_item
+                                kwargs = None
+                            else:
+                                # New format: FunctionCall object
+                                func_name = func_item.function
+                                kwargs = func_item.kwargs
 
                             # Call the function with the response and get the verification result
-                            verification_result = func(response)
+                            verification_result = call_function_with_kwargs(func_name, response, kwargs)
 
                             # Validate that the function returns a boolean
                             if not isinstance(verification_result, bool):
@@ -185,16 +206,19 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
 
                     # Handle functions
                     if stage.save.functions:
-                        for func_name in stage.save.functions:
+                        for func_item in stage.save.functions:
                             try:
-                                # Get function (validation already confirmed it exists and is callable)
-                                module_path, function_name = func_name.rsplit(":", 1)
-                                import importlib
-                                module = importlib.import_module(module_path)
-                                func = getattr(module, function_name)
+                                if isinstance(func_item, str):
+                                    # Backward compatibility: string function name
+                                    func_name = func_item
+                                    kwargs = None
+                                else:
+                                    # New format: FunctionCall object
+                                    func_name = func_item.function
+                                    kwargs = func_item.kwargs
 
                                 # Call the function with the response and get the returned variables
-                                returned_vars = func(response)
+                                returned_vars = call_function_with_kwargs(func_name, response, kwargs)
 
                                 # Validate that the function returns a dictionary
                                 if not isinstance(returned_vars, dict):

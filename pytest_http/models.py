@@ -63,15 +63,20 @@ ValidPythonFunctionName = Annotated[str, AfterValidator(validate_python_function
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
 
 
+class FunctionCall(BaseModel):
+    function: ValidPythonFunctionName
+    kwargs: dict[str, Any] | None = Field(default=None)
+
+
 class SaveConfig(BaseModel):
     vars: dict[ValidPythonVariableName, JMESPathExpression] | None = Field(default=None)
-    functions: list[ValidPythonFunctionName] | None = Field(default=None)
+    functions: list[ValidPythonFunctionName | FunctionCall] | None = Field(default=None)
 
 
 class Verify(BaseModel):
     status: HTTPStatus | None = Field(default=None)
     json_data: dict[JMESPathExpression, Any] | None = Field(default=None, alias="json")
-    functions: list[ValidPythonFunctionName] | None = Field(default=None)
+    functions: list[ValidPythonFunctionName | FunctionCall] | None = Field(default=None)
 
 
 class Stage(BaseModel):
