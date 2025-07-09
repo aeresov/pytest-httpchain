@@ -54,7 +54,10 @@ class VariableSubstitutionError(Exception):
 
 def substitute_variables(json_text: str, fixtures: dict[str, Any]) -> str:
     try:
-        for name, value in fixtures.items():
+        # Sort by length (longest first) to avoid partial replacements
+        sorted_fixtures = sorted(fixtures.items(), key=lambda x: len(x[0]), reverse=True)
+
+        for name, value in sorted_fixtures:
             placeholder: str = f'"${name}"'
             json_value: str = json.dumps(value)
             json_text = json_text.replace(placeholder, json_value)
@@ -72,7 +75,10 @@ def substitute_stage_variables(stage_data: dict[str, Any], variables: dict[str, 
     try:
         json_text: str = json.dumps(stage_data, default=str)
 
-        for name, value in variables.items():
+        # Sort by length (longest first) to avoid partial replacements
+        sorted_variables = sorted(variables.items(), key=lambda x: len(x[0]), reverse=True)
+
+        for name, value in sorted_variables:
             quoted_placeholder: str = f'"${name}"'
             json_value: str = json.dumps(value)
             json_text = json_text.replace(quoted_placeholder, json_value)
@@ -93,7 +99,10 @@ def substitute_kwargs_variables(kwargs: dict[str, Any] | None, variables: dict[s
     try:
         kwargs_json = json.dumps(kwargs, default=str)
 
-        for name, value in variables.items():
+        # Sort by length (longest first) to avoid partial replacements
+        sorted_variables = sorted(variables.items(), key=lambda x: len(x[0]), reverse=True)
+
+        for name, value in sorted_variables:
             quoted_placeholder: str = f'"${name}"'
             json_value: str = json.dumps(value)
             kwargs_json = kwargs_json.replace(quoted_placeholder, json_value)
