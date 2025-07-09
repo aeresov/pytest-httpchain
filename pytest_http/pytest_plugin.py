@@ -58,6 +58,11 @@ def substitute_variables(json_text: str, fixtures: dict[str, Any]) -> str:
             placeholder: str = f'"${name}"'
             json_value: str = json.dumps(value)
             json_text = json_text.replace(placeholder, json_value)
+
+            unquoted_placeholder: str = f"${name}"
+            string_value: str = str(value)
+            json_text = json_text.replace(unquoted_placeholder, string_value)
+
         return json_text
     except Exception as e:
         raise VariableSubstitutionError(f"Failed to substitute variables: {e}") from e
@@ -79,6 +84,29 @@ def substitute_stage_variables(stage_data: dict[str, Any], variables: dict[str, 
         return json.loads(json_text)
     except Exception as e:
         raise VariableSubstitutionError(f"Failed to substitute variables in stage: {e}") from e
+
+
+def substitute_kwargs_variables(kwargs: dict[str, Any] | None, variables: dict[str, Any]) -> dict[str, Any] | None:
+    """Apply variable substitution to kwargs values."""
+    if kwargs is None:
+        return None
+    
+    try:
+        # Convert kwargs to JSON string for substitution
+        kwargs_json = json.dumps(kwargs, default=str)
+        
+        for name, value in variables.items():
+            quoted_placeholder: str = f'"${name}"'
+            json_value: str = json.dumps(value)
+            kwargs_json = kwargs_json.replace(quoted_placeholder, json_value)
+
+            unquoted_placeholder: str = f"${name}"
+            string_value: str = str(value)
+            kwargs_json = kwargs_json.replace(unquoted_placeholder, string_value)
+        
+        return json.loads(kwargs_json)
+    except Exception as e:
+        raise VariableSubstitutionError(f"Failed to substitute variables in kwargs: {e}") from e
 
 
 def call_function_with_kwargs(func_name: str, response: requests.Response, kwargs: dict[str, Any] | None = None) -> Any:
@@ -175,7 +203,8 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                             else:
                                 # New format: FunctionCall object
                                 func_name = func_item.function
-                                kwargs = func_item.kwargs
+                                # Apply variable substitution to kwargs
+                                kwargs = substitute_kwargs_variables(func_item.kwargs, variable_context)
 
                             # Call the function with the response and get the verification result
                             verification_result = call_function_with_kwargs(func_name, response, kwargs)
@@ -215,7 +244,8 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                                 else:
                                     # New format: FunctionCall object
                                     func_name = func_item.function
-                                    kwargs = func_item.kwargs
+                                    # Apply variable substitution to kwargs
+                                    kwargs = substitute_kwargs_variables(func_item.kwargs, variable_context)
 
                                 # Call the function with the response and get the returned variables
                                 returned_vars = call_function_with_kwargs(func_name, response, kwargs)

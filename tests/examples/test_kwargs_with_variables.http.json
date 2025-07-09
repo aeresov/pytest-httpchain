@@ -1,0 +1,124 @@
+{
+    "fixtures": [
+        "expected_status",
+        "expected_text",
+        "field_path"
+    ],
+    "stages": [
+        {
+            "name": "test_kwargs_with_fixtures",
+            "url": "https://httpbin.org/json",
+            "verify": {
+                "functions": [
+                    {
+                        "function": "test_verify_helpers:verify_response_status_custom",
+                        "kwargs": {
+                            "expected_status": "$expected_status"
+                        }
+                    },
+                    {
+                        "function": "test_verify_helpers:verify_response_contains_text",
+                        "kwargs": {
+                            "expected_text": "$expected_text",
+                            "case_sensitive": false
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "test_kwargs_with_saved_variables",
+            "url": "https://httpbin.org/json",
+            "save": {
+                "vars": {
+                    "extracted_title": "json.slideshow.title",
+                    "extracted_author": "json.slideshow.author"
+                },
+                "functions": [
+                    {
+                        "function": "test_helpers:extract_custom_data",
+                        "kwargs": {
+                            "field_path": "$field_path",
+                            "default_value": "unknown"
+                        }
+                    }
+                ]
+            },
+            "verify": {
+                "functions": [
+                    {
+                        "function": "test_verify_helpers:verify_response_json_field",
+                        "kwargs": {
+                            "field_path": "slideshow.title",
+                            "expected_value": "$extracted_title"
+                        }
+                    },
+                    {
+                        "function": "test_verify_helpers:verify_response_contains_text",
+                        "kwargs": {
+                            "expected_text": "$extracted_author",
+                            "case_sensitive": true
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "test_kwargs_with_mixed_variables",
+            "url": "https://httpbin.org/json",
+            "save": {
+                "vars": {
+                    "slide_count": "json.slideshow.slides.length()"
+                },
+                "functions": [
+                    {
+                        "function": "test_helpers:extract_multiple_fields",
+                        "kwargs": {
+                            "fields": ["$field_path", "slideshow.author", "slideshow.date"]
+                        }
+                    }
+                ]
+            },
+            "verify": {
+                "functions": [
+                    {
+                        "function": "test_verify_helpers:verify_response_json_field",
+                        "kwargs": {
+                            "field_path": "slideshow.slides.length()",
+                            "expected_value": "$slide_count"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "test_kwargs_with_same_stage_variables",
+            "url": "https://httpbin.org/json",
+            "save": {
+                "vars": {
+                    "title": "json.slideshow.title"
+                },
+                "functions": [
+                    {
+                        "function": "test_helpers:extract_custom_data",
+                        "kwargs": {
+                            "field_path": "slideshow.author",
+                            "default_value": "$title"
+                        }
+                    }
+                ]
+            },
+            "verify": {
+                "functions": [
+                    {
+                        "function": "test_verify_helpers:verify_response_contains_text",
+                        "kwargs": {
+                            "expected_text": "$title",
+                            "case_sensitive": false
+                        }
+                    }
+                ]
+            }
+        }
+    ]
+}

@@ -1,10 +1,10 @@
 # Kwargs Functionality for Verify and Save Functions
 
-This document describes the new kwargs functionality that allows user functions in "verify" and "save" blocks to be called with arbitrary keyword arguments.
+This document describes the new kwargs functionality that allows user functions in "verify" and "save" blocks to be called with arbitrary keyword arguments, including support for variable substitution.
 
 ## Overview
 
-Previously, user functions in verify and save blocks could only be called with a single `response` argument. Now, you can optionally pass arbitrary keyword arguments to these functions, making them more flexible and reusable.
+Previously, user functions in verify and save blocks could only be called with a single `response` argument. Now, you can optionally pass arbitrary keyword arguments to these functions, making them more flexible and reusable. Additionally, kwargs values support variable substitution, allowing you to use fixtures and saved variables.
 
 ## Backward Compatibility
 
@@ -40,6 +40,128 @@ You can mix string function names and FunctionCall objects in the same list:
       "kwargs": {
         "expected_status": 200,
         "timeout": 5.0
+      }
+    }
+  ]
+}
+```
+
+## Variable Substitution in Kwargs
+
+Kwargs values support variable substitution using the `$variable_name` syntax. This allows you to use:
+
+1. **Fixtures** - Variables passed to the test function
+2. **Saved variables** - Variables saved in previous stages or in the same stage
+3. **Mixed values** - Combine static values with variable substitutions
+
+### Examples
+
+#### Using Fixtures in Kwargs
+
+```json
+{
+  "fixtures": ["expected_status", "expected_text"],
+  "stages": [
+    {
+      "name": "test_with_fixtures",
+      "url": "https://httpbin.org/json",
+      "verify": {
+        "functions": [
+          {
+            "function": "test_verify_helpers:verify_response_status_custom",
+            "kwargs": {
+              "expected_status": "$expected_status"
+            }
+          },
+          {
+            "function": "test_verify_helpers:verify_response_contains_text",
+            "kwargs": {
+              "expected_text": "$expected_text",
+              "case_sensitive": false
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+#### Using Saved Variables in Kwargs
+
+```json
+{
+  "stages": [
+    {
+      "name": "test_with_saved_variables",
+      "url": "https://httpbin.org/json",
+      "save": {
+        "vars": {
+          "extracted_title": "json.slideshow.title",
+          "extracted_author": "json.slideshow.author"
+        }
+      },
+      "verify": {
+        "functions": [
+          {
+            "function": "test_verify_helpers:verify_response_contains_text",
+            "kwargs": {
+              "expected_text": "$extracted_title",
+              "case_sensitive": true
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+#### Using Variables from Same Stage
+
+```json
+{
+  "stages": [
+    {
+      "name": "test_same_stage_variables",
+      "url": "https://httpbin.org/json",
+      "save": {
+        "vars": {
+          "title": "json.slideshow.title"
+        },
+        "functions": [
+          {
+            "function": "test_helpers:extract_custom_data",
+            "kwargs": {
+              "field_path": "slideshow.author",
+              "default_value": "$title"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+#### Mixed Variable and Static Values
+
+```json
+{
+  "fixtures": ["field_path"],
+  "stages": [
+    {
+      "name": "test_mixed_values",
+      "url": "https://httpbin.org/json",
+      "save": {
+        "functions": [
+          {
+            "function": "test_helpers:extract_multiple_fields",
+            "kwargs": {
+              "fields": ["$field_path", "slideshow.author", "slideshow.date"]
+            }
+          }
+        ]
       }
     }
   ]
@@ -170,12 +292,23 @@ def extract_multiple_fields(response, fields=None):
     return result
 ```
 
+## Variable Substitution Rules
+
+1. **Syntax**: Use `$variable_name` to reference variables
+2. **Quoted strings**: Both `"$variable"` and `$variable` are supported
+3. **Data types**: Variables can be strings, numbers, booleans, arrays, or objects
+4. **Nested structures**: Variables work in nested objects and arrays
+5. **Missing variables**: If a variable doesn't exist, the placeholder remains unchanged
+6. **Same stage variables**: Variables saved in the same stage can be used in subsequent functions
+
 ## Benefits
 
 1. **Reusability**: Functions can be parameterized and reused across different test scenarios
 2. **Flexibility**: Different test cases can use the same function with different parameters
 3. **Maintainability**: Centralized logic with configurable behavior
 4. **Backward Compatibility**: Existing tests continue to work without modification
+5. **Dynamic Configuration**: Use fixtures and saved variables to configure function behavior
+6. **Reduced Duplication**: Parameterize functions instead of creating multiple similar functions
 
 ## Migration Guide
 
@@ -232,11 +365,43 @@ def verify_status_custom(response, expected_status=200):
 }
 ```
 
+### Using Variables
+
+**Before (hardcoded values):**
+```json
+{
+  "functions": [
+    {
+      "function": "module:verify_text",
+      "kwargs": {
+        "expected_text": "Sample Slide Show"
+      }
+    }
+  ]
+}
+```
+
+**After (parameterized with variables):**
+```json
+{
+  "fixtures": ["expected_text"],
+  "functions": [
+    {
+      "function": "module:verify_text",
+      "kwargs": {
+        "expected_text": "$expected_text"
+      }
+    }
+  ]
+}
+```
+
 ## Error Handling
 
 - If a function call fails, the test will fail with a descriptive error message
 - Kwargs are passed as-is to the function - no validation is performed on the kwargs themselves
 - Functions should handle their own parameter validation and provide meaningful error messages
+- Variable substitution errors are caught and reported clearly
 
 ## Testing
 
@@ -244,5 +409,7 @@ The new functionality includes comprehensive tests:
 
 - `tests/test_kwargs_functionality.py`: Tests for the new models and validation
 - `tests/test_plugin_kwargs_functionality.py`: Tests for the plugin's handling of kwargs
+- `tests/test_kwargs_substitution.py`: Tests for variable substitution in kwargs
 - `tests/examples/test_verify_functions_with_kwargs.http.json`: Example tests for verify functions
 - `tests/examples/test_functions_with_kwargs.http.json`: Example tests for save functions
+- `tests/examples/test_kwargs_with_variables.http.json`: Example tests for variable substitution in kwargs
