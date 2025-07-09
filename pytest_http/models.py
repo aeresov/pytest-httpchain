@@ -34,7 +34,7 @@ def validate_json_serializable(v: Any) -> Any:
     """Validate that the value can be serialized as JSON."""
     if v is None:
         return v
-    
+
     try:
         json.dumps(v)
         return v

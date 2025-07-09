@@ -1,6 +1,7 @@
+from http import HTTPMethod, HTTPStatus
+
 import pytest
 from pydantic import ValidationError
-from http import HTTPMethod, HTTPStatus
 
 from pytest_http.models import SaveConfig, Stage, Verify, validate_jmespath_expression, validate_python_function_name, validate_python_variable_name
 
@@ -535,7 +536,7 @@ def test_stage_method_field_handling(method_input, expected_method, description)
         stage_data = {"name": "test_stage"}
     else:
         stage_data = {"name": "test_stage", "method": method_input}
-    
+
     stage = Stage.model_validate(stage_data)
     assert stage.method == expected_method
 
@@ -579,7 +580,7 @@ def test_stage_method_invalid_value():
         ({"key": "value"}, {"key": "value"}, "simple_dict"),
         ({"nested": {"key": "value"}}, {"nested": {"key": "value"}}, "nested_dict"),
         ({"array": [1, 2, 3]}, {"array": [1, 2, 3]}, "dict_with_array"),
-        ({"mixed": {"str": "value", "int": 42, "bool": True, "null": None}}, 
+        ({"mixed": {"str": "value", "int": 42, "bool": True, "null": None}},
          {"mixed": {"str": "value", "int": 42, "bool": True, "null": None}}, "mixed_types"),
         (None, None, "explicit_none"),
         ("no_json", None, "without_json_field"),
@@ -590,7 +591,7 @@ def test_stage_json_field_handling(json_input, expected_json, description):
         stage_data = {"name": "test_stage"}
     else:
         stage_data = {"name": "test_stage", "json": json_input}
-    
+
     stage = Stage.model_validate(stage_data)
     assert stage.json == expected_json
 
@@ -644,16 +645,16 @@ def test_stage_json_with_serializable_values(json_data):
     [
         (lambda x: x, "Value cannot be serialized as JSON"),
         (object(), "Value cannot be serialized as JSON"),
-        (set([1, 2, 3]), "Value cannot be serialized as JSON"),
+        ({1, 2, 3}, "Value cannot be serialized as JSON"),
         ({"key": lambda x: x}, "Value cannot be serialized as JSON"),
         ({"key": object()}, "Value cannot be serialized as JSON"),
-        ({"key": set([1, 2, 3])}, "Value cannot be serialized as JSON"),
+        ({"key": {1, 2, 3}}, "Value cannot be serialized as JSON"),
     ],
 )
 def test_stage_json_with_non_serializable_values(non_serializable_data, expected_error_fragment):
     """Test that non-JSON-serializable values are rejected."""
     stage_data = {"name": "test_stage", "json": non_serializable_data}
-    
+
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(stage_data)
     assert expected_error_fragment in str(exc_info.value)
@@ -666,7 +667,7 @@ def test_stage_with_method_and_json_together():
         "json": {"user": {"name": "John", "email": "john@example.com"}}
     }
     stage = Stage.model_validate(stage_data)
-    
+
     assert stage.method == HTTPMethod.POST
     assert stage.json == {"user": {"name": "John", "email": "john@example.com"}}
 
@@ -683,7 +684,7 @@ def test_stage_with_all_optional_fields():
         "verify": {"status": 200, "json": {"response.success": True}}
     }
     stage = Stage.model_validate(stage_data)
-    
+
     assert stage.name == "complete_stage"
     assert stage.url == "https://api.example.com/users"
     assert stage.method == HTTPMethod.PUT
@@ -695,3 +696,4 @@ def test_stage_with_all_optional_fields():
     assert stage.verify is not None
     assert stage.verify.status == HTTPStatus.OK
     assert stage.verify.json_data == {"response.success": True}
+

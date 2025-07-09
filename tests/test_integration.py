@@ -457,3 +457,4 @@ def test_json_validation_rejects_non_serializable_data(pytester):
     # The actual validation happens at the model level, which we test in the model tests
     result = pytester.runpytest(str(test_file), "-v")
     result.assert_outcomes(passed=1)
+

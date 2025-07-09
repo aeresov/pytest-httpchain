@@ -447,3 +447,4 @@ def test_scenario_model_validation():
     assert len(scenario.stages) == 2
     assert scenario.stages[0].url == "https://api.example.com/test"
     assert scenario.stages[1].url is None
+
