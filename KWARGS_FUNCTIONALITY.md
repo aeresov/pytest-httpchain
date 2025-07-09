@@ -68,13 +68,13 @@ Kwargs values support variable substitution using the `$variable_name` syntax. T
       "verify": {
         "functions": [
           {
-            "function": "test_verify_helpers:verify_response_status_custom",
+            "function": "test_kwargs_helpers:verify_response_status_custom",
             "kwargs": {
               "expected_status": "$expected_status"
             }
           },
           {
-            "function": "test_verify_helpers:verify_response_contains_text",
+            "function": "test_kwargs_helpers:verify_response_contains_text",
             "kwargs": {
               "expected_text": "$expected_text",
               "case_sensitive": false
@@ -104,7 +104,7 @@ Kwargs values support variable substitution using the `$variable_name` syntax. T
       "verify": {
         "functions": [
           {
-            "function": "test_verify_helpers:verify_response_contains_text",
+            "function": "test_kwargs_helpers:verify_response_contains_text",
             "kwargs": {
               "expected_text": "$extracted_title",
               "case_sensitive": true
@@ -131,7 +131,7 @@ Kwargs values support variable substitution using the `$variable_name` syntax. T
         },
         "functions": [
           {
-            "function": "test_helpers:extract_custom_data",
+            "function": "test_kwargs_helpers:extract_custom_data",
             "kwargs": {
               "field_path": "slideshow.author",
               "default_value": "$title"
@@ -156,7 +156,7 @@ Kwargs values support variable substitution using the `$variable_name` syntax. T
       "save": {
         "functions": [
           {
-            "function": "test_helpers:extract_multiple_fields",
+            "function": "test_kwargs_helpers:extract_multiple_fields",
             "kwargs": {
               "fields": ["$field_path", "slideshow.author", "slideshow.date"]
             }
@@ -181,13 +181,13 @@ Kwargs values support variable substitution using the `$variable_name` syntax. T
       "verify": {
         "functions": [
           {
-            "function": "test_verify_helpers:verify_response_status_custom",
+            "function": "test_kwargs_helpers:verify_response_status_custom",
             "kwargs": {
               "expected_status": 200
             }
           },
           {
-            "function": "test_verify_helpers:verify_response_contains_text",
+            "function": "test_kwargs_helpers:verify_response_contains_text",
             "kwargs": {
               "expected_text": "Sample Slide Show",
               "case_sensitive": false
@@ -211,14 +211,14 @@ Kwargs values support variable substitution using the `$variable_name` syntax. T
       "save": {
         "functions": [
           {
-            "function": "test_helpers:extract_custom_data",
+            "function": "test_kwargs_helpers:extract_custom_data",
             "kwargs": {
               "field_path": "slideshow.author",
               "default_value": "unknown_author"
             }
           },
           {
-            "function": "test_helpers:extract_multiple_fields",
+            "function": "test_kwargs_helpers:extract_multiple_fields",
             "kwargs": {
               "fields": ["slideshow.title", "slideshow.author", "slideshow.date"]
             }
@@ -238,11 +238,9 @@ Verify functions should accept a `response` parameter and optional kwargs, retur
 
 ```python
 def verify_response_status_custom(response, expected_status=200):
-    """Verify that the response status matches the expected status."""
     return response.status_code == expected_status
 
 def verify_response_contains_text(response, expected_text="", case_sensitive=True):
-    """Verify that the response text contains the expected text."""
     response_text = response.text
     if not case_sensitive:
         response_text = response_text.lower()
@@ -256,7 +254,6 @@ Save functions should accept a `response` parameter and optional kwargs, returni
 
 ```python
 def extract_custom_data(response, field_path="", default_value="unknown"):
-    """Extract custom data from a specific field path."""
     try:
         data = response.json()
         current = data
@@ -273,7 +270,6 @@ def extract_custom_data(response, field_path="", default_value="unknown"):
         }
 
 def extract_multiple_fields(response, fields=None):
-    """Extract multiple fields from the response."""
     if fields is None:
         fields = ["slideshow.title", "slideshow.author"]
     
@@ -407,9 +403,18 @@ def verify_status_custom(response, expected_status=200):
 
 The new functionality includes comprehensive tests:
 
-- `tests/test_kwargs_functionality.py`: Tests for the new models and validation
-- `tests/test_plugin_kwargs_functionality.py`: Tests for the plugin's handling of kwargs
-- `tests/test_kwargs_substitution.py`: Tests for variable substitution in kwargs
-- `tests/examples/test_verify_functions_with_kwargs.http.json`: Example tests for verify functions
-- `tests/examples/test_functions_with_kwargs.http.json`: Example tests for save functions
-- `tests/examples/test_kwargs_with_variables.http.json`: Example tests for variable substitution in kwargs
+- `tests/test_kwargs_integration.py`: Combined tests for models, substitution, and plugin functionality
+- `tests/examples/test_kwargs_comprehensive.http.json`: Comprehensive example tests covering all kwargs functionality
+- `tests/examples/test_kwargs_helpers.py`: Combined helper functions for all kwargs examples
+
+## Optimized Test Structure
+
+The test structure has been optimized to follow project rules:
+
+1. **Combined Tests**: All kwargs-related tests are now in a single file with proper parametrization
+2. **Shared Fixtures**: Common test data is shared through fixtures
+3. **Functional Style**: Tests use functional programming style with minimal nesting
+4. **No Docstrings**: Tests avoid unnecessary docstrings unless critical
+5. **Parameterized Tests**: Similar test cases are combined using `@pytest.mark.parametrize`
+6. **Comprehensive Examples**: All example scenarios are combined into a single comprehensive test file
+7. **Unified Helpers**: All helper functions are combined into a single file for easier maintenance

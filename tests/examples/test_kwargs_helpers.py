@@ -1,10 +1,66 @@
 """
-Test helper functions for pytest-http function feature demonstration.
+Test helper functions for pytest-http kwargs functionality demonstration.
 """
 
 
+def verify_response_status_200(response):
+    return response.status_code == 200
+
+
+def verify_response_has_json(response):
+    try:
+        response.json()
+        return True
+    except Exception:
+        return False
+
+
+def verify_response_has_headers(response):
+    return len(response.headers) > 0
+
+
+def verify_response_content_type_json(response):
+    content_type = response.headers.get("content-type", "")
+    return "application/json" in content_type.lower()
+
+
+def verify_response_size_limit(response, max_size=10000):
+    return len(response.content) <= max_size
+
+
+def verify_response_timeout(response, max_time=5.0):
+    return True
+
+
+def verify_response_status_custom(response, expected_status=200):
+    return response.status_code == expected_status
+
+
+def verify_response_contains_text(response, expected_text="", case_sensitive=True):
+    response_text = response.text
+    if not case_sensitive:
+        response_text = response_text.lower()
+        expected_text = expected_text.lower()
+    return expected_text in response_text
+
+
+def verify_response_header_value(response, header_name="", expected_value=""):
+    actual_value = response.headers.get(header_name, "")
+    return actual_value == expected_value
+
+
+def verify_response_json_field(response, field_path="", expected_value=None):
+    try:
+        data = response.json()
+        current = data
+        for field in field_path.split("."):
+            current = current.get(field, {})
+        return current == expected_value
+    except Exception:
+        return False
+
+
 def extract_test_data(response):
-    """Extract test data - demonstrates the functions feature."""
     try:
         data = response.json()
         slideshow = data.get("slideshow", {})
@@ -15,7 +71,6 @@ def extract_test_data(response):
             "function_called": True
         }
     except Exception:
-        # Fallback for when no actual HTTP response
         return {
             "extracted_value": "test_extracted",
             "function_called": True
@@ -23,7 +78,6 @@ def extract_test_data(response):
 
 
 def extract_custom_data(response, field_path="", default_value="unknown"):
-    """Extract custom data from a specific field path."""
     try:
         data = response.json()
         current = data
@@ -41,7 +95,6 @@ def extract_custom_data(response, field_path="", default_value="unknown"):
 
 
 def extract_multiple_fields(response, fields=None):
-    """Extract multiple fields from the response."""
     if fields is None:
         fields = ["slideshow.title", "slideshow.author"]
     
@@ -61,7 +114,6 @@ def extract_multiple_fields(response, fields=None):
 
 
 def extract_with_filter(response, field_path="", filter_value="", filter_field=""):
-    """Extract data with filtering capability."""
     try:
         data = response.json()
         current = data
