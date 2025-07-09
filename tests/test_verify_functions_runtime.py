@@ -1,6 +1,5 @@
+
 import pytest
-import requests
-from unittest.mock import Mock
 
 from pytest_http.pytest_plugin import json_test_function
 
@@ -38,7 +37,7 @@ def test_verify_functions_runtime_behavior():
     # This should fail because json:loads expects a string, not a Response object
     with pytest.raises(Exception) as exc_info:
         json_test_function(test_data)
-    
+
     # The error should be about the JSON object type
     assert "JSON object must be str, bytes or bytearray" in str(exc_info.value)
 
@@ -60,7 +59,7 @@ def test_verify_functions_invalid_function():
     # This should fail because the function doesn't exist
     with pytest.raises(Exception) as exc_info:
         json_test_function(test_data)
-    
+
     assert "Cannot import module" in str(exc_info.value)
 
 
@@ -82,6 +81,6 @@ def test_verify_functions_validation_works():
     # This should pass validation but fail at runtime because os:getcwd doesn't work with Response
     with pytest.raises(Exception) as exc_info:
         json_test_function(test_data)
-    
+
     # The error should be about the function not working with Response objects
     assert "Error executing verify function" in str(exc_info.value)
