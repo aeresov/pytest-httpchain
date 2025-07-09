@@ -97,21 +97,22 @@ def substitute_kwargs_variables(kwargs: dict[str, Any] | None, variables: dict[s
         return None
 
     try:
-        kwargs_json = json.dumps(kwargs, default=str)
+        result = kwargs.copy()
+        
+        # Handle direct substitution for quoted strings
+        for key, val in result.items():
+            if isinstance(val, str):
+                if val.startswith('"$') and val.endswith('"'):
+                    # Remove quotes and substitute
+                    var_name = val[2:-1]  # Remove '"$' and '"'
+                    if var_name in variables:
+                        result[key] = variables[var_name]
+                elif val.startswith('$'):
+                    var_name = val[1:]  # Remove '$'
+                    if var_name in variables:
+                        result[key] = variables[var_name]
 
-        # Sort by length (longest first) to avoid partial replacements
-        sorted_variables = sorted(variables.items(), key=lambda x: len(x[0]), reverse=True)
-
-        for name, value in sorted_variables:
-            quoted_placeholder: str = f'"${name}"'
-            json_value: str = json.dumps(value)
-            kwargs_json = kwargs_json.replace(quoted_placeholder, json_value)
-
-            unquoted_placeholder: str = f"${name}"
-            string_value: str = str(value)
-            kwargs_json = kwargs_json.replace(unquoted_placeholder, string_value)
-
-        return json.loads(kwargs_json)
+        return result
     except Exception as e:
         raise VariableSubstitutionError(f"Failed to substitute variables in kwargs: {e}") from e
 

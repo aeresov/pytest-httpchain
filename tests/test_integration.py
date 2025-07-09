@@ -338,7 +338,7 @@ def test_custom_suffix_configuration(pytester):
         suffix = custom
     """)
 
-    pytester.makefile('.custom.json', test_example='{"fixtures": [], "marks": [], "test": "basic test content"}')
+    pytester.makefile('.custom.json', test_example='{"fixtures": [], "marks": [], "stages": [{"name": "test_stage", "url": "https://httpbin.org/json"}]}')
     result = pytester.runpytest("-v")
     result.assert_outcomes(passed=1)
 
@@ -358,7 +358,7 @@ def test_json_body_with_different_data_types(pytester):
                     "verify": {
                         "status": 200,
                         "json": {
-                            "data": "simple string"
+                            "json.json": "simple string"
                         }
                     }
                 },
@@ -370,7 +370,7 @@ def test_json_body_with_different_data_types(pytester):
                     "verify": {
                         "status": 200,
                         "json": {
-                            "data": 42
+                            "json.json": 42
                         }
                     }
                 },
@@ -382,7 +382,7 @@ def test_json_body_with_different_data_types(pytester):
                     "verify": {
                         "status": 200,
                         "json": {
-                            "data": true
+                            "json.json": true
                         }
                     }
                 },
@@ -394,7 +394,7 @@ def test_json_body_with_different_data_types(pytester):
                     "verify": {
                         "status": 200,
                         "json": {
-                            "data": [1, 2, 3, "four"]
+                            "json.json": [1, 2, 3, "four"]
                         }
                     }
                 },
