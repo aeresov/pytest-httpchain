@@ -1,6 +1,7 @@
 import importlib
+import json
 import keyword
-from http import HTTPStatus
+from http import HTTPMethod, HTTPStatus
 from typing import Annotated, Any
 
 import jmespath
@@ -27,6 +28,18 @@ def validate_jmespath_expression(v: str) -> str:
         raise ValueError(f"'{v}' is not a valid JMESPath expression: {e}") from e
 
     return v
+
+
+def validate_json_serializable(v: Any) -> Any:
+    """Validate that the value can be serialized as JSON."""
+    if v is None:
+        return v
+    
+    try:
+        json.dumps(v)
+        return v
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Value cannot be serialized as JSON: {e}") from e
 
 
 def validate_python_function_name(v: str) -> str:
@@ -61,6 +74,7 @@ def validate_python_function_name(v: str) -> str:
 ValidPythonVariableName = Annotated[str, AfterValidator(validate_python_variable_name)]
 ValidPythonFunctionName = Annotated[str, AfterValidator(validate_python_function_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
+JSONSerializable = Annotated[Any, AfterValidator(validate_json_serializable)]
 
 
 class FunctionCall(BaseModel):
@@ -82,8 +96,10 @@ class Verify(BaseModel):
 class Stage(BaseModel):
     name: str = Field()
     url: str | None = Field(default=None)
+    method: HTTPMethod = Field(default=HTTPMethod.GET)
     params: dict[str, Any] | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)
+    json: JSONSerializable = Field(default=None)
     save: SaveConfig | None = Field(default=None)
     verify: Verify | None = Field(default=None)
 
