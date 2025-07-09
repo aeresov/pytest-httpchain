@@ -1,7 +1,8 @@
 import pytest
 from pydantic import ValidationError
+from http import HTTPStatus
 
-from pytest_http.models import SaveConfig, Stage, validate_jmespath_expression, validate_python_function_name, validate_python_variable_name
+from pytest_http.models import SaveConfig, Stage, Verify, validate_jmespath_expression, validate_python_function_name, validate_python_variable_name
 
 
 @pytest.mark.parametrize(
@@ -109,18 +110,18 @@ def test_stage_save_optional_states(save_value, expected_result, description):
         ("user id", "var", "'user id' is not a valid Python variable name"),
         ("user@id", "var", "'user@id' is not a valid Python variable name"),
         ("", "var", "'' is not a valid Python variable name"),
-                 # Function name validation - must use module:function syntax
-         ("simple_function", "func", "must use 'module:function' syntax"),
-         ("1invalid", "func", "must use 'module:function' syntax"),
-         ("func-name", "func", "must use 'module:function' syntax"),
-         ("func name", "func", "must use 'module:function' syntax"),
-         ("func@name", "func", "must use 'module:function' syntax"),
-         ("", "func", "must use 'module:function' syntax"),
-         # Invalid module:function syntax
-         (":function", "func", "missing module path"),
-         ("module:", "func", "missing function name"),
-         ("nonexistent_module:function", "func", "Cannot import module 'nonexistent_module'"),
-         ("json:nonexistent_function", "func", "Function 'nonexistent_function' not found in module 'json'"),
+        # Function name validation - must use module:function syntax
+        ("simple_function", "func", "must use 'module:function' syntax"),
+        ("1invalid", "func", "must use 'module:function' syntax"),
+        ("func-name", "func", "must use 'module:function' syntax"),
+        ("func name", "func", "must use 'module:function' syntax"),
+        ("func@name", "func", "must use 'module:function' syntax"),
+        ("", "func", "must use 'module:function' syntax"),
+        # Invalid module:function syntax
+        (":function", "func", "missing module path"),
+        ("module:", "func", "missing function name"),
+        ("nonexistent_module:function", "func", "Cannot import module 'nonexistent_module'"),
+        ("json:nonexistent_function", "func", "Function 'nonexistent_function' not found in module 'json'"),
     ],
 )
 def test_stage_save_invalid_names(invalid_name, field_type, expected_error):
@@ -204,12 +205,12 @@ def test_stage_save_keyword_validation(keyword):
             "var",
             "complex_jmespath"
         ),
-                 # Valid module:function names (only format allowed)
-         (
-             ["json:loads", "json:dumps", "os:getcwd", "sys:exit"],
-             "func",
-             "valid_module_function_names"
-         ),
+        # Valid module:function names (only format allowed)
+        (
+            ["json:loads", "json:dumps", "os:getcwd", "sys:exit"],
+            "func",
+            "valid_module_function_names"
+        ),
     ],
 )
 def test_stage_save_valid_names(valid_names, field_type, test_case):
@@ -250,8 +251,16 @@ def test_save_config_standalone():
 )
 def test_save_config_optional_fields(vars_data, functions_data):
     save_config = SaveConfig(vars=vars_data, functions=functions_data)
-    assert save_config.vars == vars_data
-    assert save_config.functions == functions_data
+
+    if vars_data is None:
+        assert save_config.vars is None
+    else:
+        assert save_config.vars == vars_data
+
+    if functions_data is None:
+        assert save_config.functions is None
+    else:
+        assert save_config.functions == functions_data
 
 
 @pytest.mark.parametrize(
@@ -263,7 +272,8 @@ def test_save_config_optional_fields(vars_data, functions_data):
     ],
 )
 def test_validator_functions_valid_input(validator_func, valid_input, expected_output):
-    assert validator_func(valid_input) == expected_output
+    result = validator_func(valid_input)
+    assert result == expected_output
 
 
 @pytest.mark.parametrize(
@@ -275,9 +285,8 @@ def test_validator_functions_valid_input(validator_func, valid_input, expected_o
     ],
 )
 def test_validator_functions_invalid_input(validator_func, invalid_input, expected_error):
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match=expected_error):
         validator_func(invalid_input)
-    assert expected_error in str(exc_info.value)
 
 
 @pytest.mark.parametrize(
@@ -305,6 +314,200 @@ def test_module_function_validation_success(function_name):
     ],
 )
 def test_module_function_validation_failure(invalid_function_name, expected_error_fragment):
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match=expected_error_fragment):
         validate_python_function_name(invalid_function_name)
-    assert expected_error_fragment in str(exc_info.value)
+
+
+# Verify model tests
+@pytest.mark.parametrize(
+    "status_input,expected_status,description",
+    [
+        (HTTPStatus.OK, HTTPStatus.OK, "with_status"),
+        (None, None, "with_none"),
+        ("no_args", None, "without_args"),
+    ],
+)
+def test_verify_model_status_handling(status_input, expected_status, description):
+    if description == "without_args":
+        verify = Verify()
+    else:
+        verify = Verify(status=status_input)
+    assert verify.status == expected_status
+
+
+def test_verify_model_with_different_status_codes():
+    status_codes = [
+        HTTPStatus.OK,
+        HTTPStatus.CREATED,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.BAD_REQUEST,
+        HTTPStatus.INTERNAL_SERVER_ERROR,
+    ]
+
+    for status_code in status_codes:
+        verify = Verify(status=status_code)
+        assert verify.status == status_code
+
+
+def test_verify_model_with_integer_status():
+    verify = Verify(status=200)
+    assert verify.status == HTTPStatus.OK
+    assert verify.status.value == 200
+
+
+def test_verify_model_invalid_status():
+    with pytest.raises(ValidationError):
+        Verify(status=999)  # Invalid HTTP status code
+
+
+@pytest.mark.parametrize(
+    "verify_input,expected_verify_exists,expected_status",
+    [
+        (Verify(status=HTTPStatus.OK), True, HTTPStatus.OK),
+        ({"status": 200}, True, HTTPStatus.OK),
+        (None, False, None),
+        ({}, True, None),
+        ("no_verify", False, None),
+    ],
+)
+def test_stage_verify_field_handling(verify_input, expected_verify_exists, expected_status):
+    if verify_input == "no_verify":
+        stage = Stage(name="test_stage")
+    else:
+        stage = Stage(name="test_stage", verify=verify_input)
+
+    if expected_verify_exists:
+        assert stage.verify is not None
+        assert stage.verify.status == expected_status
+    else:
+        assert stage.verify is None
+
+
+def test_stage_verify_field_optional():
+    stage_data = {"name": "test_stage"}
+    stage = Stage.model_validate(stage_data)
+    assert stage.verify is None
+
+
+def test_stage_with_complete_verify_data():
+    stage_data = {"name": "test_stage", "url": "https://api.example.com/test", "verify": {"status": 201}}
+    stage = Stage.model_validate(stage_data)
+    assert stage.verify is not None
+    assert stage.verify.status == HTTPStatus.CREATED
+
+
+# Verify functions tests
+@pytest.mark.parametrize(
+    "functions_input,expected_functions,description",
+    [
+        (["json:loads"], ["json:loads"], "single_function"),
+        (["os:getcwd", "json:dumps"], ["os:getcwd", "json:dumps"], "multiple_functions"),
+        (None, None, "none_functions"),
+        ([], [], "empty_functions"),
+    ],
+)
+def test_verify_model_functions_handling(functions_input, expected_functions, description):
+    if description == "none_functions":
+        verify = Verify()
+    else:
+        verify = Verify(functions=functions_input)
+    assert verify.functions == expected_functions
+
+
+@pytest.mark.parametrize(
+    "invalid_function_name,expected_error",
+    [
+        ("invalid_function", "must use 'module:function' syntax"),
+        ("module:", "is missing function name"),
+        (":function", "is missing module path"),
+        ("nonexistent_module:function", "Cannot import module"),
+        ("json:nonexistent_function", "Function 'nonexistent_function' not found"),
+        ("json:loads", None),  # Valid function
+    ],
+)
+def test_verify_functions_validation(invalid_function_name, expected_error):
+    if expected_error is None:
+        # Should not raise an error
+        result = validate_python_function_name(invalid_function_name)
+        assert result == invalid_function_name
+    else:
+        with pytest.raises(ValueError, match=expected_error):
+            validate_python_function_name(invalid_function_name)
+
+
+@pytest.mark.parametrize(
+    "stage_data,expected_functions",
+    [
+        ({"name": "test", "verify": {"functions": ["json:loads"]}}, ["json:loads"]),
+        ({"name": "test", "verify": {"functions": ["os:getcwd", "json:dumps"]}}, ["os:getcwd", "json:dumps"]),
+        ({"name": "test", "verify": {"functions": []}}, []),
+        ({"name": "test", "verify": {}}, None),
+        ({"name": "test"}, None),
+    ],
+)
+def test_stage_verify_functions_handling(stage_data, expected_functions):
+    stage = Stage.model_validate(stage_data)
+
+    if expected_functions is not None:
+        assert stage.verify is not None
+        assert stage.verify.functions == expected_functions
+    else:
+        if stage.verify:
+            assert stage.verify.functions is None
+
+
+def test_verify_functions_with_status_and_json():
+    stage_data = {
+        "name": "test",
+        "verify": {
+            "status": 200,
+            "json": {"json.some_field": "expected_value"},
+            "functions": ["json:loads"]
+        }
+    }
+    stage = Stage.model_validate(stage_data)
+
+    assert stage.verify is not None
+    assert stage.verify.status.value == 200
+    assert stage.verify.json_data == {"json.some_field": "expected_value"}
+    assert stage.verify.functions == ["json:loads"]
+
+
+def test_verify_functions_optional_field():
+    stage_data = {"name": "test_stage"}
+    stage = Stage.model_validate(stage_data)
+    assert stage.verify is None
+
+
+def test_verify_functions_invalid_function_name():
+    invalid_name = "invalid_function"
+    data = {"name": "test", "verify": {"functions": [invalid_name]}}
+
+    with pytest.raises(ValidationError):
+        Stage.model_validate(data)
+
+
+def test_verify_functions_valid_function_names():
+    valid_names = ["json:loads", "os:getcwd"]
+    data = {"name": "test", "verify": {"functions": valid_names}}
+    stage = Stage.model_validate(data)
+
+    assert stage.verify is not None
+    assert stage.verify.functions == valid_names
+
+
+@pytest.mark.parametrize(
+    "functions_data",
+    [
+        None,           # No functions
+        ["json:loads"], # Only functions
+        [],             # Empty functions list
+    ],
+)
+def test_verify_functions_optional_fields(functions_data):
+    verify = Verify(functions=functions_data)
+
+    if functions_data is None:
+        assert verify.functions is None
+    else:
+        assert verify.functions == functions_data
