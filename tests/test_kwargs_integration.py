@@ -92,29 +92,31 @@ def test_save_config_with_function_call() -> None:
 def test_stage_with_function_calls() -> None:
     stage = Stage(
         name="test_stage",
-        url="https://example.com",
-        verify=Verify(
-            functions=[
-                FunctionCall(
-                    function="test_module:verify_function",
-                    kwargs={"expected_text": "Hello", "case_sensitive": False}
-                )
-            ]
-        ),
-        save=SaveConfig(
-            functions=[
-                FunctionCall(
-                    function="test_module:save_function",
-                    kwargs={"extract_fields": ["title", "author"]}
-                )
-            ]
+        request=None, # No request fields in this stage
+        response=Stage.Response(
+            verify=Verify(
+                functions=[
+                    FunctionCall(
+                        function="test_module:verify_function",
+                        kwargs={"expected_text": "Hello", "case_sensitive": False}
+                    )
+                ]
+            ),
+            save=SaveConfig(
+                functions=[
+                    FunctionCall(
+                        function="test_module:save_function",
+                        kwargs={"extract_fields": ["title", "author"]}
+                    )
+                ]
+            )
         )
     )
 
-    assert stage.verify.functions[0].function == "test_module:verify_function"
-    assert stage.verify.functions[0].kwargs == {"expected_text": "Hello", "case_sensitive": False}
-    assert stage.save.functions[0].function == "test_module:save_function"
-    assert stage.save.functions[0].kwargs == {"extract_fields": ["title", "author"]}
+    assert stage.response.verify.functions[0].function == "test_module:verify_function"
+    assert stage.response.verify.functions[0].kwargs == {"expected_text": "Hello", "case_sensitive": False}
+    assert stage.response.save.functions[0].function == "test_module:save_function"
+    assert stage.response.save.functions[0].kwargs == {"extract_fields": ["title", "author"]}
 
 
 @pytest.mark.parametrize("scenario_data,expected_verify,expected_save", [
@@ -123,22 +125,24 @@ def test_stage_with_function_calls() -> None:
             "stages": [
                 {
                     "name": "test_stage",
-                    "url": "https://example.com",
-                    "verify": {
-                        "functions": [
-                            {
-                                "function": "test_module:verify_function",
-                                "kwargs": {"expected_status": 200, "timeout": 5.0}
-                            }
-                        ]
-                    },
-                    "save": {
-                        "functions": [
-                            {
-                                "function": "test_module:save_function",
-                                "kwargs": {"field_path": "data.items", "default_value": "unknown"}
-                            }
-                        ]
+                    "request": {}, # No request fields in this stage
+                    "response": {
+                        "verify": {
+                            "functions": [
+                                {
+                                    "function": "test_module:verify_function",
+                                    "kwargs": {"expected_status": 200, "timeout": 5.0}
+                                }
+                            ]
+                        },
+                        "save": {
+                            "functions": [
+                                {
+                                    "function": "test_module:save_function",
+                                    "kwargs": {"field_path": "data.items", "default_value": "unknown"}
+                                }
+                            ]
+                        }
                     }
                 }
             ]
@@ -151,8 +155,8 @@ def test_stage_with_function_calls() -> None:
             "stages": [
                 {
                     "name": "test_stage",
-                    "url": "https://example.com",
-                    "verify": {"functions": ["test_module:simple_function"]},
+                    "request": {}, # No request fields in this stage
+                    "response": {"functions": ["test_module:simple_function"]},
                     "save": {"functions": ["test_module:save_function"]}
                 }
             ]
@@ -168,18 +172,18 @@ def test_scenario_with_function_calls(scenario_data: dict[str, Any], expected_ve
     stage = scenario.stages[0]
 
     if expected_verify:
-        verify_func = stage.verify.functions[0]
+        verify_func = stage.response.verify.functions[0]
         assert isinstance(verify_func, FunctionCall)
         assert verify_func.function == "test_module:verify_function"
         assert verify_func.kwargs == expected_verify
 
-        save_func = stage.save.functions[0]
+        save_func = stage.response.save.functions[0]
         assert isinstance(save_func, FunctionCall)
         assert save_func.function == "test_module:save_function"
         assert save_func.kwargs == expected_save
     else:
-        assert stage.verify.functions[0] == "test_module:simple_function"
-        assert stage.save.functions[0] == "test_module:save_function"
+        assert stage.response.verify.functions[0] == "test_module:simple_function"
+        assert stage.response.save.functions[0] == "test_module:save_function"
 
 
 def test_mixed_function_formats() -> None:
@@ -187,18 +191,20 @@ def test_mixed_function_formats() -> None:
         "stages": [
             {
                 "name": "test_stage",
-                "url": "https://example.com",
-                "verify": {
-                    "functions": [
-                        "test_module:simple_function",
-                        {"function": "test_module:function_with_kwargs", "kwargs": {"param": "value"}}
-                    ]
-                },
-                "save": {
-                    "functions": [
-                        "test_module:simple_save_function",
-                        {"function": "test_module:save_with_kwargs", "kwargs": {"field": "data"}}
-                    ]
+                "request": {}, # No request fields in this stage
+                "response": {
+                    "verify": {
+                        "functions": [
+                            "test_module:simple_function",
+                            {"function": "test_module:function_with_kwargs", "kwargs": {"param": "value"}}
+                        ]
+                    },
+                    "save": {
+                        "functions": [
+                            "test_module:simple_save_function",
+                            {"function": "test_module:save_with_kwargs", "kwargs": {"field": "data"}}
+                        ]
+                    }
                 }
             }
         ]
@@ -207,13 +213,13 @@ def test_mixed_function_formats() -> None:
     scenario = Scenario.model_validate(scenario_data)
     stage = scenario.stages[0]
 
-    verify_functions = stage.verify.functions
+    verify_functions = stage.response.verify.functions
     assert verify_functions[0] == "test_module:simple_function"
     assert isinstance(verify_functions[1], FunctionCall)
     assert verify_functions[1].function == "test_module:function_with_kwargs"
     assert verify_functions[1].kwargs == {"param": "value"}
 
-    save_functions = stage.save.functions
+    save_functions = stage.response.save.functions
     assert save_functions[0] == "test_module:simple_save_function"
     assert isinstance(save_functions[1], FunctionCall)
     assert save_functions[1].function == "test_module:save_with_kwargs"

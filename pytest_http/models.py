@@ -139,30 +139,6 @@ class Stage(BaseModel):
     def verify(self) -> Verify | None:
         return self.response.verify if self.response else None
 
-    @model_validator(mode="before")
-    @classmethod
-    def handle_backward_compatibility(cls, data):
-        if isinstance(data, dict):
-            # Extract request fields
-            request_fields = {}
-            for field in ["url", "method", "params", "headers", "json"]:
-                if field in data and data[field] is not None:
-                    request_fields[field] = data.pop(field)
-            
-            # Extract response fields
-            response_fields = {}
-            for field in ["save", "verify"]:
-                if field in data and data[field] is not None:
-                    response_fields[field] = data.pop(field)
-            
-            # Create request and response objects if needed
-            if request_fields:
-                data["request"] = request_fields
-            if response_fields:
-                data["response"] = response_fields
-        
-        return data
-
 
 class Scenario(BaseModel):
     fixtures: list[str] = Field(default_factory=list)
