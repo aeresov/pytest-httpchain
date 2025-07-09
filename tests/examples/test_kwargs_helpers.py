@@ -1,13 +1,13 @@
-"""
-Test helper functions for pytest-http kwargs functionality demonstration.
-"""
+from typing import Any
+
+from requests import Response
 
 
-def verify_response_status_200(response):
+def verify_response_status_200(response: Response) -> bool:
     return response.status_code == 200
 
 
-def verify_response_has_json(response):
+def verify_response_has_json(response: Response) -> bool:
     try:
         response.json()
         return True
@@ -15,28 +15,28 @@ def verify_response_has_json(response):
         return False
 
 
-def verify_response_has_headers(response):
+def verify_response_has_headers(response: Response) -> bool:
     return len(response.headers) > 0
 
 
-def verify_response_content_type_json(response):
+def verify_response_content_type_json(response: Response) -> bool:
     content_type = response.headers.get("content-type", "")
     return "application/json" in content_type.lower()
 
 
-def verify_response_size_limit(response, max_size=10000):
+def verify_response_size_limit(response: Response, max_size: int = 10000) -> bool:
     return len(response.content) <= max_size
 
 
-def verify_response_timeout(response, max_time=5.0):
+def verify_response_timeout(response: Response, max_time: float = 5.0) -> bool:
     return True
 
 
-def verify_response_status_custom(response, expected_status=200):
+def verify_response_status_custom(response: Response, expected_status: int = 200) -> bool:
     return response.status_code == expected_status
 
 
-def verify_response_contains_text(response, expected_text="", case_sensitive=True):
+def verify_response_contains_text(response: Response, expected_text: str = "", case_sensitive: bool = True) -> bool:
     response_text = response.text
     if not case_sensitive:
         response_text = response_text.lower()
@@ -44,12 +44,12 @@ def verify_response_contains_text(response, expected_text="", case_sensitive=Tru
     return expected_text in response_text
 
 
-def verify_response_header_value(response, header_name="", expected_value=""):
+def verify_response_header_value(response: Response, header_name: str = "", expected_value: str = "") -> bool:
     actual_value = response.headers.get(header_name, "")
     return actual_value == expected_value
 
 
-def verify_response_json_field(response, field_path="", expected_value=None):
+def verify_response_json_field(response: Response, field_path: str = "", expected_value: Any = None) -> bool:
     try:
         data = response.json()
         current = data
@@ -60,7 +60,7 @@ def verify_response_json_field(response, field_path="", expected_value=None):
         return False
 
 
-def extract_test_data(response):
+def extract_test_data(response: Response) -> dict[str, Any]:
     try:
         data = response.json()
         slideshow = data.get("slideshow", {})
@@ -77,7 +77,7 @@ def extract_test_data(response):
         }
 
 
-def extract_custom_data(response, field_path="", default_value="unknown"):
+def extract_custom_data(response: Response, field_path: str = "", default_value: str = "unknown") -> dict[str, Any]:
     try:
         data = response.json()
         current = data
@@ -94,10 +94,10 @@ def extract_custom_data(response, field_path="", default_value="unknown"):
         }
 
 
-def extract_multiple_fields(response, fields=None):
+def extract_multiple_fields(response: Response, fields: list[str] | None = None) -> dict[str, Any]:
     if fields is None:
         fields = ["slideshow.title", "slideshow.author"]
-    
+
     result = {"function_called": True}
     try:
         data = response.json()
@@ -109,20 +109,20 @@ def extract_multiple_fields(response, fields=None):
     except Exception:
         for field_path in fields:
             result[f"extracted_{field_path.replace('.', '_')}"] = "unknown"
-    
+
     return result
 
 
-def extract_with_filter(response, field_path="", filter_value="", filter_field=""):
+def extract_with_filter(response: Response, field_path: str = "", filter_value: str = "", filter_field: str = "") -> dict[str, Any]:
     try:
         data = response.json()
         current = data
         for field in field_path.split("."):
             current = current.get(field, [])
-        
+
         if isinstance(current, list):
             filtered_items = [
-                item for item in current 
+                item for item in current
                 if isinstance(item, dict) and item.get(filter_field) == filter_value
             ]
             return {

@@ -18,10 +18,10 @@ from _pytest.nodes import Collector, Item
 from _pytest.python import Function
 from pydantic import ValidationError
 
-from pytest_http.models import FunctionCall, Scenario, Stage
+from pytest_http.models import Scenario, Stage
 
 
-def pytest_addoption(parser: Parser):
+def pytest_addoption(parser: Parser) -> None:
     parser.addini(
         "suffix",
         default="http",
@@ -37,7 +37,7 @@ def validate_suffix(suffix: str) -> str:
     return suffix
 
 
-def pytest_configure(config: Config):
+def pytest_configure(config: Config) -> None:
     suffix: str = config.getini("suffix")
     validated_suffix: str = validate_suffix(suffix)
     config.pytest_http_suffix = validated_suffix
@@ -87,14 +87,12 @@ def substitute_stage_variables(stage_data: dict[str, Any], variables: dict[str, 
 
 
 def substitute_kwargs_variables(kwargs: dict[str, Any] | None, variables: dict[str, Any]) -> dict[str, Any] | None:
-    """Apply variable substitution to kwargs values."""
     if kwargs is None:
         return None
-    
+
     try:
-        # Convert kwargs to JSON string for substitution
         kwargs_json = json.dumps(kwargs, default=str)
-        
+
         for name, value in variables.items():
             quoted_placeholder: str = f'"${name}"'
             json_value: str = json.dumps(value)
@@ -103,28 +101,25 @@ def substitute_kwargs_variables(kwargs: dict[str, Any] | None, variables: dict[s
             unquoted_placeholder: str = f"${name}"
             string_value: str = str(value)
             kwargs_json = kwargs_json.replace(unquoted_placeholder, string_value)
-        
+
         return json.loads(kwargs_json)
     except Exception as e:
         raise VariableSubstitutionError(f"Failed to substitute variables in kwargs: {e}") from e
 
 
 def call_function_with_kwargs(func_name: str, response: requests.Response, kwargs: dict[str, Any] | None = None) -> Any:
-    """Call a function with the response and optional kwargs."""
     try:
-        # Get function (validation already confirmed it exists and is callable)
         module_path, function_name = func_name.rsplit(":", 1)
         import importlib
         module = importlib.import_module(module_path)
         func = getattr(module, function_name)
 
-        # Call the function with the response and kwargs
         if kwargs:
             return func(response, **kwargs)
         else:
             return func(response)
     except Exception as e:
-        raise Exception(f"Error executing function '{func_name}': {e}")
+        raise Exception(f"Error executing function '{func_name}': {e}") from e
 
 
 def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
@@ -150,7 +145,7 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
             if stage.url:
                 logging.info(f"Making HTTP request to: {stage.url}")
 
-                request_params = {}
+                request_params: dict[str, Any] = {}
                 if stage.params:
                     request_params["params"] = stage.params
                 if stage.headers:
@@ -175,7 +170,7 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                         pytest.fail(f"Status code verification failed for stage '{stage.name}': expected {expected_status}, got {actual_status}")
                     logging.info(f"Status code verification passed: {actual_status}")
 
-                response_data = {
+                response_data: dict[str, Any] = {
                     "status_code": response.status_code,
                     "headers": dict(response.headers),
                     "text": response.text,
@@ -192,28 +187,21 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                         except Exception as e:
                             pytest.fail(f"Error during JSON verification for stage '{stage.name}' with JMESPath '{jmespath_expr}': {e}")
 
-                # Handle verify functions
                 if stage.verify and stage.verify.functions:
                     for func_item in stage.verify.functions:
                         try:
                             if isinstance(func_item, str):
-                                # Backward compatibility: string function name
                                 func_name = func_item
                                 kwargs = None
                             else:
-                                # New format: FunctionCall object
                                 func_name = func_item.function
-                                # Apply variable substitution to kwargs
                                 kwargs = substitute_kwargs_variables(func_item.kwargs, variable_context)
 
-                            # Call the function with the response and get the verification result
                             verification_result = call_function_with_kwargs(func_name, response, kwargs)
 
-                            # Validate that the function returns a boolean
                             if not isinstance(verification_result, bool):
                                 pytest.fail(f"Verify function '{func_name}' must return a boolean, got {type(verification_result)} for stage '{stage.name}'")
 
-                            # If verification fails, fail the test
                             if not verification_result:
                                 pytest.fail(f"Verify function '{func_name}' failed for stage '{stage.name}'")
 
@@ -223,7 +211,6 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                             pytest.fail(f"Error executing verify function '{func_name}' for stage '{stage.name}': {e}")
 
                 if stage.save:
-                    # Handle vars
                     if stage.save.vars:
                         for var_name, jmespath_expr in stage.save.vars.items():
                             try:
@@ -233,30 +220,22 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                             except Exception as e:
                                 pytest.fail(f"Error saving variable '{var_name}': {e}")
 
-                    # Handle functions
                     if stage.save.functions:
                         for func_item in stage.save.functions:
                             try:
                                 if isinstance(func_item, str):
-                                    # Backward compatibility: string function name
                                     func_name = func_item
                                     kwargs = None
                                 else:
-                                    # New format: FunctionCall object
                                     func_name = func_item.function
-                                    # Apply variable substitution to kwargs
                                     kwargs = substitute_kwargs_variables(func_item.kwargs, variable_context)
 
-                                # Call the function with the response and get the returned variables
                                 returned_vars = call_function_with_kwargs(func_name, response, kwargs)
 
-                                # Validate that the function returns a dictionary
                                 if not isinstance(returned_vars, dict):
                                     pytest.fail(f"Function '{func_name}' must return a dictionary of variables, got {type(returned_vars)} for stage '{stage.name}'")
 
-                                # Add the returned variables to the context
                                 for var_name, var_value in returned_vars.items():
-                                    # Validate that variable names are valid Python identifiers
                                     if not var_name.isidentifier():
                                         pytest.fail(f"Function '{func_name}' returned invalid variable name '{var_name}' for stage '{stage.name}'")
 
