@@ -93,15 +93,75 @@ class Verify(BaseModel):
     functions: list[ValidPythonFunctionName | FunctionCall] | None = Field(default=None)
 
 
-class Stage(BaseModel):
-    name: str = Field()
+class Request(BaseModel):
     url: str | None = Field(default=None)
     method: HTTPMethod = Field(default=HTTPMethod.GET)
     params: dict[str, Any] | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)
     json: JSONSerializable = Field(default=None)
+
+
+class Response(BaseModel):
     save: SaveConfig | None = Field(default=None)
     verify: Verify | None = Field(default=None)
+
+
+class Stage(BaseModel):
+    name: str = Field()
+    request: Request | None = Field(default=None)
+    response: Response | None = Field(default=None)
+
+    @property
+    def url(self) -> str | None:
+        return self.request.url if self.request else None
+
+    @property
+    def method(self) -> HTTPMethod:
+        return self.request.method if self.request else HTTPMethod.GET
+
+    @property
+    def params(self) -> dict[str, Any] | None:
+        return self.request.params if self.request else None
+
+    @property
+    def headers(self) -> dict[str, str] | None:
+        return self.request.headers if self.request else None
+
+    @property
+    def json(self) -> JSONSerializable:
+        return self.request.json if self.request else None
+
+    @property
+    def save(self) -> SaveConfig | None:
+        return self.response.save if self.response else None
+
+    @property
+    def verify(self) -> Verify | None:
+        return self.response.verify if self.response else None
+
+    @model_validator(mode="before")
+    @classmethod
+    def handle_backward_compatibility(cls, data):
+        if isinstance(data, dict):
+            # Extract request fields
+            request_fields = {}
+            for field in ["url", "method", "params", "headers", "json"]:
+                if field in data and data[field] is not None:
+                    request_fields[field] = data.pop(field)
+            
+            # Extract response fields
+            response_fields = {}
+            for field in ["save", "verify"]:
+                if field in data and data[field] is not None:
+                    response_fields[field] = data.pop(field)
+            
+            # Create request and response objects if needed
+            if request_fields:
+                data["request"] = request_fields
+            if response_fields:
+                data["response"] = response_fields
+        
+        return data
 
 
 class Scenario(BaseModel):
