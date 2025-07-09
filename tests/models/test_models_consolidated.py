@@ -620,9 +620,9 @@ def test_stage_json_with_various_data_types(json_data):
     assert stage.json == json_data
 
 
-def test_stage_json_with_non_dict_values():
-    # Test that non-dict values are also accepted (since json field is Any)
-    test_cases = [
+@pytest.mark.parametrize(
+    "json_data",
+    [
         "simple_string",
         42,
         True,
@@ -630,12 +630,33 @@ def test_stage_json_with_non_dict_values():
         None,
         [1, 2, 3],
         ["a", "b", "c"],
-    ]
+    ],
+)
+def test_stage_json_with_serializable_values(json_data):
+    """Test that JSON-serializable values are accepted."""
+    stage_data = {"name": "test_stage", "json": json_data}
+    stage = Stage.model_validate(stage_data)
+    assert stage.json == json_data
+
+
+@pytest.mark.parametrize(
+    "non_serializable_data,expected_error_fragment",
+    [
+        (lambda x: x, "Value cannot be serialized as JSON"),
+        (object(), "Value cannot be serialized as JSON"),
+        (set([1, 2, 3]), "Value cannot be serialized as JSON"),
+        ({"key": lambda x: x}, "Value cannot be serialized as JSON"),
+        ({"key": object()}, "Value cannot be serialized as JSON"),
+        ({"key": set([1, 2, 3])}, "Value cannot be serialized as JSON"),
+    ],
+)
+def test_stage_json_with_non_serializable_values(non_serializable_data, expected_error_fragment):
+    """Test that non-JSON-serializable values are rejected."""
+    stage_data = {"name": "test_stage", "json": non_serializable_data}
     
-    for json_value in test_cases:
-        stage_data = {"name": "test_stage", "json": json_value}
-        stage = Stage.model_validate(stage_data)
-        assert stage.json == json_value
+    with pytest.raises(ValidationError) as exc_info:
+        Stage.model_validate(stage_data)
+    assert expected_error_fragment in str(exc_info.value)
 
 
 def test_stage_with_method_and_json_together():
