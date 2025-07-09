@@ -1,6 +1,6 @@
 import importlib
 import keyword
-from http import HTTPStatus
+from http import HTTPMethod, HTTPStatus
 from typing import Annotated, Any
 
 import jmespath
@@ -82,8 +82,10 @@ class Verify(BaseModel):
 class Stage(BaseModel):
     name: str = Field()
     url: str | None = Field(default=None)
+    method: HTTPMethod = Field(default=HTTPMethod.GET)
     params: dict[str, Any] | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)
+    json: Any = Field(default=None)
     save: SaveConfig | None = Field(default=None)
     verify: Verify | None = Field(default=None)
 

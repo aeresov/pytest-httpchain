@@ -1,0 +1,90 @@
+{
+    "stages": [
+        {
+            "name": "get_users",
+            "url": "https://jsonplaceholder.typicode.com/users",
+            "method": "GET",
+            "params": {
+                "limit": 5
+            },
+            "headers": {
+                "Accept": "application/json",
+                "User-Agent": "pytest-http/0.1.0"
+            },
+            "save": {
+                "user_count": "length(@)",
+                "first_user_id": "[0].id",
+                "first_user_name": "[0].name"
+            }
+        },
+        {
+            "name": "create_user",
+            "url": "https://jsonplaceholder.typicode.com/users",
+            "method": "POST",
+            "headers": {
+                "Accept": "application/json",
+                "Content-Type": "application/json"
+            },
+            "json": {
+                "name": "John Doe",
+                "email": "john.doe@example.com",
+                "phone": "+1-555-123-4567"
+            },
+            "save": {
+                "created_user_id": "json.id",
+                "created_user_name": "json.name"
+            }
+        },
+        {
+            "name": "update_user",
+            "url": "https://jsonplaceholder.typicode.com/users/1",
+            "method": "PUT",
+            "headers": {
+                "Accept": "application/json",
+                "Content-Type": "application/json"
+            },
+            "json": {
+                "id": 1,
+                "name": "Updated User",
+                "email": "updated@example.com",
+                "phone": "+1-555-999-8888"
+            },
+            "verify": {
+                "status": 200,
+                "json": {
+                    "json.name": "Updated User",
+                    "json.email": "updated@example.com"
+                }
+            }
+        },
+        {
+            "name": "patch_user",
+            "url": "https://jsonplaceholder.typicode.com/users/1",
+            "method": "PATCH",
+            "headers": {
+                "Accept": "application/json",
+                "Content-Type": "application/json"
+            },
+            "json": {
+                "name": "Patched User"
+            },
+            "verify": {
+                "status": 200,
+                "json": {
+                    "json.name": "Patched User"
+                }
+            }
+        },
+        {
+            "name": "delete_user",
+            "url": "https://jsonplaceholder.typicode.com/users/1",
+            "method": "DELETE",
+            "headers": {
+                "Accept": "application/json"
+            },
+            "verify": {
+                "status": 200
+            }
+        }
+    ]
+}

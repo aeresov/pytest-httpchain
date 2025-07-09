@@ -143,16 +143,20 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                 pytest.fail(f"Stage '{original_stage.name}' validation failed after variable substitution: {e}")
 
             if stage.url:
-                logging.info(f"Making HTTP request to: {stage.url}")
+                logging.info(f"Making {stage.method.value} HTTP request to: {stage.url}")
+                if stage.json is not None:
+                    logging.info(f"Request JSON body: {stage.json}")
 
                 request_params: dict[str, Any] = {}
                 if stage.params:
                     request_params["params"] = stage.params
                 if stage.headers:
                     request_params["headers"] = stage.headers
+                if stage.json is not None:
+                    request_params["json"] = stage.json
 
                 try:
-                    response = requests.get(stage.url, **request_params)
+                    response = requests.request(stage.method.value, stage.url, **request_params)
                 except requests.Timeout:
                     pytest.fail(f"HTTP request timed out for stage '{stage.name}' to URL: {stage.url}")
                 except requests.ConnectionError as e:

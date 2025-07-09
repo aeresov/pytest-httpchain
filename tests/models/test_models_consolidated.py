@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError
-from http import HTTPStatus
+from http import HTTPMethod, HTTPStatus
 
 from pytest_http.models import SaveConfig, Stage, Verify, validate_jmespath_expression, validate_python_function_name, validate_python_variable_name
 
@@ -511,3 +511,166 @@ def test_verify_functions_optional_fields(functions_data):
         assert verify.functions is None
     else:
         assert verify.functions == functions_data
+
+
+# Stage method field tests
+@pytest.mark.parametrize(
+    "method_input,expected_method,description",
+    [
+        (HTTPMethod.GET, HTTPMethod.GET, "explicit_get"),
+        (HTTPMethod.POST, HTTPMethod.POST, "explicit_post"),
+        (HTTPMethod.PUT, HTTPMethod.PUT, "explicit_put"),
+        (HTTPMethod.DELETE, HTTPMethod.DELETE, "explicit_delete"),
+        (HTTPMethod.PATCH, HTTPMethod.PATCH, "explicit_patch"),
+        (HTTPMethod.HEAD, HTTPMethod.HEAD, "explicit_head"),
+        (HTTPMethod.OPTIONS, HTTPMethod.OPTIONS, "explicit_options"),
+        (HTTPMethod.CONNECT, HTTPMethod.CONNECT, "explicit_connect"),
+        (HTTPMethod.TRACE, HTTPMethod.TRACE, "explicit_trace"),
+        (None, HTTPMethod.GET, "default_method"),
+        ("no_method", HTTPMethod.GET, "without_method_field"),
+    ],
+)
+def test_stage_method_field_handling(method_input, expected_method, description):
+    if description == "without_method_field":
+        stage_data = {"name": "test_stage"}
+    else:
+        stage_data = {"name": "test_stage", "method": method_input}
+    
+    stage = Stage.model_validate(stage_data)
+    assert stage.method == expected_method
+
+
+def test_stage_method_default_value():
+    stage_data = {"name": "test_stage"}
+    stage = Stage.model_validate(stage_data)
+    assert stage.method == HTTPMethod.GET
+
+
+@pytest.mark.parametrize(
+    "method_string,expected_method",
+    [
+        ("GET", HTTPMethod.GET),
+        ("POST", HTTPMethod.POST),
+        ("PUT", HTTPMethod.PUT),
+        ("DELETE", HTTPMethod.DELETE),
+        ("PATCH", HTTPMethod.PATCH),
+        ("HEAD", HTTPMethod.HEAD),
+        ("OPTIONS", HTTPMethod.OPTIONS),
+        ("CONNECT", HTTPMethod.CONNECT),
+        ("TRACE", HTTPMethod.TRACE),
+    ],
+)
+def test_stage_method_with_string_values(method_string, expected_method):
+    stage_data = {"name": "test_stage", "method": method_string}
+    stage = Stage.model_validate(stage_data)
+    assert stage.method == expected_method
+
+
+def test_stage_method_invalid_value():
+    stage_data = {"name": "test_stage", "method": "INVALID_METHOD"}
+    with pytest.raises(ValidationError):
+        Stage.model_validate(stage_data)
+
+
+# Stage json field tests
+@pytest.mark.parametrize(
+    "json_input,expected_json,description",
+    [
+        ({"key": "value"}, {"key": "value"}, "simple_dict"),
+        ({"nested": {"key": "value"}}, {"nested": {"key": "value"}}, "nested_dict"),
+        ({"array": [1, 2, 3]}, {"array": [1, 2, 3]}, "dict_with_array"),
+        ({"mixed": {"str": "value", "int": 42, "bool": True, "null": None}}, 
+         {"mixed": {"str": "value", "int": 42, "bool": True, "null": None}}, "mixed_types"),
+        (None, None, "explicit_none"),
+        ("no_json", None, "without_json_field"),
+    ],
+)
+def test_stage_json_field_handling(json_input, expected_json, description):
+    if description == "without_json_field":
+        stage_data = {"name": "test_stage"}
+    else:
+        stage_data = {"name": "test_stage", "json": json_input}
+    
+    stage = Stage.model_validate(stage_data)
+    assert stage.json == expected_json
+
+
+def test_stage_json_default_value():
+    stage_data = {"name": "test_stage"}
+    stage = Stage.model_validate(stage_data)
+    assert stage.json is None
+
+
+@pytest.mark.parametrize(
+    "json_data",
+    [
+        {"simple": "value"},
+        {"numbers": [1, 2, 3, 4, 5]},
+        {"nested": {"deep": {"structure": "value"}}},
+        {"boolean": True},
+        {"null_value": None},
+        {"mixed": {"string": "text", "number": 42, "boolean": False, "array": [1, 2, 3]}},
+        {"empty": {}},
+        {"array_of_objects": [{"id": 1, "name": "item1"}, {"id": 2, "name": "item2"}]},
+    ],
+)
+def test_stage_json_with_various_data_types(json_data):
+    stage_data = {"name": "test_stage", "json": json_data}
+    stage = Stage.model_validate(stage_data)
+    assert stage.json == json_data
+
+
+def test_stage_json_with_non_dict_values():
+    # Test that non-dict values are also accepted (since json field is Any)
+    test_cases = [
+        "simple_string",
+        42,
+        True,
+        False,
+        None,
+        [1, 2, 3],
+        ["a", "b", "c"],
+    ]
+    
+    for json_value in test_cases:
+        stage_data = {"name": "test_stage", "json": json_value}
+        stage = Stage.model_validate(stage_data)
+        assert stage.json == json_value
+
+
+def test_stage_with_method_and_json_together():
+    stage_data = {
+        "name": "test_stage",
+        "method": HTTPMethod.POST,
+        "json": {"user": {"name": "John", "email": "john@example.com"}}
+    }
+    stage = Stage.model_validate(stage_data)
+    
+    assert stage.method == HTTPMethod.POST
+    assert stage.json == {"user": {"name": "John", "email": "john@example.com"}}
+
+
+def test_stage_with_all_optional_fields():
+    stage_data = {
+        "name": "complete_stage",
+        "url": "https://api.example.com/users",
+        "method": HTTPMethod.PUT,
+        "params": {"page": 1, "limit": 10},
+        "headers": {"Authorization": "Bearer token", "Content-Type": "application/json"},
+        "json": {"name": "Updated User", "email": "updated@example.com"},
+        "save": {"vars": {"user_id": "response.id"}},
+        "verify": {"status": 200, "json": {"response.success": True}}
+    }
+    stage = Stage.model_validate(stage_data)
+    
+    assert stage.name == "complete_stage"
+    assert stage.url == "https://api.example.com/users"
+    assert stage.method == HTTPMethod.PUT
+    assert stage.params == {"page": 1, "limit": 10}
+    assert stage.headers == {"Authorization": "Bearer token", "Content-Type": "application/json"}
+    assert stage.json == {"name": "Updated User", "email": "updated@example.com"}
+    assert stage.save is not None
+    assert stage.save.vars == {"user_id": "response.id"}
+    assert stage.verify is not None
+    assert stage.verify.status == HTTPStatus.OK
+    assert stage.verify.json_data == {"response.success": True}
