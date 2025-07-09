@@ -358,7 +358,7 @@ def test_json_body_with_different_data_types(pytester):
                     "verify": {
                         "status": 200,
                         "json": {
-                            "data": "simple string"
+                            "json": "simple string"
                         }
                     }
                 },

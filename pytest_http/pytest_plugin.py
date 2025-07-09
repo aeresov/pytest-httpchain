@@ -111,7 +111,22 @@ def substitute_kwargs_variables(kwargs: dict[str, Any] | None, variables: dict[s
             string_value: str = str(value)
             kwargs_json = kwargs_json.replace(unquoted_placeholder, string_value)
 
-        return json.loads(kwargs_json)
+        result = json.loads(kwargs_json)
+        
+        # Handle nested substitution for complex structures
+        if isinstance(result, dict):
+            for key, val in result.items():
+                if isinstance(val, str) and val.startswith('"$') and val.endswith('"'):
+                    # Remove quotes and substitute
+                    var_name = val[2:-1]  # Remove '"$' and '"'
+                    if var_name in variables:
+                        result[key] = variables[var_name]
+                elif isinstance(val, str) and val.startswith('$'):
+                    var_name = val[1:]  # Remove '$'
+                    if var_name in variables:
+                        result[key] = variables[var_name]
+
+        return result
     except Exception as e:
         raise VariableSubstitutionError(f"Failed to substitute variables in kwargs: {e}") from e
 

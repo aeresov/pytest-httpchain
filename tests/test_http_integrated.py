@@ -218,6 +218,7 @@ def test_http_request_without_or_empty_verification(verify_config):
         (requests.RequestException, "General request error", "HTTP request failed"),
     ],
 )
+@responses.activate
 def test_http_request_errors(exception_type, exception_message, expected_error_text):
     responses.add(responses.GET, "https://api.example.com/test", body=exception_type(exception_message))
 
