@@ -181,13 +181,15 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                 except Exception:
                     response_json = None
 
-                if stage.response and stage.response.verify and stage.response.verify.json_data is not None:
+                if stage.response and stage.response.verify and stage.response.verify.json is not None:
                     if response_json is None:
                         pytest.fail(f"Cannot verify JSON data for stage '{stage.name}': response is not valid JSON")
 
-                    for jmespath_expr, expected_value in stage.response.verify.json_data.items():
+                    for jmespath_expr, expected_value in stage.response.verify.json.items():
                         try:
-                            actual_value = jmespath.search(jmespath_expr, response_json)
+                            # Wrap response JSON in a structure that makes it accessible as 'json'
+                            jmespath_context = {"json": response_json}
+                            actual_value = jmespath.search(jmespath_expr, jmespath_context)
                             if actual_value != expected_value:
                                 pytest.fail(f"JSON verification failed for stage '{stage.name}' with JMESPath '{jmespath_expr}': expected {expected_value}, got {actual_value}")
                             logging.info(f"JSON verification passed for JMESPath '{jmespath_expr}': {actual_value}")
@@ -224,7 +226,9 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
 
                         for var_name, jmespath_expr in stage.response.save.vars.items():
                             try:
-                                saved_value = jmespath.search(jmespath_expr, response_json)
+                                # Wrap response JSON in a structure that makes it accessible as 'json'
+                                jmespath_context = {"json": response_json}
+                                saved_value = jmespath.search(jmespath_expr, jmespath_context)
                                 variable_context[var_name] = saved_value
                                 logging.info(f"Saved variable '{var_name}' = {saved_value}")
                             except Exception as e:

@@ -114,6 +114,38 @@ class Stage(BaseModel):
     name: str = Field()
     request: Request = Field()
     response: Response | None = Field(default=None)
+    
+    model_config = ConfigDict(extra="ignore")
+    
+    @model_validator(mode="before")
+    @classmethod
+    def convert_legacy_format(cls, data: dict) -> dict:
+        """Convert legacy stage format to new format for backward compatibility."""
+        if not isinstance(data, dict):
+            return data
+            
+        # Check if this is the legacy format (has url directly on stage)
+        if "url" in data and "request" not in data:
+            # Convert to new format
+            request_fields = {}
+            response_fields = {}
+            
+            # Move request-related fields to request object
+            for field in ["url", "method", "params", "headers", "json"]:
+                if field in data:
+                    request_fields[field] = data.pop(field)
+            
+            # Move response-related fields to response object  
+            for field in ["save", "verify"]:
+                if field in data:
+                    response_fields[field] = data.pop(field)
+            
+            # Create the new structure
+            data["request"] = request_fields
+            if response_fields:
+                data["response"] = response_fields
+                
+        return data
 
 
 class Scenario(BaseModel):
@@ -138,8 +170,8 @@ class Scenario(BaseModel):
         fixture_names = set(self.fixtures)
 
         for stage in self.stages:
-            if stage.save and stage.save.vars:
-                for var_name in stage.save.vars.keys():
+            if stage.response and stage.response.save and stage.response.save.vars:
+                for var_name in stage.response.save.vars.keys():
                     if var_name in fixture_names:
                         raise ValueError(f"Variable name '{var_name}' conflicts with fixture name")
 

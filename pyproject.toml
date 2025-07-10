@@ -62,6 +62,8 @@ markers = [
 ]
 norecursedirs = ["examples"]
 pytester_example_dir = "tests/examples"
+python_files = ["test_*.py"]
+addopts = "--ignore=test_module.py --ignore=test_helpers.py"
 
 [tool.pyright]
 exclude = ["cdk.out/"]
