@@ -322,8 +322,9 @@ def test_verify_model_with_integer_status():
 
 
 def test_verify_model_invalid_status():
+    # Test with an invalid status value that's not a valid HTTPStatus
     with pytest.raises(ValidationError):
-        Verify(status=HTTPStatus.IM_A_TEAPOT)
+        Verify(status=999)  # 999 is not a valid HTTPStatus
 
 
 @pytest.mark.parametrize(

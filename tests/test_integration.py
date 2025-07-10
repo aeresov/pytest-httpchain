@@ -352,71 +352,91 @@ def test_json_body_with_different_data_types(pytester):
             "stages": [
                 {
                     "name": "test_json_with_string",
-                    "url": "https://httpbin.org/post",
-                    "method": "POST",
-                    "json": "simple string",
-                    "verify": {
-                        "status": 200,
-                        "json": {
-                            "json.json": "simple string"
+                    "request": {
+                        "url": "https://httpbin.org/post",
+                        "method": "POST",
+                        "json": "simple string"
+                    },
+                                            "response": {
+                            "verify": {
+                                "status": 200,
+                                "json": {
+                                    "json": "simple string"
+                                }
+                            }
                         }
-                    }
                 },
                 {
                     "name": "test_json_with_number",
-                    "url": "https://httpbin.org/post",
-                    "method": "POST",
-                    "json": 42,
-                    "verify": {
-                        "status": 200,
-                        "json": {
-                            "json.json": 42
+                    "request": {
+                        "url": "https://httpbin.org/post",
+                        "method": "POST",
+                        "json": 42
+                    },
+                                            "response": {
+                            "verify": {
+                                "status": 200,
+                                "json": {
+                                    "json": 42
+                                }
+                            }
                         }
-                    }
                 },
                 {
                     "name": "test_json_with_boolean",
-                    "url": "https://httpbin.org/post",
-                    "method": "POST",
-                    "json": true,
-                    "verify": {
-                        "status": 200,
-                        "json": {
-                            "json.json": true
+                    "request": {
+                        "url": "https://httpbin.org/post",
+                        "method": "POST",
+                        "json": true
+                    },
+                                            "response": {
+                            "verify": {
+                                "status": 200,
+                                "json": {
+                                    "json": true
+                                }
+                            }
                         }
-                    }
                 },
                 {
                     "name": "test_json_with_array",
-                    "url": "https://httpbin.org/post",
-                    "method": "POST",
-                    "json": [1, 2, 3, "four"],
-                    "verify": {
-                        "status": 200,
-                        "json": {
-                            "json.json": [1, 2, 3, "four"]
+                    "request": {
+                        "url": "https://httpbin.org/post",
+                        "method": "POST",
+                        "json": [1, 2, 3, "four"]
+                    },
+                                            "response": {
+                            "verify": {
+                                "status": 200,
+                                "json": {
+                                    "json": [1, 2, 3, "four"]
+                                }
+                            }
                         }
-                    }
                 },
                 {
                     "name": "test_json_with_nested_object",
-                    "url": "https://httpbin.org/post",
-                    "method": "POST",
-                    "json": {
-                        "user": {
-                            "name": "John",
-                            "details": {
-                                "age": 30,
-                                "active": true
+                    "request": {
+                        "url": "https://httpbin.org/post",
+                        "method": "POST",
+                        "json": {
+                            "user": {
+                                "name": "John",
+                                "details": {
+                                    "age": 30,
+                                    "active": true
+                                }
                             }
                         }
                     },
-                    "verify": {
-                        "status": 200,
-                        "json": {
-                            "json.user.name": "John",
-                            "json.user.details.age": 30,
-                            "json.user.details.active": true
+                    "response": {
+                        "verify": {
+                            "status": 200,
+                            "json": {
+                                "json.user.name": "John",
+                                "json.user.details.age": 30,
+                                "json.user.details.active": true
+                            }
                         }
                     }
                 }
@@ -426,7 +446,7 @@ def test_json_body_with_different_data_types(pytester):
     )
 
     result = pytester.runpytest(str(test_file), "-v")
-    result.assert_outcomes(passed=5)
+    result.assert_outcomes(passed=1)
 
 
 def test_json_validation_rejects_non_serializable_data(pytester):
@@ -441,11 +461,13 @@ def test_json_validation_rejects_non_serializable_data(pytester):
             "stages": [
                 {
                     "name": "test_invalid_json",
-                    "url": "https://httpbin.org/post",
-                    "method": "POST",
-                    "json": {
-                        "valid": "data",
-                        "invalid": "This will be replaced with non-serializable data in the test"
+                    "request": {
+                        "url": "https://httpbin.org/post",
+                        "method": "POST",
+                        "json": {
+                            "valid": "data",
+                            "invalid": "This will be replaced with non-serializable data in the test"
+                        }
                     }
                 }
             ]

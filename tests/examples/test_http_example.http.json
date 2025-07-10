@@ -2,29 +2,37 @@
     "stages": [
         {
             "name": "get_users",
-            "url": "https://jsonplaceholder.typicode.com/users",
-            "params": {
-                "limit": 5
+            "request": {
+                "url": "https://jsonplaceholder.typicode.com/users",
+                "params": {
+                    "limit": 5
+                },
+                "headers": {
+                    "Accept": "application/json",
+                    "User-Agent": "pytest-http/0.1.0"
+                }
             },
-            "headers": {
-                "Accept": "application/json",
-                "User-Agent": "pytest-http/0.1.0"
-            },
-            "save": {
-                "user_count": "length(@)",
-                "first_user_id": "[0].id",
-                "first_user_name": "[0].name"
+            "response": {
+                "save": {
+                    "user_count": "length(@)",
+                    "first_user_id": "[0].id",
+                    "first_user_name": "[0].name"
+                }
             }
         },
         {
             "name": "get_specific_user",
-            "url": "https://jsonplaceholder.typicode.com/users/1",
-            "headers": {
-                "Accept": "application/json"
+            "request": {
+                "url": "https://jsonplaceholder.typicode.com/users/1",
+                "headers": {
+                    "Accept": "application/json"
+                }
             },
-            "save": {
-                "user_email": "json.email",
-                "user_website": "json.website"
+            "response": {
+                "save": {
+                    "user_email": "json.email",
+                    "user_website": "json.website"
+                }
             }
         }
     ]
