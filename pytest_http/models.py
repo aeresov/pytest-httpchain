@@ -93,15 +93,23 @@ class Verify(BaseModel):
     functions: list[ValidPythonFunctionName | FunctionCall] | None = Field(default=None)
 
 
-class Stage(BaseModel):
-    name: str = Field()
-    url: str | None = Field(default=None)
+class Request(BaseModel):
+    url: str = Field()
     method: HTTPMethod = Field(default=HTTPMethod.GET)
     params: dict[str, Any] | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)
     json: JSONSerializable = Field(default=None)
+
+
+class Response(BaseModel):
     save: SaveConfig | None = Field(default=None)
     verify: Verify | None = Field(default=None)
+
+
+class Stage(BaseModel):
+    name: str = Field()
+    request: Request = Field()
+    response: Response | None = Field(default=None)
 
 
 class Scenario(BaseModel):

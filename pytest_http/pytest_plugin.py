@@ -152,33 +152,33 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
             except ValidationError as e:
                 pytest.fail(f"Stage '{original_stage.name}' validation failed after variable substitution: {e}")
 
-            if stage.url:
-                logging.info(f"Making {stage.method.value} HTTP request to: {stage.url}")
-                if stage.json is not None:
-                    logging.info(f"Request JSON body: {stage.json}")
+            if stage.request.url:
+                logging.info(f"Making {stage.request.method.value} HTTP request to: {stage.request.url}")
+                if stage.request.json is not None:
+                    logging.info(f"Request JSON body: {stage.request.json}")
 
                 request_params: dict[str, Any] = {}
-                if stage.params:
-                    request_params["params"] = stage.params
-                if stage.headers:
-                    request_params["headers"] = stage.headers
-                if stage.json is not None:
-                    request_params["json"] = stage.json
+                if stage.request.params:
+                    request_params["params"] = stage.request.params
+                if stage.request.headers:
+                    request_params["headers"] = stage.request.headers
+                if stage.request.json is not None:
+                    request_params["json"] = stage.request.json
 
                 try:
-                    response = requests.request(stage.method.value, stage.url, **request_params)
+                    response = requests.request(stage.request.method.value, stage.request.url, **request_params)
                 except requests.Timeout:
-                    pytest.fail(f"HTTP request timed out for stage '{stage.name}' to URL: {stage.url}")
+                    pytest.fail(f"HTTP request timed out for stage '{stage.name}' to URL: {stage.request.url}")
                 except requests.ConnectionError as e:
-                    pytest.fail(f"HTTP connection error for stage '{stage.name}' to URL: {stage.url} - {e}")
+                    pytest.fail(f"HTTP connection error for stage '{stage.name}' to URL: {stage.request.url} - {e}")
                 except requests.RequestException as e:
-                    pytest.fail(f"HTTP request failed for stage '{stage.name}' to URL: {stage.url} - {e}")
+                    pytest.fail(f"HTTP request failed for stage '{stage.name}' to URL: {stage.request.url} - {e}")
 
                 logging.info(f"Response status: {response.status_code}")
                 logging.info(f"Response headers: {dict(response.headers)}")
 
-                if stage.verify and stage.verify.status is not None:
-                    expected_status = stage.verify.status.value
+                if stage.response and stage.response.verify and stage.response.verify.status is not None:
+                    expected_status = stage.response.verify.status.value
                     actual_status = response.status_code
                     if actual_status != expected_status:
                         pytest.fail(f"Status code verification failed for stage '{stage.name}': expected {expected_status}, got {actual_status}")
@@ -191,8 +191,8 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                     "json": response.json() if response.headers.get("content-type", "").startswith("application/json") else None,
                 }
 
-                if stage.verify and stage.verify.json_data is not None:
-                    for jmespath_expr, expected_value in stage.verify.json_data.items():
+                if stage.response and stage.response.verify and stage.response.verify.json_data is not None:
+                    for jmespath_expr, expected_value in stage.response.verify.json_data.items():
                         try:
                             actual_value = jmespath.search(jmespath_expr, response_data)
                             if actual_value != expected_value:
@@ -201,8 +201,8 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                         except Exception as e:
                             pytest.fail(f"Error during JSON verification for stage '{stage.name}' with JMESPath '{jmespath_expr}': {e}")
 
-                if stage.verify and stage.verify.functions:
-                    for func_item in stage.verify.functions:
+                if stage.response and stage.response.verify and stage.response.verify.functions:
+                    for func_item in stage.response.verify.functions:
                         try:
                             if isinstance(func_item, str):
                                 func_name = func_item
@@ -224,9 +224,9 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                         except Exception as e:
                             pytest.fail(f"Error executing verify function '{func_name}' for stage '{stage.name}': {e}")
 
-                if stage.save:
-                    if stage.save.vars:
-                        for var_name, jmespath_expr in stage.save.vars.items():
+                if stage.response and stage.response.save:
+                    if stage.response.save.vars:
+                        for var_name, jmespath_expr in stage.response.save.vars.items():
                             try:
                                 saved_value = jmespath.search(jmespath_expr, response_data)
                                 variable_context[var_name] = saved_value
@@ -234,8 +234,8 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                             except Exception as e:
                                 pytest.fail(f"Error saving variable '{var_name}': {e}")
 
-                    if stage.save.functions:
-                        for func_item in stage.save.functions:
+                    if stage.response.save.functions:
+                        for func_item in stage.response.save.functions:
                             try:
                                 if isinstance(func_item, str):
                                     func_name = func_item

@@ -3,7 +3,7 @@ from http import HTTPMethod, HTTPStatus
 import pytest
 from pydantic import ValidationError
 
-from pytest_http.models import SaveConfig, Stage, Verify, validate_jmespath_expression, validate_python_function_name, validate_python_variable_name
+from pytest_http.models import SaveConfig, Stage, Verify, Response, validate_jmespath_expression, validate_python_function_name, validate_python_variable_name
 
 
 @pytest.mark.parametrize(
@@ -18,7 +18,7 @@ from pytest_http.models import SaveConfig, Stage, Verify, validate_jmespath_expr
     ],
 )
 def test_stage_with_different_data_types(name: str, expected_name: str):
-    data_dict = {"name": name}
+    data_dict = {"name": name, "request": {"url": "https://api.example.com/test"}}
     stage = Stage.model_validate(data_dict)
     assert stage.name == expected_name
 
@@ -27,15 +27,18 @@ def test_stage_with_different_data_types(name: str, expected_name: str):
     "data,expected_error",
     [
         ({}, "name"),
+        ({"name": "test"}, "request"),
+        ({"name": "test", "request": {}}, "url"),
     ],
 )
 def test_stage_missing_required_fields(data, expected_error):
-    with pytest.raises(ValidationError, match=expected_error):
+    with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
+    assert expected_error in str(exc_info.value)
 
 
 def test_stage_empty_name():
-    data = {"name": ""}
+    data = {"name": "", "request": {"url": "https://api.example.com/test"}}
     stage = Stage.model_validate(data)
     assert stage.name == ""
 
@@ -70,12 +73,12 @@ def test_stage_empty_name():
     ],
 )
 def test_stage_save_formats(save_data, expected_vars, expected_functions, description):
-    data = {"name": "test", "save": save_data}
+    data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": save_data}}
     stage = Stage.model_validate(data)
 
-    assert isinstance(stage.save, SaveConfig)
-    assert stage.save.vars == expected_vars
-    assert stage.save.functions == expected_functions
+    assert isinstance(stage.response.save, SaveConfig)
+    assert stage.response.save.vars == expected_vars
+    assert stage.response.save.functions == expected_functions
 
 
 @pytest.mark.parametrize(
@@ -88,18 +91,18 @@ def test_stage_save_formats(save_data, expected_vars, expected_functions, descri
 )
 def test_stage_save_optional_states(save_value, expected_result, description):
     if description == "without_save_field":
-        data = {"name": "test"}
+        data = {"name": "test", "request": {"url": "https://api.example.com/test"}}
     else:
-        data = {"name": "test", "save": save_value}
+        data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": save_value}}
 
     stage = Stage.model_validate(data)
 
     if expected_result is None:
-        assert stage.save is None
+        assert stage.response is None or stage.response.save is None
     else:
-        assert isinstance(stage.save, SaveConfig)
-        assert stage.save.vars == expected_result.vars
-        assert stage.save.functions == expected_result.functions
+        assert isinstance(stage.response.save, SaveConfig)
+        assert stage.response.save.vars == expected_result.vars
+        assert stage.response.save.functions == expected_result.functions
 
 
 @pytest.mark.parametrize(
@@ -127,9 +130,9 @@ def test_stage_save_optional_states(save_value, expected_result, description):
 )
 def test_stage_save_invalid_names(invalid_name, field_type, expected_error):
     if field_type == "var":
-        data = {"name": "test", "save": {"vars": {invalid_name: "user.id"}}}
+        data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {invalid_name: "user.id"}}}}
     else:  # func
-        data = {"name": "test", "save": {"functions": [invalid_name]}}
+        data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"functions": [invalid_name]}}}
 
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
@@ -145,7 +148,7 @@ def test_stage_save_invalid_names(invalid_name, field_type, expected_error):
     ],
 )
 def test_stage_save_invalid_jmespath_expressions(invalid_jmespath, expected_error):
-    data = {"name": "test", "save": {"vars": {"user_id": invalid_jmespath}}}
+    data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {"user_id": invalid_jmespath}}}}
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
     assert expected_error in str(exc_info.value)
@@ -157,7 +160,7 @@ def test_stage_save_invalid_jmespath_expressions(invalid_jmespath, expected_erro
 )
 def test_stage_save_keyword_validation(keyword):
     # Test keywords for variable names
-    data = {"name": "test", "save": {"vars": {keyword: "user.id"}}}
+    data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {keyword: "user.id"}}}}
     expected_error = f"'{keyword}' is a Python keyword and cannot be used as a variable name"
 
     with pytest.raises(ValidationError) as exc_info:
@@ -216,17 +219,17 @@ def test_stage_save_keyword_validation(keyword):
 )
 def test_stage_save_valid_names(valid_names, field_type, test_case):
     if field_type == "var":
-        data = {"name": "test", "save": {"vars": valid_names}}
+        data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": valid_names}}}
         stage = Stage.model_validate(data)
-        assert stage.save.vars == valid_names
+        assert stage.response.save.vars == valid_names
     else:  # func
-        data = {"name": "test", "save": {"functions": valid_names}}
+        data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"functions": valid_names}}}
         stage = Stage.model_validate(data)
-        assert stage.save.functions == valid_names
+        assert stage.response.save.functions == valid_names
 
 
 def test_stage_save_multiple_validation_errors():
-    data = {"name": "test", "save": {"vars": {"1invalid": "user.id", "valid_name": "user.[invalid}"}}}
+    data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {"1invalid": "user.id", "valid_name": "user.[invalid}"}}}}
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
     assert "'1invalid' is not a valid Python variable name" in str(exc_info.value)
@@ -373,28 +376,28 @@ def test_verify_model_invalid_status():
 )
 def test_stage_verify_field_handling(verify_input, expected_verify_exists, expected_status):
     if verify_input == "no_verify":
-        stage = Stage(name="test_stage")
+        stage = Stage(name="test_stage", request={"url": "https://api.example.com/test"})
     else:
-        stage = Stage(name="test_stage", verify=verify_input)
+        stage = Stage(name="test_stage", request={"url": "https://api.example.com/test"}, response=Response(verify=verify_input))
 
     if expected_verify_exists:
-        assert stage.verify is not None
-        assert stage.verify.status == expected_status
+        assert stage.response.verify is not None
+        assert stage.response.verify.status == expected_status
     else:
-        assert stage.verify is None
+        assert stage.response is None or stage.response.verify is None
 
 
 def test_stage_verify_field_optional():
-    stage_data = {"name": "test_stage"}
+    stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test"}}
     stage = Stage.model_validate(stage_data)
-    assert stage.verify is None
+    assert stage.response is None or stage.response.verify is None
 
 
 def test_stage_with_complete_verify_data():
-    stage_data = {"name": "test_stage", "url": "https://api.example.com/test", "verify": {"status": 201}}
+    stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"status": 201}}}
     stage = Stage.model_validate(stage_data)
-    assert stage.verify is not None
-    assert stage.verify.status == HTTPStatus.CREATED
+    assert stage.response.verify is not None
+    assert stage.response.verify.status == HTTPStatus.CREATED
 
 
 # Verify functions tests
@@ -439,50 +442,53 @@ def test_verify_functions_validation(invalid_function_name, expected_error):
 @pytest.mark.parametrize(
     "stage_data,expected_functions",
     [
-        ({"name": "test", "verify": {"functions": ["json:loads"]}}, ["json:loads"]),
-        ({"name": "test", "verify": {"functions": ["os:getcwd", "json:dumps"]}}, ["os:getcwd", "json:dumps"]),
-        ({"name": "test", "verify": {"functions": []}}, []),
-        ({"name": "test", "verify": {}}, None),
-        ({"name": "test"}, None),
+        ({"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"functions": ["json:loads"]}}}, ["json:loads"]),
+        ({"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"functions": ["os:getcwd", "json:dumps"]}}}, ["os:getcwd", "json:dumps"]),
+        ({"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"functions": []}}}, []),
+        ({"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {}}}, None),
+        ({"name": "test", "request": {"url": "https://api.example.com/test"}}, None),
     ],
 )
 def test_stage_verify_functions_handling(stage_data, expected_functions):
     stage = Stage.model_validate(stage_data)
 
     if expected_functions is not None:
-        assert stage.verify is not None
-        assert stage.verify.functions == expected_functions
+        assert stage.response.verify is not None
+        assert stage.response.verify.functions == expected_functions
     else:
-        if stage.verify:
-            assert stage.verify.functions is None
+        if stage.response and stage.response.verify:
+            assert stage.response.verify.functions is None
 
 
 def test_verify_functions_with_status_and_json():
     stage_data = {
         "name": "test",
-        "verify": {
-            "status": 200,
-            "json": {"json.some_field": "expected_value"},
-            "functions": ["json:loads"]
+        "request": {"url": "https://api.example.com/test"},
+        "response": {
+            "verify": {
+                "status": 200,
+                "json": {"json.some_field": "expected_value"},
+                "functions": ["json:loads"]
+            }
         }
     }
     stage = Stage.model_validate(stage_data)
 
-    assert stage.verify is not None
-    assert stage.verify.status.value == 200
-    assert stage.verify.json_data == {"json.some_field": "expected_value"}
-    assert stage.verify.functions == ["json:loads"]
+    assert stage.response.verify is not None
+    assert stage.response.verify.status.value == 200
+    assert stage.response.verify.json_data == {"json.some_field": "expected_value"}
+    assert stage.response.verify.functions == ["json:loads"]
 
 
 def test_verify_functions_optional_field():
-    stage_data = {"name": "test_stage"}
+    stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test"}}
     stage = Stage.model_validate(stage_data)
-    assert stage.verify is None
+    assert stage.response is None or stage.response.verify is None
 
 
 def test_verify_functions_invalid_function_name():
     invalid_name = "invalid_function"
-    data = {"name": "test", "verify": {"functions": [invalid_name]}}
+    data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"functions": [invalid_name]}}}
 
     with pytest.raises(ValidationError):
         Stage.model_validate(data)
@@ -490,11 +496,11 @@ def test_verify_functions_invalid_function_name():
 
 def test_verify_functions_valid_function_names():
     valid_names = ["json:loads", "os:getcwd"]
-    data = {"name": "test", "verify": {"functions": valid_names}}
+    data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"functions": valid_names}}}
     stage = Stage.model_validate(data)
 
-    assert stage.verify is not None
-    assert stage.verify.functions == valid_names
+    assert stage.response.verify is not None
+    assert stage.response.verify.functions == valid_names
 
 
 @pytest.mark.parametrize(
@@ -527,24 +533,23 @@ def test_verify_functions_optional_fields(functions_data):
         (HTTPMethod.OPTIONS, HTTPMethod.OPTIONS, "explicit_options"),
         (HTTPMethod.CONNECT, HTTPMethod.CONNECT, "explicit_connect"),
         (HTTPMethod.TRACE, HTTPMethod.TRACE, "explicit_trace"),
-        (None, HTTPMethod.GET, "default_method"),
         ("no_method", HTTPMethod.GET, "without_method_field"),
     ],
 )
 def test_stage_method_field_handling(method_input, expected_method, description):
     if description == "without_method_field":
-        stage_data = {"name": "test_stage"}
+        stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test"}}
     else:
-        stage_data = {"name": "test_stage", "method": method_input}
+        stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test", "method": method_input}}
 
     stage = Stage.model_validate(stage_data)
-    assert stage.method == expected_method
+    assert stage.request.method == expected_method
 
 
 def test_stage_method_default_value():
-    stage_data = {"name": "test_stage"}
+    stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test"}}
     stage = Stage.model_validate(stage_data)
-    assert stage.method == HTTPMethod.GET
+    assert stage.request.method == HTTPMethod.GET
 
 
 @pytest.mark.parametrize(
@@ -562,13 +567,13 @@ def test_stage_method_default_value():
     ],
 )
 def test_stage_method_with_string_values(method_string, expected_method):
-    stage_data = {"name": "test_stage", "method": method_string}
+    stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test", "method": method_string}}
     stage = Stage.model_validate(stage_data)
-    assert stage.method == expected_method
+    assert stage.request.method == expected_method
 
 
 def test_stage_method_invalid_value():
-    stage_data = {"name": "test_stage", "method": "INVALID_METHOD"}
+    stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test", "method": "INVALID_METHOD"}}
     with pytest.raises(ValidationError):
         Stage.model_validate(stage_data)
 
@@ -588,18 +593,18 @@ def test_stage_method_invalid_value():
 )
 def test_stage_json_field_handling(json_input, expected_json, description):
     if description == "without_json_field":
-        stage_data = {"name": "test_stage"}
+        stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test"}}
     else:
-        stage_data = {"name": "test_stage", "json": json_input}
+        stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test", "json": json_input}}
 
     stage = Stage.model_validate(stage_data)
-    assert stage.json == expected_json
+    assert stage.request.json == expected_json
 
 
 def test_stage_json_default_value():
-    stage_data = {"name": "test_stage"}
+    stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test"}}
     stage = Stage.model_validate(stage_data)
-    assert stage.json is None
+    assert stage.request.json is None
 
 
 @pytest.mark.parametrize(
@@ -616,9 +621,9 @@ def test_stage_json_default_value():
     ],
 )
 def test_stage_json_with_various_data_types(json_data):
-    stage_data = {"name": "test_stage", "json": json_data}
+    stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test", "json": json_data}}
     stage = Stage.model_validate(stage_data)
-    assert stage.json == json_data
+    assert stage.request.json == json_data
 
 
 @pytest.mark.parametrize(
@@ -635,9 +640,9 @@ def test_stage_json_with_various_data_types(json_data):
 )
 def test_stage_json_with_serializable_values(json_data):
     """Test that JSON-serializable values are accepted."""
-    stage_data = {"name": "test_stage", "json": json_data}
+    stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test", "json": json_data}}
     stage = Stage.model_validate(stage_data)
-    assert stage.json == json_data
+    assert stage.request.json == json_data
 
 
 @pytest.mark.parametrize(
@@ -653,7 +658,7 @@ def test_stage_json_with_serializable_values(json_data):
 )
 def test_stage_json_with_non_serializable_values(non_serializable_data, expected_error_fragment):
     """Test that non-JSON-serializable values are rejected."""
-    stage_data = {"name": "test_stage", "json": non_serializable_data}
+    stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test", "json": non_serializable_data}}
 
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(stage_data)
@@ -663,37 +668,40 @@ def test_stage_json_with_non_serializable_values(non_serializable_data, expected
 def test_stage_with_method_and_json_together():
     stage_data = {
         "name": "test_stage",
-        "method": HTTPMethod.POST,
-        "json": {"user": {"name": "John", "email": "john@example.com"}}
+        "request": {"url": "https://api.example.com/test", "method": HTTPMethod.POST, "json": {"user": {"name": "John", "email": "john@example.com"}}}
     }
     stage = Stage.model_validate(stage_data)
 
-    assert stage.method == HTTPMethod.POST
-    assert stage.json == {"user": {"name": "John", "email": "john@example.com"}}
+    assert stage.request.method == HTTPMethod.POST
+    assert stage.request.json == {"user": {"name": "John", "email": "john@example.com"}}
 
 
 def test_stage_with_all_optional_fields():
     stage_data = {
         "name": "complete_stage",
-        "url": "https://api.example.com/users",
-        "method": HTTPMethod.PUT,
-        "params": {"page": 1, "limit": 10},
-        "headers": {"Authorization": "Bearer token", "Content-Type": "application/json"},
-        "json": {"name": "Updated User", "email": "updated@example.com"},
-        "save": {"vars": {"user_id": "response.id"}},
-        "verify": {"status": 200, "json": {"response.success": True}}
+        "request": {
+            "url": "https://api.example.com/users",
+            "method": HTTPMethod.PUT,
+            "params": {"page": 1, "limit": 10},
+            "headers": {"Authorization": "Bearer token", "Content-Type": "application/json"},
+            "json": {"name": "Updated User", "email": "updated@example.com"}
+        },
+        "response": {
+            "save": {"vars": {"user_id": "response.id"}},
+            "verify": {"status": 200, "json": {"response.success": True}}
+        }
     }
     stage = Stage.model_validate(stage_data)
 
     assert stage.name == "complete_stage"
-    assert stage.url == "https://api.example.com/users"
-    assert stage.method == HTTPMethod.PUT
-    assert stage.params == {"page": 1, "limit": 10}
-    assert stage.headers == {"Authorization": "Bearer token", "Content-Type": "application/json"}
-    assert stage.json == {"name": "Updated User", "email": "updated@example.com"}
-    assert stage.save is not None
-    assert stage.save.vars == {"user_id": "response.id"}
-    assert stage.verify is not None
-    assert stage.verify.status == HTTPStatus.OK
-    assert stage.verify.json_data == {"response.success": True}
+    assert stage.request.url == "https://api.example.com/users"
+    assert stage.request.method == HTTPMethod.PUT
+    assert stage.request.params == {"page": 1, "limit": 10}
+    assert stage.request.headers == {"Authorization": "Bearer token", "Content-Type": "application/json"}
+    assert stage.request.json == {"name": "Updated User", "email": "updated@example.com"}
+    assert stage.response.save is not None
+    assert stage.response.save.vars == {"user_id": "response.id"}
+    assert stage.response.verify is not None
+    assert stage.response.verify.status == HTTPStatus.OK
+    assert stage.response.verify.json_data == {"response.success": True}
 

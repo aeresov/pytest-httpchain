@@ -10,7 +10,7 @@ from pytest_http.pytest_plugin import json_test_function
     "stage_config,expected_url,expected_assertions,description",
     [
         (
-            {"name": "get_users", "url": "https://api.example.com/users"},
+            {"name": "get_users", "request": {"url": "https://api.example.com/users"}},
             "https://api.example.com/users",
             {"url": "https://api.example.com/users"},
             "basic_url"
@@ -18,8 +18,7 @@ from pytest_http.pytest_plugin import json_test_function
         (
             {
                 "name": "get_user",
-                "url": "https://api.example.com/users",
-                "params": {"id": 1, "format": "json"}
+                "request": {"url": "https://api.example.com/users", "params": {"id": 1, "format": "json"}}
             },
             "https://api.example.com/users",
             {"url_contains": ["id=1", "format=json"]},
@@ -28,8 +27,7 @@ from pytest_http.pytest_plugin import json_test_function
         (
             {
                 "name": "get_users",
-                "url": "https://api.example.com/users",
-                "headers": {"Authorization": "Bearer token123", "Accept": "application/json"}
+                "request": {"url": "https://api.example.com/users", "headers": {"Authorization": "Bearer token123", "Accept": "application/json"}}
             },
             "https://api.example.com/users",
             {"headers": {"Authorization": "Bearer token123", "Accept": "application/json"}},
@@ -38,8 +36,8 @@ from pytest_http.pytest_plugin import json_test_function
         (
             {
                 "name": "get_user",
-                "url": "https://api.example.com/user/1",
-                "save": {"vars": {"user_id": "json.id", "user_name": "json.name", "status": "status_code"}}
+                "request": {"url": "https://api.example.com/user/1"},
+                "response": {"save": {"vars": {"user_id": "json.id", "user_name": "json.name", "status": "status_code"}}}
             },
             "https://api.example.com/user/1",
             {"url": "https://api.example.com/user/1"},
@@ -90,14 +88,14 @@ def test_http_request_configurations(stage_config, expected_url, expected_assert
     [
         (
             [
-                {"name": "get_users", "url": "https://api.example.com/users"},
-                {"name": "get_user_details", "url": "https://api.example.com/user/1"}
+                {"name": "get_users", "request": {"url": "https://api.example.com/users"}},
+                {"name": "get_user_details", "request": {"url": "https://api.example.com/user/1"}}
             ],
             ["https://api.example.com/users", "https://api.example.com/user/1"],
             "multiple_http_stages"
         ),
         (
-            [{"name": "no_http_stage"}],
+            [{"name": "no_http_stage", "request": {"url": "https://api.example.com/test"}}],
             [],
             "no_http_stage"
         ),
@@ -145,7 +143,7 @@ def test_http_request_error_handling(response_status, expected_behavior):
         status=response_status
     )
 
-    test_data = {"stages": [{"name": "get_users", "url": "https://api.example.com/users"}]}
+    test_data = {"stages": [{"name": "get_users", "request": {"url": "https://api.example.com/users"}}]}
 
     if expected_behavior == "should_pass":
         json_test_function(test_data)
@@ -174,7 +172,7 @@ def test_http_request_verification(actual_status, expected_status, should_fail, 
         headers={"Content-Type": "application/json"},
     )
 
-    test_data = {"stages": [{"name": "test_stage", "data": {}, "url": "https://api.example.com/test", "verify": {"status": expected_status}}]}
+    test_data = {"stages": [{"name": "test_stage", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"status": expected_status}}}]}
 
     if should_fail:
         with pytest.raises(pytest.fail.Exception) as exc_info:
@@ -203,10 +201,10 @@ def test_http_request_without_or_empty_verification(verify_config):
         headers={"Content-Type": "application/json"},
     )
 
-    test_data = {"stages": [{"name": "test_stage", "data": {}, "url": "https://api.example.com/test"}]}
+    test_data = {"stages": [{"name": "test_stage", "request": {"url": "https://api.example.com/test"}}]}
     if verify_config is not None:
-        test_data["stages"][0]["verify"] = verify_config
-
+        test_data["stages"][0]["response"] = {"verify": verify_config}
+    
     json_test_function(test_data)
 
 
@@ -222,7 +220,7 @@ def test_http_request_without_or_empty_verification(verify_config):
 def test_http_request_errors(exception_type, exception_message, expected_error_text):
     responses.add(responses.GET, "https://api.example.com/test", body=exception_type(exception_message))
 
-    test_data = {"stages": [{"name": "test_stage", "data": {}, "url": "https://api.example.com/test", "verify": {"status": 200}}]}
+    test_data = {"stages": [{"name": "test_stage", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"status": 200}}}]}
 
     with pytest.raises(pytest.fail.Exception) as exc_info:
         json_test_function(test_data)
@@ -250,8 +248,8 @@ def test_multiple_stages_with_verification():
 
     test_data = {
         "stages": [
-            {"name": "get_users", "data": {}, "url": "https://api.example.com/users", "verify": {"status": 200}},
-            {"name": "get_nonexistent", "data": {}, "url": "https://api.example.com/nonexistent", "verify": {"status": 404}},
+            {"name": "get_users", "request": {"url": "https://api.example.com/users"}, "response": {"verify": {"status": 200}}},
+            {"name": "get_nonexistent", "request": {"url": "https://api.example.com/nonexistent"}, "response": {"verify": {"status": 404}}},
         ]
     }
 
@@ -313,7 +311,7 @@ def test_json_verification(response_json, verification_json, should_fail, expect
         headers={"Content-Type": "application/json"},
     )
 
-    test_data = {"stages": [{"name": "test_stage", "url": "https://api.example.com/test", "verify": {"json": verification_json}}]}
+    test_data = {"stages": [{"name": "test_stage", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"json": verification_json}}}]}
 
     if should_fail:
         with pytest.raises(pytest.fail.Exception) as exc_info:
@@ -361,7 +359,7 @@ def test_json_verification_integration(response_json, response_headers, verify_c
         headers=response_headers,
     )
 
-    test_data = {"stages": [{"name": "test_stage", "url": "https://api.example.com/test", "verify": verify_config}]}
+    test_data = {"stages": [{"name": "test_stage", "request": {"url": "https://api.example.com/test"}, "response": verify_config}]}
 
     json_test_function(test_data)
 
@@ -387,8 +385,16 @@ def test_json_verification_multiple_stages():
 
     test_data = {
         "stages": [
-            {"name": "get_users", "url": "https://api.example.com/users", "verify": {"json": {"json.total": 1, "json.users[0].name": "John"}}},
-            {"name": "get_posts", "url": "https://api.example.com/posts", "verify": {"json": {"json.count": 1, "json.posts[0].title": "Test Post"}}},
+            {
+                "name": "get_users",
+                "request": {"url": "https://api.example.com/users"},
+                "response": {"verify": {"json": {"json.total": 1, "json.users[0].name": "John"}}}
+            },
+            {
+                "name": "get_posts",
+                "request": {"url": "https://api.example.com/posts"},
+                "response": {"verify": {"json": {"json.count": 1, "json.posts[0].title": "Test Post"}}}
+            },
         ]
     }
 
@@ -403,25 +409,24 @@ def test_json_verification_multiple_stages():
         (
             {
                 "name": "test_stage",
-                "url": "https://api.example.com/test",
-                "params": {"key": "value"},
-                "headers": {"Content-Type": "application/json"}
+                "request": {
+                    "url": "https://api.example.com/test",
+                    "params": {"key": "value"},
+                    "headers": {"Content-Type": "application/json"}
+                }
             },
             {
                 "name": "test_stage",
-                "url": "https://api.example.com/test",
-                "params": {"key": "value"},
-                "headers": {"Content-Type": "application/json"}
+                "request": {
+                    "url": "https://api.example.com/test",
+                    "params": {"key": "value"},
+                    "headers": {"Content-Type": "application/json"}
+                }
             }
         ),
         (
-            {"name": "no_http_stage"},
-            {
-                "name": "no_http_stage",
-                "url": None,
-                "params": None,
-                "headers": None
-            }
+            {"name": "no_http_stage", "request": {"url": "https://api.example.com/test"}},
+            {"name": "no_http_stage", "request": {"url": "https://api.example.com/test"}}
         ),
     ],
 )
@@ -429,7 +434,12 @@ def test_stage_model_validation(stage_data, expected_attrs):
     stage = Stage(**stage_data)
 
     for attr_name, expected_value in expected_attrs.items():
-        assert getattr(stage, attr_name) == expected_value
+        if attr_name == "name":
+            assert getattr(stage, attr_name) == expected_value
+        elif attr_name == "request":
+            assert stage.request.url == expected_value["url"]
+            assert stage.request.params == expected_value["params"]
+            assert stage.request.headers == expected_value["headers"]
 
 
 def test_scenario_model_validation():
@@ -437,15 +447,17 @@ def test_scenario_model_validation():
         stages=[
             {
                 "name": "http_stage",
-                "url": "https://api.example.com/test",
-                "params": {"key": "value"},
-                "headers": {"Authorization": "Bearer token"}
+                "request": {
+                    "url": "https://api.example.com/test",
+                    "params": {"key": "value"},
+                    "headers": {"Authorization": "Bearer token"}
+                }
             },
-            {"name": "no_http_stage"},
+            {"name": "no_http_stage", "request": {}},
         ]
     )
 
     assert len(scenario.stages) == 2
-    assert scenario.stages[0].url == "https://api.example.com/test"
-    assert scenario.stages[1].url is None
+    assert scenario.stages[0].request.url == "https://api.example.com/test"
+    assert scenario.stages[1].request.url is None
 
