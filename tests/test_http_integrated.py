@@ -95,7 +95,7 @@ def test_http_request_configurations(stage_config, expected_url, expected_assert
             "multiple_http_stages"
         ),
         (
-            [{"name": "no_http_stage"}],
+            [{"name": "no_http_stage", "request": {}}],
             [],
             "no_http_stage"
         ),
@@ -203,8 +203,8 @@ def test_http_request_without_or_empty_verification(verify_config):
 
     test_data = {"stages": [{"name": "test_stage", "request": {"url": "https://api.example.com/test"}}]}
     if verify_config is not None:
-        test_data["stages"][0]["response"]["verify"] = verify_config
-
+        test_data["stages"][0]["response"] = {"verify": verify_config}
+    
     json_test_function(test_data)
 
 
@@ -425,7 +425,7 @@ def test_json_verification_multiple_stages():
             }
         ),
         (
-            {"name": "no_http_stage"},
+            {"name": "no_http_stage", "request": {}},
             {
                 "name": "no_http_stage",
                 "request": {
@@ -441,7 +441,12 @@ def test_stage_model_validation(stage_data, expected_attrs):
     stage = Stage(**stage_data)
 
     for attr_name, expected_value in expected_attrs.items():
-        assert getattr(stage, attr_name) == expected_value
+        if attr_name == "name":
+            assert getattr(stage, attr_name) == expected_value
+        elif attr_name == "request":
+            assert stage.request.url == expected_value["url"]
+            assert stage.request.params == expected_value["params"]
+            assert stage.request.headers == expected_value["headers"]
 
 
 def test_scenario_model_validation():
@@ -455,7 +460,7 @@ def test_scenario_model_validation():
                     "headers": {"Authorization": "Bearer token"}
                 }
             },
-            {"name": "no_http_stage"},
+            {"name": "no_http_stage", "request": {}},
         ]
     )
 

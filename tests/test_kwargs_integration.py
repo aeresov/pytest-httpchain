@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from pytest_http.models import FunctionCall, SaveConfig, Scenario, Stage, Verify
+from pytest_http.models import FunctionCall, SaveConfig, Scenario, Stage, Verify, Response
 from pytest_http.pytest_plugin import call_function_with_kwargs, substitute_kwargs_variables
 
 
@@ -92,8 +92,8 @@ def test_save_config_with_function_call() -> None:
 def test_stage_with_function_calls() -> None:
     stage = Stage(
         name="test_stage",
-        request=None, # No request fields in this stage
-        response=Stage.Response(
+        request={},  # No request fields in this stage
+        response=Response(
             verify=Verify(
                 functions=[
                     FunctionCall(
@@ -125,7 +125,7 @@ def test_stage_with_function_calls() -> None:
             "stages": [
                 {
                     "name": "test_stage",
-                    "request": {}, # No request fields in this stage
+                    "request": {},  # No request fields in this stage
                     "response": {
                         "verify": {
                             "functions": [
@@ -155,9 +155,11 @@ def test_stage_with_function_calls() -> None:
             "stages": [
                 {
                     "name": "test_stage",
-                    "request": {}, # No request fields in this stage
-                    "response": {"functions": ["test_module:simple_function"]},
-                    "save": {"functions": ["test_module:save_function"]}
+                    "request": {},  # No request fields in this stage
+                    "response": {
+                        "verify": {"functions": ["test_module:simple_function"]},
+                        "save": {"functions": ["test_module:save_function"]}
+                    }
                 }
             ]
         },
@@ -191,7 +193,7 @@ def test_mixed_function_formats() -> None:
         "stages": [
             {
                 "name": "test_stage",
-                "request": {}, # No request fields in this stage
+                "request": {},  # No request fields in this stage
                 "response": {
                     "verify": {
                         "functions": [

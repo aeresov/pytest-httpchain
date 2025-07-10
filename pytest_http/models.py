@@ -111,34 +111,6 @@ class Stage(BaseModel):
     request: Request = Field()
     response: Response | None = Field(default=None)
 
-    @property
-    def url(self) -> str | None:
-        return self.request.url if self.request else None
-
-    @property
-    def method(self) -> HTTPMethod:
-        return self.request.method if self.request else HTTPMethod.GET
-
-    @property
-    def params(self) -> dict[str, Any] | None:
-        return self.request.params if self.request else None
-
-    @property
-    def headers(self) -> dict[str, str] | None:
-        return self.request.headers if self.request else None
-
-    @property
-    def json(self) -> JSONSerializable:
-        return self.request.json if self.request else None
-
-    @property
-    def save(self) -> SaveConfig | None:
-        return self.response.save if self.response else None
-
-    @property
-    def verify(self) -> Verify | None:
-        return self.response.verify if self.response else None
-
 
 class Scenario(BaseModel):
     fixtures: list[str] = Field(default_factory=list)

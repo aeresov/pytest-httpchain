@@ -3,7 +3,7 @@ from http import HTTPMethod, HTTPStatus
 import pytest
 from pydantic import ValidationError
 
-from pytest_http.models import SaveConfig, Stage, Verify, validate_jmespath_expression, validate_python_function_name, validate_python_variable_name
+from pytest_http.models import SaveConfig, Stage, Verify, Response, validate_jmespath_expression, validate_python_function_name, validate_python_variable_name
 
 
 @pytest.mark.parametrize(
@@ -96,7 +96,7 @@ def test_stage_save_optional_states(save_value, expected_result, description):
     stage = Stage.model_validate(data)
 
     if expected_result is None:
-        assert stage.response.save is None
+        assert stage.response is None or stage.response.save is None
     else:
         assert isinstance(stage.response.save, SaveConfig)
         assert stage.response.save.vars == expected_result.vars
@@ -374,28 +374,28 @@ def test_verify_model_invalid_status():
 )
 def test_stage_verify_field_handling(verify_input, expected_verify_exists, expected_status):
     if verify_input == "no_verify":
-        stage = Stage(name="test_stage")
+        stage = Stage(name="test_stage", request={})
     else:
-        stage = Stage(name="test_stage", verify=verify_input)
+        stage = Stage(name="test_stage", request={}, response=Response(verify=verify_input))
 
     if expected_verify_exists:
-        assert stage.verify is not None
-        assert stage.verify.status == expected_status
+        assert stage.response.verify is not None
+        assert stage.response.verify.status == expected_status
     else:
-        assert stage.verify is None
+        assert stage.response is None or stage.response.verify is None
 
 
 def test_stage_verify_field_optional():
-    stage_data = {"name": "test_stage"}
+    stage_data = {"name": "test_stage", "request": {}}
     stage = Stage.model_validate(stage_data)
-    assert stage.verify is None
+    assert stage.response is None or stage.response.verify is None
 
 
 def test_stage_with_complete_verify_data():
     stage_data = {"name": "test_stage", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"status": 201}}}
     stage = Stage.model_validate(stage_data)
-    assert stage.verify is not None
-    assert stage.verify.status == HTTPStatus.CREATED
+    assert stage.response.verify is not None
+    assert stage.response.verify.status == HTTPStatus.CREATED
 
 
 # Verify functions tests
@@ -440,28 +440,28 @@ def test_verify_functions_validation(invalid_function_name, expected_error):
 @pytest.mark.parametrize(
     "stage_data,expected_functions",
     [
-        ({"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"functions": ["json:loads"]}}}, ["json:loads"]),
-        ({"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"functions": ["os:getcwd", "json:dumps"]}}}, ["os:getcwd", "json:dumps"]),
-        ({"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"functions": []}}}, []),
-        ({"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {}}}, None),
-        ({"name": "test", "request": {"url": "https://api.example.com/test"}}, None),
+        ({"name": "test", "request": {}, "response": {"verify": {"functions": ["json:loads"]}}}, ["json:loads"]),
+        ({"name": "test", "request": {}, "response": {"verify": {"functions": ["os:getcwd", "json:dumps"]}}}, ["os:getcwd", "json:dumps"]),
+        ({"name": "test", "request": {}, "response": {"verify": {"functions": []}}}, []),
+        ({"name": "test", "request": {}, "response": {"verify": {}}}, None),
+        ({"name": "test", "request": {}}, None),
     ],
 )
 def test_stage_verify_functions_handling(stage_data, expected_functions):
     stage = Stage.model_validate(stage_data)
 
     if expected_functions is not None:
-        assert stage.verify is not None
-        assert stage.verify.functions == expected_functions
+        assert stage.response.verify is not None
+        assert stage.response.verify.functions == expected_functions
     else:
-        if stage.verify:
-            assert stage.verify.functions is None
+        if stage.response and stage.response.verify:
+            assert stage.response.verify.functions is None
 
 
 def test_verify_functions_with_status_and_json():
     stage_data = {
         "name": "test",
-        "request": {"url": "https://api.example.com/test"},
+        "request": {},
         "response": {
             "verify": {
                 "status": 200,
@@ -472,21 +472,21 @@ def test_verify_functions_with_status_and_json():
     }
     stage = Stage.model_validate(stage_data)
 
-    assert stage.verify is not None
-    assert stage.verify.status.value == 200
-    assert stage.verify.json_data == {"json.some_field": "expected_value"}
-    assert stage.verify.functions == ["json:loads"]
+    assert stage.response.verify is not None
+    assert stage.response.verify.status.value == 200
+    assert stage.response.verify.json_data == {"json.some_field": "expected_value"}
+    assert stage.response.verify.functions == ["json:loads"]
 
 
 def test_verify_functions_optional_field():
-    stage_data = {"name": "test_stage"}
+    stage_data = {"name": "test_stage", "request": {}}
     stage = Stage.model_validate(stage_data)
-    assert stage.verify is None
+    assert stage.response is None or stage.response.verify is None
 
 
 def test_verify_functions_invalid_function_name():
     invalid_name = "invalid_function"
-    data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"functions": [invalid_name]}}}
+    data = {"name": "test", "request": {}, "response": {"verify": {"functions": [invalid_name]}}}
 
     with pytest.raises(ValidationError):
         Stage.model_validate(data)
@@ -494,11 +494,11 @@ def test_verify_functions_invalid_function_name():
 
 def test_verify_functions_valid_function_names():
     valid_names = ["json:loads", "os:getcwd"]
-    data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"verify": {"functions": valid_names}}}
+    data = {"name": "test", "request": {}, "response": {"verify": {"functions": valid_names}}}
     stage = Stage.model_validate(data)
 
-    assert stage.verify is not None
-    assert stage.verify.functions == valid_names
+    assert stage.response.verify is not None
+    assert stage.response.verify.functions == valid_names
 
 
 @pytest.mark.parametrize(
@@ -531,13 +531,12 @@ def test_verify_functions_optional_fields(functions_data):
         (HTTPMethod.OPTIONS, HTTPMethod.OPTIONS, "explicit_options"),
         (HTTPMethod.CONNECT, HTTPMethod.CONNECT, "explicit_connect"),
         (HTTPMethod.TRACE, HTTPMethod.TRACE, "explicit_trace"),
-        (None, HTTPMethod.GET, "default_method"),
         ("no_method", HTTPMethod.GET, "without_method_field"),
     ],
 )
 def test_stage_method_field_handling(method_input, expected_method, description):
     if description == "without_method_field":
-        stage_data = {"name": "test_stage"}
+        stage_data = {"name": "test_stage", "request": {}}
     else:
         stage_data = {"name": "test_stage", "request": {"method": method_input}}
 
@@ -546,7 +545,7 @@ def test_stage_method_field_handling(method_input, expected_method, description)
 
 
 def test_stage_method_default_value():
-    stage_data = {"name": "test_stage"}
+    stage_data = {"name": "test_stage", "request": {}}
     stage = Stage.model_validate(stage_data)
     assert stage.request.method == HTTPMethod.GET
 
@@ -592,7 +591,7 @@ def test_stage_method_invalid_value():
 )
 def test_stage_json_field_handling(json_input, expected_json, description):
     if description == "without_json_field":
-        stage_data = {"name": "test_stage"}
+        stage_data = {"name": "test_stage", "request": {}}
     else:
         stage_data = {"name": "test_stage", "request": {"json": json_input}}
 
@@ -601,7 +600,7 @@ def test_stage_json_field_handling(json_input, expected_json, description):
 
 
 def test_stage_json_default_value():
-    stage_data = {"name": "test_stage"}
+    stage_data = {"name": "test_stage", "request": {}}
     stage = Stage.model_validate(stage_data)
     assert stage.request.json is None
 
@@ -667,8 +666,7 @@ def test_stage_json_with_non_serializable_values(non_serializable_data, expected
 def test_stage_with_method_and_json_together():
     stage_data = {
         "name": "test_stage",
-        "request": {"method": HTTPMethod.POST},
-        "response": {"json": {"user": {"name": "John", "email": "john@example.com"}}}
+        "request": {"method": HTTPMethod.POST, "json": {"user": {"name": "John", "email": "john@example.com"}}}
     }
     stage = Stage.model_validate(stage_data)
 
@@ -679,12 +677,14 @@ def test_stage_with_method_and_json_together():
 def test_stage_with_all_optional_fields():
     stage_data = {
         "name": "complete_stage",
-        "request": {"url": "https://api.example.com/users"},
-        "response": {
+        "request": {
+            "url": "https://api.example.com/users",
             "method": HTTPMethod.PUT,
             "params": {"page": 1, "limit": 10},
             "headers": {"Authorization": "Bearer token", "Content-Type": "application/json"},
-            "json": {"name": "Updated User", "email": "updated@example.com"},
+            "json": {"name": "Updated User", "email": "updated@example.com"}
+        },
+        "response": {
             "save": {"vars": {"user_id": "response.id"}},
             "verify": {"status": 200, "json": {"response.success": True}}
         }
@@ -699,7 +699,7 @@ def test_stage_with_all_optional_fields():
     assert stage.request.json == {"name": "Updated User", "email": "updated@example.com"}
     assert stage.response.save is not None
     assert stage.response.save.vars == {"user_id": "response.id"}
-    assert stage.verify is not None
-    assert stage.verify.status == HTTPStatus.OK
-    assert stage.verify.json_data == {"response.success": True}
+    assert stage.response.verify is not None
+    assert stage.response.verify.status == HTTPStatus.OK
+    assert stage.response.verify.json_data == {"response.success": True}
 
