@@ -40,7 +40,7 @@ def validate_suffix(suffix: str) -> str:
 def pytest_configure(config: Config) -> None:
     suffix: str = config.getini("suffix")
     validated_suffix: str = validate_suffix(suffix)
-    config.pytest_http_suffix = validated_suffix
+    config.pytest_http_suffix = validated_suffix  # type: ignore
 
 
 def get_test_name_pattern(config: Config) -> re.Pattern[str]:
@@ -96,23 +96,27 @@ def substitute_kwargs_variables(kwargs: dict[str, Any] | None, variables: dict[s
     if kwargs is None:
         return None
 
-    try:
-        result = kwargs.copy()
-        
-        # Handle direct substitution for quoted strings
-        for key, val in result.items():
-            if isinstance(val, str):
-                if val.startswith('"$') and val.endswith('"'):
-                    # Remove quotes and substitute
-                    var_name = val[2:-1]  # Remove '"$' and '"'
-                    if var_name in variables:
-                        result[key] = variables[var_name]
-                elif val.startswith('$'):
-                    var_name = val[1:]  # Remove '$'
-                    if var_name in variables:
-                        result[key] = variables[var_name]
+    def _substitute_recursive(obj: Any) -> Any:
+        if isinstance(obj, str):
+            if obj.startswith('"$') and obj.endswith('"'):
+                # Remove quotes and substitute
+                var_name = obj[2:-1]  # Remove '"$' and '"'
+                if var_name in variables:
+                    return variables[var_name]
+            elif obj.startswith("$"):
+                var_name = obj[1:]  # Remove '$'
+                if var_name in variables:
+                    return variables[var_name]
+            return obj
+        elif isinstance(obj, dict):
+            return {key: _substitute_recursive(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [_substitute_recursive(item) for item in obj]
+        else:
+            return obj
 
-        return result
+    try:
+        return _substitute_recursive(kwargs)
     except Exception as e:
         raise VariableSubstitutionError(f"Failed to substitute variables in kwargs: {e}") from e
 
@@ -121,6 +125,7 @@ def call_function_with_kwargs(func_name: str, response: requests.Response, kwarg
     try:
         module_path, function_name = func_name.rsplit(":", 1)
         import importlib
+
         module = importlib.import_module(module_path)
         func = getattr(module, function_name)
 
@@ -137,13 +142,8 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
 
     try:
         test_model: Scenario = Scenario.model_validate(original_data)
-        logging.info(f"Test model: {test_model}")
-        logging.info(f"Available fixtures: {fixtures}")
 
-        for stage_index, original_stage in enumerate(test_model.stages):
-            logging.info(f"Executing stage {stage_index}: {original_stage.name}")
-            logging.info(f"Current variable context: {variable_context}")
-
+        for _, original_stage in enumerate(test_model.stages):
             stage_dict = original_stage.model_dump(by_alias=True)
             substituted_stage_dict = substitute_stage_variables(stage_dict, variable_context)
 
@@ -153,10 +153,6 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                 pytest.fail(f"Stage '{original_stage.name}' validation failed after variable substitution: {e}")
 
             if stage.request.url:
-                logging.info(f"Making {stage.request.method.value} HTTP request to: {stage.request.url}")
-                if stage.request.json is not None:
-                    logging.info(f"Request JSON body: {stage.request.json}")
-
                 request_params: dict[str, Any] = {}
                 if stage.request.params:
                     request_params["params"] = stage.request.params
@@ -174,27 +170,24 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                 except requests.RequestException as e:
                     pytest.fail(f"HTTP request failed for stage '{stage.name}' to URL: {stage.request.url} - {e}")
 
-                logging.info(f"Response status: {response.status_code}")
-                logging.info(f"Response headers: {dict(response.headers)}")
-
                 if stage.response and stage.response.verify and stage.response.verify.status is not None:
                     expected_status = stage.response.verify.status.value
                     actual_status = response.status_code
                     if actual_status != expected_status:
                         pytest.fail(f"Status code verification failed for stage '{stage.name}': expected {expected_status}, got {actual_status}")
-                    logging.info(f"Status code verification passed: {actual_status}")
 
-                response_data: dict[str, Any] = {
-                    "status_code": response.status_code,
-                    "headers": dict(response.headers),
-                    "text": response.text,
-                    "json": response.json() if response.headers.get("content-type", "").startswith("application/json") else None,
-                }
+                try:
+                    response_json = response.json() if response.headers.get("content-type", "").startswith("application/json") else None
+                except Exception:
+                    response_json = None
 
                 if stage.response and stage.response.verify and stage.response.verify.json_data is not None:
+                    if response_json is None:
+                        pytest.fail(f"Cannot verify JSON data for stage '{stage.name}': response is not valid JSON")
+
                     for jmespath_expr, expected_value in stage.response.verify.json_data.items():
                         try:
-                            actual_value = jmespath.search(jmespath_expr, response_data)
+                            actual_value = jmespath.search(jmespath_expr, response_json)
                             if actual_value != expected_value:
                                 pytest.fail(f"JSON verification failed for stage '{stage.name}' with JMESPath '{jmespath_expr}': expected {expected_value}, got {actual_value}")
                             logging.info(f"JSON verification passed for JMESPath '{jmespath_expr}': {actual_value}")
@@ -226,9 +219,12 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
 
                 if stage.response and stage.response.save:
                     if stage.response.save.vars:
+                        if response_json is None:
+                            pytest.fail(f"Cannot save variables from JSON for stage '{stage.name}': response is not valid JSON")
+
                         for var_name, jmespath_expr in stage.response.save.vars.items():
                             try:
-                                saved_value = jmespath.search(jmespath_expr, response_data)
+                                saved_value = jmespath.search(jmespath_expr, response_json)
                                 variable_context[var_name] = saved_value
                                 logging.info(f"Saved variable '{var_name}' = {saved_value}")
                             except Exception as e:
@@ -310,7 +306,7 @@ class JSONFile(pytest.File):
             def test_func(**kwargs: Any) -> None:
                 return json_test_function(processed_data, **{name: kwargs[name] for name in fixtures if name in kwargs})
 
-            test_func.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in fixtures])
+            test_func.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in fixtures])  # type: ignore
             test_func.__name__ = f"test_{self.name}"
 
             test_func = reduce(lambda func, mark: eval(f"pytest.mark.{mark}", {"pytest": pytest, "sys": sys})(func), marks or [], test_func)

@@ -338,7 +338,7 @@ def test_custom_suffix_configuration(pytester):
         suffix = custom
     """)
 
-    pytester.makefile('.custom.json', test_example='{"fixtures": [], "marks": [], "stages": [{"name": "test_stage", "url": "https://httpbin.org/json"}]}')
+    pytester.makefile(".custom.json", test_example='{"fixtures": [], "marks": [], "stages": [{"name": "test_stage", "url": "https://httpbin.org/json"}]}')
     result = pytester.runpytest("-v")
     result.assert_outcomes(passed=1)
 
@@ -347,7 +347,7 @@ def test_json_body_with_different_data_types(pytester):
     """Test JSON body with different JSON-serializable data types."""
     test_file = pytester.makefile(
         ".http.json",
-        test_json_data_types="""
+        test_json_types="""
         {
             "stages": [
                 {
@@ -457,4 +457,3 @@ def test_json_validation_rejects_non_serializable_data(pytester):
     # The actual validation happens at the model level, which we test in the model tests
     result = pytester.runpytest(str(test_file), "-v")
     result.assert_outcomes(passed=1)
-

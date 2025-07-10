@@ -1,6 +1,7 @@
 import importlib
 import json
 import keyword
+import re
 from http import HTTPMethod, HTTPStatus
 from typing import Annotated, Any
 
@@ -31,7 +32,6 @@ def validate_jmespath_expression(v: str) -> str:
 
 
 def validate_json_serializable(v: Any) -> Any:
-    """Validate that the value can be serialized as JSON."""
     if v is None:
         return v
 
@@ -43,19 +43,23 @@ def validate_json_serializable(v: Any) -> Any:
 
 
 def validate_python_function_name(v: str) -> str:
-    # Require module:function syntax
-    if ":" not in v:
-        raise ValueError(f"'{v}' must use 'module:function' syntax")
-
-    module_path, function_name = v.rsplit(":", 1)
-
-    if not module_path:
+    # Special case for missing module path
+    if v.startswith(":"):
         raise ValueError(f"'{v}' is missing module path")
 
-    if not function_name:
+    # Special case for missing function name
+    if v.endswith(":"):
         raise ValueError(f"'{v}' is missing function name")
 
-    # Actually verify the function exists and is callable
+    pattern = r"^(?P<module>[a-zA-Z_][a-zA-Z0-9_.]*):(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$"
+
+    match = re.match(pattern, v)
+    if not match:
+        raise ValueError(f"'{v}' must use 'module:function' syntax with valid identifiers")
+
+    module_path = match.group("module")
+    function_name = match.group("function")
+
     try:
         module = importlib.import_module(module_path)
     except ImportError as e:
@@ -82,14 +86,14 @@ class FunctionCall(BaseModel):
     kwargs: dict[str, Any] | None = Field(default=None)
 
 
-class SaveConfig(BaseModel):
+class Save(BaseModel):
     vars: dict[ValidPythonVariableName, JMESPathExpression] | None = Field(default=None)
     functions: list[ValidPythonFunctionName | FunctionCall] | None = Field(default=None)
 
 
 class Verify(BaseModel):
     status: HTTPStatus | None = Field(default=None)
-    json_data: dict[JMESPathExpression, Any] | None = Field(default=None, alias="json")
+    json: dict[JMESPathExpression, Any] | None = Field(default=None)
     functions: list[ValidPythonFunctionName | FunctionCall] | None = Field(default=None)
 
 
@@ -102,7 +106,7 @@ class Request(BaseModel):
 
 
 class Response(BaseModel):
-    save: SaveConfig | None = Field(default=None)
+    save: Save | None = Field(default=None)
     verify: Verify | None = Field(default=None)
 
 

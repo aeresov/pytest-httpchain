@@ -68,13 +68,10 @@ def extract_test_data(response: Response) -> dict[str, Any]:
             "extracted_author": slideshow.get("author", "unknown"),
             "extracted_date": slideshow.get("date", "unknown"),
             "slide_count": len(slideshow.get("slides", [])),
-            "function_called": True
+            "function_called": True,
         }
     except Exception:
-        return {
-            "extracted_value": "test_extracted",
-            "function_called": True
-        }
+        return {"extracted_value": "test_extracted", "function_called": True}
 
 
 def extract_custom_data(response: Response, field_path: str = "", default_value: str = "unknown") -> dict[str, Any]:
@@ -83,15 +80,9 @@ def extract_custom_data(response: Response, field_path: str = "", default_value:
         current = data
         for field in field_path.split("."):
             current = current.get(field, {})
-        return {
-            f"extracted_{field_path.replace('.', '_')}": current if current != {} else default_value,
-            "function_called": True
-        }
+        return {f"extracted_{field_path.replace('.', '_')}": current if current != {} else default_value, "function_called": True}
     except Exception:
-        return {
-            f"extracted_{field_path.replace('.', '_')}": default_value,
-            "function_called": True
-        }
+        return {f"extracted_{field_path.replace('.', '_')}": default_value, "function_called": True}
 
 
 def extract_multiple_fields(response: Response, fields: list[str] | None = None) -> dict[str, Any]:
@@ -121,24 +112,9 @@ def extract_with_filter(response: Response, field_path: str = "", filter_value: 
             current = current.get(field, [])
 
         if isinstance(current, list):
-            filtered_items = [
-                item for item in current
-                if isinstance(item, dict) and item.get(filter_field) == filter_value
-            ]
-            return {
-                f"filtered_{field_path.replace('.', '_')}": filtered_items,
-                "filter_count": len(filtered_items),
-                "function_called": True
-            }
+            filtered_items = [item for item in current if isinstance(item, dict) and item.get(filter_field) == filter_value]
+            return {f"filtered_{field_path.replace('.', '_')}": filtered_items, "filter_count": len(filtered_items), "function_called": True}
         else:
-            return {
-                f"filtered_{field_path.replace('.', '_')}": [],
-                "filter_count": 0,
-                "function_called": True
-            }
+            return {f"filtered_{field_path.replace('.', '_')}": [], "filter_count": 0, "function_called": True}
     except Exception:
-        return {
-            f"filtered_{field_path.replace('.', '_')}": [],
-            "filter_count": 0,
-            "function_called": True
-        }
+        return {f"filtered_{field_path.replace('.', '_')}": [], "filter_count": 0, "function_called": True}

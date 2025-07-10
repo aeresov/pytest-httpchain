@@ -136,7 +136,7 @@ def test_scenario_no_fixture_conflicts(data, description):
                 {"name": "test2"},
                 {"name": "test3", "save": {"vars": {"status": "response.status"}}},
             ],
-            [{"result": "user.id"}, None, {"status": "response.status"}]
+            [{"result": "user.id"}, None, {"status": "response.status"}],
         ),
     ],
 )
