@@ -181,11 +181,11 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                 except Exception:
                     response_json = None
 
-                if stage.response and stage.response.verify and stage.response.verify.json_data is not None:
+                if stage.response and stage.response.verify and stage.response.verify.json is not None:
                     if response_json is None:
                         pytest.fail(f"Cannot verify JSON data for stage '{stage.name}': response is not valid JSON")
 
-                    for jmespath_expr, expected_value in stage.response.verify.json_data.items():
+                    for jmespath_expr, expected_value in stage.response.verify.json.items():
                         try:
                             actual_value = jmespath.search(jmespath_expr, response_json)
                             if actual_value != expected_value:
