@@ -108,7 +108,7 @@ class Response(BaseModel):
 
 class Stage(BaseModel):
     name: str = Field()
-    request: Request | None = Field(default=None)
+    request: Request = Field()
     response: Response | None = Field(default=None)
 
     @property

@@ -18,7 +18,7 @@ from pytest_http.models import SaveConfig, Stage, Verify, validate_jmespath_expr
     ],
 )
 def test_stage_with_different_data_types(name: str, expected_name: str):
-    data_dict = {"name": name}
+    data_dict = {"name": name, "request": {}}
     stage = Stage.model_validate(data_dict)
     assert stage.name == expected_name
 
@@ -27,6 +27,7 @@ def test_stage_with_different_data_types(name: str, expected_name: str):
     "data,expected_error",
     [
         ({}, "name"),
+        ({"name": "test"}, "request"),
     ],
 )
 def test_stage_missing_required_fields(data, expected_error):
@@ -35,7 +36,7 @@ def test_stage_missing_required_fields(data, expected_error):
 
 
 def test_stage_empty_name():
-    data = {"name": ""}
+    data = {"name": "", "request": {}}
     stage = Stage.model_validate(data)
     assert stage.name == ""
 
@@ -88,9 +89,9 @@ def test_stage_save_formats(save_data, expected_vars, expected_functions, descri
 )
 def test_stage_save_optional_states(save_value, expected_result, description):
     if description == "without_save_field":
-        data = {"name": "test", "request": {"url": "https://api.example.com/test"}}
+        data = {"name": "test", "request": {}}
     else:
-        data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": save_value}}
+        data = {"name": "test", "request": {}, "response": {"save": save_value}}
 
     stage = Stage.model_validate(data)
 
@@ -127,9 +128,9 @@ def test_stage_save_optional_states(save_value, expected_result, description):
 )
 def test_stage_save_invalid_names(invalid_name, field_type, expected_error):
     if field_type == "var":
-        data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {invalid_name: "user.id"}}}}
+        data = {"name": "test", "request": {}, "response": {"save": {"vars": {invalid_name: "user.id"}}}}
     else:  # func
-        data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"functions": [invalid_name]}}}
+        data = {"name": "test", "request": {}, "response": {"save": {"functions": [invalid_name]}}}
 
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
@@ -145,7 +146,7 @@ def test_stage_save_invalid_names(invalid_name, field_type, expected_error):
     ],
 )
 def test_stage_save_invalid_jmespath_expressions(invalid_jmespath, expected_error):
-    data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {"user_id": invalid_jmespath}}}}
+    data = {"name": "test", "request": {}, "response": {"save": {"vars": {"user_id": invalid_jmespath}}}}
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
     assert expected_error in str(exc_info.value)
@@ -157,7 +158,7 @@ def test_stage_save_invalid_jmespath_expressions(invalid_jmespath, expected_erro
 )
 def test_stage_save_keyword_validation(keyword):
     # Test keywords for variable names
-    data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {keyword: "user.id"}}}}
+    data = {"name": "test", "request": {}, "response": {"save": {"vars": {keyword: "user.id"}}}}
     expected_error = f"'{keyword}' is a Python keyword and cannot be used as a variable name"
 
     with pytest.raises(ValidationError) as exc_info:
@@ -216,17 +217,17 @@ def test_stage_save_keyword_validation(keyword):
 )
 def test_stage_save_valid_names(valid_names, field_type, test_case):
     if field_type == "var":
-        data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": valid_names}}}
+        data = {"name": "test", "request": {}, "response": {"save": {"vars": valid_names}}}
         stage = Stage.model_validate(data)
         assert stage.response.save.vars == valid_names
     else:  # func
-        data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"functions": valid_names}}}
+        data = {"name": "test", "request": {}, "response": {"save": {"functions": valid_names}}}
         stage = Stage.model_validate(data)
         assert stage.response.save.functions == valid_names
 
 
 def test_stage_save_multiple_validation_errors():
-    data = {"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {"1invalid": "user.id", "valid_name": "user.[invalid}"}}}}
+    data = {"name": "test", "request": {}, "response": {"save": {"vars": {"1invalid": "user.id", "valid_name": "user.[invalid}"}}}}
     with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(data)
     assert "'1invalid' is not a valid Python variable name" in str(exc_info.value)
