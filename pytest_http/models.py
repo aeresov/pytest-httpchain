@@ -94,7 +94,7 @@ class Verify(BaseModel):
 
 
 class Request(BaseModel):
-    url: str | None = Field(default=None)
+    url: str = Field()
     method: HTTPMethod = Field(default=HTTPMethod.GET)
     params: dict[str, Any] | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)

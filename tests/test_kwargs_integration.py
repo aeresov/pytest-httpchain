@@ -92,7 +92,7 @@ def test_save_config_with_function_call() -> None:
 def test_stage_with_function_calls() -> None:
     stage = Stage(
         name="test_stage",
-        request={},  # No request fields in this stage
+        request={"url": "https://api.example.com/test"},  # No request fields in this stage
         response=Response(
             verify=Verify(
                 functions=[
@@ -106,7 +106,7 @@ def test_stage_with_function_calls() -> None:
                 functions=[
                     FunctionCall(
                         function="test_module:save_function",
-                        kwargs={"extract_fields": ["title", "author"]}
+                        kwargs={"extract_key": "user_id", "default_value": 0}
                     )
                 ]
             )
@@ -116,7 +116,7 @@ def test_stage_with_function_calls() -> None:
     assert stage.response.verify.functions[0].function == "test_module:verify_function"
     assert stage.response.verify.functions[0].kwargs == {"expected_text": "Hello", "case_sensitive": False}
     assert stage.response.save.functions[0].function == "test_module:save_function"
-    assert stage.response.save.functions[0].kwargs == {"extract_fields": ["title", "author"]}
+    assert stage.response.save.functions[0].kwargs == {"extract_key": "user_id", "default_value": 0}
 
 
 @pytest.mark.parametrize("scenario_data,expected_verify,expected_save", [
@@ -125,7 +125,7 @@ def test_stage_with_function_calls() -> None:
             "stages": [
                 {
                     "name": "test_stage",
-                    "request": {},  # No request fields in this stage
+                    "request": {"url": "https://api.example.com/test"},  # No request fields in this stage
                     "response": {
                         "verify": {
                             "functions": [
@@ -139,7 +139,7 @@ def test_stage_with_function_calls() -> None:
                             "functions": [
                                 {
                                     "function": "test_module:save_function",
-                                    "kwargs": {"field_path": "data.items", "default_value": "unknown"}
+                                    "kwargs": {"extract_key": "user_id", "default_value": 0}
                                 }
                             ]
                         }
@@ -147,25 +147,25 @@ def test_stage_with_function_calls() -> None:
                 }
             ]
         },
-        {"expected_status": 200, "timeout": 5.0},
-        {"field_path": "data.items", "default_value": "unknown"}
+        [FunctionCall(function="test_module:verify_function", kwargs={"expected_status": 200, "timeout": 5.0})],
+        [FunctionCall(function="test_module:save_function", kwargs={"extract_key": "user_id", "default_value": 0})]
     ),
     (
         {
             "stages": [
                 {
-                    "name": "test_stage",
-                    "request": {},  # No request fields in this stage
+                    "name": "simple_stage",
+                    "request": {"url": "https://api.example.com/test"},
                     "response": {
-                        "verify": {"functions": ["test_module:simple_function"]},
-                        "save": {"functions": ["test_module:save_function"]}
+                        "verify": {"status": 200},
+                        "save": {"vars": {"user_id": "response.id"}}
                     }
                 }
             ]
         },
         None,
         None
-    ),
+    )
 ])
 def test_scenario_with_function_calls(scenario_data: dict[str, Any], expected_verify: dict[str, Any] | None, expected_save: dict[str, Any] | None) -> None:
     scenario = Scenario.model_validate(scenario_data)

@@ -95,7 +95,7 @@ def test_http_request_configurations(stage_config, expected_url, expected_assert
             "multiple_http_stages"
         ),
         (
-            [{"name": "no_http_stage", "request": {}}],
+            [{"name": "no_http_stage", "request": {"url": "https://api.example.com/test"}}],
             [],
             "no_http_stage"
         ),
@@ -425,15 +425,8 @@ def test_json_verification_multiple_stages():
             }
         ),
         (
-            {"name": "no_http_stage", "request": {}},
-            {
-                "name": "no_http_stage",
-                "request": {
-                    "url": None,
-                    "params": None,
-                    "headers": None
-                }
-            }
+            {"name": "no_http_stage", "request": {"url": "https://api.example.com/test"}},
+            {"name": "no_http_stage", "request": {"url": "https://api.example.com/test"}}
         ),
     ],
 )
