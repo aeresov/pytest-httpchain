@@ -9,7 +9,7 @@ from pytest_http.models import Scenario
     [
         ({"stages": []}, []),
         ({"stages": None}, []),
-        ({"stages": [{"name": "stage1"}, {"name": "stage2"}]}, 2),
+        ({"stages": [{"name": "stage1", "request": {"url": "https://api.example.com/test"}}, {"name": "stage2", "request": {"url": "https://api.example.com/test"}}]}, 2),
     ],
 )
 def test_scenario_stages_handling(data, expected_stages):
@@ -45,7 +45,7 @@ def test_scenario_fixtures_and_marks(data, expected_fixtures, expected_marks):
     ],
 )
 def test_scenario_with_multiple_stages(stage_names, expected_count):
-    data = {"stages": [{"name": name} for name in stage_names]}
+    data = {"stages": [{"name": name, "request": {"url": "https://api.example.com/test"}} for name in stage_names]}
     scenario = Scenario.model_validate(data)
 
     assert len(scenario.stages) == expected_count
@@ -62,14 +62,14 @@ def test_scenario_with_multiple_stages(stage_names, expected_count):
     ],
 )
 def test_scenario_stages_with_save_field(save_data, expected_vars):
-    data = {"stages": [{"name": "stage_with_save", "save": save_data}]}
+    data = {"stages": [{"name": "stage_with_save", "request": {"url": "https://api.example.com/test"}, "response": {"save": save_data}}]}
     scenario = Scenario.model_validate(data)
 
     assert len(scenario.stages) == 1
     if expected_vars:
-        assert scenario.stages[0].save.vars == expected_vars
+        assert scenario.stages[0].response.save.vars == expected_vars
     else:
-        assert scenario.stages[0].save.vars == {}
+        assert scenario.stages[0].response.save.vars == {}
 
 
 @pytest.mark.parametrize(
@@ -78,7 +78,7 @@ def test_scenario_stages_with_save_field(save_data, expected_vars):
         ({"stages": "not_a_list"}, "Input should be a valid list"),
         ({"fixtures": "not_a_list"}, "Input should be a valid list"),
         ({"marks": "not_a_list"}, "Input should be a valid list"),
-        ({"stages": [{"name": "stage1"}, {"invalid": "structure"}]}, "Field required"),
+        ({"stages": [{"name": "stage1", "request": {"url": "https://api.example.com/test"}}, {"invalid": "structure"}]}, "Field required"),
     ],
 )
 def test_scenario_validation_errors(data, expected_error):
@@ -88,7 +88,7 @@ def test_scenario_validation_errors(data, expected_error):
 
 
 def test_scenario_ignores_extra_fields():
-    data = {"stages": [{"name": "stage1"}], "fixtures": ["user_id"], "marks": ["slow"], "extra_field": "should_be_ignored"}
+    data = {"stages": [{"name": "stage1", "request": {"url": "https://api.example.com/test"}}], "fixtures": ["user_id"], "marks": ["slow"], "extra_field": "should_be_ignored"}
     scenario = Scenario.model_validate(data)
 
     assert len(scenario.stages) == 1
@@ -106,7 +106,7 @@ def test_scenario_ignores_extra_fields():
     ],
 )
 def test_scenario_fixture_variable_conflicts(fixtures, save_vars, expected_conflict):
-    data = {"fixtures": fixtures, "stages": [{"name": "test", "save": save_vars}]}
+    data = {"fixtures": fixtures, "stages": [{"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": save_vars}}]}
 
     with pytest.raises(ValidationError) as exc_info:
         Scenario.model_validate(data)
@@ -116,9 +116,9 @@ def test_scenario_fixture_variable_conflicts(fixtures, save_vars, expected_confl
 @pytest.mark.parametrize(
     "data,description",
     [
-        ({"stages": [{"name": "test", "save": {"vars": {"user_id": "user.id"}}}]}, "no_fixtures"),
-        ({"fixtures": ["user_id", "api_key"], "stages": [{"name": "test"}]}, "no_save"),
-        ({"fixtures": ["user_id", "api_key"], "stages": [{"name": "test", "save": {"vars": {}}}]}, "empty_save"),
+        ({"stages": [{"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {"user_id": "user.id"}}}}]}, "no_fixtures"),
+        ({"fixtures": ["user_id", "api_key"], "stages": [{"name": "test", "request": {"url": "https://api.example.com/test"}}]}, "no_save"),
+        ({"fixtures": ["user_id", "api_key"], "stages": [{"name": "test", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {}}}}]}, "empty_save"),
     ],
 )
 def test_scenario_no_fixture_conflicts(data, description):
@@ -132,9 +132,9 @@ def test_scenario_no_fixture_conflicts(data, description):
         (
             ["user_id", "api_key"],
             [
-                {"name": "test1", "save": {"vars": {"result": "user.id"}}},
-                {"name": "test2"},
-                {"name": "test3", "save": {"vars": {"status": "response.status"}}},
+                {"name": "test1", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {"result": "user.id"}}}},
+                {"name": "test2", "request": {"url": "https://api.example.com/test"}},
+                {"name": "test3", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {"status": "response.status"}}}},
             ],
             [{"result": "user.id"}, None, {"status": "response.status"}],
         ),
@@ -149,9 +149,9 @@ def test_scenario_mixed_stages_validation(fixtures, stages_data, expected_saves)
 
     for i, expected_save in enumerate(expected_saves):
         if expected_save is None:
-            assert scenario.stages[i].save is None
+            assert scenario.stages[i].response is None or scenario.stages[i].response.save is None
         else:
-            assert scenario.stages[i].save.vars == expected_save
+            assert scenario.stages[i].response.save.vars == expected_save
 
 
 def test_scenario_complete_integration():
@@ -159,8 +159,8 @@ def test_scenario_complete_integration():
         "fixtures": ["user_id", "api_key"],
         "marks": ["slow", "integration"],
         "stages": [
-            {"name": "login", "save": {"vars": {"token": "response.token", "profile_id": "response.user.id"}}},
-            {"name": "get_profile", "save": {"vars": {"profile": "response.profile"}}},
+            {"name": "login", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {"token": "response.token", "profile_id": "response.user.id"}}}},
+            {"name": "get_profile", "request": {"url": "https://api.example.com/test"}, "response": {"save": {"vars": {"profile": "response.profile"}}}},
         ],
     }
 
@@ -171,9 +171,9 @@ def test_scenario_complete_integration():
 
     # Verify first stage
     assert scenario.stages[0].name == "login"
-    assert scenario.stages[0].save.vars["token"] == "response.token"
-    assert scenario.stages[0].save.vars["profile_id"] == "response.user.id"
+    assert scenario.stages[0].response.save.vars["token"] == "response.token"
+    assert scenario.stages[0].response.save.vars["profile_id"] == "response.user.id"
 
     # Verify second stage
     assert scenario.stages[1].name == "get_profile"
-    assert scenario.stages[1].save.vars["profile"] == "response.profile"
+    assert scenario.stages[1].response.save.vars["profile"] == "response.profile"

@@ -1,7 +1,10 @@
 {
     "stages": [
         {
-            "name": "basic_test"
+            "name": "basic_test",
+            "request": {
+                "url": "https://httpbin.org/json"
+            }
         }
     ]
 }
