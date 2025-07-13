@@ -2,9 +2,8 @@ import inspect
 import json
 import logging
 import re
-import sys
+import warnings
 from collections.abc import Iterable
-from functools import reduce
 from pathlib import Path
 from typing import Any
 
@@ -15,10 +14,12 @@ import requests
 from _pytest.config import Config
 from _pytest.config.argparsing import Parser
 from _pytest.nodes import Collector, Item
+from _pytest.outcomes import Failed
 from _pytest.python import Function
 from pydantic import ValidationError
 
-from pytest_http.models import Scenario, Stage
+from pytest_http.models import Scenario, Stage, Stages
+from pytest_http.user_function import UserFunction
 
 
 def pytest_addoption(parser: Parser) -> None:
@@ -30,10 +31,8 @@ def pytest_addoption(parser: Parser) -> None:
 
 
 def validate_suffix(suffix: str) -> str:
-    if not re.match(r"^[a-zA-Z0-9_-]+$", suffix):
-        raise ValueError("suffix must contain only alphanumeric characters, underscores, and hyphens")
-    if len(suffix) > 32:
-        raise ValueError("suffix must be 32 characters or less")
+    if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", suffix):
+        raise ValueError("suffix must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
     return suffix
 
 
@@ -43,158 +42,121 @@ def pytest_configure(config: Config) -> None:
     config.pytest_http_suffix = validated_suffix  # type: ignore
 
 
-def get_test_name_pattern(config: Config) -> re.Pattern[str]:
+def get_test_name_pattern(config: Config) -> tuple[re.Pattern[str], str]:
     suffix: str = getattr(config, "pytest_http_suffix", "http")
-    return re.compile(rf"^test_(?P<name>.+)\.{re.escape(suffix)}\.json$")
+    group_name: str = "name"
+    return re.compile(rf"^test_(?P<{group_name}>.+)\.{re.escape(suffix)}\.json$"), group_name
 
 
 class VariableSubstitutionError(Exception):
     pass
 
 
-def substitute_variables(json_text: str, fixtures: dict[str, Any]) -> str:
+def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
     try:
-        # Sort by length (longest first) to avoid partial replacements
-        sorted_fixtures = sorted(fixtures.items(), key=lambda x: len(x[0]), reverse=True)
+        json_text: str = stage.model_dump_json(by_alias=True)
 
-        for name, value in sorted_fixtures:
+        # Sort by length (longest first) to avoid partial replacements
+        for name, value in sorted(variables.items(), key=lambda x: len(x[0]), reverse=True):
             placeholder: str = f'"${name}"'
             json_value: str = json.dumps(value)
-            json_text = json_text.replace(placeholder, json_value)
+            json_text: str = json_text.replace(placeholder, json_value)
 
-            unquoted_placeholder: str = f"${name}"
-            string_value: str = str(value)
-            json_text = json_text.replace(unquoted_placeholder, string_value)
-
-        return json_text
-    except Exception as e:
-        raise VariableSubstitutionError(f"Failed to substitute variables: {e}") from e
-
-
-def substitute_stage_variables(stage_data: dict[str, Any], variables: dict[str, Any]) -> dict[str, Any]:
-    try:
-        json_text: str = json.dumps(stage_data, default=str)
-
-        # Sort by length (longest first) to avoid partial replacements
-        sorted_variables = sorted(variables.items(), key=lambda x: len(x[0]), reverse=True)
-
-        for name, value in sorted_variables:
-            quoted_placeholder: str = f'"${name}"'
-            json_value: str = json.dumps(value)
-            json_text = json_text.replace(quoted_placeholder, json_value)
-
-            unquoted_placeholder: str = f"${name}"
-            string_value: str = str(value)
-            json_text = json_text.replace(unquoted_placeholder, string_value)
-
-        return json.loads(json_text)
+        return Stage.model_validate_json(json_text)
+    except ValidationError as e:
+        raise VariableSubstitutionError(f"Stage validation failed after variable substitution: {e}") from e
     except Exception as e:
         raise VariableSubstitutionError(f"Failed to substitute variables in stage: {e}") from e
 
 
-def substitute_kwargs_variables(kwargs: dict[str, Any] | None, variables: dict[str, Any]) -> dict[str, Any] | None:
-    if kwargs is None:
-        return None
+def execute_stages(stages: Stages, variable_context: dict[str, Any], session: requests.Session) -> None:
+    for stage_name, stage in stages.items():
+        try:
+            stage: Stage = substitute_variables(stage, variable_context)
+        except VariableSubstitutionError as e:
+            pytest.fail(f"Stage '{stage_name}' - {e}")
 
-    def _substitute_recursive(obj: Any) -> Any:
-        if isinstance(obj, str):
-            if obj.startswith('"$') and obj.endswith('"'):
-                # Remove quotes and substitute
-                var_name = obj[2:-1]  # Remove '"$' and '"'
-                if var_name in variables:
-                    return variables[var_name]
-            elif obj.startswith("$"):
-                var_name = obj[1:]  # Remove '$'
-                if var_name in variables:
-                    return variables[var_name]
-            return obj
-        elif isinstance(obj, dict):
-            return {key: _substitute_recursive(value) for key, value in obj.items()}
-        elif isinstance(obj, list):
-            return [_substitute_recursive(item) for item in obj]
-        else:
-            return obj
+        request_params: dict[str, Any] = {}
+        if stage.request.params:
+            request_params["params"] = stage.request.params
+        if stage.request.headers:
+            request_params["headers"] = stage.request.headers
+        if stage.request.json is not None:
+            request_params["json"] = stage.request.json
 
-    try:
-        return _substitute_recursive(kwargs)
-    except Exception as e:
-        raise VariableSubstitutionError(f"Failed to substitute variables in kwargs: {e}") from e
+        try:
+            call_response: requests.Response = session.request(stage.request.method.value, stage.request.url, **request_params)
+        except requests.Timeout:
+            pytest.fail(f"HTTP request timed out for stage '{stage_name}' to URL: {stage.request.url}")
+        except requests.ConnectionError as e:
+            pytest.fail(f"HTTP connection error for stage '{stage_name}' to URL: {stage.request.url} - {e}")
+        except requests.RequestException as e:
+            pytest.fail(f"HTTP request failed for stage '{stage_name}' to URL: {stage.request.url} - {e}")
 
+        response_json: dict[str, Any] | None = call_response.json() if call_response.headers.get("content-type", "").startswith("application/json") else None
 
-def call_function_with_kwargs(func_name: str, response: requests.Response, kwargs: dict[str, Any] | None = None) -> Any:
-    try:
-        module_path, function_name = func_name.rsplit(":", 1)
-        import importlib
+        if stage.response and stage.response.save and stage.response.save.vars:
+            if response_json is None:
+                pytest.fail(f"Cannot save variables from JSON for stage '{stage_name}': response is not valid JSON")
 
-        module = importlib.import_module(module_path)
-        func = getattr(module, function_name)
+            for var_name, jmespath_expr in stage.response.save.vars.items():
+                try:
+                    saved_value = jmespath.search(jmespath_expr, response_json)
+                    variable_context[var_name] = saved_value
+                except Exception as e:
+                    pytest.fail(f"Error saving variable '{var_name}': {e}")
 
-        if kwargs:
-            return func(response, **kwargs)
-        else:
-            return func(response)
-    except Exception as e:
-        raise Exception(f"Error executing function '{func_name}': {e}") from e
-
-
-def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
-    variable_context: dict[str, Any] = dict(fixtures)
-
-    try:
-        test_model: Scenario = Scenario.model_validate(original_data)
-
-        for _, original_stage in enumerate(test_model.stages):
-            stage_dict = original_stage.model_dump(by_alias=True)
-            substituted_stage_dict = substitute_stage_variables(stage_dict, variable_context)
-
+            # run variable substitution again to update the stage with the saved variables
             try:
-                stage = Stage.model_validate(substituted_stage_dict)
-            except ValidationError as e:
-                pytest.fail(f"Stage '{original_stage.name}' validation failed after variable substitution: {e}")
-
-            if stage.request.url:
-                request_params: dict[str, Any] = {}
-                if stage.request.params:
-                    request_params["params"] = stage.request.params
-                if stage.request.headers:
-                    request_params["headers"] = stage.request.headers
-                if stage.request.json is not None:
-                    request_params["json"] = stage.request.json
-
+                stage: Stage = substitute_variables(stage, variable_context)
+            except VariableSubstitutionError as e:
+                pytest.fail(f"Stage '{stage_name}' - {e}")
+        if stage.response and stage.response.save and stage.response.save.functions:
+            for func_item in stage.response.save.functions:
                 try:
-                    response = requests.request(stage.request.method.value, stage.request.url, **request_params)
-                except requests.Timeout:
-                    pytest.fail(f"HTTP request timed out for stage '{stage.name}' to URL: {stage.request.url}")
-                except requests.ConnectionError as e:
-                    pytest.fail(f"HTTP connection error for stage '{stage.name}' to URL: {stage.request.url} - {e}")
-                except requests.RequestException as e:
-                    pytest.fail(f"HTTP request failed for stage '{stage.name}' to URL: {stage.request.url} - {e}")
+                    if isinstance(func_item, str):
+                        func_name = func_item
+                        kwargs = None
+                    else:
+                        func_name = func_item.function
+                        kwargs = func_item.kwargs
 
-                if stage.response and stage.response.verify and stage.response.verify.status is not None:
+                    returned_vars = UserFunction.call_function_with_kwargs(func_name, call_response, kwargs)
+
+                    if not isinstance(returned_vars, dict):
+                        pytest.fail(f"Function '{func_name}' must return a dictionary of variables, got {type(returned_vars)} for stage '{stage_name}'")
+
+                    for var_name, var_value in returned_vars.items():
+                        if not var_name.isidentifier():
+                            pytest.fail(f"Function '{func_name}' returned invalid variable name '{var_name}' for stage '{stage_name}'")
+
+                        variable_context[var_name] = var_value
+
+                except Exception as e:
+                    pytest.fail(f"Error executing function '{func_name}' for stage '{stage_name}': {e}")
+
+            # run variable substitution again to update the stage with the saved variables
+            try:
+                stage: Stage = substitute_variables(stage, variable_context)
+            except VariableSubstitutionError as e:
+                pytest.fail(f"Stage '{stage_name}' - {e}")
+
+        if stage.response:
+            if stage.response.verify:
+                if stage.response.verify.status:
                     expected_status = stage.response.verify.status.value
-                    actual_status = response.status_code
+                    actual_status = call_response.status_code
                     if actual_status != expected_status:
-                        pytest.fail(f"Status code verification failed for stage '{stage.name}': expected {expected_status}, got {actual_status}")
-
-                try:
-                    response_json = response.json() if response.headers.get("content-type", "").startswith("application/json") else None
-                except Exception:
-                    response_json = None
-
-                if stage.response and stage.response.verify and stage.response.verify.json is not None:
-                    if response_json is None:
-                        pytest.fail(f"Cannot verify JSON data for stage '{stage.name}': response is not valid JSON")
-
+                        pytest.fail(f"Status code verification failed for stage '{stage_name}': expected {expected_status}, got {actual_status}")
+                if stage.response.verify.json and response_json:
                     for jmespath_expr, expected_value in stage.response.verify.json.items():
                         try:
                             actual_value = jmespath.search(jmespath_expr, response_json)
                             if actual_value != expected_value:
-                                pytest.fail(f"JSON verification failed for stage '{stage.name}' with JMESPath '{jmespath_expr}': expected {expected_value}, got {actual_value}")
-                            logging.info(f"JSON verification passed for JMESPath '{jmespath_expr}': {actual_value}")
+                                pytest.fail(f"JSON verification failed for stage '{stage_name}' with JMESPath '{jmespath_expr}': expected {expected_value}, got {actual_value}")
                         except Exception as e:
-                            pytest.fail(f"Error during JSON verification for stage '{stage.name}' with JMESPath '{jmespath_expr}': {e}")
-
-                if stage.response and stage.response.verify and stage.response.verify.functions:
+                            pytest.fail(f"Error during JSON verification for stage '{stage_name}' with JMESPath '{jmespath_expr}': {e}")
+                if stage.response.verify.functions:
                     for func_item in stage.response.verify.functions:
                         try:
                             if isinstance(func_item, str):
@@ -202,120 +164,28 @@ def json_test_function(original_data: dict[str, Any], **fixtures: Any) -> None:
                                 kwargs = None
                             else:
                                 func_name = func_item.function
-                                kwargs = substitute_kwargs_variables(func_item.kwargs, variable_context)
+                                kwargs = func_item.kwargs
 
-                            verification_result = call_function_with_kwargs(func_name, response, kwargs)
+                            verification_result = UserFunction.call_function_with_kwargs(func_name, call_response, kwargs)
 
                             if not isinstance(verification_result, bool):
-                                pytest.fail(f"Verify function '{func_name}' must return a boolean, got {type(verification_result)} for stage '{stage.name}'")
+                                pytest.fail(f"Verify function '{func_name}' must return a boolean, got {type(verification_result)} for stage '{stage_name}'")
 
                             if not verification_result:
-                                pytest.fail(f"Verify function '{func_name}' failed for stage '{stage.name}'")
-
-                            logging.info(f"Verify function '{func_name}' passed for stage '{stage.name}'")
+                                pytest.fail(f"Verify function '{func_name}' failed for stage '{stage_name}'")
 
                         except Exception as e:
-                            pytest.fail(f"Error executing verify function '{func_name}' for stage '{stage.name}': {e}")
-
-                if stage.response and stage.response.save:
-                    if stage.response.save.vars:
-                        if response_json is None:
-                            pytest.fail(f"Cannot save variables from JSON for stage '{stage.name}': response is not valid JSON")
-
-                        for var_name, jmespath_expr in stage.response.save.vars.items():
-                            try:
-                                saved_value = jmespath.search(jmespath_expr, response_json)
-                                variable_context[var_name] = saved_value
-                                logging.info(f"Saved variable '{var_name}' = {saved_value}")
-                            except Exception as e:
-                                pytest.fail(f"Error saving variable '{var_name}': {e}")
-
-                    if stage.response.save.functions:
-                        for func_item in stage.response.save.functions:
-                            try:
-                                if isinstance(func_item, str):
-                                    func_name = func_item
-                                    kwargs = None
-                                else:
-                                    func_name = func_item.function
-                                    kwargs = substitute_kwargs_variables(func_item.kwargs, variable_context)
-
-                                returned_vars = call_function_with_kwargs(func_name, response, kwargs)
-
-                                if not isinstance(returned_vars, dict):
-                                    pytest.fail(f"Function '{func_name}' must return a dictionary of variables, got {type(returned_vars)} for stage '{stage.name}'")
-
-                                for var_name, var_value in returned_vars.items():
-                                    if not var_name.isidentifier():
-                                        pytest.fail(f"Function '{func_name}' returned invalid variable name '{var_name}' for stage '{stage.name}'")
-
-                                    variable_context[var_name] = var_value
-                                    logging.info(f"Function '{func_name}' saved variable '{var_name}' = {var_value}")
-
-                            except Exception as e:
-                                pytest.fail(f"Error executing function '{func_name}' for stage '{stage.name}': {e}")
-            else:
-                logging.info(f"No URL provided for stage '{stage.name}', skipping HTTP request")
-
-    except VariableSubstitutionError as e:
-        pytest.fail(f"Variable substitution error: {e}")
-    except json.JSONDecodeError as e:
-        pytest.fail(f"JSON decode error after substitution: {e}")
-    except ValidationError as e:
-        pytest.fail(f"Validation error: {e}")
-    except Exception as e:
-        pytest.fail(f"Unexpected error: {e}")
+                            pytest.fail(f"Error executing verify function '{func_name}' for stage '{stage_name}': {e}")
 
 
-class JSONFile(pytest.File):
-    def collect(self) -> Iterable[Item | Collector]:
-        try:
-            test_text: str = self.path.read_text()
-            test_data: dict[str, Any] = json.loads(test_text)
-        except json.JSONDecodeError as e:
-            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Invalid JSON: {e}")
-            return
-        except Exception as e:
-            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Error reading file: {e}")
-            return
-
-        try:
-            processed_data: dict[str, Any] = jsonref.replace_refs(test_data, base_uri=self.path.as_uri())
-        except Exception as e:
-            yield FailedValidationItem.from_parent(self, name=self.name, error=f"JSONRef error: {e}")
-            return
-
-        try:
-            test_spec: Scenario = Scenario.model_validate(processed_data)
-        except ValidationError as e:
-            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Validation error: {e}")
-            return
-        except Exception as e:
-            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Unexpected validation error: {e}")
-            return
-
-        try:
-            fixtures: list[str] = list(test_spec.fixtures)
-            marks: list[str] = list(test_spec.marks)
-        except Exception as e:
-            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Error extracting fixtures/marks: {e}")
-            return
-
-        try:
-
-            def test_func(**kwargs: Any) -> None:
-                return json_test_function(processed_data, **{name: kwargs[name] for name in fixtures if name in kwargs})
-
-            test_func.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in fixtures])  # type: ignore
-            test_func.__name__ = f"test_{self.name}"
-
-            test_func = reduce(lambda func, mark: eval(f"pytest.mark.{mark}", {"pytest": pytest, "sys": sys})(func), marks or [], test_func)
-
-            yield Function.from_parent(self, name=self.name, callobj=test_func)
-        except (SyntaxError, NameError, AttributeError) as e:
-            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Failed to apply marker: {e}")
-        except Exception as e:
-            yield FailedValidationItem.from_parent(self, name=self.name, error=f"Error creating test function: {e}")
+def json_test_function(stages: Stages, final: Stages, **fixtures: Any) -> None:
+    variable_context: dict[str, Any] = dict(fixtures)
+    session: requests.Session = requests.Session()
+    try:
+        execute_stages(stages, variable_context, session)
+    except Failed as e:
+        logging.info(f"Main stages failed: {e}")
+    execute_stages(final, variable_context, session)
 
 
 class FailedValidationItem(pytest.Item):
@@ -327,11 +197,72 @@ class FailedValidationItem(pytest.Item):
         raise AssertionError(self.error)
 
     def reportinfo(self) -> tuple[Path, int, str]:
-        return self.path, 0, f"sandbox json test: {self.name}"
+        return self.path, 0, self.name
+
+
+class JSONFile(pytest.File):
+    def _failed_validation_item(self, error: str) -> FailedValidationItem:
+        return FailedValidationItem.from_parent(self, name=self.name, error=error)
+
+    def collect(self) -> Iterable[Item | Collector]:
+        try:
+            test_text: str = self.path.read_text()
+            test_data: dict[str, Any] = json.loads(test_text)
+        except json.JSONDecodeError as e:
+            yield self._failed_validation_item(f"Invalid JSON: {e}")
+            return
+        except Exception as e:
+            yield self._failed_validation_item(f"Error reading file: {e}")
+            return
+
+        try:
+            processed_data: dict[str, Any] = jsonref.replace_refs(test_data, base_uri=self.path.as_uri())
+        except Exception as e:
+            yield self._failed_validation_item(f"JSONRef error: {e}")
+            return
+
+        try:
+            scenario: Scenario = Scenario.model_validate(processed_data)
+        except ValidationError as e:
+            yield self._failed_validation_item(f"Validation error: {e}")
+            return
+        except Exception as e:
+            yield self._failed_validation_item(f"Unexpected validation error: {e}")
+            return
+
+        try:
+            fixtures: list[str] = list(scenario.fixtures)
+            marks: list[str] = list(scenario.marks)
+            [warnings.warn("skipif marker is not supported", SyntaxWarning, stacklevel=2) for mark in marks if mark.startswith("skipif(")]
+        except Exception as e:
+            yield self._failed_validation_item(f"Error extracting fixtures/marks: {e}")
+            return
+
+        try:
+
+            def test_func(**kwargs: Any) -> None:
+                return json_test_function(scenario.stages, scenario.final, **{name: kwargs[name] for name in fixtures if name in kwargs})
+
+            test_func.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in fixtures])  # type: ignore
+            test_func.__name__ = f"test_{self.name}"
+
+            for mark in marks:
+                try:
+                    test_func = eval(f"pytest.mark.{mark}")(test_func)
+                except Exception as e:
+                    yield self._failed_validation_item(f"Failed to apply mark '{mark}': {e}")
+                    return
+
+            yield Function.from_parent(self, name=self.name, callobj=test_func)
+        except (SyntaxError, NameError, AttributeError) as e:
+            yield self._failed_validation_item(f"Failed to apply marker: {e}")
+        except Exception as e:
+            yield self._failed_validation_item(f"Error creating test function: {e}")
 
 
 def pytest_collect_file(file_path: Path, parent: Collector) -> JSONFile | None:
-    match: re.Match[str] | None = get_test_name_pattern(parent.config).match(file_path.name)
+    pattern, group_name = get_test_name_pattern(parent.config)
+    match: re.Match[str] | None = pattern.match(file_path.name)
     if match:
-        return JSONFile.from_parent(parent, path=file_path, name=match.group("name"))
+        return JSONFile.from_parent(parent, path=file_path, name=match.group(group_name))
     return None
