@@ -1,0 +1,25 @@
+{
+    "fixtures": [
+        "server"
+    ],
+    "stages": {
+        "start": {
+            "$ref": "stage_ref.json#/call_ok"
+        },
+        "call_bad": {
+            "request": {
+                "url": "http://localhost:5000/bad"
+            },
+            "response": {
+                "verify": {
+                    "status": 400
+                }
+            }
+        }
+    },
+    "final": {
+        "end": {
+            "$ref": "stage_ref.json#/call_bad"
+        }
+    }
+}

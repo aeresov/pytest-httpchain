@@ -1,6 +1,5 @@
 import inspect
 import json
-import logging
 import re
 import warnings
 from collections.abc import Iterable
@@ -181,11 +180,14 @@ def execute_stages(stages: Stages, variable_context: dict[str, Any], session: re
 def json_test_function(stages: Stages, final: Stages, **fixtures: Any) -> None:
     variable_context: dict[str, Any] = dict(fixtures)
     session: requests.Session = requests.Session()
+    main_flow_error: Failed | None = None
     try:
         execute_stages(stages, variable_context, session)
     except Failed as e:
-        logging.info(f"Main stages failed: {e}")
+        main_flow_error = e
     execute_stages(final, variable_context, session)
+    if main_flow_error:
+        raise main_flow_error
 
 
 class FailedValidationItem(pytest.Item):
@@ -194,7 +196,7 @@ class FailedValidationItem(pytest.Item):
         self.error: str = error
 
     def runtest(self) -> None:
-        raise AssertionError(self.error)
+        pytest.fail(self.error)
 
     def reportinfo(self) -> tuple[Path, int, str]:
         return self.path, 0, self.name

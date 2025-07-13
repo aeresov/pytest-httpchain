@@ -1,0 +1,22 @@
+{
+    "call_ok": {
+        "request": {
+            "url": "http://localhost:5000/ok"
+        },
+        "response": {
+            "verify": {
+                "status": 200
+            }
+        }
+    },
+    "call_bad": {
+        "request": {
+            "url": "http://localhost:5000/bad"
+        },
+        "response": {
+            "verify": {
+                "status": 400
+            }
+        }
+    }
+}

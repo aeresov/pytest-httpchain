@@ -18,6 +18,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "http-server-mock>=1.7",
     "responses>=0.25.7",
     "ruff>=0.12.1",
 ]
@@ -60,6 +61,7 @@ log_cli = true
 log_cli_level = "INFO"
 norecursedirs = ["examples"]
 pytester_example_dir = "tests/integration/examples"
+addopts = "--log-disable=werkzeug"
 
 [tool.pyright]
 exclude = ["cdk.out/"]

@@ -1,5 +1,12 @@
 {
     "marks": [
         "xfail(reason='stage is misconfigured, test should fail')"
-    ]
+    ],
+    "stages": {
+        "call_nowhere": {
+            "request": {
+                "url": "&"
+            }
+        }
+    }
 }

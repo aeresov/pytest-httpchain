@@ -52,6 +52,12 @@ class Stages(RootModel):
     def items(self):
         return self.root.items()
 
+    def keys(self):
+        return self.root.keys()
+
+    def values(self):
+        return self.root.values()
+
 
 class Scenario(BaseModel):
     fixtures: list[str] = Field(default_factory=list)
@@ -68,7 +74,7 @@ class Scenario(BaseModel):
 
         fixture_names = set(self.fixtures)
 
-        for stage in self.stages:
+        for stage in self.stages.values():
             if stage.response and stage.response.save and stage.response.save.vars:
                 for var_name in stage.response.save.vars.keys():
                     if var_name in fixture_names:
