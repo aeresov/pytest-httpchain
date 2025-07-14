@@ -15,6 +15,8 @@ A pytest plugin for HTTP testing using JSON files. Write your HTTP tests in JSON
 
 ## Installation
 
+Install normally via package manager of your choice, from PyPI or GitHub.
+
 ```bash
 pip install pytest-http
 ```
@@ -63,7 +65,8 @@ Create a JSON test file following the pattern `test_<name>.<suffix>.json` (defau
 }
 ```
 
-Run with pytest:
+Your file will be automatically discovered and treated like a test function. Run with pytest:
+
 ```bash
 pytest test_api.http.json
 ```
@@ -74,12 +77,17 @@ pytest test_api.http.json
 
 ```json
 {
-    "fixtures": ["fixture1", "fixture2"],  // Optional: pytest fixtures to inject
-    "marks": ["skip", "xfail(reason='...')"],  // Optional: pytest marks
-    "flow": [...],  // Required: main test stages
-    "final": [...]  // Optional: cleanup stages (always run)
+    "fixtures": ["fixture1", "fixture2"],
+    "marks": ["skip", "xfail(reason='...')"],
+    "flow": [...],
+    "final": [...]
 }
 ```
+
+- **`fixtures`**: Optional - pytest fixtures to inject
+- **`marks`**: Optional - pytest marks  
+- **`flow`**: Required - main test stages
+- **`final`**: Optional - cleanup stages (always run)
 
 ### Stage Schema
 
@@ -87,43 +95,59 @@ Each stage represents one HTTP request-response cycle:
 
 ```json
 {
-    "name": "stage_name",  // Required: descriptive name
+    "name": "stage_name",
     "request": {
-        "url": "https://api.example.com/endpoint",  // Required
-        "method": "GET",  // Optional: defaults to GET
-        "params": {"key": "value"},  // Optional: query parameters
-        "headers": {"Authorization": "Bearer token"},  // Optional
-        "json": {"data": "value"}  // Optional: JSON body
+        "url": "https://api.example.com/endpoint",
+        "method": "GET",
+        "params": {"key": "value"},
+        "headers": {"Authorization": "Bearer token"},
+        "json": {"data": "value"}
     },
-    "response": {  // Optional
+    "response": {
         "save": {
             "vars": {
-                "variable_name": "response.field"  // JMESPath expressions
+                "variable_name": "response.field"
             },
             "functions": [
-                "module.function_name",  // Function name only
+                "module:function_name",
                 {
-                    "function": "module.function_name",
+                    "function": "module:function_name",
                     "kwargs": {"param": "value"}
                 }
             ]
         },
         "verify": {
-            "status": 200,  // Expected HTTP status
+            "status": 200,
             "vars": {
                 "saved_variable": "expected_value"
             },
-            "functions": ["module.verification_function"]
+            "functions": ["module:function_name"]
         }
     }
 }
 ```
 
+**Request fields:**
+- **`name`**: Required - descriptive name
+- **`url`**: Required - endpoint URL
+- **`method`**: Optional - HTTP method (defaults to GET)
+- **`params`**: Optional - query parameters
+- **`headers`**: Optional - HTTP headers
+- **`json`**: Optional - JSON body
+
+**Response fields:**
+- **`response`**: Optional - response handling configuration
+- **`save.vars`**: JMESPath expressions to extract data
+- **`save.functions`**: User functions to extract data
+- **`verify.status`**: Expected HTTP status code
+- **`verify.vars`**: direct assertions for variables
+- **`verify.functions`**: User functions for non-trivial assertions
+
 ## Key Features
 
 ### Saving data for further use
 
-Stage can save data from HTTP response for further use.
+A stage can save data from HTTP response for further use.
 This data context is maintained for the whole length of scenario, updated by each subsequent stage.
 
 #### JMESPath Expressions
@@ -180,7 +204,7 @@ def complex_extraction(response: requests.Response, threshold: int) -> dict[str,
 
 #### Shaping further stages
 
-Use saved data from previous stages to alter urls, query parameters, headers etc.
+Use saved data from previous stages to alter URLs, query parameters, headers etc.
 
 ```json
 {
@@ -205,7 +229,7 @@ Use saved data from previous stages to alter urls, query parameters, headers etc
 
 #### Verification
 
-**verify** block acts like assertions in test function. You can use saved data from previous stages and from current one.
+**verify** block acts like assertions in test function. Check saved values directly or call custom functions. You can use saved data from previous stages and from current one.
 
 ```python
 # my_functions.py
@@ -247,7 +271,7 @@ def complex_verification(response: requests.Response, threshold: int) -> bool:
 
 ### JSON References ($ref)
 
-Reuse common stages across multiple test files:
+Reuse common pieces across multiple test files. Common **$ref** syntax is supported. Useful for boilerplate, e.g. authentication calls.
 
 **stage_common.json:**
 ```json
@@ -279,6 +303,7 @@ Reuse common stages across multiple test files:
 ### Pytest Integration
 
 #### Fixtures
+
 Use pytest fixtures in your JSON tests:
 
 ```json
@@ -294,6 +319,7 @@ Use pytest fixtures in your JSON tests:
 ```
 
 #### Marks
+
 Apply pytest marks:
 
 ```json
@@ -305,6 +331,8 @@ Apply pytest marks:
     ]
 }
 ```
+
+Note: **skipif** marker is not supported.
 
 ## File Naming Convention
 
@@ -321,9 +349,10 @@ Examples:
 - `test_payment_flow.http.json`
 
 Configure custom suffix in `pytest.ini`:
+
 ```ini
 [pytest]
-suffix = api
+suffix = rest
 ```
 
 ## Project Structure
@@ -394,7 +423,6 @@ suffix = rest
 [tool.pytest.ini_options]
 suffix = rest
 ```
-
 
 ## Error Handling
 
