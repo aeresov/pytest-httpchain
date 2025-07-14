@@ -1,4 +1,4 @@
-from http import HTTPMethod, HTTPStatus
+from http import HTTPStatus
 
 import pytest
 from http_server_mock import HttpServerMock
@@ -22,14 +22,24 @@ def dict_value():
 app = HttpServerMock(__name__)
 
 
-@app.route("/ok", methods=[HTTPMethod.GET])
+@app.get("/ok")
 def ok():
     return {}, HTTPStatus.OK
 
 
-@app.route("/bad", methods=[HTTPMethod.GET])
+@app.get("/bad")
 def bad():
     return {}, HTTPStatus.BAD_REQUEST
+
+
+@app.get("/path_param_number/{number_param}")
+def path_param_number(number_param: int):
+    return {"answer": {"param": number_param + 1}}, HTTPStatus.OK
+
+
+@app.get("/path_param_string/{string_param}")
+def path_param_string(string_param: str):
+    return {"answer": {"param": string_param}}, HTTPStatus.OK
 
 
 @pytest.fixture

@@ -20,29 +20,26 @@ from pydantic import ValidationError
 from pytest_http.models import Scenario, Stage, Stages
 from pytest_http.user_function import UserFunction
 
+SUFFIX: str = "suffix"
+
 
 def pytest_addoption(parser: Parser) -> None:
     parser.addini(
-        "suffix",
-        default="http",
+        name=SUFFIX,
         help="File suffix for HTTP test files (default: http). Must contain only alphanumeric characters, underscores, and hyphens, and be 32 characters or less.",
+        type="string",
+        default="http",
     )
 
 
-def validate_suffix(suffix: str) -> str:
+def pytest_configure(config: Config) -> None:
+    suffix: str = config.getini(SUFFIX)
     if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", suffix):
         raise ValueError("suffix must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
-    return suffix
-
-
-def pytest_configure(config: Config) -> None:
-    suffix: str = config.getini("suffix")
-    validated_suffix: str = validate_suffix(suffix)
-    config.pytest_http_suffix = validated_suffix  # type: ignore
 
 
 def get_test_name_pattern(config: Config) -> tuple[re.Pattern[str], str]:
-    suffix: str = getattr(config, "pytest_http_suffix", "http")
+    suffix: str = config.getini(SUFFIX)
     group_name: str = "name"
     return re.compile(rf"^test_(?P<{group_name}>.+)\.{re.escape(suffix)}\.json$"), group_name
 
@@ -57,9 +54,16 @@ def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
 
         # Sort by length (longest first) to avoid partial replacements
         for name, value in sorted(variables.items(), key=lambda x: len(x[0]), reverse=True):
-            placeholder: str = f'"${name}"'
-            json_value: str = json.dumps(value)
-            json_text: str = json_text.replace(placeholder, json_value)
+            placeholder: str = f"{{{name}}}"
+            # Check if placeholder is surrounded by quotes (inside a JSON string)
+            quoted_placeholder: str = f'"{placeholder}"'
+            if quoted_placeholder in json_text:
+                # Full JSON value replacement
+                json_value: str = json.dumps(value)
+                json_text = json_text.replace(quoted_placeholder, json_value)
+            else:
+                # String interpolation within JSON string
+                json_text = json_text.replace(placeholder, str(value))
 
         return Stage.model_validate_json(json_text)
     except ValidationError as e:
@@ -69,7 +73,8 @@ def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
 
 
 def execute_stages(stages: Stages, variable_context: dict[str, Any], session: requests.Session) -> None:
-    for stage_name, stage in stages.items():
+    for stage in stages:
+        stage_name: str = stage.name
         try:
             stage: Stage = substitute_variables(stage, variable_context)
         except VariableSubstitutionError as e:
@@ -110,6 +115,7 @@ def execute_stages(stages: Stages, variable_context: dict[str, Any], session: re
                 stage: Stage = substitute_variables(stage, variable_context)
             except VariableSubstitutionError as e:
                 pytest.fail(f"Stage '{stage_name}' - {e}")
+
         if stage.response and stage.response.save and stage.response.save.functions:
             for func_item in stage.response.save.functions:
                 try:
@@ -147,14 +153,13 @@ def execute_stages(stages: Stages, variable_context: dict[str, Any], session: re
                     actual_status = call_response.status_code
                     if actual_status != expected_status:
                         pytest.fail(f"Status code verification failed for stage '{stage_name}': expected {expected_status}, got {actual_status}")
-                if stage.response.verify.json and response_json:
-                    for jmespath_expr, expected_value in stage.response.verify.json.items():
-                        try:
-                            actual_value = jmespath.search(jmespath_expr, response_json)
-                            if actual_value != expected_value:
-                                pytest.fail(f"JSON verification failed for stage '{stage_name}' with JMESPath '{jmespath_expr}': expected {expected_value}, got {actual_value}")
-                        except Exception as e:
-                            pytest.fail(f"Error during JSON verification for stage '{stage_name}' with JMESPath '{jmespath_expr}': {e}")
+                if stage.response.verify.vars:
+                    for var_name, expected_value in stage.response.verify.vars.items():
+                        if var_name not in variable_context:
+                            pytest.fail(f"Variable '{var_name}' not found in variable_context for stage '{stage_name}'")
+                        var_value = variable_context[var_name]
+                        if var_value != expected_value:
+                            pytest.fail(f"Variable '{var_name}' verification failed for stage '{stage_name}': expected {expected_value}, got {var_value}")
                 if stage.response.verify.functions:
                     for func_item in stage.response.verify.functions:
                         try:
@@ -243,7 +248,7 @@ class JSONFile(pytest.File):
         try:
 
             def test_func(**kwargs: Any) -> None:
-                return json_test_function(scenario.stages, scenario.final, **{name: kwargs[name] for name in fixtures if name in kwargs})
+                return json_test_function(scenario.flow, scenario.final, **{name: kwargs[name] for name in fixtures if name in kwargs})
 
             test_func.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in fixtures])  # type: ignore
             test_func.__name__ = f"test_{self.name}"

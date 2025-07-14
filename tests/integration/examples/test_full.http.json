@@ -1,25 +1,24 @@
 {
     "fixtures": [
-        "server"
+        "server",
+        "string_value",
+        "number_value",
+        "dict_value"
     ],
-    "stages": {
-        "start": {
+    "flow": [
+        {
             "$ref": "stage_ref.json#/call_ok"
         },
-        "call_bad": {
+        {
+            "name": "path_param_string",
             "request": {
-                "url": "http://localhost:5000/bad"
-            },
-            "response": {
-                "verify": {
-                    "status": 400
-                }
+                "url": "http://localhost:5000/path_param_string/{string_value}"
             }
         }
-    },
-    "final": {
-        "end": {
+    ],
+    "final": [
+        {
             "$ref": "stage_ref.json#/call_bad"
         }
-    }
+    ]
 }

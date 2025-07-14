@@ -7,22 +7,90 @@ from pytest_http.types import FunctionName, JMESPathExpression, JSONSerializable
 
 
 class FunctionCall(BaseModel):
-    function: FunctionName
-    kwargs: dict[str, Any] | None = Field(default=None)
+    """
+    User function call to be made.
+
+    Attributes:
+        function: Full qualified name of the function to be called. Function must be available to import.
+        kwargs: Dictionary of arguments to be passed to the function.
+    """
+
+    function: FunctionName = Field(description="Name of the function to be called.")
+    kwargs: dict[VariableName, Any] | None = Field(default=None, description="Function arguments.")
+
+
+class Functions(RootModel):
+    """
+    Collection of functions to be called.
+    Functions are called in the order they are provided.
+
+    Attributes:
+        root:   List of functions provided by user.
+                Each item can be a function name or a function call.
+                When using a function name, the function is called with the response as the only argument.
+                When using a function call, the function is called with the response as the first argument and the kwargs provided.
+    """
+
+    root: list[FunctionName | FunctionCall] = Field(default_factory=list)
+
+    def __iter__(self):
+        return iter(self.root)
+
+    def __getitem__(self, item):
+        return self.root[item]
 
 
 class Save(BaseModel):
-    vars: dict[VariableName, JMESPathExpression] | None = Field(default=None)
-    functions: list[FunctionName | FunctionCall] | None = Field(default=None)
+    """
+    Configuration on how to save data from the response.
+    Data is saved into a dictionary called variable_context. This context is available for all stages in the scenario. Every stage updates the context with its own saves.
+
+    Attributes:
+        vars:       A dictionary where key is the variable name and value is the JMESPath expression to extract the value from the response.
+                    Dictionary with extracted values is merged into the variable_context.
+                    "vars" are processed first.
+        functions:  A list of functions to be called to save data.
+                    Function returns a dictionary to be merged into the variable_context.
+                    Functions are called after "vars".
+                    Functions can use variable_context entries for kwargs, including entries from current stage.
+    """
+
+    vars: dict[str, JMESPathExpression] | None = Field(default=None, description="Dictionary of JMESPath expressions to extract the value from the response")
+    functions: Functions | None = Field(default=None, description="List of functions to be called to save data.")
 
 
 class Verify(BaseModel):
-    status: HTTPStatus | None = Field(default=None)
-    json: dict[JMESPathExpression, Any] | None = Field(default=None)
-    functions: list[FunctionName | FunctionCall] | None = Field(default=None)
+    """
+    Configuration on how to verify the response.
+
+    Attributes:
+        status:     Expected HTTP status code.
+        vars:       A dictionary where key is the variable name and value is the expected value.
+                    Variables come from variable_context.
+                    Variables from current stage are available.
+        functions:  List of functions to be called to verify the response.
+                    Function returns a boolean value, negative result triggers test failure.
+                    Functions are called after "vars".
+                    Functions can use variable_context entries for kwargs, including entries from current stage.
+    """
+
+    status: HTTPStatus | None = Field(default=None, description="Expected HTTP status code.")
+    vars: dict[str, Any] | None = Field(default=None, description="Expected values for variables.")
+    functions: Functions | None = Field(default=None, description="List of functions to be called to verify the response.")
 
 
 class Request(BaseModel):
+    """
+    HTTP request configuration.
+
+    Attributes:
+        url:      URL to be requested. Can contain variable names for substitution.
+        method:   HTTP method to be used.
+        params:   Query parameters to be sent.
+        headers:  HTTP headers to be sent.
+        json:     JSON body to be sent.
+    """
+
     url: str = Field()
     method: HTTPMethod = Field(default=HTTPMethod.GET)
     params: dict[str, Any] | None = Field(default=None)
@@ -31,17 +99,45 @@ class Request(BaseModel):
 
 
 class Response(BaseModel):
+    """
+    HTTP response configuration.
+
+    Attributes:
+        save:   Configuration on how to save data from the response.
+        verify: Configuration on how to verify the response.
+    """
+
     save: Save | None = Field(default=None)
     verify: Verify | None = Field(default=None)
 
 
 class Stage(BaseModel):
+    """
+    HTTP request and response configuration.
+    Represents a single step in the scenario's test chain.
+
+    Attributes:
+        name:     Stage name.
+        request:  HTTP request configuration.
+        response: HTTP response configuration.
+    """
+
+    name: str = Field()
     request: Request = Field()
     response: Response | None = Field(default=None)
 
 
 class Stages(RootModel):
-    root: dict[str, Stage] = Field(default_factory=dict)
+    """
+    Collection of stages.
+    Represents scenario's test chain.
+    Stages are executed in the order they are provided.
+
+    Attributes:
+        root: List of stages.
+    """
+
+    root: list[Stage] = Field(default_factory=list)
 
     def __iter__(self):
         return iter(self.root)
@@ -49,21 +145,23 @@ class Stages(RootModel):
     def __getitem__(self, item):
         return self.root[item]
 
-    def items(self):
-        return self.root.items()
-
-    def keys(self):
-        return self.root.keys()
-
-    def values(self):
-        return self.root.values()
-
 
 class Scenario(BaseModel):
-    fixtures: list[str] = Field(default_factory=list)
-    marks: list[str] = Field(default_factory=list)
-    stages: Stages = Field(default_factory=Stages)
-    final: Stages = Field(default_factory=Stages)
+    """
+    Scenario represents a pytest test function that runs a chain of HTTP requests.
+    Scenario is organized as a collection of stages that are executed in order.
+
+    Attributes:
+        fixtures:   List of pytest fixture names to be supplied with, like a regular pytest function.
+        marks:      List of marks to be applied to, like to a regular pytest function.
+        flow:       Main test chain.
+        final:      Finalization chain, runs after the flow chain whether it fails or not.
+    """
+
+    fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names", extra="forbid")
+    marks: list[str] = Field(default_factory=list, description="List of marks to be applied", examples=["xfail", "skip"])
+    flow: Stages = Field(default_factory=Stages, description="Main test chain")
+    final: Stages = Field(default_factory=Stages, description="Finalization chain")
 
     model_config = ConfigDict(extra="ignore")
 
@@ -74,7 +172,7 @@ class Scenario(BaseModel):
 
         fixture_names = set(self.fixtures)
 
-        for stage in self.stages.values():
+        for stage in self.flow:
             if stage.response and stage.response.save and stage.response.save.vars:
                 for var_name in stage.response.save.vars.keys():
                     if var_name in fixture_names:

@@ -8,7 +8,7 @@ from pydantic import AfterValidator
 from pytest_http.user_function import UserFunction
 
 
-def validate_python_variable_name(v: str) -> str:
+def validate_python_identifier(v: str) -> str:
     if not v.isidentifier():
         raise ValueError(f"'{v}' is not a valid Python variable name")
 
@@ -41,7 +41,7 @@ def validate_json_serializable(v: Any) -> Any:
         raise ValueError(f"Value cannot be serialized as JSON: {e}") from e
 
 
-VariableName = Annotated[str, AfterValidator(validate_python_variable_name)]
+VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
 FunctionName = Annotated[str, AfterValidator(UserFunction.validate_function_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
 JSONSerializable = Annotated[Any, AfterValidator(validate_json_serializable)]
