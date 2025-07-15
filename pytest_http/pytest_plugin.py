@@ -16,8 +16,9 @@ from _pytest.nodes import Collector, Item
 from _pytest.outcomes import Failed
 from _pytest.python import Function
 from pydantic import ValidationError
+from requests.auth import AuthBase
 
-from pytest_http.models import Scenario, Stage, Stages
+from pytest_http.models import AWSCredentials, AWSProfile, Scenario, Stage, Stages
 from pytest_http.user_function import UserFunction
 
 SUFFIX: str = "suffix"
@@ -46,6 +47,38 @@ def get_test_name_pattern(config: Config) -> tuple[re.Pattern[str], str]:
 
 class VariableSubstitutionError(Exception):
     pass
+
+
+def create_aws_auth(aws_config: AWSProfile | AWSCredentials) -> AuthBase:
+    try:
+        import boto3
+        from requests_auth_aws_sigv4 import AWSSigV4  # type: ignore
+    except ImportError as e:
+        raise ImportError("AWS support requires 'aws' optional dependency") from e
+
+    if isinstance(aws_config, AWSProfile):
+        # Profile-based authentication
+        session = boto3.Session(profile_name=aws_config.profile)
+        credentials = session.get_credentials()
+        if not credentials:
+            raise ValueError(f"Could not get credentials for AWS profile '{aws_config.profile}'")
+
+        return AWSSigV4(
+            service=aws_config.service,
+            region=aws_config.region,
+            aws_access_key_id=credentials.access_key,
+            aws_secret_access_key=credentials.secret_key,
+            aws_session_token=credentials.token,
+        )
+    else:
+        # Credential-based authentication
+        return AWSSigV4(
+            service=aws_config.service,
+            region=aws_config.region,
+            aws_access_key_id=aws_config.access_key_id,
+            aws_secret_access_key=aws_config.secret_access_key,
+            aws_session_token=aws_config.session_token,
+        )
 
 
 def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
@@ -182,9 +215,17 @@ def execute_stages(stages: Stages, variable_context: dict[str, Any], session: re
                             pytest.fail(f"Error executing verify function '{func_name}' for stage '{stage_name}': {e}")
 
 
-def json_test_function(stages: Stages, final: Stages, **fixtures: Any) -> None:
+def json_test_function(stages: Stages, final: Stages, aws_config: AWSProfile | AWSCredentials | None = None, **fixtures: Any) -> None:
     variable_context: dict[str, Any] = dict(fixtures)
     session: requests.Session = requests.Session()
+
+    if aws_config:
+        try:
+            aws_auth = create_aws_auth(aws_config)
+            session.auth = aws_auth
+        except Exception as e:
+            pytest.fail(f"Failed to setup AWS authentication: {e}")
+
     main_flow_error: Failed | None = None
     try:
         execute_stages(stages, variable_context, session)
@@ -248,7 +289,7 @@ class JSONFile(pytest.File):
         try:
 
             def test_func(**kwargs: Any) -> None:
-                return json_test_function(scenario.flow, scenario.final, **{name: kwargs[name] for name in fixtures if name in kwargs})
+                return json_test_function(scenario.flow, scenario.final, scenario.aws, **{name: kwargs[name] for name in fixtures if name in kwargs})
 
             test_func.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in fixtures])  # type: ignore
             test_func.__name__ = f"test_{self.name}"

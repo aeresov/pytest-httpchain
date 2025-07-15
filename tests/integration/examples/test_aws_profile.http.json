@@ -1,0 +1,23 @@
+{
+    "aws": {
+        "service": "execute-api",
+        "region": "us-west-2",
+        "profile": "dev"
+    },
+    "fixtures": [
+        "server"
+    ],
+    "flow": [
+        {
+            "name": "call_aws_api",
+            "request": {
+                "url": "http://localhost:5000/ok"
+            },
+            "response": {
+                "verify": {
+                    "status": 200
+                }
+            }
+        }
+    ]
+}

@@ -1,3 +1,4 @@
+import os
 from http import HTTPMethod, HTTPStatus
 from typing import Any
 
@@ -146,6 +147,45 @@ class Stages(RootModel):
         return self.root[item]
 
 
+class AWSBase(BaseModel):
+    """
+    Base AWS configuration with common fields.
+
+    Attributes:
+        service:    AWS service name (e.g., 'execute-api', 's3', 'lambda').
+        region:     AWS region. Defaults to AWS_DEFAULT_REGION env var or 'us-east-1'.
+    """
+
+    service: str = Field(description="AWS service name")
+    region: str = Field(default_factory=lambda: os.getenv("AWS_DEFAULT_REGION", "us-east-1"), description="AWS region")
+
+
+class AWSProfile(AWSBase):
+    """
+    AWS configuration using profile-based authentication.
+
+    Attributes:
+        profile:    AWS profile name. Defaults to AWS_PROFILE env var.
+    """
+
+    profile: str = Field(default_factory=lambda: os.getenv("AWS_PROFILE", "default"), description="AWS profile name")
+
+
+class AWSCredentials(AWSBase):
+    """
+    AWS configuration using credential-based authentication.
+
+    Attributes:
+        access_key_id:      AWS access key ID. Defaults to AWS_ACCESS_KEY_ID env var.
+        secret_access_key:  AWS secret access key. Defaults to AWS_SECRET_ACCESS_KEY env var.
+        session_token:      AWS session token. Defaults to AWS_SESSION_TOKEN env var.
+    """
+
+    access_key_id: str = Field(default_factory=lambda: os.getenv("AWS_ACCESS_KEY_ID"), description="AWS access key ID")
+    secret_access_key: str = Field(default_factory=lambda: os.getenv("AWS_SECRET_ACCESS_KEY"), description="AWS secret access key")
+    session_token: str | None = Field(default_factory=lambda: os.getenv("AWS_SESSION_TOKEN"), description="AWS session token")
+
+
 class Scenario(BaseModel):
     """
     Scenario represents a pytest test function that runs a chain of HTTP requests.
@@ -154,12 +194,21 @@ class Scenario(BaseModel):
     Attributes:
         fixtures:   List of pytest fixture names to be supplied with, like a regular pytest function.
         marks:      List of marks to be applied to, like to a regular pytest function.
+        aws:        AWS configuration for IAM authentication (optional)
         flow:       Main test chain.
         final:      Finalization chain, runs after the flow chain whether it fails or not.
     """
 
     fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names", extra="forbid")
     marks: list[str] = Field(default_factory=list, description="List of marks to be applied", examples=["xfail", "skip"])
+    aws: AWSProfile | AWSCredentials | None = Field(
+        default=None,
+        description="AWS configuration for IAM authentication",
+        examples=[
+            {"service": "execute-api", "region": "us-west-2", "profile": "dev"},
+            {"service": "s3", "access_key_id": "AKIAIOSFODNN7EXAMPLE", "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"},
+        ],
+    )
     flow: Stages = Field(default_factory=Stages, description="Main test chain")
     final: Stages = Field(default_factory=Stages, description="Finalization chain")
 
