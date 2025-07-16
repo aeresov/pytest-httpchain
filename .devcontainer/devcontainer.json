@@ -12,10 +12,11 @@
     "mounts": [],
     "postCreateCommand": {
         "home": "sudo chown --recursive $(whoami): /home/$(whoami)",
-        "uv": "pipx install uv"
+        "uv": "pipx install uv",
+        "claude": "npm install -g @anthropic-ai/claude-code"
     },
     "postAttachCommand": {
-        "uv": "uv sync"
+        "uv": "uv sync --dev --all-extras"
     },
     "customizations": {
         "vscode": {
@@ -23,6 +24,7 @@
                 "-ms-python.autopep8",
                 "charliermarsh.ruff",
                 "astral-sh.ty",
+                "anthropic.claude-code",
                 "tamasfe.even-better-toml",
                 "esbenp.prettier-vscode"
             ]
