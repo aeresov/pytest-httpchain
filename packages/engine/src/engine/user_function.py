@@ -32,14 +32,14 @@ class UserFunction:
         return func
 
     @classmethod
-    def validate_function_name(cls, func_name: str) -> str:
+    def validate_name(cls, func_name: str) -> str:
         module_path, function_name = cls._parse_given_name(func_name)
         cls._import_function(module_path, function_name)
         # expect ValueError raised here on any error
         return func_name
 
     @classmethod
-    def call_function_with_kwargs(cls, func_name: str, response: requests.Response, kwargs: dict[str, Any] | None = None) -> Any:
+    def call_with_kwargs(cls, func_name: str, response: requests.Response, kwargs: dict[str, Any] | None = None) -> Any:
         module_path, function_name = cls._parse_given_name(func_name)
         func = cls._import_function(module_path, function_name)
 

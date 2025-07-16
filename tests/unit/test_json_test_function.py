@@ -1,7 +1,7 @@
 import responses
 
-from pytest_http.models import Request, Scenario, Stage, Stages
-from pytest_http.pytest_plugin import json_test_function
+from packages.engine.src.engine.models import Request, Scenario, Stage, Stages
+from pytest_http.plugin import json_test_function
 
 
 @responses.activate

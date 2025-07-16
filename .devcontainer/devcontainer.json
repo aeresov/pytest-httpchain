@@ -16,7 +16,7 @@
         "claude": "npm install -g @anthropic-ai/claude-code"
     },
     "postAttachCommand": {
-        "uv": "uv sync --dev --all-extras"
+        "uv": "uv sync --dev --all-packages --all-extras"
     },
     "customizations": {
         "vscode": {

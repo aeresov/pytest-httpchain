@@ -15,11 +15,10 @@ from _pytest.config.argparsing import Parser
 from _pytest.nodes import Collector, Item
 from _pytest.outcomes import Failed
 from _pytest.python import Function
+from engine.models import AWSCredentials, AWSProfile, Scenario, Stage, Stages
+from engine.user_function import UserFunction
 from pydantic import ValidationError
 from requests.auth import AuthBase
-
-from pytest_http.models import AWSCredentials, AWSProfile, Scenario, Stage, Stages
-from pytest_http.user_function import UserFunction
 
 SUFFIX: str = "suffix"
 
@@ -159,7 +158,7 @@ def execute_stages(stages: Stages, variable_context: dict[str, Any], session: re
                         func_name = func_item.function
                         kwargs = func_item.kwargs
 
-                    returned_vars = UserFunction.call_function_with_kwargs(func_name, call_response, kwargs)
+                    returned_vars = UserFunction.call_with_kwargs(func_name, call_response, kwargs)
 
                     if not isinstance(returned_vars, dict):
                         pytest.fail(f"Function '{func_name}' must return a dictionary of variables, got {type(returned_vars)} for stage '{stage_name}'")
@@ -203,7 +202,7 @@ def execute_stages(stages: Stages, variable_context: dict[str, Any], session: re
                                 func_name = func_item.function
                                 kwargs = func_item.kwargs
 
-                            verification_result = UserFunction.call_function_with_kwargs(func_name, call_response, kwargs)
+                            verification_result = UserFunction.call_with_kwargs(func_name, call_response, kwargs)
 
                             if not isinstance(verification_result, bool):
                                 pytest.fail(f"Verify function '{func_name}' must return a boolean, got {type(verification_result)} for stage '{stage_name}'")

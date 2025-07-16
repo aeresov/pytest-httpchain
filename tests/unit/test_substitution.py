@@ -1,5 +1,5 @@
-from pytest_http.models import Request, Stage
-from pytest_http.pytest_plugin import substitute_variables
+from packages.engine.src.engine.models import Request, Stage
+from pytest_http.plugin import substitute_variables
 
 
 def test_url_substitution():

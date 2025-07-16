@@ -5,7 +5,7 @@ from typing import Annotated, Any
 import jmespath
 from pydantic import AfterValidator
 
-from pytest_http.user_function import UserFunction
+from engine.user_function import UserFunction
 
 
 def validate_python_identifier(v: str) -> str:
@@ -42,6 +42,6 @@ def validate_json_serializable(v: Any) -> Any:
 
 
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
-FunctionName = Annotated[str, AfterValidator(UserFunction.validate_function_name)]
+FunctionName = Annotated[str, AfterValidator(UserFunction.validate_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
 JSONSerializable = Annotated[Any, AfterValidator(validate_json_serializable)]

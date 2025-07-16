@@ -1,9 +1,7 @@
 from http import HTTPMethod
 
 import pytest
-from pydantic import ValidationError
-
-from pytest_http.models import (
+from engine.models import (
     FunctionCall,
     Functions,
     Request,
@@ -13,6 +11,7 @@ from pytest_http.models import (
     Stage,
     Stages,
 )
+from pydantic import ValidationError
 
 
 def test_function_call_valid_with_kwargs():

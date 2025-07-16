@@ -2,15 +2,13 @@ import os
 from unittest.mock import Mock, patch
 
 import pytest
+from requests_auth_aws_sigv4 import AWSSigV4
 
-from pytest_http.models import AWSCredentials, AWSProfile
+from packages.engine.src.engine.models import AWSCredentials, AWSProfile
+from pytest_http.plugin import create_aws_auth
 
 pytest.importorskip("boto3")
 pytest.importorskip("requests_auth_aws_sigv4")
-
-from requests_auth_aws_sigv4 import AWSSigV4
-
-from pytest_http.pytest_plugin import create_aws_auth
 
 
 def test_create_aws_auth_with_profile():

@@ -1,0 +1,21 @@
+[project]
+name = "mcp-server"
+version = "0.1.0"
+description = "MCP server for pytest-http plugin"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [{ name = "Alexander Eresov", email = "aeresov@gmail.com" }]
+dependencies = ["mcp[cli]>=1.11.0", "engine"]
+
+[project.scripts]
+serve = "mcp_server.cli:serve"
+
+[dependency-groups]
+dev = []
+
+[tool.uv.sources]
+engine = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.7.21,<0.8.0"]
+build-backend = "uv_build"
