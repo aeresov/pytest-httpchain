@@ -51,8 +51,8 @@ def verify_json(json_data: str, base_uri: str = "") -> VerifyJsonResult:
             scenario_info={
                 "fixtures": scenario.fixtures,
                 "marks": scenario.marks,
-                "flow_stages": len(scenario.flow),
-                "final_stages": len(scenario.final),
+                "flow_stages": len(scenario.flow.root),
+                "final_stages": len(scenario.final.root),
                 "has_aws_config": scenario.aws is not None,
             },
         )
