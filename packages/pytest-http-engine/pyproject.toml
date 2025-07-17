@@ -13,12 +13,6 @@ dependencies = [
     "requests>=2.32.4",
 ]
 
-[project.optional-dependencies]
-aws = ["requests-auth-aws-sigv4>=0.7.0", "boto3>=1.35.0"]
-
-[dependency-groups]
-dev = []
-
 [build-system]
 requires = ["uv_build>=0.7.21,<0.8.0"]
 build-backend = "uv_build"
