@@ -1,6 +1,6 @@
 import responses
+from pytest_http_engine.models import Request, Scenario, Stage, Stages
 
-from packages.engine.src.engine.models import Request, Scenario, Stage, Stages
 from pytest_http.plugin import json_test_function
 
 

@@ -15,9 +15,9 @@ from _pytest.config.argparsing import Parser
 from _pytest.nodes import Collector, Item
 from _pytest.outcomes import Failed
 from _pytest.python import Function
-from engine.models import AWSCredentials, AWSProfile, Scenario, Stage, Stages
-from engine.user_function import UserFunction
 from pydantic import ValidationError
+from pytest_http_engine.models import AWSCredentials, AWSProfile, Scenario, Stage, Stages
+from pytest_http_engine.user_function import UserFunction
 from requests.auth import AuthBase
 
 SUFFIX: str = "suffix"

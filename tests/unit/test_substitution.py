@@ -1,4 +1,5 @@
-from packages.engine.src.engine.models import Request, Stage
+from pytest_http_engine.models import Request, Stage
+
 from pytest_http.plugin import substitute_variables
 
 
