@@ -15,10 +15,28 @@ A pytest plugin for HTTP testing using JSON files. Write your HTTP tests in JSON
 
 ## Installation
 
-Install normally via package manager of your choice, from PyPI or GitHub.
+Install normally via package manager of your choice from PyPi.
 
 ```bash
 pip install pytest-http
+```
+
+### Optional dependencies
+
+The following optional dependencies are available:
+* `aws`: AWS SigV4 authentication via [requests-auth-aws-sigv4](https://github.com/andrewjroth/requests-auth-aws-sigv4). Details in [AWS Authentication](#aws-authentication).
+* `mcp`: installs MCP server package and its starting script. Details in [MCP Server](#mcp-server).
+
+```bash
+pip install pytest-http[aws,mcp]
+```
+
+### Install from repository
+
+Directly from Github, in case you need a particular ref:
+
+```bash
+pip install 'git+https://github.com/aeresov/pytest-http@main'
 ```
 
 ## Quick Start
@@ -516,6 +534,42 @@ Exceptions to be expected from this plugin:
 - **Modular design**: Use `$ref` for reusable components
 - **Cleanup**: Use `final` stages for cleanup operations
 - **Fixtures**: Leverage pytest fixtures for test data and setup
+
+## MCP Server
+
+`pytest-http` includes an MCP (Model Context Protocol) server that provides JSON validation and schema support for AI assistants working with HTTP test files.
+
+### Installation
+
+The optional dependency `mcp` installs MCP server's package.
+
+The script `pytest-http-mcp` gets installed automatically. Use it as a call target for your MCP configuration.
+
+```json
+// .mcp.json for Claude Code
+{
+  "mcpServers": {
+    "pytest-http": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "pytest-http-mcp"
+      ],
+      "env": {}
+    }
+  }
+}
+```
+
+### Features
+
+The MCP server provides:
+
+- **JSON Validation**: Verify HTTP test JSON files against the Scenario schema
+- **Schema Export**: Access the complete JSON schema for test file structure
+- **Example Generation**: Get complete example test scenarios
+
 
 ## Examples
 
