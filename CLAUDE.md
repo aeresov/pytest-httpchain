@@ -62,6 +62,30 @@ Each stage defines:
 - `request`: HTTP request details (URL, method, headers, body)
 - `response`: Response handling (save variables, verify status/data)
 
+### Variable Substitution
+
+The plugin uses a simple variable substitution system that allows passing data between stages:
+
+- **Format**: `{variable_name}` (single curly braces)
+- **Usage**: Variables saved in earlier stages can be referenced in later stages
+- **Context**: All saved variables are available in the variable context for subsequent stages
+- **Examples**:
+  - URL: `"https://api.example.com/users/{user_id}/profile"`
+  - Headers: `"Authorization": "Bearer {auth_token}"`
+  - JSON body: `"user_id": "{user_id}"`
+
+Variables are saved using JMESPath expressions in the `response.save.vars` section:
+```json
+"response": {
+  "save": {
+    "vars": {
+      "auth_token": "data.token",
+      "user_id": "data.user.id"
+    }
+  }
+}
+```
+
 ## Configuration
 
 The plugin supports configuration through:

@@ -5,11 +5,11 @@ description = "pytest plugin for HTTP testing using JSON files"
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [{ name = "Alexander Eresov", email = "aeresov@gmail.com" }]
-dependencies = ["engine"]
+dependencies = ["pytest-http-engine"]
 
 [project.optional-dependencies]
 aws = ["requests-auth-aws-sigv4>=0.7.0", "boto3>=1.35.0"]
-mcp = ["mcp-server"]
+mcp = ["pytest-http-mcp"]
 
 [dependency-groups]
 dev = ["http-server-mock>=1.7", "responses>=0.25.7", "ruff>=0.12.1"]
@@ -18,8 +18,8 @@ dev = ["http-server-mock>=1.7", "responses>=0.25.7", "ruff>=0.12.1"]
 members = ["packages/*"]
 
 [tool.uv.sources]
-engine = { workspace = true }
-mcp-server = { workspace = true }
+pytest-http-engine = { workspace = true }
+pytest-http-mcp = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.7.21,<0.8.0"]

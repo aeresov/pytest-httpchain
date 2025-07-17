@@ -1,5 +1,5 @@
 [project]
-name = "engine"
+name = "pytest-http-engine"
 version = "0.1.0"
 description = "utilities for HTTP testing using JSON files"
 readme = "README.md"

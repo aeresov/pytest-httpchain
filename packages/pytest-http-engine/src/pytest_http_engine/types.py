@@ -5,7 +5,7 @@ from typing import Annotated, Any
 import jmespath
 from pydantic import AfterValidator
 
-from engine.user_function import UserFunction
+from pytest_http_engine.user_function import UserFunction
 
 
 def validate_python_identifier(v: str) -> str:

@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
-from engine.types import FunctionName, JMESPathExpression, JSONSerializable, VariableName
+from pytest_http_engine.types import FunctionName, JMESPathExpression, JSONSerializable, VariableName
 
 
 class FunctionCall(BaseModel):
