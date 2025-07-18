@@ -80,12 +80,12 @@ def get_scenario_example() -> str:
                     "url": "https://api.example.com/auth/login",
                     "method": "POST",
                     "headers": {"Content-Type": "application/json"},
-                    "json": {"username": "{user_credentials.username}", "password": "{user_credentials.password}"},
+                    "json": {"username": "{{ user_credentials.username }}", "password": "{{ user_credentials.password }}"},
                 },
                 "response": {
                     "save": {
                         "vars": {"auth_token": "data.token", "user_id": "data.user.id", "expires_at": "data.expires_at", "login_success": "data.success"},
-                        "functions": [{"function": "auth_utils:validate_token_format", "kwargs": {"token": "{auth_token}"}}],
+                        "functions": [{"function": "auth_utils:validate_token_format", "kwargs": {"token": "{{ auth_token }}"}}],
                     },
                     "verify": {"status": 200, "vars": {"login_success": True}},
                 },
@@ -93,9 +93,9 @@ def get_scenario_example() -> str:
             {
                 "name": "get_profile",
                 "request": {
-                    "url": "https://api.example.com/users/{user_id}/profile",
+                    "url": "https://api.example.com/users/{{ user_id }}/profile",
                     "method": "GET",
-                    "headers": {"Authorization": "Bearer {auth_token}", "Content-Type": "application/json"},
+                    "headers": {"Authorization": "Bearer {{ auth_token }}", "Content-Type": "application/json"},
                 },
                 "response": {
                     "save": {"vars": {"last_login": "data.profile.last_login", "profile_status": "data.profile.status", "old_theme": "data.settings.theme"}},
@@ -105,9 +105,9 @@ def get_scenario_example() -> str:
             {
                 "name": "update_settings",
                 "request": {
-                    "url": "https://api.example.com/users/{user_id}/settings",
+                    "url": "https://api.example.com/users/{{ user_id }}/settings",
                     "method": "PUT",
-                    "headers": {"Authorization": "Bearer {auth_token}", "Content-Type": "application/json"},
+                    "headers": {"Authorization": "Bearer {{ auth_token }}", "Content-Type": "application/json"},
                     "json": {"theme": "dark"},
                 },
                 "response": {
@@ -116,7 +116,10 @@ def get_scenario_example() -> str:
                         "status": 200,
                         "vars": {"update_success": True, "new_notifications": True, "new_theme": "dark"},
                         "functions": [
-                            {"function": "settings_utils:validate_settings_update", "kwargs": {"old_settings": {"theme": "{old_theme}"}, "new_settings": {"theme": "{new_theme}"}}}
+                            {
+                                "function": "settings_utils:validate_settings_update",
+                                "kwargs": {"old_settings": {"theme": "{{ old_theme }}"}, "new_settings": {"theme": "{{ new_theme }}"}},
+                            }
                         ],
                     },
                 },
@@ -128,7 +131,7 @@ def get_scenario_example() -> str:
                 "request": {
                     "url": "https://api.example.com/auth/logout",
                     "method": "POST",
-                    "headers": {"Authorization": "Bearer {auth_token}", "Content-Type": "application/json"},
+                    "headers": {"Authorization": "Bearer {{ auth_token }}", "Content-Type": "application/json"},
                 },
                 "response": {
                     "save": {"vars": {"logout_success": "data.logged_out", "token_invalidated": "data.token_invalidated"}},
