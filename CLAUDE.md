@@ -64,15 +64,18 @@ Each stage defines:
 
 ### Variable Substitution
 
-The plugin uses a simple variable substitution system that allows passing data between stages:
+The plugin uses Jinja2 templates for powerful variable substitution that allows passing data between stages:
 
-- **Format**: `{variable_name}` (single curly braces)
+- **Format**: `{{ variable_name }}` (double curly braces)
+- **Features**: Supports object dot notation, array access, and Jinja2 filters
 - **Usage**: Variables saved in earlier stages can be referenced in later stages
 - **Context**: All saved variables are available in the variable context for subsequent stages
 - **Examples**:
-  - URL: `"https://api.example.com/users/{user_id}/profile"`
-  - Headers: `"Authorization": "Bearer {auth_token}"`
-  - JSON body: `"user_id": "{user_id}"`
+  - Simple variables: `"https://api.example.com/users/{{ user_id }}/profile"`
+  - Object properties: `"Authorization": "Bearer {{ auth.token }}"`
+  - Array access: `"https://api.example.com/items/{{ items[0] }}/details"`
+  - Nested access: `"https://api.example.com/users/{{ data.users[0].profile.id }}"`
+  - JSON body: `"user_id": "{{ user.id }}", "name": "{{ user.name }}"`
 
 Variables are saved using JMESPath expressions in the `response.save.vars` section:
 ```json

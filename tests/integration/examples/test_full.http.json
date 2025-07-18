@@ -12,7 +12,7 @@
         {
             "name": "path_param_string",
             "request": {
-                "url": "http://localhost:5000/path_param_string/{string_value}"
+                "url": "http://localhost:5000/path_param_string/{{ string_value }}"
             }
         }
     ],

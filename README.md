@@ -9,7 +9,7 @@ A pytest plugin for HTTP testing using JSON files. Write your HTTP tests in JSON
 - **Declarative HTTP testing** - Define requests, responses, and validations in JSON
 - **Multi-stage scenarios** - Chain multiple HTTP requests with variable passing between stages
 - **pytest integration** - Full pytest features including fixtures, marks, and test discovery
-- **Variable substitution** - Use values from previous requests in subsequent ones
+- **Variable substitution** - Use data obtained from previous requests. Jinja2 syntax is supported.
 - **JMESPath support** - Extract and validate data from JSON responses
 - **User function integration** - Call custom Python functions for complex logic
 
@@ -67,10 +67,10 @@ Create a JSON test file following the pattern `test_<name>.<suffix>.json` (defau
         {
             "name": "update_user",
             "request": {
-                "url": "https://api.example.com/users/{user_id}",
+                "url": "https://api.example.com/users/{{ user_id }}",
                 "method": "PUT",
                 "json": {
-                    "name": "{username}_updated"
+                    "name": "{{ username }}_updated"
                 }
             },
             "response": {
@@ -293,6 +293,56 @@ This allows you to omit credentials from JSON files:
 
 - **`service`**: AWS service name (e.g., `execute-api`, `s3`, `lambda`)
 
+### Variable Substitution
+
+The plugin uses **Jinja2 templates** for powerful variable substitution, supporting complex data access patterns. Note that every string is treated as independent Jinja2 environment. This means, while you can use Jinja2 syntax within a string, you can't make the whole JSON file a Jinja2 template, it'll break validation.
+
+#### Basic Variable Access
+```json
+{
+    "request": {
+        "url": "https://api.example.com/users/{{ user_id }}",
+        "headers": {"Authorization": "Bearer {{ auth_token }}"}
+    }
+}
+```
+
+#### Object Dot Notation
+Access nested object properties using dot notation:
+```json
+{
+    "request": {
+        "url": "https://api.example.com/users/{{ user.profile.id }}",
+        "headers": {"X-User-Role": "{{ user.permissions.role }}"}
+    }
+}
+```
+
+#### Array/List Access
+Access array elements using square brackets:
+```json
+{
+    "request": {
+        "url": "https://api.example.com/items/{{ items[0] }}/details",
+        "json": {"categories": "{{ categories[1] }}"}
+    }
+}
+```
+
+#### Complex Nested Access
+Combine dot notation and array access for complex data structures:
+```json
+{
+    "request": {
+        "url": "https://api.example.com/users/{{ data.users[0].profile.id }}",
+        "json": {
+            "primary_address": "{{ user.addresses[0].street }}",
+            "backup_email": "{{ user.contacts.emails[1] }}"
+        }
+    }
+}
+```
+
 ### Using saved data
 
 #### Shaping further stages
@@ -313,7 +363,7 @@ Use saved data from previous stages to alter URLs, query parameters, headers etc
             "name": "api_call",
             "request": {
                 "url": "/api/data",
-                "headers": {"Authorization": "Bearer {token}"}
+                "headers": {"Authorization": "Bearer {{ token }}"}
             }
         }
     ]
@@ -386,7 +436,7 @@ Reuse common pieces across multiple test files. Common **$ref** syntax is suppor
             "name": "get_data",
             "request": {
                 "url": "/data",
-                "headers": {"Authorization": "Bearer {token}"}
+                "headers": {"Authorization": "Bearer {{ token }}"}
             }
         }
     ]
@@ -405,7 +455,7 @@ Use pytest fixtures in your JSON tests:
     "flow": [
         {
             "name": "test_with_fixtures",
-            "request": {"url": "http://{server}/api/{auth_token}"}
+            "request": {"url": "http://{{ server }}/api/{{ auth_token }}"}
         }
     ]
 }
@@ -497,7 +547,8 @@ uv run pytest tests/integration/examples/test_full.http.json
 - **pytest**: Test framework integration
 - **jsonref**: JSON reference resolution
 - **pydantic**: Data validation and parsing
-- **jmespath**: JSON query language
+- **jmespath**: JSON query language for response data extraction
+- **jinja2**: Template engine for variable substitution
 - **requests**: HTTP client
 
 ## Configuration

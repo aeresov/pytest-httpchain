@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+import jinja2
 import jmespath
 import jsonref
 import pytest
@@ -82,22 +83,30 @@ def create_aws_auth(aws_config: AWSProfile | AWSCredentials) -> AuthBase:
 
 def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
     try:
-        json_text: str = stage.model_dump_json(by_alias=True)
+        # Convert stage to dict for template processing
+        stage_dict = stage.model_dump()
 
-        # Sort by length (longest first) to avoid partial replacements
-        for name, value in sorted(variables.items(), key=lambda x: len(x[0]), reverse=True):
-            placeholder: str = f"{{{name}}}"
-            # Check if placeholder is surrounded by quotes (inside a JSON string)
-            quoted_placeholder: str = f'"{placeholder}"'
-            if quoted_placeholder in json_text:
-                # Full JSON value replacement
-                json_value: str = json.dumps(value)
-                json_text = json_text.replace(quoted_placeholder, json_value)
+        def render_recursive(obj: Any) -> Any:
+            if isinstance(obj, str):
+                # Create Jinja2 environment for each string template
+                env = jinja2.Environment(variable_start_string="{{", variable_end_string="}}", undefined=jinja2.StrictUndefined)
+                template = env.from_string(obj)
+                return template.render(variables)
+            elif isinstance(obj, dict):
+                return {key: render_recursive(value) for key, value in obj.items()}
+            elif isinstance(obj, list):
+                return [render_recursive(item) for item in obj]
             else:
-                # String interpolation within JSON string
-                json_text = json_text.replace(placeholder, str(value))
+                return obj
 
-        return Stage.model_validate_json(json_text)
+        # Recursively render all string values in the stage
+        rendered_stage_dict = render_recursive(stage_dict)
+
+        return Stage.model_validate(rendered_stage_dict)
+    except jinja2.UndefinedError as e:
+        raise VariableSubstitutionError(f"Undefined variable in template: {e}") from e
+    except jinja2.TemplateError as e:
+        raise VariableSubstitutionError(f"Template rendering error: {e}") from e
     except ValidationError as e:
         raise VariableSubstitutionError(f"Stage validation failed after variable substitution: {e}") from e
     except Exception as e:

@@ -19,7 +19,7 @@ def test_url_substitution():
                 Stage(
                     name="stage1",
                     request=Request(
-                        url="http://localhost:5000/path_param/{number_value}",
+                        url="http://localhost:5000/path_param/{{ number_value }}",
                     ),
                 )
             ]
