@@ -119,11 +119,13 @@ class Stage(BaseModel):
 
     Attributes:
         name:     Stage name.
+        fixtures: List of pytest fixture names to be supplied to this stage.
         request:  HTTP request configuration.
         response: HTTP response configuration.
     """
 
     name: str = Field()
+    fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names for this stage")
     request: Request = Field()
     response: Response | None = Field(default=None)
 
@@ -199,7 +201,7 @@ class Scenario(BaseModel):
         final:      Finalization chain, runs after the flow chain whether it fails or not.
     """
 
-    fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names", extra="forbid")
+    fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names (deprecated: use stage-level fixtures instead)")
     marks: list[str] = Field(default_factory=list, description="List of marks to be applied", examples=["xfail", "skip"])
     aws: AWSProfile | AWSCredentials | None = Field(
         default=None,

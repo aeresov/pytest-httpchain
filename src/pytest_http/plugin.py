@@ -1,8 +1,8 @@
-import inspect
 import json
 import re
 import warnings
 from collections.abc import Iterable
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,6 @@ import requests
 from _pytest.config import Config
 from _pytest.config.argparsing import Parser
 from _pytest.nodes import Collector, Item
-from _pytest.outcomes import Failed
 from _pytest.python import Function
 from pydantic import ValidationError
 from pytest_http_engine.models import AWSCredentials, AWSProfile, Scenario, Stage, Stages
@@ -113,135 +112,258 @@ def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
         raise VariableSubstitutionError(f"Failed to substitute variables in stage: {e}") from e
 
 
-def execute_stages(stages: Stages, variable_context: dict[str, Any], session: requests.Session) -> None:
-    for stage in stages:
-        stage_name: str = stage.name
+def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session: requests.Session) -> None:
+    stage_name: str = stage.name
+    try:
+        stage: Stage = substitute_variables(stage, variable_context)
+    except VariableSubstitutionError as e:
+        pytest.fail(f"Stage '{stage_name}' - {e}")
+
+    request_params: dict[str, Any] = {}
+    if stage.request.params:
+        request_params["params"] = stage.request.params
+    if stage.request.headers:
+        request_params["headers"] = stage.request.headers
+    if stage.request.json is not None:
+        request_params["json"] = stage.request.json
+
+    try:
+        call_response: requests.Response = session.request(stage.request.method.value, stage.request.url, **request_params)
+    except requests.Timeout:
+        pytest.fail(f"HTTP request timed out for stage '{stage_name}' to URL: {stage.request.url}")
+    except requests.ConnectionError as e:
+        pytest.fail(f"HTTP connection error for stage '{stage_name}' to URL: {stage.request.url} - {e}")
+    except requests.RequestException as e:
+        pytest.fail(f"HTTP request failed for stage '{stage_name}' to URL: {stage.request.url} - {e}")
+
+    response_json: dict[str, Any] | None = call_response.json() if call_response.headers.get("content-type", "").startswith("application/json") else None
+
+    if stage.response and stage.response.save and stage.response.save.vars:
+        if response_json is None:
+            pytest.fail(f"Cannot save variables from JSON for stage '{stage_name}': response is not valid JSON")
+
+        for var_name, jmespath_expr in stage.response.save.vars.items():
+            try:
+                saved_value = jmespath.search(jmespath_expr, response_json)
+                variable_context[var_name] = saved_value
+            except Exception as e:
+                pytest.fail(f"Error saving variable '{var_name}': {e}")
+
+        # run variable substitution again to update the stage with the saved variables
         try:
             stage: Stage = substitute_variables(stage, variable_context)
         except VariableSubstitutionError as e:
             pytest.fail(f"Stage '{stage_name}' - {e}")
 
-        request_params: dict[str, Any] = {}
-        if stage.request.params:
-            request_params["params"] = stage.request.params
-        if stage.request.headers:
-            request_params["headers"] = stage.request.headers
-        if stage.request.json is not None:
-            request_params["json"] = stage.request.json
-
-        try:
-            call_response: requests.Response = session.request(stage.request.method.value, stage.request.url, **request_params)
-        except requests.Timeout:
-            pytest.fail(f"HTTP request timed out for stage '{stage_name}' to URL: {stage.request.url}")
-        except requests.ConnectionError as e:
-            pytest.fail(f"HTTP connection error for stage '{stage_name}' to URL: {stage.request.url} - {e}")
-        except requests.RequestException as e:
-            pytest.fail(f"HTTP request failed for stage '{stage_name}' to URL: {stage.request.url} - {e}")
-
-        response_json: dict[str, Any] | None = call_response.json() if call_response.headers.get("content-type", "").startswith("application/json") else None
-
-        if stage.response and stage.response.save and stage.response.save.vars:
-            if response_json is None:
-                pytest.fail(f"Cannot save variables from JSON for stage '{stage_name}': response is not valid JSON")
-
-            for var_name, jmespath_expr in stage.response.save.vars.items():
-                try:
-                    saved_value = jmespath.search(jmespath_expr, response_json)
-                    variable_context[var_name] = saved_value
-                except Exception as e:
-                    pytest.fail(f"Error saving variable '{var_name}': {e}")
-
-            # run variable substitution again to update the stage with the saved variables
+    if stage.response and stage.response.save and stage.response.save.functions:
+        for func_item in stage.response.save.functions:
             try:
-                stage: Stage = substitute_variables(stage, variable_context)
-            except VariableSubstitutionError as e:
-                pytest.fail(f"Stage '{stage_name}' - {e}")
+                if isinstance(func_item, str):
+                    func_name = func_item
+                    kwargs = None
+                else:
+                    func_name = func_item.function
+                    kwargs = func_item.kwargs
 
-        if stage.response and stage.response.save and stage.response.save.functions:
-            for func_item in stage.response.save.functions:
-                try:
-                    if isinstance(func_item, str):
-                        func_name = func_item
-                        kwargs = None
-                    else:
-                        func_name = func_item.function
-                        kwargs = func_item.kwargs
+                returned_vars = UserFunction.call_with_kwargs(func_name, call_response, kwargs)
 
-                    returned_vars = UserFunction.call_with_kwargs(func_name, call_response, kwargs)
+                if not isinstance(returned_vars, dict):
+                    pytest.fail(f"Function '{func_name}' must return a dictionary of variables, got {type(returned_vars)} for stage '{stage_name}'")
 
-                    if not isinstance(returned_vars, dict):
-                        pytest.fail(f"Function '{func_name}' must return a dictionary of variables, got {type(returned_vars)} for stage '{stage_name}'")
+                for var_name, var_value in returned_vars.items():
+                    if not var_name.isidentifier():
+                        pytest.fail(f"Function '{func_name}' returned invalid variable name '{var_name}' for stage '{stage_name}'")
 
-                    for var_name, var_value in returned_vars.items():
-                        if not var_name.isidentifier():
-                            pytest.fail(f"Function '{func_name}' returned invalid variable name '{var_name}' for stage '{stage_name}'")
+                    variable_context[var_name] = var_value
 
-                        variable_context[var_name] = var_value
+            except Exception as e:
+                pytest.fail(f"Error executing function '{func_name}' for stage '{stage_name}': {e}")
 
-                except Exception as e:
-                    pytest.fail(f"Error executing function '{func_name}' for stage '{stage_name}': {e}")
-
-            # run variable substitution again to update the stage with the saved variables
-            try:
-                stage: Stage = substitute_variables(stage, variable_context)
-            except VariableSubstitutionError as e:
-                pytest.fail(f"Stage '{stage_name}' - {e}")
-
-        if stage.response:
-            if stage.response.verify:
-                if stage.response.verify.status:
-                    expected_status = stage.response.verify.status.value
-                    actual_status = call_response.status_code
-                    if actual_status != expected_status:
-                        pytest.fail(f"Status code verification failed for stage '{stage_name}': expected {expected_status}, got {actual_status}")
-                if stage.response.verify.vars:
-                    for var_name, expected_value in stage.response.verify.vars.items():
-                        if var_name not in variable_context:
-                            pytest.fail(f"Variable '{var_name}' not found in variable_context for stage '{stage_name}'")
-                        var_value = variable_context[var_name]
-                        if var_value != expected_value:
-                            pytest.fail(f"Variable '{var_name}' verification failed for stage '{stage_name}': expected {expected_value}, got {var_value}")
-                if stage.response.verify.functions:
-                    for func_item in stage.response.verify.functions:
-                        try:
-                            if isinstance(func_item, str):
-                                func_name = func_item
-                                kwargs = None
-                            else:
-                                func_name = func_item.function
-                                kwargs = func_item.kwargs
-
-                            verification_result = UserFunction.call_with_kwargs(func_name, call_response, kwargs)
-
-                            if not isinstance(verification_result, bool):
-                                pytest.fail(f"Verify function '{func_name}' must return a boolean, got {type(verification_result)} for stage '{stage_name}'")
-
-                            if not verification_result:
-                                pytest.fail(f"Verify function '{func_name}' failed for stage '{stage_name}'")
-
-                        except Exception as e:
-                            pytest.fail(f"Error executing verify function '{func_name}' for stage '{stage_name}': {e}")
-
-
-def json_test_function(stages: Stages, final: Stages, aws_config: AWSProfile | AWSCredentials | None = None, **fixtures: Any) -> None:
-    variable_context: dict[str, Any] = dict(fixtures)
-    session: requests.Session = requests.Session()
-
-    if aws_config:
+        # run variable substitution again to update the stage with the saved variables
         try:
-            aws_auth = create_aws_auth(aws_config)
-            session.auth = aws_auth
-        except Exception as e:
-            pytest.fail(f"Failed to setup AWS authentication: {e}")
+            stage: Stage = substitute_variables(stage, variable_context)
+        except VariableSubstitutionError as e:
+            pytest.fail(f"Stage '{stage_name}' - {e}")
 
-    main_flow_error: Failed | None = None
-    try:
-        execute_stages(stages, variable_context, session)
-    except Failed as e:
-        main_flow_error = e
-    execute_stages(final, variable_context, session)
-    if main_flow_error:
-        raise main_flow_error
+    if stage.response:
+        if stage.response.verify:
+            if stage.response.verify.status:
+                expected_status = stage.response.verify.status.value
+                actual_status = call_response.status_code
+                if actual_status != expected_status:
+                    pytest.fail(f"Status code verification failed for stage '{stage_name}': expected {expected_status}, got {actual_status}")
+            if stage.response.verify.vars:
+                for var_name, expected_value in stage.response.verify.vars.items():
+                    if var_name not in variable_context:
+                        pytest.fail(f"Variable '{var_name}' not found in variable_context for stage '{stage_name}'")
+                    var_value = variable_context[var_name]
+                    if var_value != expected_value:
+                        pytest.fail(f"Variable '{var_name}' verification failed for stage '{stage_name}': expected {expected_value}, got {var_value}")
+            if stage.response.verify.functions:
+                for func_item in stage.response.verify.functions:
+                    try:
+                        if isinstance(func_item, str):
+                            func_name = func_item
+                            kwargs = None
+                        else:
+                            func_name = func_item.function
+                            kwargs = func_item.kwargs
+
+                        verification_result = UserFunction.call_with_kwargs(func_name, call_response, kwargs)
+
+                        if not isinstance(verification_result, bool):
+                            pytest.fail(f"Verify function '{func_name}' must return a boolean, got {type(verification_result)} for stage '{stage_name}'")
+
+                        if not verification_result:
+                            pytest.fail(f"Verify function '{func_name}' failed for stage '{stage_name}'")
+
+                    except Exception as e:
+                        pytest.fail(f"Error executing verify function '{func_name}' for stage '{stage_name}': {e}")
+
+
+class StageType(StrEnum):
+    FLOW = "flow"
+    FINAL = "final"
+
+
+class JSONScenario(Collector):
+    def __init__(self, model: Scenario, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._model = model
+        self._variable_context: dict[str, Any] = {}
+        self._http_session: requests.Session | None = None
+        self._flow_failed: bool = False
+        self._final_failed: bool = False
+
+    @property
+    def model(self) -> Scenario:
+        """Pydantic model"""
+        return self._model
+
+    @property
+    def variable_context(self) -> dict[str, Any]:
+        """Variable context for sharing data between stages"""
+        return self._variable_context
+
+    @variable_context.setter
+    def variable_context(self, value: dict[str, Any]) -> None:
+        self._variable_context = value
+
+    @property
+    def http_session(self) -> requests.Session | None:
+        """HTTP session for making requests"""
+        return self._http_session
+
+    @property
+    def flow_failed(self) -> bool:
+        """Flag indicating if any flow stage has failed"""
+        return self._flow_failed
+
+    @flow_failed.setter
+    def flow_failed(self, value: bool) -> None:
+        self._flow_failed = value
+
+    @property
+    def final_failed(self) -> bool:
+        """Flag indicating if any final stage has failed"""
+        return self._final_failed
+
+    @final_failed.setter
+    def final_failed(self, value: bool) -> None:
+        self._final_failed = value
+
+    def setup(self) -> None:
+        """Initialize session and variable context for the scenario"""
+        self.variable_context = {}
+        self._http_session = requests.Session()
+
+        if self.model.aws:
+            try:
+                aws_auth = create_aws_auth(self.model.aws)
+                self._http_session.auth = aws_auth
+            except Exception as e:
+                pytest.fail(f"Failed to setup AWS authentication: {e}")
+
+    def teardown(self) -> None:
+        """Cleanup session"""
+        if self.http_session:
+            self.http_session.close()
+
+    def collect(self) -> Iterable[Item | Collector]:
+        """Collect stage functions for both flow and final stages"""
+
+        def collect_stages(stages: Stages, type: StageType) -> Iterable[JSONStage]:
+            for stage in stages:
+                # Combine scenario fixtures with stage-specific fixtures
+                combined_fixtures = list(set(self._model.fixtures + stage.fixtures))
+                if combined_fixtures != stage.fixtures:
+                    # Only modify stage if fixtures changed
+                    stage_dict = stage.model_dump()
+                    stage_dict["fixtures"] = combined_fixtures
+                    stage = Stage.model_validate(stage_dict)
+
+                yield JSONStage.from_parent(self, name=stage.name, model=stage, scenario=self, type=type)
+
+        # Collect flow stages first, then final stages
+        # pytest will execute them in the order we yield them
+        yield from collect_stages(self._model.flow, StageType.FLOW)
+        yield from collect_stages(self._model.final, StageType.FINAL)
+
+
+class JSONStage(Function):
+    def __init__(self, model: Stage, scenario: JSONScenario, type: StageType, **kwargs: Any) -> None:
+        self._model = model
+        self._scenario = scenario
+        self._type = type
+
+        def execute_stage(**fixture_kwargs: Any) -> None:
+            # Check if we should execute this stage
+            if not self._should_execute_stage():
+                pytest.skip(f"Skipping {self._type} stage '{model.name}' due to flow failure")
+
+            # Add fixtures to variable context
+            for fixture_name in model.fixtures:
+                if fixture_name in fixture_kwargs:
+                    scenario.variable_context[fixture_name] = fixture_kwargs[fixture_name]
+
+            # Execute the stage and handle failures
+            try:
+                execute_single_stage(model, scenario.variable_context, scenario.http_session)
+            except Exception as e:
+                match self._type:
+                    case StageType.FLOW:
+                        self._scenario.flow_failed = True
+                    case StageType.FINAL:
+                        self._scenario.final_failed = True
+                raise e
+
+        # Set up function signature for fixtures if needed
+        if model.fixtures:
+            import inspect
+
+            execute_stage.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in model.fixtures])
+
+        kwargs["callobj"] = execute_stage
+        super().__init__(**kwargs)
+
+        # Apply marks from parent scenario after initialization
+        if hasattr(scenario, "pytestmark"):
+            self.pytestmark = getattr(self, "pytestmark", []) + scenario.pytestmark
+
+    @property
+    def model(self) -> Stage:
+        """Pydantic model"""
+        return self._model
+
+    def _should_execute_stage(self) -> bool:
+        """Check if this stage should execute based on scenario failures"""
+        match self._type:
+            case StageType.FLOW:
+                return not self._scenario.flow_failed
+            case StageType.FINAL:
+                return not self._scenario.final_failed
+            case _:
+                return True
 
 
 class FailedValidationItem(pytest.Item):
@@ -287,33 +409,28 @@ class JSONFile(pytest.File):
             return
 
         try:
-            fixtures: list[str] = list(scenario.fixtures)
             marks: list[str] = list(scenario.marks)
             [warnings.warn("skipif marker is not supported", SyntaxWarning, stacklevel=2) for mark in marks if mark.startswith("skipif(")]
         except Exception as e:
-            yield self._failed_validation_item(f"Error extracting fixtures/marks: {e}")
+            yield self._failed_validation_item(f"Error extracting marks: {e}")
             return
 
         try:
+            # Create the scenario class
+            scenario_class = JSONScenario.from_parent(self, name=f"Test{self.name.title().replace('_', '')}", model=scenario)
 
-            def test_func(**kwargs: Any) -> None:
-                return json_test_function(scenario.flow, scenario.final, scenario.aws, **{name: kwargs[name] for name in fixtures if name in kwargs})
-
-            test_func.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in fixtures])  # type: ignore
-            test_func.__name__ = f"test_{self.name}"
-
+            # Apply marks to the class
             for mark in marks:
                 try:
-                    test_func = eval(f"pytest.mark.{mark}")(test_func)
+                    mark_obj = eval(f"pytest.mark.{mark}")
+                    scenario_class.pytestmark = getattr(scenario_class, "pytestmark", []) + [mark_obj]
                 except Exception as e:
                     yield self._failed_validation_item(f"Failed to apply mark '{mark}': {e}")
                     return
 
-            yield Function.from_parent(self, name=self.name, callobj=test_func)
-        except (SyntaxError, NameError, AttributeError) as e:
-            yield self._failed_validation_item(f"Failed to apply marker: {e}")
+            yield scenario_class
         except Exception as e:
-            yield self._failed_validation_item(f"Error creating test function: {e}")
+            yield self._failed_validation_item(f"Error creating scenario class: {e}")
 
 
 def pytest_collect_file(file_path: Path, parent: Collector) -> JSONFile | None:
