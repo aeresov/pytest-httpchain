@@ -1,6 +1,5 @@
 import json
 import re
-import warnings
 from collections.abc import Iterable
 from enum import StrEnum
 from pathlib import Path
@@ -294,10 +293,8 @@ class JSONScenario(Collector):
 
         def collect_stages(stages: Stages, type: StageType) -> Iterable[JSONStage]:
             for stage in stages:
-                # Combine scenario fixtures with stage-specific fixtures
                 combined_fixtures = list(set(self._model.fixtures + stage.fixtures))
                 if combined_fixtures != stage.fixtures:
-                    # Only modify stage if fixtures changed
                     stage_dict = stage.model_dump()
                     stage_dict["fixtures"] = combined_fixtures
                     stage = Stage.model_validate(stage_dict)
@@ -409,18 +406,11 @@ class JSONFile(pytest.File):
             return
 
         try:
-            marks: list[str] = list(scenario.marks)
-            [warnings.warn("skipif marker is not supported", SyntaxWarning, stacklevel=2) for mark in marks if mark.startswith("skipif(")]
-        except Exception as e:
-            yield self._failed_validation_item(f"Error extracting marks: {e}")
-            return
-
-        try:
             # Create the scenario class
             scenario_class = JSONScenario.from_parent(self, name=f"Test{self.name.title().replace('_', '')}", model=scenario)
 
             # Apply marks to the class
-            for mark in marks:
+            for mark in scenario.marks:
                 try:
                     mark_obj = eval(f"pytest.mark.{mark}")
                     scenario_class.pytestmark = getattr(scenario_class, "pytestmark", []) + [mark_obj]

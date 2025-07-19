@@ -230,3 +230,14 @@ class Scenario(BaseModel):
                         raise ValueError(f"Variable name '{var_name}' conflicts with fixture name")
 
         return self
+
+    @model_validator(mode="after")
+    def validate_prohibited_marks(self) -> "Scenario":
+        prohibited_marks = ["skipif", "usefixture"]
+
+        for mark in self.marks:
+            for prohibited in prohibited_marks:
+                if mark.startswith(f"{prohibited}(") or mark == prohibited:
+                    raise ValueError(f"Mark '{prohibited}' is not supported")
+
+        return self

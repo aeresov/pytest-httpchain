@@ -5,14 +5,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Development Commands
 
 ### Package Management and Dependencies
+- **Python requirement**: Python >=3.13
 - **Install dependencies**: `uv sync --all-extras --all-packages`
+- **Install dev dependencies**: `make sync` (runs uv sync --dev --all-extras --all-packages)
 - **Update dependencies**: `uv lock --upgrade`
+- **Build packages**: `uv build`
 
 ### Testing
 - **Run all tests**: `uv run pytest`
-- **Run specific test file**: `uv run pytest tests/unit/test_models.py`
+- **Run tests with verbose output**: `uv run pytest -v`
+- **Run tests with print statements**: `uv run pytest -s`
+- **Run specific test file**: `uv run pytest tests/unit/test_aws_auth.py`
 - **Run integration tests**: `uv run pytest tests/integration/`
-- files in `tests/integration/examples/` are used in integration tests and are not individual test targets
+- **Run specific JSON test**: `uv run pytest tests/integration/examples/test_full.http.json`
+- **Note**: Files in `tests/integration/examples/` are used in integration tests and are not individual test targets
 
 ### Code Quality
 - **Lint code**: `uv run ruff check`
@@ -39,11 +45,15 @@ This is a pytest plugin that enables HTTP testing through JSON configuration fil
 
 ### Key Architecture Details
 
-- **Plugin System**: Uses pytest's plugin architecture with file collection hooks
+- **Plugin System**: Uses pytest's plugin architecture with file collection hooks in `src/pytest_http/plugin.py:434`
 - **JSON Schema Validation**: Pydantic models validate JSON test files against strict schemas
-- **Variable Substitution**: Template engine for passing data between HTTP request stages
-- **AWS Authentication**: Optional AWS SigV4 authentication support
+- **Variable Substitution**: Jinja2 template engine for passing data between HTTP request stages (`substitute_variables` function)
+- **AWS Authentication**: Optional AWS SigV4 authentication support via `create_aws_auth` function
 - **User Functions**: Extensible system for custom validation and data extraction logic
+- **Stage Execution**: Sequential execution of flow stages, with final stages always executed for cleanup
+- **Session Management**: HTTP session per scenario with proper setup/teardown lifecycle
+- **Error Handling**: HTTP errors and validation failures produce descriptive pytest failure messages
+- **Mock Server**: Integration tests use `http-server-mock` for reliable testing
 
 ### File Naming Convention
 
@@ -97,18 +107,24 @@ The plugin supports configuration through:
 
 ## Dependencies
 
+Core dependencies:
 - **pytest**: Core testing framework
-- **pydantic**: Data validation and parsing
-- **requests**: HTTP client
-- **jmespath**: JSON query language for data extraction  
-- **jsonref**: JSON reference resolution ($ref support)
+- **pydantic**: Data validation and parsing using `pytest_http_engine.models`
+- **requests**: HTTP client for making API calls
+- **jmespath**: JSON query language for response data extraction  
+- **jsonref**: JSON reference resolution ($ref support) for reusable stage definitions
+- **jinja2**: Template engine for variable substitution
 - **ruff**: Linting and formatting
 - **uv**: Package management
 
 Optional dependencies:
-- **aws**: `requests-auth-aws-sigv4`, `boto3` for AWS authentication
-- **mcp**: `mcp-server` for MCP functionality
+- **aws**: `requests-auth-aws-sigv4`, `boto3` for AWS SigV4 authentication
+- **mcp**: `pytest-http-mcp` package for MCP server functionality
 
-## Current State
+Development dependencies:
+- **http-server-mock**: Mock HTTP server for testing
+- **responses**: HTTP response mocking library
 
-The codebase is in development with recent restructuring. The main pytest plugin entry point is configured but there may be import path issues that need resolution during development.
+## Plugin Entry Point
+
+The pytest plugin is configured in `pyproject.toml` with entry point `pytest_http = "pytest_http.plugin"` which makes it automatically discoverable by pytest when the package is installed.
