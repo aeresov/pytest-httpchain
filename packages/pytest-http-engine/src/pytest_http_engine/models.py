@@ -233,7 +233,7 @@ class Scenario(BaseModel):
 
     @model_validator(mode="after")
     def validate_prohibited_marks(self) -> "Scenario":
-        prohibited_marks = ["skipif", "usefixture"]
+        prohibited_marks = ["skipif", "usefixture", "parametrize"]
 
         for mark in self.marks:
             for prohibited in prohibited_marks:

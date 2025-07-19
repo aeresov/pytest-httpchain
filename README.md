@@ -469,13 +469,12 @@ Apply pytest marks:
 {
     "marks": [
         "skip(reason='API not ready')",
-        "xfail",
-        "parametrize('param', [1, 2, 3])"
+        "xfail"
     ]
 }
 ```
 
-Note: **skipif** marker is not supported.
+Note: The following markers are **not supported**: `skipif`, `usefixture`, and `parametrize`.
 
 ## File Naming Convention
 
