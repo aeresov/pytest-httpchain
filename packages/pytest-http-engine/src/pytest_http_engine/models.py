@@ -143,6 +143,7 @@ class Request(BaseModel):
         headers:  HTTP headers to be sent.
         body:     Request body configuration.
         timeout:  Request timeout in seconds (optional).
+        allow_redirects: Whether to follow HTTP redirects (defaults to True).
         ssl:      SSL/TLS configuration for this specific request (overrides scenario SSL settings).
     """
 
@@ -152,6 +153,7 @@ class Request(BaseModel):
     headers: dict[str, str] | None = Field(default=None)
     body: RequestBody | None = Field(default=None, description="Request body configuration")
     timeout: float | None = Field(default=None, description="Request timeout in seconds", gt=0)
+    allow_redirects: bool = Field(default=True, description="Whether to follow redirects")
     ssl: SSLConfig | None = Field(
         default=None,
         description="SSL/TLS configuration for this specific request (overrides scenario SSL settings)",

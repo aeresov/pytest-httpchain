@@ -126,6 +126,9 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
     if stage.request.timeout:
         request_params["timeout"] = stage.request.timeout
 
+    # Set allow_redirects based on request configuration
+    request_params["allow_redirects"] = stage.request.allow_redirects
+
     # Add SSL configuration for this specific request (overrides session SSL)
     if stage.request.ssl:
         if stage.request.ssl.verify is not None:

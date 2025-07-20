@@ -1,0 +1,30 @@
+{
+    "fixtures": [
+        "server"
+    ],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "flow": [
+        {
+            "name": "test_follow_redirect",
+            "request": {
+                "url": "{{ api_base }}/redirect-source",
+                "method": "GET"
+            },
+            "response": {
+                "save": {
+                    "vars": {
+                        "success": "success"
+                    }
+                },
+                "verify": {
+                    "status": 200,
+                    "vars": {
+                        "success": true
+                    }
+                }
+            }
+        }
+    ]
+}
