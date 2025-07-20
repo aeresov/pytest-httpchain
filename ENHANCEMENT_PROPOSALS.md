@@ -329,37 +329,6 @@ This document outlines potential enhancements for the pytest-http plugin to expa
 - Request/response logging options
 - Failure screenshots for UI tests
 
-#### WebSocket Support
-
-```json
-{
-  "websocket": {
-    "url": "wss://api.example.com/ws",
-    "messages": [
-      {
-        "send": {"type": "subscribe", "channel": "updates"},
-        "expect": {"type": "subscribed"},
-        "timeout": 5000
-      }
-    ]
-  }
-}
-```
-
-#### Mock Server Integration
-
-```json
-{
-  "mocks": [
-    {
-      "request": {"method": "GET", "path": "/external/api"},
-      "response": {"status": 200, "json": {"mocked": true}}
-    }
-  ]
-}
-```
-
-
 ## Configuration
 
 New features should support configuration at multiple levels:
