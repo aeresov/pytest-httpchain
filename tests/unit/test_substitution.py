@@ -51,11 +51,11 @@ def test_complex_nested_access():
 def test_string_interpolation():
     stage = Stage(
         name="stage1",
-        request=Request(url="http://localhost:5000/api", json={"user_id": "{{ user.id }}", "name": "{{ user.name }}"}),
+        request=Request(url="http://localhost:5000/api", body={"json": {"user_id": "{{ user.id }}", "name": "{{ user.name }}"}}),
     )
     variables = {"user": {"id": 123, "name": "John Doe"}}
     stage = substitute_variables(stage, variables)
-    assert stage.request.json == {"user_id": "123", "name": "John Doe"}
+    assert stage.request.body.json == {"user_id": "123", "name": "John Doe"}
 
 
 def test_full_object_embedding():
@@ -66,9 +66,11 @@ def test_full_object_embedding():
     )
     # Add a custom attribute to demonstrate object embedding
     stage_data = stage.model_dump()
-    stage_data["request"]["json"] = {
-        "user_id": "{{ user.id }}",
-        "config": "{{ config }}",  # This will be rendered as a string
+    stage_data["request"]["body"] = {
+        "json": {
+            "user_id": "{{ user.id }}",
+            "config": "{{ config }}",  # This will be rendered as a string
+        }
     }
 
     variables = {
@@ -80,4 +82,4 @@ def test_full_object_embedding():
     test_stage = Stage.model_validate(stage_data)
     result = substitute_variables(test_stage, variables)
 
-    assert result.request.json == {"user_id": "123", "config": '{"theme": "dark", "notifications": true}'}
+    assert result.request.body.json == {"user_id": "123", "config": '{"theme": "dark", "notifications": true}'}

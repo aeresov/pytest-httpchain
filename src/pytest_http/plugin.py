@@ -123,8 +123,39 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
         request_params["params"] = stage.request.params
     if stage.request.headers:
         request_params["headers"] = stage.request.headers
-    if stage.request.json is not None:
-        request_params["json"] = stage.request.json
+
+    # Handle different body types
+    if stage.request.body:
+        from pytest_http_engine.models import FilesBody, FormBody, JsonBody, RawBody, XmlBody
+
+        match stage.request.body:
+            case JsonBody(json=data):
+                request_params["json"] = data
+            case FormBody(form=data):
+                request_params["data"] = data
+            case XmlBody(xml=data):
+                request_params["data"] = data
+            case RawBody(raw=data):
+                request_params["data"] = data
+            case FilesBody(files=files_dict):
+                # Process files - handle @/path/to/file syntax
+                files = {}
+                file_ref_pattern = re.compile(r"^@(?P<path>.+)$")
+
+                for field_name, file_value in files_dict.items():
+                    if match := file_ref_pattern.match(file_value):
+                        # File path reference
+                        file_path = match.group("path")
+                        try:
+                            files[field_name] = open(file_path, "rb")
+                        except FileNotFoundError:
+                            pytest.fail(f"File not found for upload: {file_path}")
+                        except Exception as e:
+                            pytest.fail(f"Error opening file {file_path}: {e}")
+                    else:
+                        # Raw content
+                        files[field_name] = file_value
+                request_params["files"] = files
 
     try:
         call_response: requests.Response = session.request(stage.request.method.value, stage.request.url, **request_params)
@@ -134,6 +165,12 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
         pytest.fail(f"HTTP connection error for stage '{stage_name}' to URL: {stage.request.url} - {e}")
     except requests.RequestException as e:
         pytest.fail(f"HTTP request failed for stage '{stage_name}' to URL: {stage.request.url} - {e}")
+    finally:
+        # Clean up opened files
+        if "files" in request_params:
+            for _, file_obj in request_params["files"].items():
+                if hasattr(file_obj, "close"):
+                    file_obj.close()
 
     response_json: dict[str, Any] | None = call_response.json() if call_response.headers.get("content-type", "").startswith("application/json") else None
 

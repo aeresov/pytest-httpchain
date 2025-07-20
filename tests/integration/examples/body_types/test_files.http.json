@@ -1,0 +1,33 @@
+{
+    "fixtures": [
+        "server"
+    ],
+    "flow": [
+        {
+            "name": "test_files_body",
+            "request": {
+                "url": "http://localhost:5000/echo",
+                "method": "POST",
+                "body": {
+                    "files": {
+                        "file1": "Raw file content 1",
+                        "file2": "Raw file content 2"
+                    }
+                }
+            },
+            "response": {
+                "save": {
+                    "vars": {
+                        "body_type": "body_type"
+                    }
+                },
+                "verify": {
+                    "status": 200,
+                    "vars": {
+                        "body_type": "files"
+                    }
+                }
+            }
+        }
+    ]
+}

@@ -1,0 +1,33 @@
+{
+    "fixtures": [
+        "server"
+    ],
+    "flow": [
+        {
+            "name": "test_json_body",
+            "request": {
+                "url": "http://localhost:5000/echo",
+                "method": "POST",
+                "body": {
+                    "json": {
+                        "name": "John Doe",
+                        "age": 30
+                    }
+                }
+            },
+            "response": {
+                "save": {
+                    "vars": {
+                        "body_type": "body_type"
+                    }
+                },
+                "verify": {
+                    "status": 200,
+                    "vars": {
+                        "body_type": "json"
+                    }
+                }
+            }
+        }
+    ]
+}

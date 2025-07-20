@@ -1,0 +1,34 @@
+{
+    "fixtures": [
+        "server"
+    ],
+    "flow": [
+        {
+            "name": "test_form_body",
+            "request": {
+                "url": "http://localhost:5000/echo",
+                "method": "POST",
+                "body": {
+                    "form": {
+                        "username": "johndoe",
+                        "password": "secret123",
+                        "remember": "true"
+                    }
+                }
+            },
+            "response": {
+                "save": {
+                    "vars": {
+                        "body_type": "body_type"
+                    }
+                },
+                "verify": {
+                    "status": 200,
+                    "vars": {
+                        "body_type": "form"
+                    }
+                }
+            }
+        }
+    ]
+}

@@ -80,7 +80,7 @@ def get_scenario_example() -> str:
                     "url": "https://api.example.com/auth/login",
                     "method": "POST",
                     "headers": {"Content-Type": "application/json"},
-                    "json": {"username": "{{ user_credentials.username }}", "password": "{{ user_credentials.password }}"},
+                    "body": {"json": {"username": "{{ user_credentials.username }}", "password": "{{ user_credentials.password }}"}},
                 },
                 "response": {
                     "save": {
@@ -108,7 +108,7 @@ def get_scenario_example() -> str:
                     "url": "https://api.example.com/users/{{ user_id }}/settings",
                     "method": "PUT",
                     "headers": {"Authorization": "Bearer {{ auth_token }}", "Content-Type": "application/json"},
-                    "json": {"theme": "dark"},
+                    "body": {"json": {"theme": "dark"}},
                 },
                 "response": {
                     "save": {"vars": {"update_success": "data.updated", "new_theme": "data.settings.theme"}},

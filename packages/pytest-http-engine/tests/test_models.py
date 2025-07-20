@@ -98,8 +98,8 @@ def test_scenario_validator_fixture_variable_conflict():
     ],
 )
 def test_request_json_serializable_validation(json_data):
-    request = Request(url="https://api.example.com", json=json_data)
-    assert request.json == json_data
+    request = Request(url="https://api.example.com", body={"json": json_data})
+    assert request.body.json == json_data
 
 
 def test_scenario_extra_fields_ignored():

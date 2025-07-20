@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
-from pytest_http_engine.types import FunctionName, JMESPathExpression, JSONSerializable, VariableName
+from pytest_http_engine.types import FileReference, FunctionName, JMESPathExpression, JSONSerializable, VariableName
 
 
 class FunctionCall(BaseModel):
@@ -80,6 +80,40 @@ class Verify(BaseModel):
     functions: Functions | None = Field(default=None, description="List of functions to be called to verify the response.")
 
 
+class JsonBody(BaseModel):
+    """JSON request body."""
+
+    json: JSONSerializable = Field(description="JSON data to send")
+
+
+class XmlBody(BaseModel):
+    """XML request body."""
+
+    xml: str = Field(description="XML content as string")
+
+
+class FormBody(BaseModel):
+    """Form-encoded request body."""
+
+    form: dict[str, Any] = Field(description="Form data to be URL-encoded")
+
+
+class RawBody(BaseModel):
+    """Raw text request body."""
+
+    raw: str = Field(description="Raw text content")
+
+
+class FilesBody(BaseModel):
+    """Multipart file upload request body."""
+
+    files: dict[str, FileReference] = Field(description="Files to upload, use @/path/to/file for file paths or raw content")
+
+
+# Union type for all possible body types
+RequestBody = JsonBody | XmlBody | FormBody | RawBody | FilesBody
+
+
 class Request(BaseModel):
     """
     HTTP request configuration.
@@ -89,14 +123,14 @@ class Request(BaseModel):
         method:   HTTP method to be used.
         params:   Query parameters to be sent.
         headers:  HTTP headers to be sent.
-        json:     JSON body to be sent.
+        body:     Request body configuration.
     """
 
     url: str = Field()
     method: HTTPMethod = Field(default=HTTPMethod.GET)
     params: dict[str, Any] | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)
-    json: JSONSerializable = Field(default=None)
+    body: RequestBody | None = Field(default=None, description="Request body configuration")
 
 
 class Response(BaseModel):

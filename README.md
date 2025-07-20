@@ -69,8 +69,10 @@ Create a JSON test file following the pattern `test_<name>.<suffix>.json` (defau
             "request": {
                 "url": "https://api.example.com/users/{{ user_id }}",
                 "method": "PUT",
-                "json": {
-                    "name": "{{ username }}_updated"
+                "body": {
+                    "json": {
+                        "name": "{{ username }}_updated"
+                    }
                 }
             },
             "response": {
@@ -119,7 +121,9 @@ Each stage represents one HTTP request-response cycle:
         "method": "GET",
         "params": {"key": "value"},
         "headers": {"Authorization": "Bearer token"},
-        "json": {"data": "value"}
+        "body": {
+            "json": {"data": "value"}
+        }
     },
     "response": {
         "save": {
@@ -151,7 +155,90 @@ Each stage represents one HTTP request-response cycle:
 - **`method`**: Optional - HTTP method (defaults to GET)
 - **`params`**: Optional - query parameters
 - **`headers`**: Optional - HTTP headers
-- **`json`**: Optional - JSON body
+- **`body`**: Optional - request body (see Body Types section below)
+
+### Request Body Types
+
+The `body` field supports different content types. Only one body type can be specified per request:
+
+#### JSON Body
+```json
+{
+    "request": {
+        "body": {
+            "json": {
+                "name": "John Doe",
+                "age": 30,
+                "active": true
+            }
+        }
+    }
+}
+```
+
+#### Form Data (application/x-www-form-urlencoded)
+```json
+{
+    "request": {
+        "body": {
+            "form": {
+                "username": "johndoe",
+                "password": "secret123",
+                "remember": "true"
+            }
+        }
+    }
+}
+```
+
+#### XML Body
+```json
+{
+    "request": {
+        "headers": {
+            "Content-Type": "application/xml"
+        },
+        "body": {
+            "xml": "<user><name>John Doe</name><age>30</age></user>"
+        }
+    }
+}
+```
+
+#### Raw Text Body
+```json
+{
+    "request": {
+        "headers": {
+            "Content-Type": "text/plain; charset=utf-8"
+        },
+        "body": {
+            "raw": "This is raw text content"
+        }
+    }
+}
+```
+
+#### File Upload (multipart/form-data)
+```json
+{
+    "request": {
+        "body": {
+            "files": {
+                "document": "@/path/to/file.pdf",
+                "raw_content": "This is raw file content",
+                "config": "@./config.json"
+            }
+        }
+    }
+}
+```
+
+**File Upload Notes:**
+- Use `@/path/to/file` syntax to reference actual files
+- Use raw strings for inline content
+- Files are automatically opened in binary mode
+- Relative and absolute paths are supported
 
 **Response fields:**
 - **`response`**: Optional - response handling configuration
@@ -324,7 +411,9 @@ Access array elements using square brackets:
 {
     "request": {
         "url": "https://api.example.com/items/{{ items[0] }}/details",
-        "json": {"categories": "{{ categories[1] }}"}
+        "body": {
+            "json": {"categories": "{{ categories[1] }}"}
+        }
     }
 }
 ```
@@ -335,9 +424,11 @@ Combine dot notation and array access for complex data structures:
 {
     "request": {
         "url": "https://api.example.com/users/{{ data.users[0].profile.id }}",
-        "json": {
-            "primary_address": "{{ user.addresses[0].street }}",
-            "backup_email": "{{ user.contacts.emails[1] }}"
+        "body": {
+            "json": {
+                "primary_address": "{{ user.addresses[0].street }}",
+                "backup_email": "{{ user.contacts.emails[1] }}"
+            }
         }
     }
 }

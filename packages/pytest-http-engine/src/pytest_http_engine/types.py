@@ -1,5 +1,7 @@
 import json
 import keyword
+import re
+from pathlib import Path
 from typing import Annotated, Any
 
 import jmespath
@@ -41,7 +43,23 @@ def validate_json_serializable(v: Any) -> Any:
         raise ValueError(f"Value cannot be serialized as JSON: {e}") from e
 
 
+def validate_file_reference(v: str) -> str:
+    """Validate file reference format - either raw content or @/path/to/file."""
+    file_ref_pattern = re.compile(r"^@(?P<path>.+)$")
+
+    if match := file_ref_pattern.match(v):
+        path = match.group("path")
+        # Validate it's a valid path format
+        try:
+            Path(path)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid file path format: {e}") from e
+
+    return v
+
+
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
 FunctionName = Annotated[str, AfterValidator(UserFunction.validate_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
 JSONSerializable = Annotated[Any, AfterValidator(validate_json_serializable)]
+FileReference = Annotated[str, AfterValidator(validate_file_reference)]

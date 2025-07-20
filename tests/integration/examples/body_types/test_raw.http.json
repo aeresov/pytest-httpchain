@@ -1,0 +1,33 @@
+{
+    "fixtures": [
+        "server"
+    ],
+    "flow": [
+        {
+            "name": "test_raw_body",
+            "request": {
+                "url": "http://localhost:5000/echo",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "text/plain; charset=utf-8"
+                },
+                "body": {
+                    "raw": "This is raw text content for testing"
+                }
+            },
+            "response": {
+                "save": {
+                    "vars": {
+                        "body_type": "body_type"
+                    }
+                },
+                "verify": {
+                    "status": 200,
+                    "vars": {
+                        "body_type": "raw"
+                    }
+                }
+            }
+        }
+    ]
+}

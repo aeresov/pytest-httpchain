@@ -3,43 +3,7 @@ from http import HTTPStatus
 import pytest
 from http_server_mock import HttpServerMock
 
-
-@pytest.fixture
-def string_value():
-    return "test_value"
-
-
-@pytest.fixture
-def number_value():
-    return 123
-
-
-@pytest.fixture
-def dict_value():
-    return {"key": "value", "number": 42}
-
-
 app = HttpServerMock(__name__)
-
-
-@app.get("/ok")
-def ok():
-    return {}, HTTPStatus.OK
-
-
-@app.get("/bad")
-def bad():
-    return {}, HTTPStatus.BAD_REQUEST
-
-
-@app.get("/path_param_number/{number_param}")
-def path_param_number(number_param: int):
-    return {"answer": {"param": number_param + 1}}, HTTPStatus.OK
-
-
-@app.get("/path_param_string/{string_param}")
-def path_param_string(string_param: str):
-    return {"answer": {"param": string_param}}, HTTPStatus.OK
 
 
 @app.post("/echo")
@@ -47,7 +11,11 @@ def echo_post():
     """Echo back the request details for testing different body types."""
     from flask import request
 
-    response_data = {"method": request.method, "content_type": request.content_type, "headers": dict(request.headers)}
+    response_data = {
+        "method": request.method,
+        "content_type": request.content_type,
+        "headers": dict(request.headers),
+    }
 
     # Handle different content types
     if request.is_json:
@@ -56,9 +24,6 @@ def echo_post():
     elif request.content_type == "application/x-www-form-urlencoded":
         response_data["body_type"] = "form"
         response_data["form"] = dict(request.form)
-    elif request.content_type and request.content_type.startswith("text/"):
-        response_data["body_type"] = "text"
-        response_data["text"] = request.get_data(as_text=True)
     elif request.content_type == "application/xml":
         response_data["body_type"] = "xml"
         response_data["xml"] = request.get_data(as_text=True)
@@ -69,7 +34,7 @@ def echo_post():
             response_data["files"][field_name] = file_obj.read().decode("utf-8")
     else:
         response_data["body_type"] = "raw"
-        response_data["data"] = request.get_data(as_text=True)
+        response_data["text"] = request.get_data(as_text=True)
 
     return response_data, HTTPStatus.OK
 
