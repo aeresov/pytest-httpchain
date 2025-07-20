@@ -1,0 +1,26 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "flow": [
+        {
+            "name": "quick_test",
+            "request": {
+                "url": "{{ api_base }}/quick",
+                "method": "GET",
+                "timeout": 5.0
+            },
+            "response": {
+                "verify": {
+                    "status": 200
+                },
+                "save": {
+                    "vars": {
+                        "msg": "message"
+                    }
+                }
+            }
+        }
+    ]
+}

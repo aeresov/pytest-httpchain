@@ -128,7 +128,8 @@ Each stage represents one HTTP request-response cycle:
         "headers": {"Authorization": "Bearer token"},
         "body": {
             "json": {"data": "value"}
-        }
+        },
+        "timeout": 30.0
     },
     "response": {
         "save": {
@@ -161,6 +162,7 @@ Each stage represents one HTTP request-response cycle:
 - **`params`**: Optional - query parameters
 - **`headers`**: Optional - HTTP headers
 - **`body`**: Optional - request body (see Body Types section below)
+- **`timeout`**: Optional - request timeout in seconds (float)
 
 ### Request Body Types
 
@@ -309,6 +311,43 @@ def complex_extraction(response: requests.Response, threshold: int) -> dict[str,
     }
 }
 ```
+
+### Request Timeout
+
+You can specify a timeout for individual requests to prevent hanging on slow or unresponsive servers:
+
+```json
+{
+    "flow": [
+        {
+            "name": "quick_request",
+            "request": {
+                "url": "https://api.example.com/endpoint",
+                "method": "GET",
+                "timeout": 5.0
+            },
+            "response": {
+                "verify": {
+                    "status": 200
+                }
+            }
+        },
+        {
+            "name": "slow_operation",
+            "request": {
+                "url": "https://api.example.com/long-running-task",
+                "method": "POST",
+                "timeout": 60.0,
+                "body": {
+                    "json": {"task": "process_data"}
+                }
+            }
+        }
+    ]
+}
+```
+
+If the request exceeds the specified timeout (in seconds), the test will fail with a timeout error.
 
 ### AWS Authentication
 

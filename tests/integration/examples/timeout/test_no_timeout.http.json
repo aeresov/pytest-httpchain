@@ -1,0 +1,20 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "flow": [
+        {
+            "name": "no_timeout_test",
+            "request": {
+                "url": "{{ api_base }}/fast",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200
+                }
+            }
+        }
+    ]
+}

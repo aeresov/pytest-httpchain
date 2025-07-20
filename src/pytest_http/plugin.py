@@ -123,6 +123,8 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
         request_params["params"] = stage.request.params
     if stage.request.headers:
         request_params["headers"] = stage.request.headers
+    if stage.request.timeout:
+        request_params["timeout"] = stage.request.timeout
 
     # Handle different body types
     if stage.request.body:

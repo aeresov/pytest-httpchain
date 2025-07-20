@@ -128,3 +128,128 @@ Development dependencies:
 ## Plugin Entry Point
 
 The pytest plugin is configured in `pyproject.toml` with entry point `pytest_http = "pytest_http.plugin"` which makes it automatically discoverable by pytest when the package is installed.
+
+## Writing Integration Tests
+
+Integration tests for pytest-http should follow these conventions and patterns:
+
+### Directory Structure
+
+- **Integration tests**: Place in `tests/integration/`
+- **Example files**: Create reusable example files in `tests/integration/examples/`
+- **Feature-specific examples**: Group related examples in subdirectories like `tests/integration/examples/timeout/`
+
+### Integration Test Pattern
+
+All integration tests should use `pytester` and `http_server_mock` following this pattern:
+
+```python
+def test_feature(pytester):
+    """Test description."""
+    # 1. Copy example files from tests/integration/examples/
+    pytester.copy_example("feature/conftest.py")
+    pytester.copy_example("feature/test_case.http.json")
+    
+    # 2. Run pytest in isolated environment
+    result = pytester.runpytest()
+    
+    # 3. Assert expected outcomes
+    result.assert_outcomes(passed=1, failed=0)
+    
+    # 4. Optional: Check specific content in output
+    assert "expected text" in result.stdout.str()
+```
+
+### Example File Structure
+
+#### conftest.py Pattern
+Create mock server fixtures in `tests/integration/examples/feature/conftest.py`:
+
+```python
+import time
+from http import HTTPStatus
+
+import pytest
+from http_server_mock import HttpServerMock
+
+app = HttpServerMock(__name__)
+
+@app.get("/endpoint")
+def endpoint_handler():
+    return {"data": "value"}, HTTPStatus.OK
+
+@pytest.fixture
+def server():
+    with app.run("localhost", 5000):
+        yield
+```
+
+#### JSON Test File Pattern
+Create HTTP test files in `tests/integration/examples/feature/test_case.http.json`:
+
+```json
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "flow": [
+        {
+            "name": "test_stage",
+            "request": {
+                "url": "{{ api_base }}/endpoint",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200
+                }
+            }
+        }
+    ]
+}
+```
+
+### Key Guidelines
+
+1. **Never create files inline** - Always create example files and use `pytester.copy_example()`
+2. **Use http_server_mock** - Create realistic HTTP endpoints for testing
+3. **Follow naming conventions** - Use `test_*.http.json` for JSON test files
+4. **Test different scenarios** - Create separate example files for pass/fail cases
+5. **Use descriptive names** - Name files and tests clearly to indicate their purpose
+6. **Minimal test logic** - Keep integration tests focused on copying files and asserting outcomes
+
+### Testing Different Scenarios
+
+- **Success cases**: Test normal operation with expected responses
+- **Failure cases**: Test error conditions (timeouts, 404s, validation failures)
+- **Edge cases**: Test boundary conditions and optional features
+- **Combinations**: Test how features work together
+
+### Pytester Methods
+
+- `pytester.copy_example("path/file.ext")` - Copy files from examples directory
+- `pytester.runpytest("-v", "-s")` - Run pytest with options
+- `result.assert_outcomes(passed=N, failed=M)` - Assert test counts
+- `result.stdout.str()` - Get output for content assertions
+
+### Example: Timeout Feature Tests
+
+Files structure:
+```
+tests/integration/examples/timeout/
+├── conftest.py                     # Mock server with slow/fast endpoints
+├── test_timeout_fail.http.json     # Test that should timeout
+├── test_timeout_pass.http.json     # Test that should succeed
+└── test_no_timeout.http.json       # Test without timeout specified
+```
+
+Integration test:
+```python
+def test_timeout_with_slow_server(pytester):
+    pytester.copy_example("timeout/conftest.py")
+    pytester.copy_example("timeout/test_timeout_fail.http.json")
+    result = pytester.runpytest()
+    result.assert_outcomes(failed=1)
+    assert "HTTP request timed out" in result.stdout.str()
+```

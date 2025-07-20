@@ -124,6 +124,7 @@ class Request(BaseModel):
         params:   Query parameters to be sent.
         headers:  HTTP headers to be sent.
         body:     Request body configuration.
+        timeout:  Request timeout in seconds (optional).
     """
 
     url: str = Field()
@@ -131,6 +132,7 @@ class Request(BaseModel):
     params: dict[str, Any] | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)
     body: RequestBody | None = Field(default=None, description="Request body configuration")
+    timeout: float | None = Field(default=None, description="Request timeout in seconds", gt=0)
 
 
 class Response(BaseModel):

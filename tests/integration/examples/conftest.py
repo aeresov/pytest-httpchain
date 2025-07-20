@@ -1,3 +1,4 @@
+import time
 from http import HTTPStatus
 
 import pytest
@@ -40,6 +41,12 @@ def path_param_number(number_param: int):
 @app.get("/path_param_string/{string_param}")
 def path_param_string(string_param: str):
     return {"answer": {"param": string_param}}, HTTPStatus.OK
+
+
+@app.get("/delay/{seconds}")
+def delay(seconds: int):
+    time.sleep(seconds)
+    return {"delayed": seconds}, HTTPStatus.OK
 
 
 @pytest.fixture
