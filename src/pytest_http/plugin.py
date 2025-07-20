@@ -126,6 +126,13 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
     if stage.request.timeout:
         request_params["timeout"] = stage.request.timeout
 
+    # Add SSL configuration for this specific request (overrides session SSL)
+    if stage.request.ssl:
+        if stage.request.ssl.verify is not None:
+            request_params["verify"] = stage.request.ssl.verify
+        if stage.request.ssl.cert is not None:
+            request_params["cert"] = stage.request.ssl.cert
+
     # Handle different body types
     if stage.request.body:
         from pytest_http_engine.models import FilesBody, FormBody, JsonBody, RawBody, XmlBody
@@ -315,6 +322,14 @@ class JSONScenario(Collector):
         self.variable_context = self.model.vars.copy() if self.model.vars else {}
         self._http_session = requests.Session()
 
+        # Configure SSL settings for the session
+        if self.model.ssl:
+            if self.model.ssl.verify is not None:
+                self._http_session.verify = self.model.ssl.verify
+            if self.model.ssl.cert is not None:
+                self._http_session.cert = self.model.ssl.cert
+
+        # Configure AWS auth for the session
         if self.model.aws:
             try:
                 aws_auth = create_aws_auth(self.model.aws)

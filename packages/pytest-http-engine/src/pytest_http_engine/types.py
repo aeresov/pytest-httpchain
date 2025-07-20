@@ -58,8 +58,36 @@ def validate_file_reference(v: str) -> str:
     return v
 
 
+def validate_ssl_verify_path(v: str) -> str:
+    """Validate SSL verify path - can be a file or directory."""
+    if not v:
+        raise ValueError("SSL verify path cannot be empty")
+
+    try:
+        # Basic validation: ensure it can be used as a path
+        Path(v)
+        return v
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Invalid SSL verify path format: {e}") from e
+
+
+def validate_ssl_cert_path(v: str) -> str:
+    """Validate SSL certificate path - must be a file."""
+    if not v:
+        raise ValueError("SSL certificate path cannot be empty")
+
+    try:
+        Path(v)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Invalid SSL certificate path format: {e}") from e
+
+    return v
+
+
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
 FunctionName = Annotated[str, AfterValidator(UserFunction.validate_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
 JSONSerializable = Annotated[Any, AfterValidator(validate_json_serializable)]
 FileReference = Annotated[str, AfterValidator(validate_file_reference)]
+SSLVerifyPath = Annotated[str, AfterValidator(validate_ssl_verify_path)]
+SSLCertPath = Annotated[str, AfterValidator(validate_ssl_cert_path)]

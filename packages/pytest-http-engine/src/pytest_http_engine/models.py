@@ -4,7 +4,25 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
-from pytest_http_engine.types import FileReference, FunctionName, JMESPathExpression, JSONSerializable, VariableName
+from pytest_http_engine.types import FileReference, FunctionName, JMESPathExpression, JSONSerializable, SSLCertPath, SSLVerifyPath, VariableName
+
+
+class SSLConfig(BaseModel):
+    """
+    SSL/TLS configuration for HTTP requests.
+
+    Attributes:
+        verify: Control SSL certificate verification.
+                - True: Verify SSL certificates (default)
+                - False: Disable verification (security risk, use only for testing)
+                - str: Path to custom CA bundle file or directory
+        cert: SSL client certificate configuration.
+              - str: Path to SSL client certificate file (containing both cert and key)
+              - tuple[str, str]: Tuple of (certificate_path, private_key_path)
+    """
+
+    verify: bool | SSLVerifyPath | None = Field(default=True, description="SSL certificate verification. True (verify), False (no verification), or path to CA bundle")
+    cert: SSLCertPath | tuple[SSLCertPath, SSLCertPath] | None = Field(default=None, description="SSL client certificate. Single file path or tuple of (cert_path, key_path)")
 
 
 class FunctionCall(BaseModel):
@@ -125,6 +143,7 @@ class Request(BaseModel):
         headers:  HTTP headers to be sent.
         body:     Request body configuration.
         timeout:  Request timeout in seconds (optional).
+        ssl:      SSL/TLS configuration for this specific request (overrides scenario SSL settings).
     """
 
     url: str = Field()
@@ -133,6 +152,17 @@ class Request(BaseModel):
     headers: dict[str, str] | None = Field(default=None)
     body: RequestBody | None = Field(default=None, description="Request body configuration")
     timeout: float | None = Field(default=None, description="Request timeout in seconds", gt=0)
+    ssl: SSLConfig | None = Field(
+        default=None,
+        description="SSL/TLS configuration for this specific request (overrides scenario SSL settings)",
+        examples=[
+            {"verify": True},
+            {"verify": False},
+            {"verify": "/path/to/ca-bundle.crt"},
+            {"cert": "/path/to/client.pem"},
+            {"cert": ["/path/to/client.crt", "/path/to/client.key"]},
+        ],
+    )
 
 
 class Response(BaseModel):
@@ -234,6 +264,7 @@ class Scenario(BaseModel):
         marks:      List of marks to be applied to, like to a regular pytest function.
         vars:       Initial variables to seed the variable context.
         aws:        AWS configuration for IAM authentication (optional)
+        ssl:        SSL/TLS configuration applied to the HTTP session for all requests (optional)
         flow:       Main test chain.
         final:      Finalization chain, runs after the flow chain whether it fails or not.
     """
@@ -247,6 +278,18 @@ class Scenario(BaseModel):
         examples=[
             {"service": "execute-api", "region": "us-west-2", "profile": "dev"},
             {"service": "s3", "access_key_id": "AKIAIOSFODNN7EXAMPLE", "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"},
+        ],
+    )
+    ssl: SSLConfig | None = Field(
+        default=None,
+        description="SSL/TLS configuration applied to the HTTP session for all requests",
+        examples=[
+            {"verify": True},
+            {"verify": False},
+            {"verify": "/path/to/ca-bundle.crt"},
+            {"cert": "/path/to/client.pem"},
+            {"cert": ["/path/to/client.crt", "/path/to/client.key"]},
+            {"verify": "/path/to/ca-bundle.crt", "cert": ["/path/to/client.crt", "/path/to/client.key"]},
         ],
     )
     flow: Stages = Field(default_factory=Stages, description="Main test chain")

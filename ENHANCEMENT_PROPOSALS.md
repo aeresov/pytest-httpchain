@@ -76,41 +76,7 @@ This document outlines potential enhancements for the pytest-http plugin to expa
 - Store response time in variable context for access
 - Provide clear error messages for validation failures
 
-#### Request Configuration Options
 
-**Problem**: No control over request behavior (timeouts, retries, SSL).
-
-**Solution**: Add configuration section:
-
-```json
-{
-  "request": {
-    "url": "https://api.example.com/data",
-    "config": {
-      "timeout": 30,
-      "connect_timeout": 10,
-      "retry": {
-        "count": 3,
-        "delay": 1000,
-        "backoff": 2.0,
-        "status_codes": [500, 502, 503, 504]
-      },
-      "verify_ssl": false,
-      "allow_redirects": true,
-      "max_redirects": 5,
-      "proxy": {
-        "http": "http://proxy.example.com:8080",
-        "https": "https://proxy.example.com:8080"
-      }
-    }
-  }
-}
-```
-
-**Implementation Notes**:
-- Use `urllib3.util.retry.Retry` for retry logic
-- Apply configs to session for efficiency
-- Allow global defaults in pytest configuration
 
 #### Flexible Authentication Support
 
