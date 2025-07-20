@@ -230,6 +230,7 @@ class Scenario(BaseModel):
     Attributes:
         fixtures:   List of pytest fixture names to be supplied with, like a regular pytest function.
         marks:      List of marks to be applied to, like to a regular pytest function.
+        vars:       Initial variables to seed the variable context.
         aws:        AWS configuration for IAM authentication (optional)
         flow:       Main test chain.
         final:      Finalization chain, runs after the flow chain whether it fails or not.
@@ -237,6 +238,7 @@ class Scenario(BaseModel):
 
     fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names (deprecated: use stage-level fixtures instead)")
     marks: list[str] = Field(default_factory=list, description="List of marks to be applied", examples=["xfail", "skip"])
+    vars: dict[str, Any] | None = Field(default=None, description="Initial variables for the scenario context")
     aws: AWSProfile | AWSCredentials | None = Field(
         default=None,
         description="AWS configuration for IAM authentication",
@@ -251,17 +253,28 @@ class Scenario(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     @model_validator(mode="after")
-    def validate_save_variables_not_fixtures(self) -> "Scenario":
+    def validate_variable_naming_conflicts(self) -> "Scenario":
+        """Validate that fixtures don't conflict with initial vars or saved vars."""
         if not self.fixtures:
             return self
 
         fixture_names = set(self.fixtures)
 
+        # Check for any conflicts with fixtures
+        conflicting_vars = set()
+
+        # Check initial vars
+        if self.vars:
+            conflicting_vars.update(fixture_names & self.vars.keys())
+
+        # Check saved vars
         for stage in self.flow:
             if stage.response and stage.response.save and stage.response.save.vars:
-                for var_name in stage.response.save.vars.keys():
-                    if var_name in fixture_names:
-                        raise ValueError(f"Variable name '{var_name}' conflicts with fixture name")
+                conflicting_vars.update(fixture_names & stage.response.save.vars.keys())
+
+        if conflicting_vars:
+            name = next(iter(conflicting_vars))
+            raise ValueError(f"Variable name '{name}' conflicts with fixture name")
 
         return self
 

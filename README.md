@@ -99,6 +99,10 @@ pytest test_api.http.json
 {
     "fixtures": ["fixture1", "fixture2"],
     "marks": ["skip", "xfail(reason='...')"],
+    "vars": {
+        "base_url": "https://api.example.com",
+        "api_key": "test-key-123"
+    },
     "flow": [...],
     "final": [...]
 }
@@ -106,6 +110,7 @@ pytest test_api.http.json
 
 - **`fixtures`**: Optional - pytest fixtures to inject
 - **`marks`**: Optional - pytest marks  
+- **`vars`**: Optional - initial variables for the scenario context
 - **`flow`**: Required - main test stages
 - **`final`**: Optional - cleanup stages (always run)
 
@@ -383,6 +388,39 @@ This allows you to omit credentials from JSON files:
 ### Variable Substitution
 
 The plugin uses **Jinja2 templates** for powerful variable substitution, supporting complex data access patterns. Note that every string is treated as independent Jinja2 environment. This means, while you can use Jinja2 syntax within a string, you can't make the whole JSON file a Jinja2 template, it'll break validation.
+
+#### Initial Variables
+
+You can define initial variables at the scenario level using the `vars` field. These variables are available throughout all stages:
+
+```json
+{
+    "vars": {
+        "base_url": "https://api.example.com",
+        "api_version": "v2",
+        "default_timeout": 30
+    },
+    "flow": [
+        {
+            "name": "get_users",
+            "request": {
+                "url": "{{ base_url }}/{{ api_version }}/users",
+                "timeout": "{{ default_timeout }}"
+            }
+        }
+    ]
+}
+```
+
+Initial variables are useful for:
+- Defining common values used across multiple stages (base URLs, API keys, etc.)
+- Setting default configuration values that can be overridden
+- Parameterizing tests without using fixtures
+
+**Variable Overwriting Rules**:
+- Initial variables can be overwritten by saved variables in later stages
+- Fixtures cannot be overwritten and cannot shadow initial variables
+- Saved variables cannot conflict with fixture names
 
 #### Basic Variable Access
 ```json

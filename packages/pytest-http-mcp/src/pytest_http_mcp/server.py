@@ -51,6 +51,7 @@ def verify_json(json_data: str, base_uri: str = "") -> VerifyJsonResult:
             scenario_info={
                 "fixtures": scenario.fixtures,
                 "marks": scenario.marks,
+                "vars": scenario.vars or {},
                 "flow_stages": len(scenario.flow.root),
                 "final_stages": len(scenario.final.root),
                 "has_aws_config": scenario.aws is not None,
@@ -73,14 +74,16 @@ def get_scenario_example() -> str:
     example = {
         "fixtures": ["user_credentials"],
         "marks": ["integration", "auth"],
+        "vars": {"base_url": "https://api.example.com", "api_version": "v1", "default_timeout": 30},
         "flow": [
             {
                 "name": "authenticate",
                 "request": {
-                    "url": "https://api.example.com/auth/login",
+                    "url": "{{ base_url }}/{{ api_version }}/auth/login",
                     "method": "POST",
                     "headers": {"Content-Type": "application/json"},
                     "body": {"json": {"username": "{{ user_credentials.username }}", "password": "{{ user_credentials.password }}"}},
+                    "timeout": "{{ default_timeout }}",
                 },
                 "response": {
                     "save": {
@@ -93,7 +96,7 @@ def get_scenario_example() -> str:
             {
                 "name": "get_profile",
                 "request": {
-                    "url": "https://api.example.com/users/{{ user_id }}/profile",
+                    "url": "{{ base_url }}/{{ api_version }}/users/{{ user_id }}/profile",
                     "method": "GET",
                     "headers": {"Authorization": "Bearer {{ auth_token }}", "Content-Type": "application/json"},
                 },
@@ -105,7 +108,7 @@ def get_scenario_example() -> str:
             {
                 "name": "update_settings",
                 "request": {
-                    "url": "https://api.example.com/users/{{ user_id }}/settings",
+                    "url": "{{ base_url }}/{{ api_version }}/users/{{ user_id }}/settings",
                     "method": "PUT",
                     "headers": {"Authorization": "Bearer {{ auth_token }}", "Content-Type": "application/json"},
                     "body": {"json": {"theme": "dark"}},

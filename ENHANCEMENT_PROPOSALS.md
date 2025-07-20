@@ -220,48 +220,6 @@ This document outlines potential enhancements for the pytest-http plugin to expa
 - Optional faker library integration
 - Cache generated values in variable context
 
-#### Environment-Specific Configuration
-
-**Problem**: No built-in way to handle different environments.
-
-**Solution**: Add environment support:
-
-```json
-{
-  "environments": {
-    "default": {
-      "base_url": "http://localhost:8000",
-      "timeout": 30
-    },
-    "dev": {
-      "base_url": "https://dev.api.example.com",
-      "auth": {
-        "type": "bearer",
-        "token": "{{ env.DEV_TOKEN }}"
-      }
-    },
-    "prod": {
-      "base_url": "https://api.example.com",
-      "timeout": 10,
-      "retry": {"count": 5}
-    }
-  },
-  
-  "flow": [
-    {
-      "request": {
-        "url": "{{ base_url }}/users"
-      }
-    }
-  ]
-}
-```
-
-**Implementation Notes**:
-- Select environment via CLI: `--http-env=dev`
-- Merge environment config with defaults
-- Support environment variables: `HTTP_ENV=prod`
-
 #### Loop and Iteration Support
 
 **Problem**: No way to repeat requests or iterate over data.
@@ -301,25 +259,6 @@ This document outlines potential enhancements for the pytest-http plugin to expa
 - Implement retry with exponential backoff
 - Support parallel execution with thread pool
 - Collect results from all iterations
-
-### 💡 Nice-to-Have Features
-
-#### GraphQL Support
-
-```json
-{
-  "request": {
-    "url": "https://api.example.com/graphql",
-    "graphql": {
-      "query": "query GetUser($id: ID!) { user(id: $id) { name email } }",
-      "variables": {
-        "id": "{{ user_id }}"
-      },
-      "operation": "GetUser"
-    }
-  }
-}
-```
 
 #### Enhanced Reporting
 

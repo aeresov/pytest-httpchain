@@ -310,7 +310,7 @@ class JSONScenario(Collector):
 
     def setup(self) -> None:
         """Initialize session and variable context for the scenario"""
-        self.variable_context = {}
+        self.variable_context = self.model.vars.copy() if self.model.vars else {}
         self._http_session = requests.Session()
 
         if self.model.aws:

@@ -5,6 +5,9 @@
         "number_value",
         "dict_value"
     ],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
     "flow": [
         {
             "$ref": "stage_ref.json#/call_ok"
@@ -12,7 +15,7 @@
         {
             "name": "path_param_string",
             "request": {
-                "url": "http://localhost:5000/path_param_string/{{ string_value }}"
+                "url": "{{ api_base }}/path_param_string/{{ string_value }}"
             }
         }
     ],
