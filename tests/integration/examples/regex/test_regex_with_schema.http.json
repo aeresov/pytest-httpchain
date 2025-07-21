@@ -1,9 +1,11 @@
 {
-    "fixtures": ["server"],
+    "fixtures": [
+        "server"
+    ],
     "vars": {
         "api_base": "http://localhost:5000"
     },
-    "flow": [
+    "stages": [
         {
             "name": "test_combined_schema_and_regex",
             "request": {
@@ -17,11 +19,25 @@
                         "schema": {
                             "type": "object",
                             "properties": {
-                                "message": {"type": "string"},
-                                "id": {"type": "number"},
-                                "status": {"type": "string", "enum": ["active", "inactive"]}
+                                "message": {
+                                    "type": "string"
+                                },
+                                "id": {
+                                    "type": "number"
+                                },
+                                "status": {
+                                    "type": "string",
+                                    "enum": [
+                                        "active",
+                                        "inactive"
+                                    ]
+                                }
                             },
-                            "required": ["message", "id", "status"]
+                            "required": [
+                                "message",
+                                "id",
+                                "status"
+                            ]
                         },
                         "matches": [
                             "\"status\":\\s*\"active\""

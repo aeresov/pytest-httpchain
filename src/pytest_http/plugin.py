@@ -1,7 +1,6 @@
 import json
 import re
 from collections.abc import Iterable
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +15,7 @@ from _pytest.config.argparsing import Parser
 from _pytest.nodes import Collector, Item
 from _pytest.python import Function
 from pydantic import ValidationError
-from pytest_http_engine.models import AWSCredentials, AWSProfile, Scenario, Stage, Stages
+from pytest_http_engine.models import AWSCredentials, AWSProfile, Scenario, Stage
 from pytest_http_engine.user_function import UserFunction
 from requests.auth import AuthBase
 
@@ -345,11 +344,6 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
                                 pytest.fail(f"Invalid regex pattern '{pattern}' for stage '{stage_name}': {e}")
 
 
-class StageType(StrEnum):
-    FLOW = "flow"
-    FINAL = "final"
-
-
 class JSONScenario(Collector):
     def __init__(self, model: Scenario, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -357,7 +351,6 @@ class JSONScenario(Collector):
         self._variable_context: dict[str, Any] = {}
         self._http_session: requests.Session | None = None
         self._flow_failed: bool = False
-        self._final_failed: bool = False
 
     @property
     def model(self) -> Scenario:
@@ -387,15 +380,6 @@ class JSONScenario(Collector):
     def flow_failed(self, value: bool) -> None:
         self._flow_failed = value
 
-    @property
-    def final_failed(self) -> bool:
-        """Flag indicating if any final stage has failed"""
-        return self._final_failed
-
-    @final_failed.setter
-    def final_failed(self, value: bool) -> None:
-        self._final_failed = value
-
     def setup(self) -> None:
         """Initialize session and variable context for the scenario"""
         self.variable_context = self.model.vars.copy() if self.model.vars else {}
@@ -422,9 +406,9 @@ class JSONScenario(Collector):
             self.http_session.close()
 
     def collect(self) -> Iterable[Item | Collector]:
-        """Collect stage functions for both flow and final stages"""
+        """Collect stage functions from unified stages collection"""
 
-        def collect_stages(stages: Stages, type: StageType) -> Iterable[JSONStage]:
+        def collect_stages(stages: list[Stage]) -> Iterable[JSONStage]:
             for stage in stages:
                 combined_fixtures = list(set(self._model.fixtures + stage.fixtures))
                 if combined_fixtures != stage.fixtures:
@@ -432,24 +416,21 @@ class JSONScenario(Collector):
                     stage_dict["fixtures"] = combined_fixtures
                     stage = Stage.model_validate(stage_dict)
 
-                yield JSONStage.from_parent(self, name=stage.name, model=stage, scenario=self, type=type)
+                yield JSONStage.from_parent(self, name=stage.name, model=stage, scenario=self)
 
-        # Collect flow stages first, then final stages
-        # pytest will execute them in the order we yield them
-        yield from collect_stages(self._model.flow, StageType.FLOW)
-        yield from collect_stages(self._model.final, StageType.FINAL)
+        # Collect all stages from unified collection
+        yield from collect_stages(self._model.stages)
 
 
 class JSONStage(Function):
-    def __init__(self, model: Stage, scenario: JSONScenario, type: StageType, **kwargs: Any) -> None:
+    def __init__(self, model: Stage, scenario: JSONScenario, **kwargs: Any) -> None:
         self._model = model
         self._scenario = scenario
-        self._type = type
 
         def execute_stage(**fixture_kwargs: Any) -> None:
             # Check if we should execute this stage
             if not self._should_execute_stage():
-                pytest.skip(f"Skipping {self._type} stage '{model.name}' due to flow failure")
+                pytest.skip(f"Skipping stage '{model.name}' due to flow failure")
 
             # Add fixtures to variable context
             for fixture_name in model.fixtures:
@@ -460,11 +441,9 @@ class JSONStage(Function):
             try:
                 execute_single_stage(model, scenario.variable_context, scenario.http_session)
             except Exception as e:
-                match self._type:
-                    case StageType.FLOW:
-                        self._scenario.flow_failed = True
-                    case StageType.FINAL:
-                        self._scenario.final_failed = True
+                # Only set flow_failed if this is not an always_run stage
+                if not model.always_run:
+                    self._scenario.flow_failed = True
                 raise e
 
         # Set up function signature for fixtures if needed
@@ -487,13 +466,12 @@ class JSONStage(Function):
 
     def _should_execute_stage(self) -> bool:
         """Check if this stage should execute based on scenario failures"""
-        match self._type:
-            case StageType.FLOW:
-                return not self._scenario.flow_failed
-            case StageType.FINAL:
-                return not self._scenario.final_failed
-            case _:
-                return True
+        # If stage has always_run=True, it always executes
+        if self._model.always_run:
+            return True
+
+        # Otherwise, only execute if no previous flow stages have failed
+        return not self._scenario.flow_failed
 
 
 class FailedValidationItem(pytest.Item):

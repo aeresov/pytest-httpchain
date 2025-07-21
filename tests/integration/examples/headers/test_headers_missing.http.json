@@ -1,9 +1,11 @@
 {
-    "fixtures": ["server"],
+    "fixtures": [
+        "server"
+    ],
     "vars": {
         "api_base": "http://localhost:5000"
     },
-    "flow": [
+    "stages": [
         {
             "name": "test_missing_header_verification",
             "request": {

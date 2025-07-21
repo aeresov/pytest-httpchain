@@ -10,7 +10,7 @@ def test_combined_validator_checks_fixture_shadows_var():
         Scenario(
             fixtures=["api_key"],
             vars={"api_key": "test-key"},
-            flow=[Stage(name="test", request=Request(url="https://api.example.com"))],
+            stages=[Stage(name="test", request=Request(url="https://api.example.com"))],
         )
 
 
@@ -19,7 +19,7 @@ def test_combined_validator_checks_saved_var_conflicts_with_fixture():
     with pytest.raises(ValueError, match="Variable name 'api_key' conflicts with fixture name"):
         Scenario(
             fixtures=["api_key"],
-            flow=[
+            stages=[
                 Stage(
                     name="test",
                     request=Request(url="https://api.example.com"),
@@ -33,7 +33,7 @@ def test_combined_validator_allows_saved_var_to_overwrite_initial_var():
     """Test that the combined validator allows saved vars to overwrite initial vars."""
     scenario = Scenario(
         vars={"base_url": "https://api.example.com"},
-        flow=[
+        stages=[
             Stage(
                 name="test",
                 request=Request(url="{{ base_url }}"),
@@ -43,7 +43,7 @@ def test_combined_validator_allows_saved_var_to_overwrite_initial_var():
     )
     # Should not raise an error
     assert scenario.vars["base_url"] == "https://api.example.com"
-    assert scenario.flow.root[0].response.save.vars["base_url"] == "data.url"
+    assert scenario.stages[0].response.save.vars["base_url"] == "data.url"
 
 
 def test_combined_validator_allows_non_conflicting_names():
@@ -51,7 +51,7 @@ def test_combined_validator_allows_non_conflicting_names():
     scenario = Scenario(
         fixtures=["auth_token"],
         vars={"base_url": "https://api.example.com"},
-        flow=[
+        stages=[
             Stage(
                 name="test",
                 request=Request(url="{{ base_url }}", headers={"Authorization": "{{ auth_token }}"}),
@@ -61,4 +61,4 @@ def test_combined_validator_allows_non_conflicting_names():
     )
     assert "auth_token" in scenario.fixtures
     assert "base_url" in scenario.vars
-    assert scenario.flow.root[0].response.save.vars["user_id"] == "data.id"
+    assert scenario.stages[0].response.save.vars["user_id"] == "data.id"

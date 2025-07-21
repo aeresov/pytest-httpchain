@@ -11,7 +11,7 @@ def test_progressive_api_key_refinement():
             "base_url": "https://api.example.com",
             "user_id": None,
         },
-        flow=[
+        stages=[
             Stage(
                 name="authenticate",
                 request=Request(
@@ -56,9 +56,9 @@ def test_progressive_api_key_refinement():
     assert scenario.vars["user_id"] is None
 
     # Check that the saved variables can overwrite initial vars
-    auth_stage = scenario.flow.root[0]
+    auth_stage = scenario.stages[0]
     assert auth_stage.response.save.vars["api_key"] == "data.access_token"
     assert auth_stage.response.save.vars["user_id"] == "data.user.id"
 
-    profile_stage = scenario.flow.root[1]
+    profile_stage = scenario.stages[1]
     assert profile_stage.response.save.vars["base_url"] == "data.preferred_api_endpoint"

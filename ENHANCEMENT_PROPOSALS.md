@@ -70,41 +70,6 @@ This document outlines potential enhancements for the pytest-http plugin to expa
 - Cache OAuth2 tokens across stages
 - Support auth inheritance from global config
 
-#### Conditional Stage Execution
-
-**Problem**: All stages execute sequentially without conditions.
-
-**Solution**: Add execution control:
-
-```json
-{
-  "stages": [
-    {
-      "name": "create_user",
-      "condition": "{{ environment != 'production' }}",
-      "request": { "url": "/users", "method": "POST" }
-    },
-    {
-      "name": "verify_user",
-      "skip_if": "{{ create_user.status != 201 }}",
-      "depends_on": ["create_user"],
-      "request": { "url": "/users/{{ user_id }}" }
-    },
-    {
-      "name": "cleanup",
-      "always_run": true,
-      "run_on_failure": true,
-      "request": { "url": "/users/{{ user_id }}", "method": "DELETE" }
-    }
-  ]
-}
-```
-
-**Implementation Notes**:
-- Evaluate conditions using Jinja2 expressions
-- Track stage execution status
-- Support stage dependencies
-
 ### 🚀 Medium Priority
 
 #### Built-in Data Generators

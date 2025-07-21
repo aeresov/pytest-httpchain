@@ -156,7 +156,7 @@ class TestSSLSerialization:
 
     def test_scenario_ssl_model_dump(self):
         """Test scenario with SSL model dump."""
-        scenario = Scenario(ssl=SSLConfig(verify=False, cert=Path("/path/to/client.pem")), flow=[])
+        scenario = Scenario(ssl=SSLConfig(verify=False, cert=Path("/path/to/client.pem")), stages=[])
         data = scenario.model_dump(exclude_unset=True)
         assert data["ssl"]["verify"] is False
         assert data["ssl"]["cert"] == "/path/to/client.pem"
@@ -170,7 +170,7 @@ class TestSSLSerialization:
 
     def test_roundtrip_serialization(self):
         """Test roundtrip serialization of SSL configuration."""
-        original_scenario = Scenario(ssl=SSLConfig(verify=Path("/custom/ca-bundle.crt"), cert=(Path("/path/to/client.crt"), Path("/path/to/client.key"))), flow=[])
+        original_scenario = Scenario(ssl=SSLConfig(verify=Path("/custom/ca-bundle.crt"), cert=(Path("/path/to/client.crt"), Path("/path/to/client.key"))), stages=[])
 
         # Serialize to dict
         data = original_scenario.model_dump()

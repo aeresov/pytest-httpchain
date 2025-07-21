@@ -1,9 +1,11 @@
 {
-    "fixtures": ["server"],
+    "fixtures": [
+        "server"
+    ],
     "vars": {
         "api_base": "http://localhost:5000"
     },
-    "flow": [
+    "stages": [
         {
             "name": "get_valid_user",
             "request": {
@@ -18,12 +20,26 @@
                             "$schema": "http://json-schema.org/draft-07/schema#",
                             "type": "object",
                             "properties": {
-                                "id": {"type": "integer"},
-                                "name": {"type": "string"},
-                                "email": {"type": "string", "format": "email"},
-                                "age": {"type": "integer", "minimum": 0}
+                                "id": {
+                                    "type": "integer"
+                                },
+                                "name": {
+                                    "type": "string"
+                                },
+                                "email": {
+                                    "type": "string",
+                                    "format": "email"
+                                },
+                                "age": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                }
                             },
-                            "required": ["id", "name", "email"],
+                            "required": [
+                                "id",
+                                "name",
+                                "email"
+                            ],
                             "additionalProperties": true
                         }
                     }

@@ -8,7 +8,7 @@
     "vars": {
         "api_base": "http://localhost:5000"
     },
-    "flow": [
+    "stages": [
         {
             "$ref": "stage_ref.json#/call_ok"
         },
@@ -17,11 +17,10 @@
             "request": {
                 "url": "{{ api_base }}/path_param_string/{{ string_value }}"
             }
-        }
-    ],
-    "final": [
+        },
         {
-            "$ref": "stage_ref.json#/call_bad"
+            "$ref": "stage_ref.json#/call_bad",
+            "always_run": true
         }
     ]
 }

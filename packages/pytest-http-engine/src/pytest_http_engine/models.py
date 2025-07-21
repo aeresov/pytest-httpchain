@@ -223,31 +223,14 @@ class Stage(BaseModel):
         fixtures: List of pytest fixture names to be supplied to this stage.
         request:  HTTP request configuration.
         response: HTTP response configuration.
+        always_run: If True, this stage will run even if previous stages failed (useful for cleanup).
     """
 
     name: str = Field()
     fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names for this stage")
     request: Request = Field()
     response: Response | None = Field(default=None)
-
-
-class Stages(RootModel):
-    """
-    Collection of stages.
-    Represents scenario's test chain.
-    Stages are executed in the order they are provided.
-
-    Attributes:
-        root: List of stages.
-    """
-
-    root: list[Stage] = Field(default_factory=list)
-
-    def __iter__(self):
-        return iter(self.root)
-
-    def __getitem__(self, item):
-        return self.root[item]
+    always_run: bool = Field(default=False, description="Run this stage even if previous stages failed")
 
 
 class AWSBase(BaseModel):
@@ -300,8 +283,7 @@ class Scenario(BaseModel):
         vars:       Initial variables to seed the variable context.
         aws:        AWS configuration for IAM authentication (optional)
         ssl:        SSL/TLS configuration applied to the HTTP session for all requests (optional)
-        flow:       Main test chain.
-        final:      Finalization chain, runs after the flow chain whether it fails or not.
+        stages:     Collection of stages to execute. Stages with always_run=True will execute even if previous stages failed.
     """
 
     fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names (deprecated: use stage-level fixtures instead)")
@@ -327,8 +309,7 @@ class Scenario(BaseModel):
             {"verify": "/path/to/ca-bundle.crt", "cert": ["/path/to/client.crt", "/path/to/client.key"]},
         ],
     )
-    flow: Stages = Field(default_factory=Stages, description="Main test chain")
-    final: Stages = Field(default_factory=Stages, description="Finalization chain")
+    stages: list[Stage] = Field(default_factory=list, description="Collection of stages to execute")
 
     model_config = ConfigDict(extra="ignore")
 
@@ -348,7 +329,7 @@ class Scenario(BaseModel):
             conflicting_vars.update(fixture_names & self.vars.keys())
 
         # Check saved vars
-        for stage in self.flow:
+        for stage in self.stages:
             if stage.response and stage.response.save and stage.response.save.vars:
                 conflicting_vars.update(fixture_names & stage.response.save.vars.keys())
 

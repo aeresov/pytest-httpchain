@@ -1,21 +1,27 @@
 {
-    "fixtures": ["server"],
-    "vars": {"api_base": "http://localhost:5000"},
-    "flow": [{
-        "name": "test_invalid_schema",
-        "request": {
-            "url": "{{ api_base }}/user/valid",
-            "method": "GET"
-        },
-        "response": {
-            "verify": {
-                "status": 200,
-                "body": {
-                    "schema": {
-                        "type": "invalid_type"
+    "fixtures": [
+        "server"
+    ],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "stages": [
+        {
+            "name": "test_invalid_schema",
+            "request": {
+                "url": "{{ api_base }}/user/valid",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "body": {
+                        "schema": {
+                            "type": "invalid_type"
+                        }
                     }
                 }
             }
         }
-    }]
+    ]
 }

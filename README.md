@@ -47,7 +47,7 @@ Create a JSON test file following the pattern `test_<name>.<suffix>.json` (defau
 
 ```json
 {
-    "flow": [
+    "stages": [
         {
             "name": "get_user",
             "request": {
@@ -82,6 +82,14 @@ Create a JSON test file following the pattern `test_<name>.<suffix>.json` (defau
                     "status": 200
                 }
             }
+        },
+        {
+            "name": "cleanup",
+            "always_run": true,
+            "request": {
+                "url": "https://api.example.com/cleanup",
+                "method": "POST"
+            }
         }
     ]
 }
@@ -105,16 +113,14 @@ pytest test_api.http.json
         "base_url": "https://api.example.com",
         "api_key": "test-key-123"
     },
-    "flow": [...],
-    "final": [...]
+    "stages": [...]
 }
 ```
 
 -   **`fixtures`**: Optional - pytest fixtures to inject
 -   **`marks`**: Optional - pytest marks
 -   **`vars`**: Optional - initial variables for the scenario context
--   **`flow`**: Required - main test stages
--   **`final`**: Optional - cleanup stages (always run)
+-   **`stages`**: Required - collection of test stages
 
 ### Stage Schema
 
@@ -123,6 +129,7 @@ Each stage represents one HTTP request-response cycle:
 ```json
 {
     "name": "stage_name",
+    "always_run": false,
     "request": {
         "url": "https://api.example.com/endpoint",
         "method": "GET",
@@ -157,9 +164,15 @@ Each stage represents one HTTP request-response cycle:
 }
 ```
 
-**Request fields:**
+**Stage fields:**
 
 -   **`name`**: Required - descriptive name
+-   **`always_run`**: Optional - run stage even if previous stages failed (defaults to false)
+-   **`request`**: Required - HTTP request configuration
+-   **`response`**: Optional - response handling configuration
+
+**Request fields:**
+
 -   **`url`**: Required - endpoint URL
 -   **`method`**: Optional - HTTP method (defaults to GET)
 -   **`params`**: Optional - query parameters
@@ -333,7 +346,7 @@ You can specify a timeout for individual requests to prevent hanging on slow or 
 
 ```json
 {
-    "flow": [
+    "stages": [
         {
             "name": "quick_request",
             "request": {
@@ -364,6 +377,55 @@ You can specify a timeout for individual requests to prevent hanging on slow or 
 
 If the request exceeds the specified timeout (in seconds), the test will fail with a timeout error.
 
+### Cleanup and Always-Run Stages
+
+By default, if any stage in a scenario fails, subsequent stages are skipped. However, you can mark stages with `always_run: true` to ensure they execute regardless of previous failures. This is particularly useful for cleanup operations:
+
+```json
+{
+    "stages": [
+        {
+            "name": "create_resource",
+            "request": {
+                "url": "https://api.example.com/resources",
+                "method": "POST",
+                "body": {
+                    "json": { "name": "test-resource" }
+                }
+            },
+            "response": {
+                "save": {
+                    "vars": { "resource_id": "id" }
+                }
+            }
+        },
+        {
+            "name": "test_resource",
+            "request": {
+                "url": "https://api.example.com/resources/{{ resource_id }}/test",
+                "method": "POST"
+            },
+            "response": {
+                "verify": { "status": 200 }
+            }
+        },
+        {
+            "name": "cleanup_resource",
+            "always_run": true,
+            "request": {
+                "url": "https://api.example.com/resources/{{ resource_id }}",
+                "method": "DELETE"
+            }
+        }
+    ]
+}
+```
+
+In this example:
+- If `create_resource` fails, both `test_resource` and `cleanup_resource` are skipped
+- If `test_resource` fails, `cleanup_resource` still runs due to `always_run: true`
+- This ensures the test resource is cleaned up even if the test fails
+
 ### AWS Authentication
 
 `pytest-http` supports AWS SigV4 authentication for calling AWS APIs. You can use either profile-based or credential-based authentication.
@@ -379,7 +441,7 @@ Use AWS profiles from your local AWS configuration:
         "region": "us-west-2",
         "profile": "dev"
     },
-    "flow": [
+    "stages": [
         {
             "name": "call_api_gateway",
             "request": {
@@ -403,7 +465,7 @@ Use AWS access keys directly:
         "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
         "session_token": "optional-session-token"
     },
-    "flow": [
+    "stages": [
         {
             "name": "call_s3_api",
             "request": {
@@ -431,7 +493,7 @@ This allows you to omit credentials from JSON files:
     "aws": {
         "service": "execute-api"
     },
-    "flow": [...]
+    "stages": [...]
 }
 ```
 
@@ -454,7 +516,7 @@ You can define initial variables at the scenario level using the `vars` field. T
         "api_version": "v2",
         "default_timeout": 30
     },
-    "flow": [
+    "stages": [
         {
             "name": "get_users",
             "request": {
@@ -543,7 +605,7 @@ Use saved data from previous stages to alter URLs, query parameters, headers etc
 
 ```json
 {
-    "flow": [
+    "stages": [
         {
             "name": "login",
             "request": { "url": "/auth" },
@@ -752,7 +814,7 @@ Reuse common pieces across multiple test files. Common **$ref** syntax is suppor
 
 ```json
 {
-    "flow": [
+    "stages": [
         { "$ref": "stage_common.json#/authenticate" },
         {
             "name": "get_data",
@@ -774,7 +836,7 @@ Use pytest fixtures in your JSON tests:
 ```json
 {
     "fixtures": ["server", "auth_token"],
-    "flow": [
+    "stages": [
         {
             "name": "test_with_fixtures",
             "request": { "url": "http://{{ server }}/api/{{ auth_token }}" }
@@ -902,7 +964,7 @@ Exceptions to be expected from this plugin:
 
 -   **Descriptive stage names**: Use clear, action-oriented names
 -   **Modular design**: Use `$ref` for reusable components
--   **Cleanup**: Use `final` stages for cleanup operations
+-   **Cleanup**: Use `always_run: true` stages for cleanup operations
 -   **Fixtures**: Leverage pytest fixtures for test data and setup
 
 ## MCP Server

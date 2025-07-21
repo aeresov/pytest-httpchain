@@ -5,7 +5,7 @@
     "vars": {
         "api_base": "http://localhost:5000"
     },
-    "flow": [
+    "stages": [
         {
             "name": "test_follow_multiple_redirects",
             "request": {

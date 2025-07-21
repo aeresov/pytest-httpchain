@@ -10,7 +10,6 @@ from pytest_http_engine.models import (
     Save,
     Scenario,
     Stage,
-    Stages,
 )
 
 
@@ -72,17 +71,15 @@ def test_scenario_validator_fixture_variable_conflict():
     with pytest.raises(ValidationError):
         Scenario(
             fixtures=["fixture1", "fixture2"],
-            flow=Stages(
-                root=[
-                    Stage(
-                        name="stage1",
-                        request=Request(url="https://api.example.com"),
-                        response=Response(
-                            save=Save(vars={"fixture1": "response.token"}),
-                        ),
-                    )
-                ]
-            ),
+            stages=[
+                Stage(
+                    name="stage1",
+                    request=Request(url="https://api.example.com"),
+                    response=Response(
+                        save=Save(vars={"fixture1": "response.token"}),
+                    ),
+                )
+            ],
         )
 
 

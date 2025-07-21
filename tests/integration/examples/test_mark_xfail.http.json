@@ -2,7 +2,7 @@
     "marks": [
         "xfail(reason='stage is misconfigured, test should fail')"
     ],
-    "flow": [
+    "stages": [
         {
             "name": "call_nowhere",
             "request": {

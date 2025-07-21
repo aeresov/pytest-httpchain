@@ -52,8 +52,8 @@ def verify_json(json_data: str, base_uri: str = "") -> VerifyJsonResult:
                 "fixtures": scenario.fixtures,
                 "marks": scenario.marks,
                 "vars": scenario.vars or {},
-                "flow_stages": len(scenario.flow.root),
-                "final_stages": len(scenario.final.root),
+                "total_stages": len(scenario.stages),
+                "always_run_stages": sum(1 for stage in scenario.stages if stage.always_run),
                 "has_aws_config": scenario.aws is not None,
             },
         )

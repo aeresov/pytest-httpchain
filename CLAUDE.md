@@ -50,7 +50,7 @@ This is a pytest plugin that enables HTTP testing through JSON configuration fil
 - **Variable Substitution**: Jinja2 template engine for passing data between HTTP request stages (`substitute_variables` function)
 - **AWS Authentication**: Optional AWS SigV4 authentication support via `create_aws_auth` function
 - **User Functions**: Extensible system for custom validation and data extraction logic
-- **Stage Execution**: Sequential execution of flow stages, with final stages always executed for cleanup
+- **Stage Execution**: Sequential execution of stages, with `always_run` stages executed even if previous stages failed
 - **Session Management**: HTTP session per scenario with proper setup/teardown lifecycle
 - **Error Handling**: HTTP errors and validation failures produce descriptive pytest failure messages
 - **Mock Server**: Integration tests use `http-server-mock` for reliable testing
@@ -65,12 +65,13 @@ JSON test files contain:
 - `fixtures`: pytest fixture names to inject
 - `marks`: pytest marks to apply
 - `aws`: AWS authentication configuration (optional)
-- `flow`: Main test stages (executed in order)
-- `final`: Cleanup stages (always executed)
+- `stages`: Collection of test stages (executed in order)
 
 Each stage defines:
+- `name`: Stage name
 - `request`: HTTP request details (URL, method, headers, body)
 - `response`: Response handling (save variables, verify status/data)
+- `always_run`: Boolean flag to execute stage even if previous stages failed (optional, defaults to false)
 
 ### Variable Substitution
 
@@ -193,7 +194,7 @@ Create HTTP test files in `tests/integration/examples/feature/test_case.http.jso
     "vars": {
         "api_base": "http://localhost:5000"
     },
-    "flow": [
+    "stages": [
         {
             "name": "test_stage",
             "request": {
@@ -204,6 +205,14 @@ Create HTTP test files in `tests/integration/examples/feature/test_case.http.jso
                 "verify": {
                     "status": 200
                 }
+            }
+        },
+        {
+            "name": "cleanup_stage",
+            "always_run": true,
+            "request": {
+                "url": "{{ api_base }}/cleanup",
+                "method": "POST"
             }
         }
     ]
