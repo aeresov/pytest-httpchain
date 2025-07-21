@@ -82,16 +82,28 @@ class Save(BaseModel):
 
 class ResponseBody(BaseModel):
     """
-    Configuration for response body schema validation.
+    Configuration for response body validation.
 
     Attributes:
-        schema: JSON schema to validate the response body against.
-                Can be either:
-                - An inline JSON schema (dict)
-                - A path to a schema file (str)
+        schema:       JSON schema to validate the response body against.
+                      Can be either:
+                      - An inline JSON schema (dict)
+                      - A path to a schema file (str)
+        contains:     List of substrings that must be present in the response body.
+                      All substrings must be found for verification to pass.
+        not_contains: List of substrings that must NOT be present in the response body.
+                      If any substring is found, verification fails.
+        matches:      List of regular expressions that the response body text must match.
+                      All patterns must match for verification to pass.
+        not_matches:  List of regular expressions that the response body text must NOT match.
+                      If any pattern matches, verification fails.
     """
 
-    schema: JSONSchemaInline | SerializablePath = Field(description="JSON schema or path to schema file")
+    schema: JSONSchemaInline | SerializablePath | None = Field(default=None, description="JSON schema or path to schema file")
+    contains: list[str] | None = Field(default=None, description="Substrings that must be present in the response body")
+    not_contains: list[str] | None = Field(default=None, description="Substrings that must NOT be present in the response body")
+    matches: list[str] | None = Field(default=None, description="Regular expressions that must match the response body text")
+    not_matches: list[str] | None = Field(default=None, description="Regular expressions that must NOT match the response body text")
 
 
 class Verify(BaseModel):
@@ -99,24 +111,24 @@ class Verify(BaseModel):
     Configuration on how to verify the response.
 
     Attributes:
-        status:     Expected HTTP status code.
-        headers:    A dictionary where key is the header name and value is the expected header value.
-                    Header names are case-insensitive.
-        vars:       A dictionary where key is the variable name and value is the expected value.
-                    Variables come from variable_context.
-                    Variables from current stage are available.
-        functions:  List of functions to be called to verify the response.
-                    Function returns a boolean value, negative result triggers test failure.
-                    Functions are called after "vars".
-                    Functions can use variable_context entries for kwargs, including entries from current stage.
-        body:       Configuration for response body schema validation.
+        status:    Expected HTTP status code.
+        headers:   A dictionary where key is the header name and value is the expected header value.
+                   Header names are case-insensitive.
+        vars:      A dictionary where key is the variable name and value is the expected value.
+                   Variables come from variable_context.
+                   Variables from current stage are available.
+        functions: List of functions to be called to verify the response.
+                   Function returns a boolean value, negative result triggers test failure.
+                   Functions are called after "vars".
+                   Functions can use variable_context entries for kwargs, including entries from current stage.
+        body:      Configuration for response body validation (schema and regex patterns).
     """
 
     status: HTTPStatus | None = Field(default=None, description="Expected HTTP status code.")
     headers: dict[str, str] | None = Field(default=None, description="Expected response headers (case-insensitive).")
     vars: dict[str, Any] | None = Field(default=None, description="Expected values for variables.")
     functions: Functions | None = Field(default=None, description="List of functions to be called to verify the response.")
-    body: ResponseBody | None = Field(default=None, description="Response body schema validation.")
+    body: ResponseBody | None = Field(default=None, description="Response body validation (schema and regex patterns).")
 
 
 class JsonBody(BaseModel):

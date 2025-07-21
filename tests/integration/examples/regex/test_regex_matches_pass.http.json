@@ -1,0 +1,46 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "flow": [
+        {
+            "name": "test_text_patterns_match",
+            "request": {
+                "url": "{{ api_base }}/text-content",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "body": {
+                        "matches": [
+                            "Hello World",
+                            "User ID: \\d+",
+                            "user@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+                        ]
+                    }
+                }
+            }
+        },
+        {
+            "name": "test_json_patterns_match",
+            "request": {
+                "url": "{{ api_base }}/json-response",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "body": {
+                        "matches": [
+                            "\"message\":\\s*\"Success\"",
+                            "\"id\":\\s*\\d+",
+                            "\"status\":\\s*\"active\""
+                        ]
+                    }
+                }
+            }
+        }
+    ]
+}

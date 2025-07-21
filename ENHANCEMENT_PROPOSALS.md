@@ -28,56 +28,6 @@ This document outlines potential enhancements for the pytest-http plugin to expa
 
 ### 🎯 High Priority
 
-#### Comprehensive Response Validation
-
-**Problem**: Limited to status code checks and variable extraction.
-
-**Solution**: Add rich validation options:
-
-```json
-{
-  "response": {
-    "status": 200,
-    "verify": {
-      // Header validation
-      "headers": {
-        "content-type": "application/json",
-        "x-rate-limit": "{{ limit > 0 }}"
-      },
-      
-      // JSON Schema validation
-      "schema": "@/schemas/user-response.json",
-      
-      // Response time assertion
-      "response_time": {
-        "max": 1000,
-        "percentile_95": 500
-      },
-      
-      // Content validation
-      "body_contains": ["success", "user_id"],
-      "body_not_contains": ["error", "failed"],
-      
-      // Regex matching
-      "body_matches": "user_[0-9]+",
-      
-      // Size validation
-      "content_length": {
-        "min": 100,
-        "max": 10000
-      }
-    }
-  }
-}
-```
-
-**Implementation Notes**:
-- Use `jsonschema` library for schema validation
-- Store response time in variable context for access
-- Provide clear error messages for validation failures
-
-
-
 #### Flexible Authentication Support
 
 **Problem**: Only AWS SigV4 authentication is supported.

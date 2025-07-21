@@ -1,0 +1,46 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "flow": [
+        {
+            "name": "test_substring_contains",
+            "request": {
+                "url": "{{ api_base }}/text-content",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "body": {
+                        "contains": [
+                            "Hello World",
+                            "User ID: 12345",
+                            "user@example.com"
+                        ]
+                    }
+                }
+            }
+        },
+        {
+            "name": "test_json_substring_contains",
+            "request": {
+                "url": "{{ api_base }}/json-response",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "body": {
+                        "contains": [
+                            "\"message\":\"Success\"",
+                            "\"id\":67890",
+                            "\"status\":\"active\""
+                        ]
+                    }
+                }
+            }
+        }
+    ]
+}

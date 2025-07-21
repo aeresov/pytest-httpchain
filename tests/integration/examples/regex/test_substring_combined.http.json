@@ -1,0 +1,40 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "flow": [
+        {
+            "name": "test_combined_substring_and_regex",
+            "request": {
+                "url": "{{ api_base }}/html-content",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "body": {
+                        "contains": [
+                            "<title>Test Page</title>",
+                            "Welcome to our site",
+                            "Contact us at"
+                        ],
+                        "not_contains": [
+                            "<script>",
+                            "javascript:",
+                            "onclick="
+                        ],
+                        "matches": [
+                            "support@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}",
+                            "Error code: \\d+"
+                        ],
+                        "not_matches": [
+                            "alert\\(",
+                            "document\\.cookie"
+                        ]
+                    }
+                }
+            }
+        }
+    ]
+}

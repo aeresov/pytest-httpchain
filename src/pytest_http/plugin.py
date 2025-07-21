@@ -268,38 +268,81 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
                         pytest.fail(f"Error executing verify function '{func_name}' for stage '{stage_name}': {e}")
 
             if stage.response.verify.body:
-                # Get the response body as JSON
-                try:
-                    response_json = call_response.json()
-                except Exception as e:
-                    pytest.fail(f"Failed to parse response body as JSON for stage '{stage_name}': {e}")
-
-                # Get the schema
-                schema_config = stage.response.verify.body.schema
-
-                if isinstance(schema_config, str | Path):
-                    # Load schema from file path
-                    schema_path = Path(str(schema_config))
-                    if not schema_path.is_absolute():
-                        # Make it relative to current working directory
-                        schema_path = Path.cwd() / schema_path
-
+                # Handle schema validation
+                if stage.response.verify.body.schema:
+                    # Get the response body as JSON
                     try:
-                        with open(schema_path) as f:
-                            schema = json.load(f)
+                        response_json = call_response.json()
                     except Exception as e:
-                        pytest.fail(f"Failed to load schema file '{schema_path}' for stage '{stage_name}': {e}")
-                else:
-                    # Use inline schema
-                    schema = schema_config
+                        pytest.fail(f"Failed to parse response body as JSON for stage '{stage_name}': {e}")
 
-                # Validate the response against the schema
-                try:
-                    jsonschema.validate(instance=response_json, schema=schema)
-                except jsonschema.ValidationError as e:
-                    pytest.fail(f"Response body schema validation failed for stage '{stage_name}': {e.message}")
-                except jsonschema.SchemaError as e:
-                    pytest.fail(f"Invalid JSON schema for stage '{stage_name}': {e.message}")
+                    # Get the schema
+                    schema_config = stage.response.verify.body.schema
+
+                    if isinstance(schema_config, str | Path):
+                        # Load schema from file path
+                        schema_path = Path(str(schema_config))
+                        if not schema_path.is_absolute():
+                            # Make it relative to current working directory
+                            schema_path = Path.cwd() / schema_path
+
+                        try:
+                            with open(schema_path) as f:
+                                schema = json.load(f)
+                        except Exception as e:
+                            pytest.fail(f"Failed to load schema file '{schema_path}' for stage '{stage_name}': {e}")
+                    else:
+                        # Use inline schema
+                        schema = schema_config
+
+                    # Validate the response against the schema
+                    try:
+                        jsonschema.validate(instance=response_json, schema=schema)
+                    except jsonschema.ValidationError as e:
+                        pytest.fail(f"Response body schema validation failed for stage '{stage_name}': {e.message}")
+                    except jsonschema.SchemaError as e:
+                        pytest.fail(f"Invalid JSON schema for stage '{stage_name}': {e.message}")
+
+                # Handle substring validation
+                if stage.response.verify.body.contains or stage.response.verify.body.not_contains:
+                    # Get response body as text
+                    response_text = call_response.text
+
+                    # Check substrings that must be present
+                    if stage.response.verify.body.contains:
+                        for substring in stage.response.verify.body.contains:
+                            if substring not in response_text:
+                                pytest.fail(f"Body substring verification failed for stage '{stage_name}': substring '{substring}' not found in response body")
+
+                    # Check substrings that must not be present
+                    if stage.response.verify.body.not_contains:
+                        for substring in stage.response.verify.body.not_contains:
+                            if substring in response_text:
+                                pytest.fail(f"Body substring verification failed for stage '{stage_name}': substring '{substring}' found in response body")
+
+                # Handle regex validation
+                if stage.response.verify.body.matches or stage.response.verify.body.not_matches:
+                    # Get response body as text if not already retrieved
+                    if "response_text" not in locals():
+                        response_text = call_response.text
+
+                    # Check patterns that must match
+                    if stage.response.verify.body.matches:
+                        for pattern in stage.response.verify.body.matches:
+                            try:
+                                if not re.search(pattern, response_text):
+                                    pytest.fail(f"Body regex verification failed for stage '{stage_name}': pattern '{pattern}' did not match response body")
+                            except re.error as e:
+                                pytest.fail(f"Invalid regex pattern '{pattern}' for stage '{stage_name}': {e}")
+
+                    # Check patterns that must not match
+                    if stage.response.verify.body.not_matches:
+                        for pattern in stage.response.verify.body.not_matches:
+                            try:
+                                if re.search(pattern, response_text):
+                                    pytest.fail(f"Body regex verification failed for stage '{stage_name}': pattern '{pattern}' matched response body but should not have")
+                            except re.error as e:
+                                pytest.fail(f"Invalid regex pattern '{pattern}' for stage '{stage_name}': {e}")
 
 
 class StageType(StrEnum):

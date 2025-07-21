@@ -1,0 +1,33 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "flow": [
+        {
+            "name": "test_combined_regex_verification",
+            "request": {
+                "url": "{{ api_base }}/html-content",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "body": {
+                        "matches": [
+                            "<title>Test Page</title>",
+                            "support@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}",
+                            "Error code: \\d+"
+                        ],
+                        "not_matches": [
+                            "<script>",
+                            "javascript:",
+                            "alert\\(",
+                            "document\\.cookie"
+                        ]
+                    }
+                }
+            }
+        }
+    ]
+}

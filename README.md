@@ -6,12 +6,13 @@ A pytest plugin for HTTP testing using JSON files. Write your HTTP tests in JSON
 
 `pytest-http` allows you to write HTTP integration tests using structured JSON files instead of Python code. It provides:
 
-- **Declarative HTTP testing** - Define requests, responses, and validations in JSON
-- **Multi-stage scenarios** - Chain multiple HTTP requests with variable passing between stages
-- **pytest integration** - Full pytest features including fixtures, marks, and test discovery
-- **Variable substitution** - Use data obtained from previous requests. Jinja2 syntax is supported.
-- **JMESPath support** - Extract and validate data from JSON responses
-- **User function integration** - Call custom Python functions for complex logic
+-   **Declarative HTTP testing** - Define requests, responses, and validations in JSON
+-   **Multi-stage scenarios** - Chain multiple HTTP requests with variable passing between stages
+-   **pytest integration** - Full pytest features including fixtures, marks, and test discovery
+-   **Variable substitution** - Use data obtained from previous requests. Jinja2 syntax is supported.
+-   **JMESPath support** - Extract and validate data from JSON responses
+-   **User function integration** - Call custom Python functions for complex logic
+-   **Regex pattern matching** - Verify response body content with regular expressions
 
 ## Installation
 
@@ -24,8 +25,9 @@ pip install pytest-http
 ### Optional dependencies
 
 The following optional dependencies are available:
-* `aws`: AWS SigV4 authentication via [requests-auth-aws-sigv4](https://github.com/andrewjroth/requests-auth-aws-sigv4). Details in [AWS Authentication](#aws-authentication).
-* `mcp`: installs MCP server package and its starting script. Details in [MCP Server](#mcp-server).
+
+-   `aws`: AWS SigV4 authentication via [requests-auth-aws-sigv4](https://github.com/andrewjroth/requests-auth-aws-sigv4). Details in [AWS Authentication](#aws-authentication).
+-   `mcp`: installs MCP server package and its starting script. Details in [MCP Server](#mcp-server).
 
 ```bash
 pip install pytest-http[aws,mcp]
@@ -108,11 +110,11 @@ pytest test_api.http.json
 }
 ```
 
-- **`fixtures`**: Optional - pytest fixtures to inject
-- **`marks`**: Optional - pytest marks  
-- **`vars`**: Optional - initial variables for the scenario context
-- **`flow`**: Required - main test stages
-- **`final`**: Optional - cleanup stages (always run)
+-   **`fixtures`**: Optional - pytest fixtures to inject
+-   **`marks`**: Optional - pytest marks
+-   **`vars`**: Optional - initial variables for the scenario context
+-   **`flow`**: Required - main test stages
+-   **`final`**: Optional - cleanup stages (always run)
 
 ### Stage Schema
 
@@ -124,10 +126,10 @@ Each stage represents one HTTP request-response cycle:
     "request": {
         "url": "https://api.example.com/endpoint",
         "method": "GET",
-        "params": {"key": "value"},
-        "headers": {"Authorization": "Bearer token"},
+        "params": { "key": "value" },
+        "headers": { "Authorization": "Bearer token" },
         "body": {
-            "json": {"data": "value"}
+            "json": { "data": "value" }
         },
         "timeout": 30.0
     },
@@ -140,7 +142,7 @@ Each stage represents one HTTP request-response cycle:
                 "module:function_name",
                 {
                     "function": "module:function_name",
-                    "kwargs": {"param": "value"}
+                    "kwargs": { "param": "value" }
                 }
             ]
         },
@@ -156,19 +158,21 @@ Each stage represents one HTTP request-response cycle:
 ```
 
 **Request fields:**
-- **`name`**: Required - descriptive name
-- **`url`**: Required - endpoint URL
-- **`method`**: Optional - HTTP method (defaults to GET)
-- **`params`**: Optional - query parameters
-- **`headers`**: Optional - HTTP headers
-- **`body`**: Optional - request body (see Body Types section below)
-- **`timeout`**: Optional - request timeout in seconds (float)
+
+-   **`name`**: Required - descriptive name
+-   **`url`**: Required - endpoint URL
+-   **`method`**: Optional - HTTP method (defaults to GET)
+-   **`params`**: Optional - query parameters
+-   **`headers`**: Optional - HTTP headers
+-   **`body`**: Optional - request body (see Body Types section below)
+-   **`timeout`**: Optional - request timeout in seconds (float)
 
 ### Request Body Types
 
 The `body` field supports different content types. Only one body type can be specified per request:
 
 #### JSON Body
+
 ```json
 {
     "request": {
@@ -184,6 +188,7 @@ The `body` field supports different content types. Only one body type can be spe
 ```
 
 #### Form Data (application/x-www-form-urlencoded)
+
 ```json
 {
     "request": {
@@ -199,6 +204,7 @@ The `body` field supports different content types. Only one body type can be spe
 ```
 
 #### XML Body
+
 ```json
 {
     "request": {
@@ -213,6 +219,7 @@ The `body` field supports different content types. Only one body type can be spe
 ```
 
 #### Raw Text Body
+
 ```json
 {
     "request": {
@@ -227,6 +234,7 @@ The `body` field supports different content types. Only one body type can be spe
 ```
 
 #### File Upload (multipart/form-data)
+
 ```json
 {
     "request": {
@@ -241,17 +249,26 @@ The `body` field supports different content types. Only one body type can be spe
 ```
 
 **File Upload Notes:**
-- Use file paths directly (e.g., `/path/to/file` or `relative/path/file.txt`)
-- Files are automatically opened in binary mode
-- Relative and absolute paths are supported
+
+-   Use file paths directly (e.g., `/path/to/file` or `relative/path/file.txt`)
+-   Files are automatically opened in binary mode
+-   Relative and absolute paths are supported
 
 **Response fields:**
-- **`response`**: Optional - response handling configuration
-- **`save.vars`**: JMESPath expressions to extract data
-- **`save.functions`**: User functions to extract data
-- **`verify.status`**: Expected HTTP status code
-- **`verify.vars`**: direct assertions for variables
-- **`verify.functions`**: User functions for non-trivial assertions
+
+-   **`response`**: Optional - response handling configuration
+-   **`save.vars`**: JMESPath expressions to extract data
+-   **`save.functions`**: User functions to extract data
+-   **`verify.status`**: Expected HTTP status code
+-   **`verify.headers`**: Expected response headers (case-insensitive)
+-   **`verify.vars`**: direct assertions for variables
+-   **`verify.functions`**: User functions for non-trivial assertions
+-   **`verify.body`**: Response body validation (schema, substring matching, and/or regex patterns)
+    -   **`schema`**: JSON schema for validating response structure
+    -   **`contains`**: List of substrings that must be present in the response body
+    -   **`not_contains`**: List of substrings that must NOT be present in the response body
+    -   **`matches`**: List of regex patterns that must match the response body
+    -   **`not_matches`**: List of regex patterns that must NOT match the response body
 
 ## Key Features
 
@@ -302,7 +319,7 @@ def complex_extraction(response: requests.Response, threshold: int) -> dict[str,
                 "my_functions:simple_extraction",
                 {
                     "function": "my_functions:complex_extraction",
-                    "kwargs": {"threshold": 5}
+                    "kwargs": { "threshold": 5 }
                 }
             ]
         }
@@ -337,7 +354,7 @@ You can specify a timeout for individual requests to prevent hanging on slow or 
                 "method": "POST",
                 "timeout": 60.0,
                 "body": {
-                    "json": {"task": "process_data"}
+                    "json": { "task": "process_data" }
                 }
             }
         }
@@ -401,11 +418,11 @@ Use AWS access keys directly:
 
 AWS authentication fields default to standard environment variables:
 
-- `AWS_PROFILE` → `profile`
-- `AWS_ACCESS_KEY_ID` → `access_key_id`
-- `AWS_SECRET_ACCESS_KEY` → `secret_access_key`
-- `AWS_SESSION_TOKEN` → `session_token`
-- `AWS_DEFAULT_REGION` → `region`
+-   `AWS_PROFILE` → `profile`
+-   `AWS_ACCESS_KEY_ID` → `access_key_id`
+-   `AWS_SECRET_ACCESS_KEY` → `secret_access_key`
+-   `AWS_SESSION_TOKEN` → `session_token`
+-   `AWS_DEFAULT_REGION` → `region`
 
 This allows you to omit credentials from JSON files:
 
@@ -420,7 +437,7 @@ This allows you to omit credentials from JSON files:
 
 #### Required Fields
 
-- **`service`**: AWS service name (e.g., `execute-api`, `s3`, `lambda`)
+-   **`service`**: AWS service name (e.g., `execute-api`, `s3`, `lambda`)
 
 ### Variable Substitution
 
@@ -450,51 +467,60 @@ You can define initial variables at the scenario level using the `vars` field. T
 ```
 
 Initial variables are useful for:
-- Defining common values used across multiple stages (base URLs, API keys, etc.)
-- Setting default configuration values that can be overridden
-- Parameterizing tests without using fixtures
+
+-   Defining common values used across multiple stages (base URLs, API keys, etc.)
+-   Setting default configuration values that can be overridden
+-   Parameterizing tests without using fixtures
 
 **Variable Overwriting Rules**:
-- Initial variables can be overwritten by saved variables in later stages
-- Fixtures cannot be overwritten and cannot shadow initial variables
-- Saved variables cannot conflict with fixture names
+
+-   Initial variables can be overwritten by saved variables in later stages
+-   Fixtures cannot be overwritten and cannot shadow initial variables
+-   Saved variables cannot conflict with fixture names
 
 #### Basic Variable Access
+
 ```json
 {
     "request": {
         "url": "https://api.example.com/users/{{ user_id }}",
-        "headers": {"Authorization": "Bearer {{ auth_token }}"}
+        "headers": { "Authorization": "Bearer {{ auth_token }}" }
     }
 }
 ```
 
 #### Object Dot Notation
+
 Access nested object properties using dot notation:
+
 ```json
 {
     "request": {
         "url": "https://api.example.com/users/{{ user.profile.id }}",
-        "headers": {"X-User-Role": "{{ user.permissions.role }}"}
+        "headers": { "X-User-Role": "{{ user.permissions.role }}" }
     }
 }
 ```
 
 #### Array/List Access
+
 Access array elements using square brackets:
+
 ```json
 {
     "request": {
         "url": "https://api.example.com/items/{{ items[0] }}/details",
         "body": {
-            "json": {"categories": "{{ categories[1] }}"}
+            "json": { "categories": "{{ categories[1] }}" }
         }
     }
 }
 ```
 
 #### Complex Nested Access
+
 Combine dot notation and array access for complex data structures:
+
 ```json
 {
     "request": {
@@ -520,16 +546,16 @@ Use saved data from previous stages to alter URLs, query parameters, headers etc
     "flow": [
         {
             "name": "login",
-            "request": {"url": "/auth"},
+            "request": { "url": "/auth" },
             "response": {
-                "save": {"vars": {"token": "access_token"}}
+                "save": { "vars": { "token": "access_token" } }
             }
         },
         {
             "name": "api_call",
             "request": {
                 "url": "/api/data",
-                "headers": {"Authorization": "Bearer {{ token }}"}
+                "headers": { "Authorization": "Bearer {{ token }}" }
             }
         }
     ]
@@ -570,9 +596,137 @@ def complex_verification(response: requests.Response, threshold: int) -> bool:
                 "my_functions:simple_verification",
                 {
                     "function": "my_functions:complex_verification",
-                    "kwargs": {"threshold": 5}
+                    "kwargs": { "threshold": 5 }
                 }
             ]
+        }
+    }
+}
+```
+
+### Response Body Verification
+
+#### JSON Schema Validation
+
+Validate response body structure against a JSON schema:
+
+```json
+{
+    "response": {
+        "verify": {
+            "body": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "integer" },
+                        "name": { "type": "string" },
+                        "active": { "type": "boolean" }
+                    },
+                    "required": ["id", "name"]
+                }
+            }
+        }
+    }
+}
+```
+
+You can also reference schema from a file:
+
+```json
+{
+    "response": {
+        "verify": {
+            "body": {
+                "schema": "schemas/user_response.json"
+            }
+        }
+    }
+}
+```
+
+#### Substring Matching
+
+For simple text verification, use substring matching without regex complexity:
+
+```json
+{
+    "response": {
+        "verify": {
+            "body": {
+                "contains": ["Success", "User created", "user@example.com"],
+                "not_contains": ["error", "failed", "unauthorized"]
+            }
+        }
+    }
+}
+```
+
+**Substring Matching Notes:**
+
+-   **`contains`**: All substrings in this list must be found in the response body
+-   **`not_contains`**: None of the substrings in this list should be found in the response body
+-   Case-sensitive exact substring matching (no pattern interpretation)
+-   Useful for quick content checks without regex complexity
+
+#### Regex Pattern Matching
+
+For more complex pattern matching, use regular expressions:
+
+```json
+{
+    "response": {
+        "verify": {
+            "body": {
+                "matches": ["User ID: \\d+", "email@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}", "<title>.*Success.*</title>"],
+                "not_matches": ["error", "failed", "<script>"]
+            }
+        }
+    }
+}
+```
+
+**Pattern Matching Notes:**
+
+-   **`matches`**: All patterns in this list must match the response body
+-   **`not_matches`**: None of the patterns in this list should match the response body
+-   Patterns are applied to the raw response text (not just JSON)
+-   Standard Python regex syntax is supported
+-   Useful for HTML responses, error detection, or content validation
+
+#### Combining All Validation Methods
+
+You can use schema validation, substring matching, and regex patterns together:
+
+```json
+{
+    "response": {
+        "verify": {
+            "status": 200,
+            "body": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["active", "inactive"]},
+                        "data": {"type": "object"}
+                    }
+                },
+                "contains": [
+                    "active",
+                    "data"
+                ],
+                "not_contains": [
+                    "error",
+                    "deprecated"
+                ],
+                "matches": [
+                    "\"id\":\\s*\\d+",
+                    "\"timestamp\":\\s*\"\\d{4}-\\d{2}-\\d{2}\""
+                ],
+                "not_matches": [
+                    "password",
+                    "secret"
+                ]
+            }
         }
     }
 }
@@ -583,26 +737,28 @@ def complex_verification(response: requests.Response, threshold: int) -> bool:
 Reuse common pieces across multiple test files. Common **$ref** syntax is supported. Useful for boilerplate, e.g. authentication calls.
 
 **stage_common.json:**
+
 ```json
 {
     "authenticate": {
         "name": "auth",
-        "request": {"url": "/auth/login"},
-        "response": {"save": {"vars": {"token": "access_token"}}}
+        "request": { "url": "/auth/login" },
+        "response": { "save": { "vars": { "token": "access_token" } } }
     }
 }
 ```
 
 **test_api.http.json:**
+
 ```json
 {
     "flow": [
-        {"$ref": "stage_common.json#/authenticate"},
+        { "$ref": "stage_common.json#/authenticate" },
         {
             "name": "get_data",
             "request": {
                 "url": "/data",
-                "headers": {"Authorization": "Bearer {{ token }}"}
+                "headers": { "Authorization": "Bearer {{ token }}" }
             }
         }
     ]
@@ -621,7 +777,7 @@ Use pytest fixtures in your JSON tests:
     "flow": [
         {
             "name": "test_with_fixtures",
-            "request": {"url": "http://{{ server }}/api/{{ auth_token }}"}
+            "request": { "url": "http://{{ server }}/api/{{ auth_token }}" }
         }
     ]
 }
@@ -633,10 +789,7 @@ Apply pytest marks:
 
 ```json
 {
-    "marks": [
-        "skip(reason='API not ready')",
-        "xfail"
-    ]
+    "marks": ["skip(reason='API not ready')", "xfail"]
 }
 ```
 
@@ -646,15 +799,16 @@ Note: The following markers are **not supported**: `skipif`, `usefixture`, and `
 
 Test files must follow the pattern: `test_<name>.<suffix>.json`
 
-- **Prefix**: Must start with `test_`
-- **Name**: Descriptive test name
-- **Suffix**: Configurable (default: `http`)
-- **Extension**: Must be `.json`
+-   **Prefix**: Must start with `test_`
+-   **Name**: Descriptive test name
+-   **Suffix**: Configurable (default: `http`)
+-   **Extension**: Must be `.json`
 
 Examples:
-- `test_user_api.http.json`
-- `test_authentication.http.json`
-- `test_payment_flow.http.json`
+
+-   `test_user_api.http.json`
+-   `test_authentication.http.json`
+-   `test_payment_flow.http.json`
 
 Configure custom suffix in `pytest.ini`:
 
@@ -686,9 +840,9 @@ tests/
 
 Python tooling used in this project:
 
-- **Package manager**: `uv`
-- **Linting/formatting**: `ruff`
-- **Testing**: `pytest`
+-   **Package manager**: `uv`
+-   **Linting/formatting**: `ruff`
+-   **Testing**: `pytest`
 
 ### Commands
 
@@ -709,12 +863,12 @@ uv run pytest tests/integration/examples/test_full.http.json
 
 ### Key dependencies
 
-- **pytest**: Test framework integration
-- **jsonref**: JSON reference resolution
-- **pydantic**: Data validation and parsing
-- **jmespath**: JSON query language for response data extraction
-- **jinja2**: Template engine for variable substitution
-- **requests**: HTTP client
+-   **pytest**: Test framework integration
+-   **jsonref**: JSON reference resolution
+-   **pydantic**: Data validation and parsing
+-   **jmespath**: JSON query language for response data extraction
+-   **jinja2**: Template engine for variable substitution
+-   **requests**: HTTP client
 
 ## Configuration
 
@@ -737,19 +891,19 @@ suffix = rest
 
 Exceptions to be expected from this plugin:
 
-- **JSON validation errors**: Invalid test file syntax
-- **Pydantic validation errors**: Invalid test file structure
-- **Variable substitution errors**: Missing or invalid variables
-- **HTTP request errors**: Network or server issues
-- **JMESPath errors**: Invalid query expressions
-- **Function import errors**: Missing or invalid user functions
+-   **JSON validation errors**: Invalid test file syntax
+-   **Pydantic validation errors**: Invalid test file structure
+-   **Variable substitution errors**: Missing or invalid variables
+-   **HTTP request errors**: Network or server issues
+-   **JMESPath errors**: Invalid query expressions
+-   **Function import errors**: Missing or invalid user functions
 
 ## Best Practices
 
-- **Descriptive stage names**: Use clear, action-oriented names
-- **Modular design**: Use `$ref` for reusable components
-- **Cleanup**: Use `final` stages for cleanup operations
-- **Fixtures**: Leverage pytest fixtures for test data and setup
+-   **Descriptive stage names**: Use clear, action-oriented names
+-   **Modular design**: Use `$ref` for reusable components
+-   **Cleanup**: Use `final` stages for cleanup operations
+-   **Fixtures**: Leverage pytest fixtures for test data and setup
 
 ## MCP Server
 
@@ -764,17 +918,14 @@ The script `pytest-http-mcp` gets installed automatically. Use it as a call targ
 ```json
 // .mcp.json for Claude Code
 {
-  "mcpServers": {
-    "pytest-http": {
-      "type": "stdio",
-      "command": "uv",
-      "args": [
-        "run",
-        "pytest-http-mcp"
-      ],
-      "env": {}
+    "mcpServers": {
+        "pytest-http": {
+            "type": "stdio",
+            "command": "uv",
+            "args": ["run", "pytest-http-mcp"],
+            "env": {}
+        }
     }
-  }
 }
 ```
 
@@ -782,17 +933,16 @@ The script `pytest-http-mcp` gets installed automatically. Use it as a call targ
 
 The MCP server provides:
 
-- **JSON Validation**: Verify HTTP test JSON files against the Scenario schema
-- **Schema Export**: Access the complete JSON schema for test file structure
-- **Example Generation**: Get complete example test scenarios
-
+-   **JSON Validation**: Verify HTTP test JSON files against the Scenario schema
+-   **Schema Export**: Access the complete JSON schema for test file structure
+-   **Example Generation**: Get complete example test scenarios
 
 ## Examples
 
 See the `tests/integration/examples/` directory for complete working examples of:
 
-- Basic HTTP requests and responses
-- Multi-stage scenarios with variable passing
-- pytest mark usage
-- JSON reference usage
-- Custom function integration
+-   Basic HTTP requests and responses
+-   Multi-stage scenarios with variable passing
+-   pytest mark usage
+-   JSON reference usage
+-   Custom function integration
