@@ -15,7 +15,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Run all tests**: `uv run pytest`
 - **Run tests with verbose output**: `uv run pytest -v`
 - **Run tests with print statements**: `uv run pytest -s`
-- **Run specific test file**: `uv run pytest tests/unit/test_aws_auth.py`
 - **Run integration tests**: `uv run pytest tests/integration/`
 - **Run specific JSON test**: `uv run pytest tests/integration/examples/test_full.http.json`
 - **Note**: Files in `tests/integration/examples/` are used in integration tests and are not individual test targets
@@ -48,7 +47,6 @@ This is a pytest plugin that enables HTTP testing through JSON configuration fil
 - **Plugin System**: Uses pytest's plugin architecture with file collection hooks in `src/pytest_http/plugin.py:434`
 - **JSON Schema Validation**: Pydantic models validate JSON test files against strict schemas
 - **Variable Substitution**: Jinja2 template engine for passing data between HTTP request stages (`substitute_variables` function)
-- **AWS Authentication**: Optional AWS SigV4 authentication support via `create_aws_auth` function
 - **User Functions**: Extensible system for custom validation and data extraction logic
 - **Stage Execution**: Sequential execution of stages, with `always_run` stages executed even if previous stages failed
 - **Session Management**: HTTP session per scenario with proper setup/teardown lifecycle
@@ -64,7 +62,6 @@ JSON test files must follow: `test_<name>.<suffix>.json` where suffix defaults t
 JSON test files contain:
 - `fixtures`: pytest fixture names to inject
 - `marks`: pytest marks to apply
-- `aws`: AWS authentication configuration (optional)
 - `stages`: Collection of test stages (executed in order)
 
 Each stage defines:
@@ -119,7 +116,6 @@ Core dependencies:
 - **uv**: Package management
 
 Optional dependencies:
-- **aws**: `requests-auth-aws-sigv4`, `boto3` for AWS SigV4 authentication
 - **mcp**: `pytest-http-mcp` package for MCP server functionality
 
 Development dependencies:

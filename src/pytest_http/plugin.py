@@ -15,9 +15,8 @@ from _pytest.config.argparsing import Parser
 from _pytest.nodes import Collector, Item
 from _pytest.python import Function
 from pydantic import ValidationError
-from pytest_http_engine.models import AWSCredentials, AWSProfile, Scenario, Stage
+from pytest_http_engine.models import Scenario, Stage
 from pytest_http_engine.user_function import UserFunction
-from requests.auth import AuthBase
 
 SUFFIX: str = "suffix"
 
@@ -45,38 +44,6 @@ def get_test_name_pattern(config: Config) -> tuple[re.Pattern[str], str]:
 
 class VariableSubstitutionError(Exception):
     pass
-
-
-def create_aws_auth(aws_config: AWSProfile | AWSCredentials) -> AuthBase:
-    try:
-        import boto3
-        from requests_auth_aws_sigv4 import AWSSigV4  # type: ignore
-    except ImportError as e:
-        raise ImportError("AWS support requires 'aws' optional dependency") from e
-
-    if isinstance(aws_config, AWSProfile):
-        # Profile-based authentication
-        session = boto3.Session(profile_name=aws_config.profile)
-        credentials = session.get_credentials()
-        if not credentials:
-            raise ValueError(f"Could not get credentials for AWS profile '{aws_config.profile}'")
-
-        return AWSSigV4(
-            service=aws_config.service,
-            region=aws_config.region,
-            aws_access_key_id=credentials.access_key,
-            aws_secret_access_key=credentials.secret_key,
-            aws_session_token=credentials.token,
-        )
-    else:
-        # Credential-based authentication
-        return AWSSigV4(
-            service=aws_config.service,
-            region=aws_config.region,
-            aws_access_key_id=aws_config.access_key_id,
-            aws_secret_access_key=aws_config.secret_access_key,
-            aws_session_token=aws_config.session_token,
-        )
 
 
 def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
@@ -391,14 +358,6 @@ class JSONScenario(Collector):
                 self._http_session.verify = self.model.ssl.verify
             if self.model.ssl.cert is not None:
                 self._http_session.cert = self.model.ssl.cert
-
-        # Configure AWS auth for the session
-        if self.model.aws:
-            try:
-                aws_auth = create_aws_auth(self.model.aws)
-                self._http_session.auth = aws_auth
-            except Exception as e:
-                pytest.fail(f"Failed to setup AWS authentication: {e}")
 
     def teardown(self) -> None:
         """Cleanup session"""

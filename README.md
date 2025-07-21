@@ -26,11 +26,10 @@ pip install pytest-http
 
 The following optional dependencies are available:
 
--   `aws`: AWS SigV4 authentication via [requests-auth-aws-sigv4](https://github.com/andrewjroth/requests-auth-aws-sigv4). Details in [AWS Authentication](#aws-authentication).
 -   `mcp`: installs MCP server package and its starting script. Details in [MCP Server](#mcp-server).
 
 ```bash
-pip install pytest-http[aws,mcp]
+pip install pytest-http[mcp]
 ```
 
 ### Install from repository
@@ -426,80 +425,6 @@ In this example:
 - If `test_resource` fails, `cleanup_resource` still runs due to `always_run: true`
 - This ensures the test resource is cleaned up even if the test fails
 
-### AWS Authentication
-
-`pytest-http` supports AWS SigV4 authentication for calling AWS APIs. You can use either profile-based or credential-based authentication.
-
-#### Profile-based Authentication
-
-Use AWS profiles from your local AWS configuration:
-
-```json
-{
-    "aws": {
-        "service": "execute-api",
-        "region": "us-west-2",
-        "profile": "dev"
-    },
-    "stages": [
-        {
-            "name": "call_api_gateway",
-            "request": {
-                "url": "https://api.example.com/prod/endpoint"
-            }
-        }
-    ]
-}
-```
-
-#### Credential-based Authentication
-
-Use AWS access keys directly:
-
-```json
-{
-    "aws": {
-        "service": "s3",
-        "region": "us-east-1",
-        "access_key_id": "AKIAIOSFODNN7EXAMPLE",
-        "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-        "session_token": "optional-session-token"
-    },
-    "stages": [
-        {
-            "name": "call_s3_api",
-            "request": {
-                "url": "https://s3.amazonaws.com/my-bucket/object"
-            }
-        }
-    ]
-}
-```
-
-#### Environment Variables
-
-AWS authentication fields default to standard environment variables:
-
--   `AWS_PROFILE` → `profile`
--   `AWS_ACCESS_KEY_ID` → `access_key_id`
--   `AWS_SECRET_ACCESS_KEY` → `secret_access_key`
--   `AWS_SESSION_TOKEN` → `session_token`
--   `AWS_DEFAULT_REGION` → `region`
-
-This allows you to omit credentials from JSON files:
-
-```json
-{
-    "aws": {
-        "service": "execute-api"
-    },
-    "stages": [...]
-}
-```
-
-#### Required Fields
-
--   **`service`**: AWS service name (e.g., `execute-api`, `s3`, `lambda`)
 
 ### Variable Substitution
 
