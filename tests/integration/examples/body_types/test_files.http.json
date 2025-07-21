@@ -10,8 +10,8 @@
                 "method": "POST",
                 "body": {
                     "files": {
-                        "file1": "@textfile.txt",
-                        "file2": "world"
+                        "file1": "textfile1.txt",
+                        "file2": "textfile2.txt"
                     }
                 }
             },

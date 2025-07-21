@@ -14,7 +14,7 @@
                 "verify": {
                     "status": 200,
                     "body": {
-                        "schema": "@user_schema.json"
+                        "schema": "user_schema.json"
                     }
                 }
             }

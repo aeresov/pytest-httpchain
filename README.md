@@ -232,9 +232,8 @@ The `body` field supports different content types. Only one body type can be spe
     "request": {
         "body": {
             "files": {
-                "document": "@/path/to/file.pdf",
-                "raw_content": "This is raw file content",
-                "config": "@./config.json"
+                "document": "path/to/file.pdf",
+                "config": "/etc/important.conf"
             }
         }
     }
@@ -242,8 +241,7 @@ The `body` field supports different content types. Only one body type can be spe
 ```
 
 **File Upload Notes:**
-- Use `@/path/to/file` syntax to reference actual files
-- Use raw strings for inline content
+- Use file paths directly (e.g., `/path/to/file` or `relative/path/file.txt`)
 - Files are automatically opened in binary mode
 - Relative and absolute paths are supported
 

@@ -83,21 +83,6 @@ def validate_json_serializable(v: Any) -> Any:
         raise ValueError(f"Value cannot be serialized as JSON: {e}") from e
 
 
-def validate_file_path(v: str) -> FilePath:
-    """Validate file path format - must start with @/path/to/file."""
-    match = FILE_REF_PATTERN.match(v)
-    if not match:
-        raise ValueError(f"File path must start with '@' and contain a non-empty path, got: {v}")
-
-    # Validate path format by attempting to create Path object
-    try:
-        Path(match.group("path"))
-    except (ValueError, TypeError) as e:
-        raise ValueError(f"Invalid file path format: {e}") from e
-
-    return FilePath(v)
-
-
 def validate_json_schema_inline(v: dict[str, Any]) -> dict[str, Any]:
     """Validate inline JSON schema dictionary."""
     # Basic JSON schema validation - check if it's a valid dict structure
@@ -117,6 +102,5 @@ VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
 FunctionName = Annotated[str, AfterValidator(UserFunction.validate_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
 JSONSerializable = Annotated[Any, AfterValidator(validate_json_serializable)]
-FilePathRef = Annotated[FilePath, AfterValidator(validate_file_path)]
 JSONSchemaInline = Annotated[dict[str, Any], AfterValidator(validate_json_schema_inline)]
 SerializablePath = Annotated[Path, PlainSerializer(lambda x: str(x), return_type=str)]

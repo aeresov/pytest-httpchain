@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
-from pytest_http_engine.types import FilePathRef, FunctionName, JMESPathExpression, JSONSchemaInline, JSONSerializable, SerializablePath, VariableName
+from pytest_http_engine.types import FunctionName, JMESPathExpression, JSONSchemaInline, JSONSerializable, SerializablePath, VariableName
 
 
 class SSLConfig(BaseModel):
@@ -88,10 +88,10 @@ class ResponseBody(BaseModel):
         schema: JSON schema to validate the response body against.
                 Can be either:
                 - An inline JSON schema (dict)
-                - A path to a schema file (str starting with '@')
+                - A path to a schema file (str)
     """
 
-    schema: JSONSchemaInline | FilePathRef = Field(description="JSON schema or path to schema file (prefixed with '@')")
+    schema: JSONSchemaInline | SerializablePath = Field(description="JSON schema or path to schema file")
 
 
 class Verify(BaseModel):
@@ -143,7 +143,7 @@ class RawBody(BaseModel):
 class FilesBody(BaseModel):
     """Multipart file upload request body."""
 
-    files: dict[str, str | FilePathRef] | None = Field(default=None, description="Files to upload from raw strings or file paths (e.g., '@/path/to/file')")
+    files: dict[str, SerializablePath] | None = Field(default=None, description="Files to upload from file paths (e.g., '/path/to/file')")
 
 
 # Union type for all possible body types

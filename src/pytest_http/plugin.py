@@ -17,7 +17,6 @@ from _pytest.nodes import Collector, Item
 from _pytest.python import Function
 from pydantic import ValidationError
 from pytest_http_engine.models import AWSCredentials, AWSProfile, Scenario, Stage, Stages
-from pytest_http_engine.types import FILE_REF_PATTERN
 from pytest_http_engine.user_function import UserFunction
 from requests.auth import AuthBase
 
@@ -152,23 +151,15 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
             case RawBody(raw=data):
                 request_params["data"] = data
             case FilesBody(files=files_dict):
-                # Process files - handle @/path/to/file syntax
+                # Process files - all values are file paths
                 files = {}
-                file_ref_pattern = re.compile(r"^@(?P<path>.+)$")
-
-                for field_name, file_value in files_dict.items():
-                    if match := file_ref_pattern.match(file_value):
-                        # File path reference
-                        file_path = match.group("path")
-                        try:
-                            files[field_name] = open(file_path, "rb")
-                        except FileNotFoundError:
-                            pytest.fail(f"File not found for upload: {file_path}")
-                        except Exception as e:
-                            pytest.fail(f"Error opening file {file_path}: {e}")
-                    else:
-                        # Raw content
-                        files[field_name] = file_value
+                for field_name, file_path in files_dict.items():
+                    try:
+                        files[field_name] = open(file_path, "rb")
+                    except FileNotFoundError:
+                        pytest.fail(f"File not found for upload: {file_path}")
+                    except Exception as e:
+                        pytest.fail(f"Error opening file {file_path}: {e}")
 
                 request_params["files"] = files
 
@@ -281,9 +272,9 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
                 # Get the schema
                 schema_config = stage.response.verify.body.schema
 
-                if isinstance(schema_config, str) and (match := FILE_REF_PATTERN.match(schema_config)):
-                    # Load schema from file
-                    schema_path = Path(match.group("path"))
+                if isinstance(schema_config, str | Path):
+                    # Load schema from file path
+                    schema_path = Path(str(schema_config))
                     if not schema_path.is_absolute():
                         # Make it relative to current working directory
                         schema_path = Path.cwd() / schema_path
