@@ -234,6 +234,11 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
                 actual_status = call_response.status_code
                 if actual_status != expected_status:
                     pytest.fail(f"Status code verification failed for stage '{stage_name}': expected {expected_status}, got {actual_status}")
+            if stage.response.verify.headers:
+                for header_name, expected_value in stage.response.verify.headers.items():
+                    actual_value = call_response.headers.get(header_name)
+                    if actual_value != expected_value:
+                        pytest.fail(f"Header '{header_name}' verification failed for stage '{stage_name}': expected '{expected_value}', got '{actual_value}'")
             if stage.response.verify.vars:
                 for var_name, expected_value in stage.response.verify.vars.items():
                     if var_name not in variable_context:

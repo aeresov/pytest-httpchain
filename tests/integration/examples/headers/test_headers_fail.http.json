@@ -1,0 +1,23 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "flow": [
+        {
+            "name": "test_headers_verification_fail",
+            "request": {
+                "url": "{{ api_base }}/headers",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "headers": {
+                        "X-Custom-Header": "wrong-value"
+                    }
+                }
+            }
+        }
+    ]
+}

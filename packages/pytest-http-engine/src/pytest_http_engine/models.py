@@ -100,6 +100,8 @@ class Verify(BaseModel):
 
     Attributes:
         status:     Expected HTTP status code.
+        headers:    A dictionary where key is the header name and value is the expected header value.
+                    Header names are case-insensitive.
         vars:       A dictionary where key is the variable name and value is the expected value.
                     Variables come from variable_context.
                     Variables from current stage are available.
@@ -111,6 +113,7 @@ class Verify(BaseModel):
     """
 
     status: HTTPStatus | None = Field(default=None, description="Expected HTTP status code.")
+    headers: dict[str, str] | None = Field(default=None, description="Expected response headers (case-insensitive).")
     vars: dict[str, Any] | None = Field(default=None, description="Expected values for variables.")
     functions: Functions | None = Field(default=None, description="List of functions to be called to verify the response.")
     body: ResponseBody | None = Field(default=None, description="Response body schema validation.")
