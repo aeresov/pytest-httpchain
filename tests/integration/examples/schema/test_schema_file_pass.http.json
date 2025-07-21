@@ -1,0 +1,23 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "flow": [
+        {
+            "name": "get_valid_user",
+            "request": {
+                "url": "{{ api_base }}/user/valid",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "body": {
+                        "schema": "@user_schema.json"
+                    }
+                }
+            }
+        }
+    ]
+}

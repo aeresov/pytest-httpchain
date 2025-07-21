@@ -1,0 +1,23 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "flow": [
+        {
+            "name": "get_user_with_extras",
+            "request": {
+                "url": "{{ api_base }}/user/extra-fields",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "body": {
+                        "schema": "@user_schema.json"
+                    }
+                }
+            }
+        }
+    ]
+}

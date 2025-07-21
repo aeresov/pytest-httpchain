@@ -8,6 +8,7 @@ from typing import Any
 import jinja2
 import jmespath
 import jsonref
+import jsonschema
 import pytest
 import requests
 from _pytest.config import Config
@@ -267,6 +268,42 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
 
                     except Exception as e:
                         pytest.fail(f"Error executing verify function '{func_name}' for stage '{stage_name}': {e}")
+
+            if stage.response.verify.body:
+                # Get the response body as JSON
+                try:
+                    response_json = call_response.json()
+                except Exception as e:
+                    pytest.fail(f"Failed to parse response body as JSON for stage '{stage_name}': {e}")
+
+                # Get the schema
+                schema_config = stage.response.verify.body.schema
+                file_ref_pattern = re.compile(r"^@(?P<path>.+)$")
+
+                if isinstance(schema_config, str) and (match := file_ref_pattern.match(schema_config)):
+                    # Load schema from file
+                    file_path = match.group("path")
+                    schema_path = Path(file_path)
+                    if not schema_path.is_absolute():
+                        # Make it relative to current working directory
+                        schema_path = Path.cwd() / schema_path
+
+                    try:
+                        with open(schema_path) as f:
+                            schema = json.load(f)
+                    except Exception as e:
+                        pytest.fail(f"Failed to load schema file '{schema_path}' for stage '{stage_name}': {e}")
+                else:
+                    # Use inline schema
+                    schema = schema_config
+
+                # Validate the response against the schema
+                try:
+                    jsonschema.validate(instance=response_json, schema=schema)
+                except jsonschema.ValidationError as e:
+                    pytest.fail(f"Response body schema validation failed for stage '{stage_name}': {e.message}")
+                except jsonschema.SchemaError as e:
+                    pytest.fail(f"Invalid JSON schema for stage '{stage_name}': {e.message}")
 
 
 class StageType(StrEnum):

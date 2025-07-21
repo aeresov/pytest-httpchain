@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
-from pytest_http_engine.types import FileReference, FunctionName, JMESPathExpression, JSONSerializable, SSLCertPath, SSLVerifyPath, VariableName
+from pytest_http_engine.types import FileReference, FunctionName, JMESPathExpression, JSONSchema, JSONSerializable, SSLCertPath, SSLVerifyPath, VariableName
 
 
 class SSLConfig(BaseModel):
@@ -78,6 +78,20 @@ class Save(BaseModel):
     functions: Functions | None = Field(default=None, description="List of functions to be called to save data.")
 
 
+class ResponseBody(BaseModel):
+    """
+    Configuration for response body schema validation.
+
+    Attributes:
+        schema: JSON schema to validate the response body against.
+                Can be either:
+                - An inline JSON schema (dict)
+                - A path to a schema file (str starting with '@')
+    """
+
+    schema: JSONSchema = Field(description="JSON schema or path to schema file (prefixed with '@')")
+
+
 class Verify(BaseModel):
     """
     Configuration on how to verify the response.
@@ -91,11 +105,13 @@ class Verify(BaseModel):
                     Function returns a boolean value, negative result triggers test failure.
                     Functions are called after "vars".
                     Functions can use variable_context entries for kwargs, including entries from current stage.
+        body:       Configuration for response body schema validation.
     """
 
     status: HTTPStatus | None = Field(default=None, description="Expected HTTP status code.")
     vars: dict[str, Any] | None = Field(default=None, description="Expected values for variables.")
     functions: Functions | None = Field(default=None, description="List of functions to be called to verify the response.")
+    body: ResponseBody | None = Field(default=None, description="Response body schema validation.")
 
 
 class JsonBody(BaseModel):

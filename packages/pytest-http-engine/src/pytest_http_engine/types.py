@@ -84,6 +84,21 @@ def validate_ssl_cert_path(v: str) -> str:
     return v
 
 
+def validate_json_schema_inline(v: dict[str, Any]) -> dict[str, Any]:
+    """Validate inline JSON schema dictionary."""
+    # Basic JSON schema validation - check if it's a valid dict structure
+    try:
+        json.dumps(v)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Invalid JSON schema format: {e}") from e
+
+    # Optional: Basic schema structure validation
+    if "$schema" in v and not isinstance(v["$schema"], str):
+        raise ValueError("$schema must be a string")
+
+    return v
+
+
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
 FunctionName = Annotated[str, AfterValidator(UserFunction.validate_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
@@ -91,3 +106,5 @@ JSONSerializable = Annotated[Any, AfterValidator(validate_json_serializable)]
 FileReference = Annotated[str, AfterValidator(validate_file_reference)]
 SSLVerifyPath = Annotated[str, AfterValidator(validate_ssl_verify_path)]
 SSLCertPath = Annotated[str, AfterValidator(validate_ssl_cert_path)]
+JSONSchemaInline = Annotated[dict[str, Any], AfterValidator(validate_json_schema_inline)]
+JSONSchema = JSONSchemaInline | FileReference
