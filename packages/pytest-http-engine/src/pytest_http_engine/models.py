@@ -177,6 +177,7 @@ class Request(BaseModel):
         timeout:  Request timeout in seconds (optional).
         allow_redirects: Whether to follow HTTP redirects (defaults to True).
         ssl:      SSL/TLS configuration for this specific request (overrides scenario SSL settings).
+        auth:     Authentication function name for this specific request (overrides scenario auth settings).
     """
 
     url: str = Field()
@@ -197,6 +198,7 @@ class Request(BaseModel):
             {"cert": ["/path/to/client.crt", "/path/to/client.key"]},
         ],
     )
+    auth: FunctionName | FunctionCall | None = Field(default=None, description="Authentication function name or function call (overrides scenario auth settings)")
 
 
 class Response(BaseModel):
@@ -242,6 +244,7 @@ class Scenario(BaseModel):
         marks:      List of marks to be applied to, like to a regular pytest function.
         vars:       Initial variables to seed the variable context.
         ssl:        SSL/TLS configuration applied to the HTTP session for all requests (optional)
+        auth:       Authentication function name applied to the HTTP session for all requests (optional)
         stages:     Collection of stages to execute. Stages with always_run=True will execute even if previous stages failed.
     """
 
@@ -260,6 +263,7 @@ class Scenario(BaseModel):
             {"verify": "/path/to/ca-bundle.crt", "cert": ["/path/to/client.crt", "/path/to/client.key"]},
         ],
     )
+    auth: FunctionName | FunctionCall | None = Field(default=None, description="Authentication function name or function call applied to the HTTP session for all requests")
     stages: list[Stage] = Field(default_factory=list, description="Collection of stages to execute")
 
     model_config = ConfigDict(extra="ignore")

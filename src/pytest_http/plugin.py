@@ -46,6 +46,34 @@ class VariableSubstitutionError(Exception):
     pass
 
 
+def substitute_variables_in_auth(auth_spec: str | Any, variables: dict[str, Any]) -> str | Any:
+    """Apply variable substitution to auth specification."""
+    if isinstance(auth_spec, str):
+        # Simple function name string
+        env = jinja2.Environment(variable_start_string="{{", variable_end_string="}}", undefined=jinja2.StrictUndefined)
+        template = env.from_string(auth_spec)
+        return template.render(variables)
+    else:
+        # FunctionCall object - need to substitute in kwargs
+        from pytest_http_engine.models import FunctionCall
+        auth_dict = auth_spec.model_dump()
+
+        def render_recursive(obj: Any) -> Any:
+            if isinstance(obj, str):
+                env = jinja2.Environment(variable_start_string="{{", variable_end_string="}}", undefined=jinja2.StrictUndefined)
+                template = env.from_string(obj)
+                return template.render(variables)
+            elif isinstance(obj, dict):
+                return {key: render_recursive(value) for key, value in obj.items()}
+            elif isinstance(obj, list):
+                return [render_recursive(item) for item in obj]
+            else:
+                return obj
+
+        rendered_auth_dict = render_recursive(auth_dict)
+        return FunctionCall.model_validate(rendered_auth_dict)
+
+
 def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
     try:
         # Convert stage to dict for template processing
@@ -102,6 +130,14 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
             request_params["verify"] = stage.request.ssl.verify
         if stage.request.ssl.cert is not None:
             request_params["cert"] = stage.request.ssl.cert
+
+    # Add authentication for this specific request (overrides session auth)
+    if stage.request.auth:
+        try:
+            auth_instance = UserFunction.call_auth_function_from_spec(stage.request.auth)
+            request_params["auth"] = auth_instance
+        except Exception as e:
+            pytest.fail(f"Failed to configure stage authentication '{stage.request.auth}' for stage '{stage_name}': {e}")
 
     # Handle different body types
     if stage.request.body:
@@ -358,6 +394,17 @@ class JSONScenario(Collector):
                 self._http_session.verify = self.model.ssl.verify
             if self.model.ssl.cert is not None:
                 self._http_session.cert = self.model.ssl.cert
+
+        # Configure authentication for the session
+        if self.model.auth:
+            try:
+                # Apply variable substitution to auth spec
+                resolved_auth = substitute_variables_in_auth(self.model.auth, self.variable_context)
+                auth_instance = UserFunction.call_auth_function_from_spec(resolved_auth)
+                self._http_session.auth = auth_instance
+            except Exception as e:
+                import pytest
+                pytest.fail(f"Failed to configure scenario authentication '{self.model.auth}': {e}")
 
     def teardown(self) -> None:
         """Cleanup session"""

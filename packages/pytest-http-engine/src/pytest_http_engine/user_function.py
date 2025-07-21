@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 import requests
+from requests.auth import AuthBase
 
 
 class UserFunction:
@@ -47,3 +48,58 @@ class UserFunction:
             return func(response, **kwargs)
         else:
             return func(response)
+
+    @classmethod
+    def call_auth_function(cls, func_name: str, kwargs: dict[str, Any] | None = None) -> AuthBase:
+        """
+        Call an authentication function that returns a requests.AuthBase instance.
+
+        Args:
+            func_name: Function name in 'module:function' format
+            kwargs: Optional keyword arguments to pass to the function
+
+        Returns:
+            AuthBase: Authentication instance to be used with requests
+
+        Raises:
+            ValueError: If function doesn't exist or doesn't return AuthBase instance
+        """
+        module_path, function_name = cls._parse_given_name(func_name)
+        func = cls._import_function(module_path, function_name)
+
+        try:
+            if kwargs:
+                auth_instance = func(**kwargs)
+            else:
+                auth_instance = func()
+        except Exception as e:
+            raise ValueError(f"Error calling authentication function '{func_name}': {e}") from e
+
+        if not isinstance(auth_instance, AuthBase):
+            raise ValueError(f"Authentication function '{func_name}' must return a requests.AuthBase instance, got {type(auth_instance)}")
+
+        return auth_instance
+
+    @classmethod
+    def call_auth_function_from_spec(cls, auth_spec: str | Any) -> AuthBase:
+        """
+        Call an authentication function from either a string or FunctionCall spec.
+
+        Args:
+            auth_spec: Either a function name string or FunctionCall object
+
+        Returns:
+            AuthBase: Authentication instance to be used with requests
+
+        Raises:
+            ValueError: If function doesn't exist or doesn't return AuthBase instance
+        """
+        if isinstance(auth_spec, str):
+            # Simple function name, call without kwargs
+            return cls.call_auth_function(auth_spec)
+        else:
+            # FunctionCall object with kwargs (already resolved by variable substitution)
+            func_name = auth_spec.function
+            kwargs = auth_spec.kwargs
+
+            return cls.call_auth_function(func_name, kwargs)

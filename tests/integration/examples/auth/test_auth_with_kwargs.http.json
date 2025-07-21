@@ -1,0 +1,54 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000",
+        "username": "user",
+        "password": "pass"
+    },
+    "stages": [
+        {
+            "name": "test_basic_auth_with_variables",
+            "request": {
+                "url": "{{ api_base }}/api/protected",
+                "method": "GET",
+                "auth": {
+                    "function": "auth_functions:basic_auth_with_args",
+                    "kwargs": {
+                        "username": "{{ username }}",
+                        "password": "{{ password }}"
+                    }
+                }
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "body": {
+                        "contains": ["protected data", "user"]
+                    }
+                }
+            }
+        },
+        {
+            "name": "test_basic_auth_with_literals",
+            "request": {
+                "url": "{{ api_base }}/api/protected",
+                "method": "GET",
+                "auth": {
+                    "function": "auth_functions:basic_auth_with_args",
+                    "kwargs": {
+                        "username": "user",
+                        "password": "pass"
+                    }
+                }
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "body": {
+                        "contains": ["protected data", "user"]
+                    }
+                }
+            }
+        }
+    ]
+}
