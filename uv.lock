@@ -441,6 +441,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pytest-http-engine" },
+    { name = "rich" },
 ]
 
 [package.optional-dependencies]
@@ -459,6 +460,7 @@ dev = [
 requires-dist = [
     { name = "pytest-http-engine", editable = "packages/pytest-http-engine" },
     { name = "pytest-http-mcp", marker = "extra == 'mcp'", editable = "packages/pytest-http-mcp" },
+    { name = "rich", specifier = ">=13.7.0" },
 ]
 provides-extras = ["mcp"]
 

@@ -1,5 +1,6 @@
 """Integration tests for authentication functionality."""
 
+
 def test_scenario_level_basic_auth(pytester):
     """Test scenario-level basic authentication works correctly."""
     pytester.copy_example("auth/conftest.py")

@@ -5,7 +5,7 @@ from requests.auth import HTTPBasicAuth
 
 def basic_auth():
     """Returns HTTP Basic Auth for user:pass"""
-    return HTTPBasicAuth('user', 'pass')
+    return HTTPBasicAuth("user", "pass")
 
 
 def basic_auth_with_args(username, password):

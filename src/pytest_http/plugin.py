@@ -14,11 +14,20 @@ from _pytest.config import Config
 from _pytest.config.argparsing import Parser
 from _pytest.nodes import Collector, Item
 from _pytest.python import Function
+from _pytest.reports import TestReport
+from _pytest.stash import StashKey
 from pydantic import ValidationError
 from pytest_http_engine.models import Scenario, Stage
 from pytest_http_engine.user_function import UserFunction
+from rich.console import Console
+from rich.syntax import Syntax
+from rich.table import Table
+from rich.text import Text
 
 SUFFIX: str = "suffix"
+
+# Stash key for storing HTTP request/response data
+http_details_key = StashKey[list[dict[str, Any]]]()
 
 
 def pytest_addoption(parser: Parser) -> None:
@@ -56,6 +65,7 @@ def substitute_variables_in_auth(auth_spec: str | Any, variables: dict[str, Any]
     else:
         # FunctionCall object - need to substitute in kwargs
         from pytest_http_engine.models import FunctionCall
+
         auth_dict = auth_spec.model_dump()
 
         def render_recursive(obj: Any) -> Any:
@@ -106,7 +116,100 @@ def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
         raise VariableSubstitutionError(f"Failed to substitute variables in stage: {e}") from e
 
 
-def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session: requests.Session) -> None:
+def _format_request_response_details(stage: Stage, request_params: dict[str, Any], response: requests.Response) -> str:
+    """Format detailed request and response information using Rich and return as string."""
+    console = Console(record=True, width=120, force_terminal=False)
+
+    # Create request details table
+    request_table = Table(title=f"🔄 HTTP Request - {stage.name}", show_header=True, header_style="bold blue")
+    request_table.add_column("Property", style="cyan", no_wrap=True)
+    request_table.add_column("Value", style="white")
+
+    # Add basic request info
+    request_table.add_row("Method", stage.request.method.value)
+    request_table.add_row("URL", stage.request.url)
+
+    # Add headers if present
+    if request_params.get("headers"):
+        headers_str = json.dumps(request_params["headers"], indent=2)
+        request_table.add_row("Headers", Syntax(headers_str, "json", theme="github-dark"))
+
+    # Add request body if present
+    if "json" in request_params:
+        body_str = json.dumps(request_params["json"], indent=2)
+        request_table.add_row("Body (JSON)", Syntax(body_str, "json", theme="github-dark"))
+    elif "data" in request_params:
+        if isinstance(request_params["data"], str):
+            request_table.add_row("Body (Text)", request_params["data"])
+        else:
+            request_table.add_row("Body (Form)", str(request_params["data"]))
+    elif "files" in request_params:
+        files_info = ", ".join(request_params["files"].keys())
+        request_table.add_row("Files", files_info)
+
+    # Add timeout if present
+    if request_params.get("timeout"):
+        request_table.add_row("Timeout", f"{request_params['timeout']}s")
+
+    console.print(request_table)
+
+    # Create response details table
+    response_table = Table(title="📥 HTTP Response", show_header=True, header_style="bold green")
+    response_table.add_column("Property", style="cyan", no_wrap=True)
+    response_table.add_column("Value", style="white")
+
+    # Status code with color
+    status_color = "green" if 200 <= response.status_code < 300 else "yellow" if 300 <= response.status_code < 400 else "red"
+    status_text = Text(str(response.status_code), style=f"bold {status_color}")
+    response_table.add_row("Status Code", status_text)
+
+    # Response headers
+    if response.headers:
+        headers_dict = dict(response.headers)
+        headers_str = json.dumps(headers_dict, indent=2)
+        response_table.add_row("Headers", Syntax(headers_str, "json", theme="github-dark"))
+
+    # Response body
+    content_type = response.headers.get("content-type", "")
+    if content_type.startswith("application/json"):
+        try:
+            response_json = response.json()
+            body_str = json.dumps(response_json, indent=2)
+            response_table.add_row("Body (JSON)", Syntax(body_str, "json", theme="github-dark"))
+        except Exception:
+            response_table.add_row("Body (Text)", response.text[:500] + "..." if len(response.text) > 500 else response.text)
+    elif content_type.startswith("text/"):
+        response_table.add_row("Body (Text)", response.text[:500] + "..." if len(response.text) > 500 else response.text)
+    elif response.content:
+        response_table.add_row("Body Size", f"{len(response.content)} bytes")
+
+    # Response time
+    if hasattr(response, "elapsed"):
+        response_table.add_row("Response Time", f"{response.elapsed.total_seconds():.3f}s")
+
+    console.print(response_table)
+    console.print()  # Add spacing
+
+    # Export the rich output as text
+    return console.export_text()
+
+
+def _store_http_details(item: Item, stage: Stage, request_params: dict[str, Any], response: requests.Response) -> None:
+    """Store HTTP request/response details in the test item stash."""
+    if not hasattr(item, "stash"):
+        return
+
+    formatted_output = _format_request_response_details(stage, request_params, response)
+
+    # Initialize the list if it doesn't exist
+    if http_details_key not in item.stash:
+        item.stash[http_details_key] = []
+
+    # Store the formatted output
+    item.stash[http_details_key].append({"stage_name": stage.name, "formatted_output": formatted_output})
+
+
+def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session: requests.Session, item: Item | None = None) -> None:
     stage_name: str = stage.name
     try:
         stage: Stage = substitute_variables(stage, variable_context)
@@ -167,6 +270,11 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
 
     try:
         call_response: requests.Response = session.request(stage.request.method.value, stage.request.url, **request_params)
+
+        # Store request and response details for pytest reporting
+        if item is not None:
+            _store_http_details(item, stage, request_params, call_response)
+
     except requests.Timeout:
         pytest.fail(f"HTTP request timed out for stage '{stage_name}' to URL: {stage.request.url}")
     except requests.ConnectionError as e:
@@ -404,6 +512,7 @@ class JSONScenario(Collector):
                 self._http_session.auth = auth_instance
             except Exception as e:
                 import pytest
+
                 pytest.fail(f"Failed to configure scenario authentication '{self.model.auth}': {e}")
 
     def teardown(self) -> None:
@@ -445,7 +554,7 @@ class JSONStage(Function):
 
             # Execute the stage and handle failures
             try:
-                execute_single_stage(model, scenario.variable_context, scenario.http_session)
+                execute_single_stage(model, scenario.variable_context, scenario.http_session, self)
             except Exception as e:
                 # Only set flow_failed if this is not an always_run stage
                 if not model.always_run:
@@ -546,3 +655,19 @@ def pytest_collect_file(file_path: Path, parent: Collector) -> JSONFile | None:
     if match:
         return JSONFile.from_parent(parent, path=file_path, name=match.group(group_name))
     return None
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: Item, call):
+    """Add HTTP request/response details to test report sections."""
+    outcome = yield
+    report: TestReport = outcome.get_result()
+
+    # Only add sections during the 'call' phase and if we have stored HTTP details
+    if call.when == "call" and hasattr(item, "stash") and http_details_key in item.stash:
+        http_details = item.stash[http_details_key]
+
+        # Add each HTTP request/response as a separate section
+        for detail in http_details:
+            section_title = f"HTTP Details - {detail['stage_name']}"
+            report.sections.append((section_title, detail["formatted_output"]))
