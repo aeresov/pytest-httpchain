@@ -1,6 +1,7 @@
 def test_files(pytester):
     pytester.copy_example("body_types/conftest.py")
     pytester.copy_example("body_types/test_files.http.json")
+    pytester.copy_example("body_types/textfile.txt")
     result = pytester.runpytest()
     result.assert_outcomes(passed=1)
 

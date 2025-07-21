@@ -17,6 +17,7 @@ from _pytest.nodes import Collector, Item
 from _pytest.python import Function
 from pydantic import ValidationError
 from pytest_http_engine.models import AWSCredentials, AWSProfile, Scenario, Stage, Stages
+from pytest_http_engine.types import FILE_REF_PATTERN
 from pytest_http_engine.user_function import UserFunction
 from requests.auth import AuthBase
 
@@ -168,6 +169,7 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
                     else:
                         # Raw content
                         files[field_name] = file_value
+
                 request_params["files"] = files
 
     try:
@@ -278,12 +280,10 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
 
                 # Get the schema
                 schema_config = stage.response.verify.body.schema
-                file_ref_pattern = re.compile(r"^@(?P<path>.+)$")
 
-                if isinstance(schema_config, str) and (match := file_ref_pattern.match(schema_config)):
+                if isinstance(schema_config, str) and (match := FILE_REF_PATTERN.match(schema_config)):
                     # Load schema from file
-                    file_path = match.group("path")
-                    schema_path = Path(file_path)
+                    schema_path = Path(match.group("path"))
                     if not schema_path.is_absolute():
                         # Make it relative to current working directory
                         schema_path = Path.cwd() / schema_path

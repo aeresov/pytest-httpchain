@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
-from pytest_http_engine.types import FileReference, FunctionName, JMESPathExpression, JSONSchema, JSONSerializable, SSLCertPath, SSLVerifyPath, VariableName
+from pytest_http_engine.types import FilePathRef, FunctionName, JMESPathExpression, JSONSchemaInline, JSONSerializable, SerializablePath, VariableName
 
 
 class SSLConfig(BaseModel):
@@ -21,8 +21,10 @@ class SSLConfig(BaseModel):
               - tuple[str, str]: Tuple of (certificate_path, private_key_path)
     """
 
-    verify: bool | SSLVerifyPath | None = Field(default=True, description="SSL certificate verification. True (verify), False (no verification), or path to CA bundle")
-    cert: SSLCertPath | tuple[SSLCertPath, SSLCertPath] | None = Field(default=None, description="SSL client certificate. Single file path or tuple of (cert_path, key_path)")
+    verify: bool | SerializablePath | None = Field(default=True, description="SSL certificate verification. True (verify), False (no verification), or path to CA bundle")
+    cert: tuple[SerializablePath, SerializablePath] | SerializablePath | None = Field(
+        default=None, description="SSL client certificate. Single file path or tuple of (cert_path, key_path)"
+    )
 
 
 class FunctionCall(BaseModel):
@@ -89,7 +91,7 @@ class ResponseBody(BaseModel):
                 - A path to a schema file (str starting with '@')
     """
 
-    schema: JSONSchema = Field(description="JSON schema or path to schema file (prefixed with '@')")
+    schema: JSONSchemaInline | FilePathRef = Field(description="JSON schema or path to schema file (prefixed with '@')")
 
 
 class Verify(BaseModel):
@@ -141,7 +143,7 @@ class RawBody(BaseModel):
 class FilesBody(BaseModel):
     """Multipart file upload request body."""
 
-    files: dict[str, FileReference] = Field(description="Files to upload, use @/path/to/file for file paths or raw content")
+    files: dict[str, str | FilePathRef] | None = Field(default=None, description="Files to upload from raw strings or file paths (e.g., '@/path/to/file')")
 
 
 # Union type for all possible body types
