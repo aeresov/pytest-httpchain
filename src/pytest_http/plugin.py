@@ -129,6 +129,11 @@ def _format_request_response_details(stage: Stage, request_params: dict[str, Any
     request_table.add_row("Method", stage.request.method.value)
     request_table.add_row("URL", stage.request.url)
 
+    # Add query parameters if present
+    if request_params.get("params"):
+        params_str = json.dumps(request_params["params"], indent=2)
+        request_table.add_row("Query Params", Syntax(params_str, "json", theme="github-dark"))
+
     # Add headers if present
     if request_params.get("headers"):
         headers_str = json.dumps(request_params["headers"], indent=2)
