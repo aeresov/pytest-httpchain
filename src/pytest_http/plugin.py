@@ -582,8 +582,7 @@ class JSONStage(Function):
         # Apply marks from the stage itself
         for mark in model.marks:
             try:
-                mark_obj = eval(f"pytest.mark.{mark}")
-                self.add_marker(mark_obj)
+                self.add_marker(f"pytest.mark.{mark}")
             except Exception as e:
                 pytest.fail(f"Failed to apply mark '{mark}' to stage '{model.name}': {e}")
 
