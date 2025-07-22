@@ -54,7 +54,6 @@ def verify_json(json_data: str, base_uri: str = "") -> VerifyJsonResult:
                 "vars": scenario.vars or {},
                 "total_stages": len(scenario.stages),
                 "always_run_stages": sum(1 for stage in scenario.stages if stage.always_run),
-                "has_aws_config": scenario.aws is not None,
             },
         )
 
@@ -66,81 +65,3 @@ def verify_json(json_data: str, base_uri: str = "") -> VerifyJsonResult:
 def get_scenario_schema() -> dict:
     """Export the full JSON schema of the Scenario model"""
     return Scenario.model_json_schema()
-
-
-@mcp.resource("example://scenario")
-def get_scenario_example() -> str:
-    """Complete example of a test scenario JSON file"""
-    example = {
-        "fixtures": ["user_credentials"],
-        "marks": ["integration", "auth"],
-        "vars": {"base_url": "https://api.example.com", "api_version": "v1", "default_timeout": 30},
-        "flow": [
-            {
-                "name": "authenticate",
-                "request": {
-                    "url": "{{ base_url }}/{{ api_version }}/auth/login",
-                    "method": "POST",
-                    "headers": {"Content-Type": "application/json"},
-                    "body": {"json": {"username": "{{ user_credentials.username }}", "password": "{{ user_credentials.password }}"}},
-                    "timeout": "{{ default_timeout }}",
-                },
-                "response": {
-                    "save": {
-                        "vars": {"auth_token": "data.token", "user_id": "data.user.id", "expires_at": "data.expires_at", "login_success": "data.success"},
-                        "functions": [{"function": "auth_utils:validate_token_format", "kwargs": {"token": "{{ auth_token }}"}}],
-                    },
-                    "verify": {"status": 200, "vars": {"login_success": True}},
-                },
-            },
-            {
-                "name": "get_profile",
-                "request": {
-                    "url": "{{ base_url }}/{{ api_version }}/users/{{ user_id }}/profile",
-                    "method": "GET",
-                    "headers": {"Authorization": "Bearer {{ auth_token }}", "Content-Type": "application/json"},
-                },
-                "response": {
-                    "save": {"vars": {"last_login": "data.profile.last_login", "profile_status": "data.profile.status", "old_theme": "data.settings.theme"}},
-                    "verify": {"status": 200, "vars": {"profile_status": "active"}},
-                },
-            },
-            {
-                "name": "update_settings",
-                "request": {
-                    "url": "{{ base_url }}/{{ api_version }}/users/{{ user_id }}/settings",
-                    "method": "PUT",
-                    "headers": {"Authorization": "Bearer {{ auth_token }}", "Content-Type": "application/json"},
-                    "body": {"json": {"theme": "dark"}},
-                },
-                "response": {
-                    "save": {"vars": {"update_success": "data.updated", "new_theme": "data.settings.theme"}},
-                    "verify": {
-                        "status": 200,
-                        "vars": {"update_success": True, "new_notifications": True, "new_theme": "dark"},
-                        "functions": [
-                            {
-                                "function": "settings_utils:validate_settings_update",
-                                "kwargs": {"old_settings": {"theme": "{{ old_theme }}"}, "new_settings": {"theme": "{{ new_theme }}"}},
-                            }
-                        ],
-                    },
-                },
-            },
-        ],
-        "final": [
-            {
-                "name": "logout",
-                "request": {
-                    "url": "https://api.example.com/auth/logout",
-                    "method": "POST",
-                    "headers": {"Authorization": "Bearer {{ auth_token }}", "Content-Type": "application/json"},
-                },
-                "response": {
-                    "save": {"vars": {"logout_success": "data.logged_out", "token_invalidated": "data.token_invalidated"}},
-                    "verify": {"status": 200, "vars": {"logout_success": True, "token_invalidated": True}},
-                },
-            }
-        ],
-    }
-    return json.dumps(example, indent=2)

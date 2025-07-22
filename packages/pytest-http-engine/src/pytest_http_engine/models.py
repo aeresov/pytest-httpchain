@@ -261,7 +261,7 @@ class Scenario(BaseModel):
         stages:     Collection of stages to execute. Stages with always_run=True will execute even if previous stages failed.
     """
 
-    fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names (deprecated: use stage-level fixtures instead)")
+    fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names")
     marks: list[str] = Field(default_factory=list, description="List of marks to be applied", examples=["xfail", "skip"])
     vars: dict[str, Any] | None = Field(default=None, description="Initial variables for the scenario context")
     ssl: SSLConfig | None = Field(

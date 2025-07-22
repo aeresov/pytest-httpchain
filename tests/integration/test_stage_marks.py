@@ -22,16 +22,16 @@ def test_combined_marks(pytester):
     """Test that marks on both scenario and stage are combined correctly."""
     pytester.copy_example("stage_marks/conftest.py")
     pytester.copy_example("stage_marks/test_combined_marks.http.json")
-    
+
     # Run with -m critical to select only the critical stage
     result = pytester.runpytest("-v", "-m", "critical")
     result.assert_outcomes(passed=1)
     assert "critical_stage PASSED" in result.stdout.str()
-    
+
     # Run with -m slow to select all stages (since scenario has slow mark)
     result = pytester.runpytest("-v", "-m", "slow")
     result.assert_outcomes(passed=2)
-    
+
     # Run with -m "slow and critical" to select only critical_stage
     result = pytester.runpytest("-v", "-m", "slow and critical")
     result.assert_outcomes(passed=1)
