@@ -128,6 +128,7 @@ Each stage represents one HTTP request-response cycle:
 ```json
 {
     "name": "stage_name",
+    "marks": ["skip", "xfail(reason='...')"],
     "always_run": false,
     "request": {
         "url": "https://api.example.com/endpoint",
@@ -166,6 +167,7 @@ Each stage represents one HTTP request-response cycle:
 **Stage fields:**
 
 -   **`name`**: Required - descriptive name
+-   **`marks`**: Optional - pytest marks to apply to this specific stage
 -   **`always_run`**: Optional - run stage even if previous stages failed (defaults to false)
 -   **`request`**: Required - HTTP request configuration
 -   **`response`**: Optional - response handling configuration
@@ -772,13 +774,44 @@ Use pytest fixtures in your JSON tests:
 
 #### Marks
 
-Apply pytest marks:
+Apply pytest marks at the scenario level (applies to all stages):
 
 ```json
 {
     "marks": ["skip(reason='API not ready')", "xfail"]
 }
 ```
+
+You can also apply marks to individual stages:
+
+```json
+{
+    "stages": [
+        {
+            "name": "normal_test",
+            "request": { "url": "/api/test" }
+        },
+        {
+            "name": "flaky_endpoint",
+            "marks": ["xfail(reason='Known issue with endpoint')"],
+            "request": { "url": "/api/flaky" }
+        },
+        {
+            "name": "optional_test",
+            "marks": ["skip(reason='Not implemented yet')"],
+            "request": { "url": "/api/optional" }
+        }
+    ]
+}
+```
+
+**Mark Inheritance**: When marks are applied at both scenario and stage levels, the stage inherits all marks from the scenario plus its own marks. For example, if a scenario has `marks: ["slow"]` and a stage has `marks: ["critical"]`, that stage will have both `slow` and `critical` marks.
+
+**Supported Use Cases**:
+- Skip specific stages that aren't ready
+- Mark flaky stages as expected failures (xfail)
+- Apply custom marks for test selection (e.g., `pytest -m critical`)
+- Combine scenario and stage marks for fine-grained control
 
 Note: The following markers are **not supported**: `skipif`, `usefixture`, and `parametrize`.
 

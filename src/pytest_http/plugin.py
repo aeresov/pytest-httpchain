@@ -579,6 +579,14 @@ class JSONStage(Function):
         if hasattr(scenario, "pytestmark"):
             self.pytestmark = getattr(self, "pytestmark", []) + scenario.pytestmark
 
+        # Apply marks from the stage itself
+        for mark in model.marks:
+            try:
+                mark_obj = eval(f"pytest.mark.{mark}")
+                self.add_marker(mark_obj)
+            except Exception as e:
+                pytest.fail(f"Failed to apply mark '{mark}' to stage '{model.name}': {e}")
+
     @property
     def model(self) -> Stage:
         """Pydantic model"""
@@ -644,7 +652,7 @@ class JSONFile(pytest.File):
             for mark in scenario.marks:
                 try:
                     mark_obj = eval(f"pytest.mark.{mark}")
-                    scenario_class.pytestmark = getattr(scenario_class, "pytestmark", []) + [mark_obj]
+                    scenario_class.add_marker(mark_obj)
                 except Exception as e:
                     yield self._failed_validation_item(f"Failed to apply mark '{mark}': {e}")
                     return

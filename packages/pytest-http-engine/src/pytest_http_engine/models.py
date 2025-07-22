@@ -185,7 +185,7 @@ class Request(BaseModel):
     params: dict[str, Any] | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)
     body: RequestBody | None = Field(default=None, description="Request body configuration")
-    timeout: float | None = Field(default=None, description="Request timeout in seconds", gt=0)
+    timeout: float | None = Field(default=30.0, description="Request timeout in seconds", gt=0)
     allow_redirects: bool = Field(default=True, description="Whether to follow redirects")
     ssl: SSLConfig | None = Field(
         default=None,
@@ -222,6 +222,7 @@ class Stage(BaseModel):
     Attributes:
         name:     Stage name.
         fixtures: List of pytest fixture names to be supplied to this stage.
+        marks:    List of marks to be applied to this stage.
         request:  HTTP request configuration.
         response: HTTP response configuration.
         always_run: If True, this stage will run even if previous stages failed (useful for cleanup).
@@ -229,9 +230,21 @@ class Stage(BaseModel):
 
     name: str = Field()
     fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names for this stage")
+    marks: list[str] = Field(default_factory=list, description="List of marks to be applied to this stage", examples=["xfail", "skip"])
     request: Request = Field()
     response: Response | None = Field(default=None)
     always_run: bool = Field(default=False, description="Run this stage even if previous stages failed")
+
+    @model_validator(mode="after")
+    def validate_prohibited_marks(self) -> "Stage":
+        prohibited_marks = ["skipif", "usefixture", "parametrize"]
+
+        for mark in self.marks:
+            for prohibited in prohibited_marks:
+                if mark.startswith(f"{prohibited}(") or mark == prohibited:
+                    raise ValueError(f"Mark '{prohibited}' is not supported")
+
+        return self
 
 
 class Scenario(BaseModel):

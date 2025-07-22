@@ -10,5 +10,5 @@ def test_mark_xfail(pytester):
     pytester.copy_example("conftest.py")
     pytester.copy_example("test_mark_xfail.http.json")
     result = pytester.runpytest()
-    # Test fails because URL is invalid, mark inheritance needs further work
-    result.assert_outcomes(failed=1)
+    # Test correctly xfails because URL is invalid
+    result.assert_outcomes(xfailed=1)
