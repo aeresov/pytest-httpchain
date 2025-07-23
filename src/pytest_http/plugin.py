@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+import deepmerge
 import jinja2
 import jmespath
 import jsonref
@@ -28,6 +29,64 @@ SUFFIX: str = "suffix"
 
 # Stash key for storing HTTP request/response data
 http_details_key = StashKey[list[dict[str, Any]]]()
+
+
+def replace_refs_with_deep_merge(obj: dict[str, Any], base_uri: str) -> dict[str, Any]:
+    """
+    Replace JSON references with deep merging of additional properties.
+
+    This function processes a JSON object with $ref directives, resolving references
+    and performing deep merging when additional properties exist alongside $ref.
+
+    Args:
+        obj: The JSON object to process
+        base_uri: Base URI for resolving relative references
+
+    Returns:
+        Processed object with references resolved and deep merging applied
+    """
+    # First, resolve references without merging additional properties
+    resolved_without_merge = jsonref.replace_refs(obj=obj, base_uri=base_uri, merge_props=False)
+
+    # Then, resolve with merge_props=True to get additional properties
+    resolved_with_merge = jsonref.replace_refs(obj=obj, base_uri=base_uri, merge_props=True)
+
+    def deep_merge_refs(original: Any, merged: Any, resolved: Any) -> Any:
+        """Recursively deep merge references with additional properties."""
+        if isinstance(original, dict) and "$ref" in original:
+            # This object has a $ref - we need to deep merge
+            additional_props = {k: v for k, v in original.items() if k != "$ref"}
+            if additional_props:
+                # Deep merge the resolved reference with additional properties
+                return deepmerge.always_merger.merge(resolved, additional_props)
+            else:
+                # No additional properties, just return resolved reference
+                return resolved
+        elif isinstance(original, dict) and isinstance(merged, dict) and isinstance(resolved, dict):
+            # Recursively process nested objects
+            result = {}
+            all_keys = set(original.keys()) | set(merged.keys()) | set(resolved.keys())
+            for key in all_keys:
+                orig_val = original.get(key)
+                merged_val = merged.get(key)
+                resolved_val = resolved.get(key)
+                result[key] = deep_merge_refs(orig_val, merged_val, resolved_val)
+            return result
+        elif isinstance(original, list) and isinstance(merged, list) and isinstance(resolved, list):
+            # Process list items
+            max_len = max(len(original), len(merged), len(resolved))
+            result = []
+            for i in range(max_len):
+                orig_val = original[i] if i < len(original) else None
+                merged_val = merged[i] if i < len(merged) else None
+                resolved_val = resolved[i] if i < len(resolved) else None
+                result.append(deep_merge_refs(orig_val, merged_val, resolved_val))
+            return result
+        else:
+            # For primitive values, prefer merged over resolved
+            return merged if merged is not None else resolved
+
+    return deep_merge_refs(obj, resolved_with_merge, resolved_without_merge)
 
 
 def pytest_addoption(parser: Parser) -> None:
@@ -607,10 +666,8 @@ class JSONSynthScenario(Function):
         # Set up function signature for fixtures if needed
         if scenario.model.fixtures:
             import inspect
-            synth_scenario.__signature__ = inspect.Signature([
-                inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-                for name in scenario.model.fixtures
-            ])
+
+            synth_scenario.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in scenario.model.fixtures])
 
         kwargs["callobj"] = synth_scenario
         super().__init__(**kwargs)
@@ -716,7 +773,7 @@ class JSONFile(pytest.File):
             return
 
         try:
-            processed_data: dict[str, Any] = jsonref.replace_refs(obj=test_data, base_uri=self.path.as_uri(), merge_props=True)
+            processed_data: dict[str, Any] = replace_refs_with_deep_merge(obj=test_data, base_uri=self.path.as_uri())
         except Exception as e:
             yield self._failed_validation_item(f"JSONRef error: {e}")
             return
