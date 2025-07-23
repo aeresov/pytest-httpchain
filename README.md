@@ -179,7 +179,7 @@ Each stage represents one HTTP request-response cycle:
 -   **`params`**: Optional - query parameters
 -   **`headers`**: Optional - HTTP headers
 -   **`body`**: Optional - request body (see Body Types section below)
--   **`timeout`**: Optional - request timeout in seconds (float)
+-   **`timeout`**: Optional - request timeout in seconds (float, defaults to 30.0)
 
 ### Request Body Types
 
@@ -343,7 +343,7 @@ def complex_extraction(response: requests.Response, threshold: int) -> dict[str,
 
 ### Request Timeout
 
-You can specify a timeout for individual requests to prevent hanging on slow or unresponsive servers:
+You can specify a timeout for individual requests to prevent hanging on slow or unresponsive servers. The default timeout is 30 seconds if not specified:
 
 ```json
 {

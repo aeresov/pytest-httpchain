@@ -582,7 +582,8 @@ class JSONStage(Function):
         # Apply marks from the stage itself
         for mark in model.marks:
             try:
-                self.add_marker(f"pytest.mark.{mark}")
+                mark_obj = eval(f"pytest.mark.{mark}")
+                self.add_marker(mark_obj)
             except Exception as e:
                 pytest.fail(f"Failed to apply mark '{mark}' to stage '{model.name}': {e}")
 
@@ -629,7 +630,7 @@ class JSONFile(pytest.File):
             return
 
         try:
-            processed_data: dict[str, Any] = jsonref.replace_refs(test_data, base_uri=self.path.as_uri())
+            processed_data: dict[str, Any] = jsonref.replace_refs(obj=test_data, base_uri=self.path.as_uri(), merge_props=True)
         except Exception as e:
             yield self._failed_validation_item(f"JSONRef error: {e}")
             return

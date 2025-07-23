@@ -13,9 +13,19 @@ def test_request_timeout_valid():
     request = Request(url="http://example.com", timeout=10)
     assert request.timeout == 10.0
 
-    # No timeout
+    # No timeout specified (uses default)
     request = Request(url="http://example.com")
+    assert request.timeout == 30.0
+
+    # Explicitly set timeout to None (no timeout)
+    request = Request(url="http://example.com", timeout=None)
     assert request.timeout is None
+
+
+def test_request_timeout_default():
+    """Test that default timeout is 30 seconds."""
+    request = Request(url="http://example.com")
+    assert request.timeout == 30.0
 
 
 def test_request_timeout_invalid():
