@@ -1,0 +1,43 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "stages": [
+        {
+            "name": "first_stage",
+            "request": {
+                "url": "{{ api_base }}/endpoint1",
+                "method": "GET"
+            },
+            "response": {
+                "$ref": "common_response.json#/ok",
+                "save": {
+                    "vars": {
+                        "test1_id": "Status.Result.List.Id"
+                    }
+                }
+            }
+        },
+        {
+            "name": "second_stage", 
+            "request": {
+                "url": "{{ api_base }}/endpoint2",
+                "method": "GET"
+            },
+            "response": {
+                "$ref": "common_response.json#/ok",
+                "save": {
+                    "vars": {
+                        "result": "List.Id"
+                    }
+                },
+                "verify": {
+                    "vars": {
+                        "result": "{{ test1_id }}"
+                    }
+                }
+            }
+        }
+    ]
+}

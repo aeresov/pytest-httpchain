@@ -45,48 +45,49 @@ def replace_refs_with_deep_merge(obj: dict[str, Any], base_uri: str) -> dict[str
     Returns:
         Processed object with references resolved and deep merging applied
     """
-    # First, resolve references without merging additional properties
-    resolved_without_merge = jsonref.replace_refs(obj=obj, base_uri=base_uri, merge_props=False)
 
-    # Then, resolve with merge_props=True to get additional properties
-    resolved_with_merge = jsonref.replace_refs(obj=obj, base_uri=base_uri, merge_props=True)
+    def process_refs(obj_to_process: Any) -> Any:
+        """Process references recursively, handling $ref with additional properties."""
+        if isinstance(obj_to_process, dict):
+            if "$ref" in obj_to_process:
+                # This object has a $ref - resolve it and merge additional properties
+                ref_uri = obj_to_process["$ref"]
 
-    def deep_merge_refs(original: Any, merged: Any, resolved: Any) -> Any:
-        """Recursively deep merge references with additional properties."""
-        if isinstance(original, dict) and "$ref" in original:
-            # This object has a $ref - we need to deep merge
-            additional_props = {k: v for k, v in original.items() if k != "$ref"}
-            if additional_props:
-                # Deep merge the resolved reference with additional properties
-                return deepmerge.always_merger.merge(resolved, additional_props)
+                # Resolve the reference
+                resolved_ref = jsonref.replace_refs(obj={"$ref": ref_uri}, base_uri=base_uri, merge_props=False)
+
+                # Get additional properties (everything except $ref)
+                additional_props = {k: v for k, v in obj_to_process.items() if k != "$ref"}
+
+                if additional_props:
+                    # Merge the resolved reference with additional properties
+                    if isinstance(resolved_ref, dict):
+                        result = resolved_ref.copy()
+                        for key, value in additional_props.items():
+                            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                                # For nested dicts, merge recursively
+                                result[key] = deepmerge.always_merger.merge(result[key], process_refs(value))
+                            else:
+                                # For all other cases, overwrite with processed value
+                                result[key] = process_refs(value)
+                        return result
+                    else:
+                        # Reference resolved to non-dict, can't merge
+                        return resolved_ref
+                else:
+                    # No additional properties, just return resolved reference
+                    return resolved_ref
             else:
-                # No additional properties, just return resolved reference
-                return resolved
-        elif isinstance(original, dict) and isinstance(merged, dict) and isinstance(resolved, dict):
-            # Recursively process nested objects
-            result = {}
-            all_keys = set(original.keys()) | set(merged.keys()) | set(resolved.keys())
-            for key in all_keys:
-                orig_val = original.get(key)
-                merged_val = merged.get(key)
-                resolved_val = resolved.get(key)
-                result[key] = deep_merge_refs(orig_val, merged_val, resolved_val)
-            return result
-        elif isinstance(original, list) and isinstance(merged, list) and isinstance(resolved, list):
-            # Process list items
-            max_len = max(len(original), len(merged), len(resolved))
-            result = []
-            for i in range(max_len):
-                orig_val = original[i] if i < len(original) else None
-                merged_val = merged[i] if i < len(merged) else None
-                resolved_val = resolved[i] if i < len(resolved) else None
-                result.append(deep_merge_refs(orig_val, merged_val, resolved_val))
-            return result
+                # Regular dict without $ref - process all values recursively
+                return {key: process_refs(value) for key, value in obj_to_process.items()}
+        elif isinstance(obj_to_process, list):
+            # Process list items recursively
+            return [process_refs(item) for item in obj_to_process]
         else:
-            # For primitive values, prefer merged over resolved
-            return merged if merged is not None else resolved
+            # Primitive value - return as is
+            return obj_to_process
 
-    return deep_merge_refs(obj, resolved_with_merge, resolved_without_merge)
+    return process_refs(obj)
 
 
 def pytest_addoption(parser: Parser) -> None:
