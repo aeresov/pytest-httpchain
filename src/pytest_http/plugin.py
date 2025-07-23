@@ -37,6 +37,11 @@ def pytest_addoption(parser: Parser) -> None:
         type="string",
         default="http",
     )
+    parser.addoption(
+        "--synth",
+        action="store_true",
+        help="Synthesize test files: combine full JSON, apply variable substitution, and print output without executing tests",
+    )
 
 
 def pytest_configure(config: Config) -> None:
@@ -82,6 +87,37 @@ def substitute_variables_in_auth(auth_spec: str | Any, variables: dict[str, Any]
 
         rendered_auth_dict = render_recursive(auth_dict)
         return FunctionCall.model_validate(rendered_auth_dict)
+
+
+def synthesize_scenario_json(scenario: Scenario, variables: dict[str, Any]) -> dict[str, Any]:
+    """Synthesize the complete scenario JSON with variable substitution applied."""
+    try:
+        # Convert scenario to dict for template processing
+        scenario_dict = scenario.model_dump()
+
+        def render_recursive(obj: Any) -> Any:
+            if isinstance(obj, str):
+                # Create Jinja2 environment for each string template
+                env = jinja2.Environment(variable_start_string="{{", variable_end_string="}}", undefined=jinja2.StrictUndefined)
+                template = env.from_string(obj)
+                try:
+                    return template.render(variables)
+                except jinja2.UndefinedError:
+                    # Return original string if variable is undefined (in-stage variables might not be available)
+                    return obj
+            elif isinstance(obj, dict):
+                return {key: render_recursive(value) for key, value in obj.items()}
+            elif isinstance(obj, list):
+                return [render_recursive(item) for item in obj]
+            else:
+                return obj
+
+        # Recursively render all string values in the scenario
+        rendered_scenario_dict = render_recursive(scenario_dict)
+        return rendered_scenario_dict
+    except Exception:
+        # If anything goes wrong, return the original dict
+        return scenario.model_dump()
 
 
 def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
@@ -548,6 +584,20 @@ class JSONStage(Function):
         self._scenario = scenario
 
         def execute_stage(**fixture_kwargs: Any) -> None:
+            # Check for synth mode - only print once per scenario (for the first stage)
+            if self.config.getoption("--synth"):
+                if not hasattr(scenario, '_synth_printed'):
+                    # Synthesize and print the scenario JSON
+                    synthesized_json = synthesize_scenario_json(scenario.model, scenario.variable_context)
+
+                    console = Console()
+                    console.print(f"\n[bold blue]Synthesized JSON for scenario: {self.path.name}[/bold blue]")
+                    console.print(Syntax(json.dumps(synthesized_json, indent=2), "json", theme="github-dark"))
+
+                    scenario._synth_printed = True
+
+                pytest.skip("Skipping test execution in synth mode")
+
             # Check if we should execute this stage
             if not self._should_execute_stage():
                 pytest.skip(f"Skipping stage '{model.name}' due to flow failure")
