@@ -161,7 +161,7 @@ def _format_request_response_details(stage: Stage, request_params: dict[str, Any
 
     # Add basic request info
     request_table.add_row("Method", stage.request.method.value)
-    
+
     # Show full URL with query parameters if available from response
     full_url = response.url if response and hasattr(response, 'url') else stage.request.url
     request_table.add_row("URL", full_url)
@@ -640,7 +640,9 @@ class JSONStage(Function):
 
             # Add stage seed variables to variable context (overwriting existing values)
             if model.vars:
-                scenario.variable_context.update(model.vars)
+                # Apply variable substitution to stage vars before adding to context
+                substituted_vars = substitute_variables_simple(model.vars, scenario.variable_context)
+                scenario.variable_context.update(substituted_vars)
 
             # Execute the stage and handle failures
             try:
