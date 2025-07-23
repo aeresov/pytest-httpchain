@@ -161,7 +161,10 @@ def _format_request_response_details(stage: Stage, request_params: dict[str, Any
 
     # Add basic request info
     request_table.add_row("Method", stage.request.method.value)
-    request_table.add_row("URL", stage.request.url)
+    
+    # Show full URL with query parameters if available from response
+    full_url = response.url if response and hasattr(response, 'url') else stage.request.url
+    request_table.add_row("URL", full_url)
 
     # Add query parameters if present
     if request_params.get("params"):
