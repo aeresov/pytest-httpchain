@@ -4,7 +4,6 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-import deepmerge
 import jinja2
 import jmespath
 import jsonref
@@ -31,63 +30,22 @@ SUFFIX: str = "suffix"
 http_details_key = StashKey[list[dict[str, Any]]]()
 
 
-def replace_refs_with_deep_merge(obj: dict[str, Any], base_uri: str) -> dict[str, Any]:
+def replace_refs(obj: dict[str, Any], base_uri: str) -> dict[str, Any]:
     """
-    Replace JSON references with deep merging of additional properties.
+    Replace JSON references using standard resolution.
 
     This function processes a JSON object with $ref directives, resolving references
-    and performing deep merging when additional properties exist alongside $ref.
+    using standard JSON reference resolution without merging additional properties.
 
     Args:
         obj: The JSON object to process
         base_uri: Base URI for resolving relative references
 
     Returns:
-        Processed object with references resolved and deep merging applied
+        Processed object with references resolved
     """
-
-    def process_refs(obj_to_process: Any) -> Any:
-        """Process references recursively, handling $ref with additional properties."""
-        if isinstance(obj_to_process, dict):
-            if "$ref" in obj_to_process:
-                # This object has a $ref - resolve it and merge additional properties
-                ref_uri = obj_to_process["$ref"]
-
-                # Resolve the reference
-                resolved_ref = jsonref.replace_refs(obj={"$ref": ref_uri}, base_uri=base_uri, merge_props=False)
-
-                # Get additional properties (everything except $ref)
-                additional_props = {k: v for k, v in obj_to_process.items() if k != "$ref"}
-
-                if additional_props:
-                    # Merge the resolved reference with additional properties
-                    if isinstance(resolved_ref, dict):
-                        result = resolved_ref.copy()
-                        for key, value in additional_props.items():
-                            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                                # For nested dicts, merge recursively
-                                result[key] = deepmerge.always_merger.merge(result[key], process_refs(value))
-                            else:
-                                # For all other cases, overwrite with processed value
-                                result[key] = process_refs(value)
-                        return result
-                    else:
-                        # Reference resolved to non-dict, can't merge
-                        return resolved_ref
-                else:
-                    # No additional properties, just return resolved reference
-                    return resolved_ref
-            else:
-                # Regular dict without $ref - process all values recursively
-                return {key: process_refs(value) for key, value in obj_to_process.items()}
-        elif isinstance(obj_to_process, list):
-            # Process list items recursively
-            return [process_refs(item) for item in obj_to_process]
-        else:
-            # Primitive value - return as is
-            return obj_to_process
-
-    return process_refs(obj)
+    # Use jsonref with merge_props=False for standard reference resolution
+    return jsonref.replace_refs(obj=obj, base_uri=base_uri, merge_props=False)
 
 
 def pytest_addoption(parser: Parser) -> None:
@@ -774,7 +732,7 @@ class JSONFile(pytest.File):
             return
 
         try:
-            processed_data: dict[str, Any] = replace_refs_with_deep_merge(obj=test_data, base_uri=self.path.as_uri())
+            processed_data: dict[str, Any] = replace_refs(obj=test_data, base_uri=self.path.as_uri())
         except Exception as e:
             yield self._failed_validation_item(f"JSONRef error: {e}")
             return
