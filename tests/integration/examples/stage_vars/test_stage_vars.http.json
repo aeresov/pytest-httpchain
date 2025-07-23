@@ -1,0 +1,45 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000",
+        "initial_value": "scenario_level"
+    },
+    "stages": [
+        {
+            "name": "test_stage_vars_override",
+            "vars": {
+                "initial_value": "stage_level",
+                "stage_only_var": "only_in_stage"
+            },
+            "request": {
+                "url": "{{ api_base }}/echo/{{ initial_value }}",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200
+                },
+                "save": {
+                    "vars": {
+                        "echo_result": "echo"
+                    }
+                }
+            }
+        },
+        {
+            "name": "verify_stage_vars_persist",
+            "request": {
+                "url": "{{ api_base }}/echo/{{ stage_only_var }}",
+                "method": "GET"
+            },
+            "response": {
+                "verify": {
+                    "status": 200,
+                    "vars": {
+                        "echo_result": "stage_level"
+                    }
+                }
+            }
+        }
+    ]
+}

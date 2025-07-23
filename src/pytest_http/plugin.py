@@ -557,6 +557,10 @@ class JSONStage(Function):
                 if fixture_name in fixture_kwargs:
                     scenario.variable_context[fixture_name] = fixture_kwargs[fixture_name]
 
+            # Add stage seed variables to variable context (overwriting existing values)
+            if model.vars:
+                scenario.variable_context.update(model.vars)
+
             # Execute the stage and handle failures
             try:
                 execute_single_stage(model, scenario.variable_context, scenario.http_session, self)

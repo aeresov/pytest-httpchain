@@ -223,6 +223,7 @@ class Stage(BaseModel):
         name:     Stage name.
         fixtures: List of pytest fixture names to be supplied to this stage.
         marks:    List of marks to be applied to this stage.
+        vars:     Initial variables to seed the variable context for this stage.
         request:  HTTP request configuration.
         response: HTTP response configuration.
         always_run: If True, this stage will run even if previous stages failed (useful for cleanup).
@@ -231,6 +232,7 @@ class Stage(BaseModel):
     name: str = Field()
     fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names for this stage")
     marks: list[str] = Field(default_factory=list, description="List of marks to be applied to this stage", examples=["xfail", "skip"])
+    vars: dict[str, Any] | None = Field(default=None, description="Initial variables for the stage context")
     request: Request = Field()
     response: Response | None = Field(default=None)
     always_run: bool = Field(default=False, description="Run this stage even if previous stages failed")
@@ -243,6 +245,21 @@ class Stage(BaseModel):
             for prohibited in prohibited_marks:
                 if mark.startswith(f"{prohibited}(") or mark == prohibited:
                     raise ValueError(f"Mark '{prohibited}' is not supported")
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_variable_naming_conflicts(self) -> "Stage":
+        """Validate that fixtures don't conflict with stage seed vars."""
+        if not self.fixtures or not self.vars:
+            return self
+
+        fixture_names = set(self.fixtures)
+        conflicting_vars = fixture_names & self.vars.keys()
+
+        if conflicting_vars:
+            name = next(iter(conflicting_vars))
+            raise ValueError(f"Variable name '{name}' conflicts with fixture name in stage '{self.name}'")
 
         return self
 
