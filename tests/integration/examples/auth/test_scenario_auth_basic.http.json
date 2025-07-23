@@ -8,7 +8,7 @@
         {
             "name": "test_public_endpoint",
             "request": {
-                "url": "{{ api_base }}/api/public",
+                "url": "{api_base}/api/public",
                 "method": "GET"
             },
             "response": {
@@ -20,7 +20,7 @@
         {
             "name": "test_protected_endpoint",
             "request": {
-                "url": "{{ api_base }}/api/protected",
+                "url": "{api_base}/api/protected",
                 "method": "GET"
             },
             "response": {

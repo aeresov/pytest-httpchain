@@ -9,7 +9,7 @@
         {
             "name": "no_timeout_test",
             "request": {
-                "url": "{{ api_base }}/fast",
+                "url": "{api_base}/fast",
                 "method": "GET"
             },
             "response": {

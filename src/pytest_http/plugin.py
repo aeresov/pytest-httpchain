@@ -4,7 +4,6 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-import jinja2
 import jmespath
 import jsonref
 import jsonschema
@@ -23,6 +22,39 @@ from rich.console import Console
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
+
+
+def substitute_variables_simple(obj: Any, variables: dict[str, Any]) -> Any:
+    """
+    Simple variable substitution that preserves types for single variable references.
+
+    Syntax:
+    - Single variable: "{var_name}" -> preserves original type
+    - Multiple variables: "Hello {name}, you have {count} items" -> string interpolation
+    - No variables: "static text" -> unchanged
+    """
+    if isinstance(obj, str):
+        # Check for single variable reference: "{var_name}"
+        if obj.startswith("{") and obj.endswith("}") and obj.count("{") == 1 and obj.count("}") == 1:
+            var_name = obj[1:-1].strip()
+            if var_name in variables:
+                return variables[var_name]  # Type preserved
+
+        # Handle multiple placeholders in string
+        result = obj
+        for var_name, value in variables.items():
+            placeholder = f"{{{var_name}}}"
+            if placeholder in result:
+                result = result.replace(placeholder, str(value))
+        return result
+
+    elif isinstance(obj, dict):
+        return {key: substitute_variables_simple(value, variables) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [substitute_variables_simple(item, variables) for item in obj]
+    else:
+        return obj
+
 
 SUFFIX: str = "suffix"
 
@@ -81,29 +113,14 @@ class VariableSubstitutionError(Exception):
 def substitute_variables_in_auth(auth_spec: str | Any, variables: dict[str, Any]) -> str | Any:
     """Apply variable substitution to auth specification."""
     if isinstance(auth_spec, str):
-        # Simple function name string
-        env = jinja2.Environment(variable_start_string="{{", variable_end_string="}}", undefined=jinja2.StrictUndefined)
-        template = env.from_string(auth_spec)
-        return template.render(variables)
+        # Simple function name string - use simple substitution
+        return substitute_variables_simple(auth_spec, variables)
     else:
         # FunctionCall object - need to substitute in kwargs
         from pytest_http_engine.models import FunctionCall
 
         auth_dict = auth_spec.model_dump()
-
-        def render_recursive(obj: Any) -> Any:
-            if isinstance(obj, str):
-                env = jinja2.Environment(variable_start_string="{{", variable_end_string="}}", undefined=jinja2.StrictUndefined)
-                template = env.from_string(obj)
-                return template.render(variables)
-            elif isinstance(obj, dict):
-                return {key: render_recursive(value) for key, value in obj.items()}
-            elif isinstance(obj, list):
-                return [render_recursive(item) for item in obj]
-            else:
-                return obj
-
-        rendered_auth_dict = render_recursive(auth_dict)
+        rendered_auth_dict = substitute_variables_simple(auth_dict, variables)
         return FunctionCall.model_validate(rendered_auth_dict)
 
 
@@ -112,26 +129,8 @@ def synthesize_scenario_json(scenario: Scenario, variables: dict[str, Any]) -> d
     try:
         # Convert scenario to dict for template processing
         scenario_dict = scenario.model_dump()
-
-        def render_recursive(obj: Any) -> Any:
-            if isinstance(obj, str):
-                # Create Jinja2 environment for each string template
-                env = jinja2.Environment(variable_start_string="{{", variable_end_string="}}", undefined=jinja2.StrictUndefined)
-                template = env.from_string(obj)
-                try:
-                    return template.render(variables)
-                except jinja2.UndefinedError:
-                    # Return original string if variable is undefined (in-stage variables might not be available)
-                    return obj
-            elif isinstance(obj, dict):
-                return {key: render_recursive(value) for key, value in obj.items()}
-            elif isinstance(obj, list):
-                return [render_recursive(item) for item in obj]
-            else:
-                return obj
-
-        # Recursively render all string values in the scenario
-        rendered_scenario_dict = render_recursive(scenario_dict)
+        # Apply simple variable substitution
+        rendered_scenario_dict = substitute_variables_simple(scenario_dict, variables)
         return rendered_scenario_dict
     except Exception:
         # If anything goes wrong, return the original dict
@@ -142,28 +141,9 @@ def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
     try:
         # Convert stage to dict for template processing
         stage_dict = stage.model_dump()
-
-        def render_recursive(obj: Any) -> Any:
-            if isinstance(obj, str):
-                # Create Jinja2 environment for each string template
-                env = jinja2.Environment(variable_start_string="{{", variable_end_string="}}", undefined=jinja2.StrictUndefined)
-                template = env.from_string(obj)
-                return template.render(variables)
-            elif isinstance(obj, dict):
-                return {key: render_recursive(value) for key, value in obj.items()}
-            elif isinstance(obj, list):
-                return [render_recursive(item) for item in obj]
-            else:
-                return obj
-
-        # Recursively render all string values in the stage
-        rendered_stage_dict = render_recursive(stage_dict)
-
+        # Apply simple variable substitution
+        rendered_stage_dict = substitute_variables_simple(stage_dict, variables)
         return Stage.model_validate(rendered_stage_dict)
-    except jinja2.UndefinedError as e:
-        raise VariableSubstitutionError(f"Undefined variable in template: {e}") from e
-    except jinja2.TemplateError as e:
-        raise VariableSubstitutionError(f"Template rendering error: {e}") from e
     except ValidationError as e:
         raise VariableSubstitutionError(f"Stage validation failed after variable substitution: {e}") from e
     except Exception as e:

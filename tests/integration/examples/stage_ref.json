@@ -2,7 +2,7 @@
     "call_ok": {
         "name": "start",
         "request": {
-            "url": "{{ api_base }}/ok"
+            "url": "{api_base}/ok"
         },
         "response": {
             "verify": {
@@ -13,7 +13,7 @@
     "call_bad": {
         "name": "end",
         "request": {
-            "url": "{{ api_base }}/bad"
+            "url": "{api_base}/bad"
         },
         "response": {
             "verify": {

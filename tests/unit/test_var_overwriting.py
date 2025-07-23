@@ -15,8 +15,8 @@ def test_progressive_api_key_refinement():
             Stage(
                 name="authenticate",
                 request=Request(
-                    url="{{ base_url }}/auth",
-                    json={"api_key": "{{ api_key }}"},
+                    url="{base_url}/auth",
+                    json={"api_key": "{api_key}"},
                 ),
                 response=Response(
                     save=Save(
@@ -30,8 +30,8 @@ def test_progressive_api_key_refinement():
             Stage(
                 name="get_profile",
                 request=Request(
-                    url="{{ base_url }}/users/{{ user_id }}",
-                    headers={"Authorization": "Bearer {{ api_key }}"},  # Uses updated token
+                    url="{base_url}/users/{user_id}",
+                    headers={"Authorization": "Bearer {api_key}"},  # Uses updated token
                 ),
                 response=Response(
                     save=Save(
@@ -44,8 +44,8 @@ def test_progressive_api_key_refinement():
             Stage(
                 name="update_settings",
                 request=Request(
-                    url="{{ base_url }}/users/{{ user_id }}/settings",  # Uses updated endpoint
-                    headers={"Authorization": "Bearer {{ api_key }}"},
+                    url="{base_url}/users/{user_id}/settings",  # Uses updated endpoint
+                    headers={"Authorization": "Bearer {api_key}"},
                 ),
             ),
         ],

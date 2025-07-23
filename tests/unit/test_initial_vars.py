@@ -12,8 +12,8 @@ def test_scenario_with_initial_vars():
             Stage(
                 name="get_users",
                 request=Request(
-                    url="{{ base_url }}/users",
-                    headers={"Authorization": "Bearer {{ api_key }}"},
+                    url="{base_url}/users",
+                    headers={"Authorization": "Bearer {api_key}"},
                 ),
             )
         ],
@@ -44,7 +44,7 @@ def test_scenario_without_vars_field():
                 name="get_user",
                 request=Request(
                     url="https://api.example.com/users/123",
-                    headers={"Authorization": "Bearer {{ auth_token }}"},
+                    headers={"Authorization": "Bearer {auth_token}"},
                 ),
                 response=Response(save=Save(vars={"user_name": "data.name"})),
             ),
@@ -52,7 +52,7 @@ def test_scenario_without_vars_field():
                 name="update_user",
                 request=Request(
                     url="https://api.example.com/users/123",
-                    json={"name": "{{ user_name }}_updated"},
+                    json={"name": "{user_name}_updated"},
                 ),
             ),
         ],
@@ -126,15 +126,15 @@ def test_no_conflicts_allows_scenario_creation():
             Stage(
                 name="create_user",
                 request=Request(
-                    url="{{ base_url }}/users",
-                    headers={"Authorization": "Bearer {{ auth_token }}"},
+                    url="{base_url}/users",
+                    headers={"Authorization": "Bearer {auth_token}"},
                 ),
                 response=Response(save=Save(vars={"user_id": "data.id", "user_name": "data.name"})),
             ),
             Stage(
                 name="get_user",
                 request=Request(
-                    url="{{ base_url }}/users/{{ user_id }}",
+                    url="{base_url}/users/{user_id}",
                 ),
             ),
         ],

@@ -46,7 +46,7 @@ This is a pytest plugin that enables HTTP testing through JSON configuration fil
 
 - **Plugin System**: Uses pytest's plugin architecture with file collection hooks in `src/pytest_http/plugin.py:434`
 - **JSON Schema Validation**: Pydantic models validate JSON test files against strict schemas
-- **Variable Substitution**: Jinja2 template engine for passing data between HTTP request stages (`substitute_variables` function)
+- **Variable Substitution**: Simple placeholder system with type preservation for passing data between HTTP request stages (`substitute_variables` function)
 - **User Functions**: Extensible system for custom validation and data extraction logic
 - **Stage Execution**: Sequential execution of stages, with `always_run` stages executed even if previous stages failed
 - **Session Management**: HTTP session per scenario with proper setup/teardown lifecycle
@@ -72,18 +72,18 @@ Each stage defines:
 
 ### Variable Substitution
 
-The plugin uses Jinja2 templates for powerful variable substitution that allows passing data between stages:
+The plugin uses a simple placeholder system for variable substitution with type preservation:
 
-- **Format**: `{{ variable_name }}` (double curly braces)
-- **Features**: Supports object dot notation, array access, and Jinja2 filters
+- **Format**: `{variable_name}` (single curly braces)
+- **Type Preservation**: Single variable references preserve original data types (int, float, bool, list, dict)
+- **String Interpolation**: Mixed content like `"User {name} has {count} items"` renders as strings
 - **Usage**: Variables saved in earlier stages can be referenced in later stages
 - **Context**: All saved variables are available in the variable context for subsequent stages
 - **Examples**:
-  - Simple variables: `"https://api.example.com/users/{{ user_id }}/profile"`
-  - Object properties: `"Authorization": "Bearer {{ auth.token }}"`
-  - Array access: `"https://api.example.com/items/{{ items[0] }}/details"`
-  - Nested access: `"https://api.example.com/users/{{ data.users[0].profile.id }}"`
-  - JSON body: `"user_id": "{{ user.id }}", "name": "{{ user.name }}"`
+  - Type-preserved variables: `"user_id": "{user_id}"` (preserves integer type)
+  - String templates: `"https://api.example.com/users/{user_id}/profile"`
+  - Headers: `"Authorization": "Bearer {auth_token}"`
+  - Mixed content: `"User {username} (ID: {user_id})"`
 
 Variables are saved using JMESPath expressions in the `response.save.vars` section:
 ```json
@@ -111,7 +111,6 @@ Core dependencies:
 - **requests**: HTTP client for making API calls
 - **jmespath**: JSON query language for response data extraction  
 - **jsonref**: JSON reference resolution ($ref support) for reusable stage definitions
-- **jinja2**: Template engine for variable substitution
 - **ruff**: Linting and formatting
 - **uv**: Package management
 

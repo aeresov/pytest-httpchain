@@ -7,7 +7,7 @@
         {
             "name": "success_stage",
             "request": {
-                "url": "{{ api_base }}/success",
+                "url": "{api_base}/success",
                 "method": "GET"
             },
             "response": {
@@ -20,7 +20,7 @@
             "name": "skip_stage",
             "marks": ["skip(reason='This stage should be skipped')"],
             "request": {
-                "url": "{{ api_base }}/success",
+                "url": "{api_base}/success",
                 "method": "GET"
             },
             "response": {
@@ -32,7 +32,7 @@
         {
             "name": "another_success_stage",
             "request": {
-                "url": "{{ api_base }}/success",
+                "url": "{api_base}/success",
                 "method": "GET"
             },
             "response": {

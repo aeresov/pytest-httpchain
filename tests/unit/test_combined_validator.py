@@ -36,7 +36,7 @@ def test_combined_validator_allows_saved_var_to_overwrite_initial_var():
         stages=[
             Stage(
                 name="test",
-                request=Request(url="{{ base_url }}"),
+                request=Request(url="{base_url}"),
                 response=Response(save=Save(vars={"base_url": "data.url"})),
             )
         ],
@@ -54,7 +54,7 @@ def test_combined_validator_allows_non_conflicting_names():
         stages=[
             Stage(
                 name="test",
-                request=Request(url="{{ base_url }}", headers={"Authorization": "{{ auth_token }}"}),
+                request=Request(url="{base_url}", headers={"Authorization": "{auth_token}"}),
                 response=Response(save=Save(vars={"user_id": "data.id"})),
             )
         ],

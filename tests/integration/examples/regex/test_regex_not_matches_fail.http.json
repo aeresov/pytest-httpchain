@@ -9,7 +9,7 @@
         {
             "name": "test_pattern_should_not_match_but_does",
             "request": {
-                "url": "{{ api_base }}/error-response",
+                "url": "{api_base}/error-response",
                 "method": "GET"
             },
             "response": {

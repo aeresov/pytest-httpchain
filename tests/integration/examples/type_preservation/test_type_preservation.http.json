@@ -1,0 +1,48 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000"
+    },
+    "stages": [
+        {
+            "name": "save_different_types",
+            "request": {
+                "url": "{api_base}/save_values",
+                "method": "POST"
+            },
+            "response": {
+                "save": {
+                    "vars": {
+                        "saved_int": "int_value",
+                        "saved_float": "float_value",
+                        "saved_bool": "bool_value",
+                        "saved_string": "string_value",
+                        "saved_list": "list_value",
+                        "saved_dict": "dict_value"
+                    }
+                },
+                "verify": {
+                    "status": 200
+                }
+            }
+        },
+        {
+            "name": "test_preserved_types_in_params",
+            "request": {
+                "url": "{api_base}/echo_params",
+                "method": "GET",
+                "params": {
+                    "int_param": "{saved_int}",
+                    "float_param": "{saved_float}",
+                    "bool_param": "{saved_bool}",
+                    "string_param": "{saved_string}"
+                }
+            },
+            "response": {
+                "verify": {
+                    "status": 200
+                }
+            }
+        }
+    ]
+}

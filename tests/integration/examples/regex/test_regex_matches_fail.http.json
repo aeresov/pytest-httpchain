@@ -9,7 +9,7 @@
         {
             "name": "test_pattern_not_found",
             "request": {
-                "url": "{{ api_base }}/text-content",
+                "url": "{api_base}/text-content",
                 "method": "GET"
             },
             "response": {

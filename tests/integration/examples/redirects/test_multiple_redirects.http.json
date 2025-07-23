@@ -9,7 +9,7 @@
         {
             "name": "test_follow_multiple_redirects",
             "request": {
-                "url": "{{ api_base }}/multiple-redirects-1",
+                "url": "{api_base}/multiple-redirects-1",
                 "method": "GET"
             },
             "response": {

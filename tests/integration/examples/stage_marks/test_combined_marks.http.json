@@ -9,7 +9,7 @@
             "name": "critical_stage",
             "marks": ["critical"],
             "request": {
-                "url": "{{ api_base }}/success",
+                "url": "{api_base}/success",
                 "method": "GET"
             },
             "response": {
@@ -21,7 +21,7 @@
         {
             "name": "normal_stage",
             "request": {
-                "url": "{{ api_base }}/success",
+                "url": "{api_base}/success",
                 "method": "GET"
             },
             "response": {

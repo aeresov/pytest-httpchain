@@ -15,7 +15,7 @@
         {
             "name": "path_param_string",
             "request": {
-                "url": "{{ api_base }}/path_param_string/{{ string_value }}"
+                "url": "{api_base}/path_param_string/{string_value}"
             }
         },
         {

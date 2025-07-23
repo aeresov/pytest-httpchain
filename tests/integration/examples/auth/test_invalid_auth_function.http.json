@@ -8,7 +8,7 @@
         {
             "name": "test_with_invalid_auth",
             "request": {
-                "url": "{{ api_base }}/api/protected",
+                "url": "{api_base}/api/protected",
                 "method": "GET"
             },
             "response": {

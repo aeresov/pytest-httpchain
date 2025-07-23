@@ -9,7 +9,7 @@
         {
             "name": "get_invalid_user",
             "request": {
-                "url": "{{ api_base }}/user/invalid",
+                "url": "{api_base}/user/invalid",
                 "method": "GET"
             },
             "response": {

@@ -1,0 +1,32 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "api_base": "http://localhost:5000",
+        "user_id": "123",
+        "name": "John"
+    },
+    "stages": [
+        {
+            "name": "test_mixed_template",
+            "request": {
+                "url": "{api_base}/echo_json",
+                "method": "POST",
+                "body": {
+                    "json": {
+                        "single_var": "{user_id}",
+                        "mixed_template": "Hello {name}, your ID is {user_id}",
+                        "nested": {
+                            "id": "{user_id}",
+                            "greeting": "Welcome {name}!"
+                        }
+                    }
+                }
+            },
+            "response": {
+                "verify": {
+                    "status": 200
+                }
+            }
+        }
+    ]
+}

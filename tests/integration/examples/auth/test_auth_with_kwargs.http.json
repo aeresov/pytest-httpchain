@@ -9,13 +9,13 @@
         {
             "name": "test_basic_auth_with_variables",
             "request": {
-                "url": "{{ api_base }}/api/protected",
+                "url": "{api_base}/api/protected",
                 "method": "GET",
                 "auth": {
                     "function": "auth_functions:basic_auth_with_args",
                     "kwargs": {
-                        "username": "{{ username }}",
-                        "password": "{{ password }}"
+                        "username": "{username}",
+                        "password": "{password}"
                     }
                 }
             },
@@ -31,7 +31,7 @@
         {
             "name": "test_basic_auth_with_literals",
             "request": {
-                "url": "{{ api_base }}/api/protected",
+                "url": "{api_base}/api/protected",
                 "method": "GET",
                 "auth": {
                     "function": "auth_functions:basic_auth_with_args",

@@ -9,7 +9,7 @@ A pytest plugin for HTTP testing using JSON files. Write your HTTP tests in JSON
 -   **Declarative HTTP testing** - Define requests, responses, and validations in JSON
 -   **Multi-stage scenarios** - Chain multiple HTTP requests with variable passing between stages
 -   **pytest integration** - Full pytest features including fixtures, marks, and test discovery
--   **Variable substitution** - Use data obtained from previous requests. Jinja2 syntax is supported.
+-   **Variable substitution** - Use data obtained from previous requests with type preservation.
 -   **JMESPath support** - Extract and validate data from JSON responses
 -   **User function integration** - Call custom Python functions for complex logic
 -   **Regex pattern matching** - Verify response body content with regular expressions
@@ -68,11 +68,11 @@ Create a JSON test file following the pattern `test_<name>.<suffix>.json` (defau
         {
             "name": "update_user",
             "request": {
-                "url": "https://api.example.com/users/{{ user_id }}",
+                "url": "https://api.example.com/users/{user_id}",
                 "method": "PUT",
                 "body": {
                     "json": {
-                        "name": "{{ username }}_updated"
+                        "name": "{username}_updated"
                     }
                 }
             },
@@ -403,7 +403,7 @@ By default, if any stage in a scenario fails, subsequent stages are skipped. How
         {
             "name": "test_resource",
             "request": {
-                "url": "https://api.example.com/resources/{{ resource_id }}/test",
+                "url": "https://api.example.com/resources/{resource_id}/test",
                 "method": "POST"
             },
             "response": {
@@ -414,7 +414,7 @@ By default, if any stage in a scenario fails, subsequent stages are skipped. How
             "name": "cleanup_resource",
             "always_run": true,
             "request": {
-                "url": "https://api.example.com/resources/{{ resource_id }}",
+                "url": "https://api.example.com/resources/{resource_id}",
                 "method": "DELETE"
             }
         }
@@ -430,7 +430,7 @@ In this example:
 
 ### Variable Substitution
 
-The plugin uses **Jinja2 templates** for powerful variable substitution, supporting complex data access patterns. Note that every string is treated as independent Jinja2 environment. This means, while you can use Jinja2 syntax within a string, you can't make the whole JSON file a Jinja2 template, it'll break validation.
+The plugin uses a **simple placeholder system** for variable substitution with type preservation. Variables are referenced using `{variable_name}` syntax within strings.
 
 #### Initial Variables
 
@@ -447,8 +447,8 @@ You can define initial variables at the scenario level using the `vars` field. T
         {
             "name": "get_users",
             "request": {
-                "url": "{{ base_url }}/{{ api_version }}/users",
-                "timeout": "{{ default_timeout }}"
+                "url": "{base_url}/{api_version}/users",
+                "timeout": "{default_timeout}"
             }
         }
     ]
@@ -467,62 +467,43 @@ Initial variables are useful for:
 -   Fixtures cannot be overwritten and cannot shadow initial variables
 -   Saved variables cannot conflict with fixture names
 
-#### Basic Variable Access
+#### Variable Syntax and Type Preservation
 
+**Single Variable References** (preserves original data types):
 ```json
 {
     "request": {
-        "url": "https://api.example.com/users/{{ user_id }}",
-        "headers": { "Authorization": "Bearer {{ auth_token }}" }
-    }
-}
-```
-
-#### Object Dot Notation
-
-Access nested object properties using dot notation:
-
-```json
-{
-    "request": {
-        "url": "https://api.example.com/users/{{ user.profile.id }}",
-        "headers": { "X-User-Role": "{{ user.permissions.role }}" }
-    }
-}
-```
-
-#### Array/List Access
-
-Access array elements using square brackets:
-
-```json
-{
-    "request": {
-        "url": "https://api.example.com/items/{{ items[0] }}/details",
-        "body": {
-            "json": { "categories": "{{ categories[1] }}" }
-        }
-    }
-}
-```
-
-#### Complex Nested Access
-
-Combine dot notation and array access for complex data structures:
-
-```json
-{
-    "request": {
-        "url": "https://api.example.com/users/{{ data.users[0].profile.id }}",
         "body": {
             "json": {
-                "primary_address": "{{ user.addresses[0].street }}",
-                "backup_email": "{{ user.contacts.emails[1] }}"
+                "user_id": "{user_id}",           // Preserves integer type
+                "price": "{price}",               // Preserves float type  
+                "active": "{is_active}",          // Preserves boolean type
+                "metadata": "{user_metadata}"     // Preserves object/array type
             }
         }
     }
 }
 ```
+
+**String Templates** (converts to strings):
+```json
+{
+    "request": {
+        "url": "https://api.example.com/users/{user_id}/profile",
+        "headers": { 
+            "Authorization": "Bearer {auth_token}",
+            "X-User-Info": "User {username} (ID: {user_id})"
+        }
+    }
+}
+```
+
+#### Key Features
+
+- **Type Preservation**: Single variable references like `"{user_id}"` preserve the original data type (int, float, bool, list, dict)
+- **String Interpolation**: Mixed content like `"User {name} has {count} items"` renders as strings
+- **Simple Syntax**: Use `{variable_name}` instead of complex template syntax
+- **No Complex Patterns**: Object dot notation and array access should be handled via JMESPath in the `save.vars` section
 
 ### Using saved data
 
@@ -544,7 +525,7 @@ Use saved data from previous stages to alter URLs, query parameters, headers etc
             "name": "api_call",
             "request": {
                 "url": "/api/data",
-                "headers": { "Authorization": "Bearer {{ token }}" }
+                "headers": { "Authorization": "Bearer {token}" }
             }
         }
     ]
@@ -747,7 +728,7 @@ Reuse common pieces across multiple test files. Common **$ref** syntax is suppor
             "name": "get_data",
             "request": {
                 "url": "/data",
-                "headers": { "Authorization": "Bearer {{ token }}" }
+                "headers": { "Authorization": "Bearer {token}" }
             }
         }
     ]
@@ -766,7 +747,7 @@ Use pytest fixtures in your JSON tests:
     "stages": [
         {
             "name": "test_with_fixtures",
-            "request": { "url": "http://{{ server }}/api/{{ auth_token }}" }
+            "request": { "url": "http://{server}/api/{auth_token}" }
         }
     ]
 }
@@ -887,7 +868,6 @@ uv run pytest tests/integration/examples/test_full.http.json
 -   **jsonref**: JSON reference resolution
 -   **pydantic**: Data validation and parsing
 -   **jmespath**: JSON query language for response data extraction
--   **jinja2**: Template engine for variable substitution
 -   **requests**: HTTP client
 
 ## Configuration

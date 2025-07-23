@@ -9,7 +9,7 @@
         {
             "name": "test_combined_schema_and_regex",
             "request": {
-                "url": "{{ api_base }}/json-response",
+                "url": "{api_base}/json-response",
                 "method": "GET"
             },
             "response": {

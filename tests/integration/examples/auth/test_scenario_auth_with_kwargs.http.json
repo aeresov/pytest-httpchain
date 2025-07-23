@@ -8,15 +8,15 @@
     "auth": {
         "function": "auth_functions:basic_auth_with_args",
         "kwargs": {
-            "username": "{{ username }}",
-            "password": "{{ password }}"
+            "username": "{username}",
+            "password": "{password}"
         }
     },
     "stages": [
         {
             "name": "test_scenario_auth_with_kwargs",
             "request": {
-                "url": "{{ api_base }}/api/protected",
+                "url": "{api_base}/api/protected",
                 "method": "GET"
             },
             "response": {
@@ -31,7 +31,7 @@
         {
             "name": "test_stage_override_with_kwargs",
             "request": {
-                "url": "{{ api_base }}/api/protected",
+                "url": "{api_base}/api/protected",
                 "method": "GET",
                 "auth": "auth_functions:basic_auth"
             },
