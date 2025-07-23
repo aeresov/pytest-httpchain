@@ -564,6 +564,11 @@ class JSONScenario(Collector):
     def collect(self) -> Iterable[Item | Collector]:
         """Collect stage functions from unified stages collection"""
 
+        # In synth mode, create a single test item for the scenario
+        if self.config.getoption("--synth"):
+            yield JSONSynthScenario.from_parent(self, name="synth", scenario=self)
+            return
+
         def collect_stages(stages: list[Stage]) -> Iterable[JSONStage]:
             for stage in stages:
                 combined_fixtures = list(set(self._model.fixtures + stage.fixtures))
@@ -578,26 +583,53 @@ class JSONScenario(Collector):
         yield from collect_stages(self._model.stages)
 
 
+class JSONSynthScenario(Function):
+    """A test item that synthesizes and prints the scenario JSON in synth mode."""
+
+    def __init__(self, scenario: JSONScenario, **kwargs: Any) -> None:
+        self._scenario = scenario
+
+        def synth_scenario(**fixture_kwargs: Any) -> None:
+            # Add fixtures to variable context
+            for fixture_name in scenario.model.fixtures:
+                if fixture_name in fixture_kwargs:
+                    scenario.variable_context[fixture_name] = fixture_kwargs[fixture_name]
+
+            # Synthesize and print the scenario JSON
+            synthesized_json = synthesize_scenario_json(scenario.model, scenario.variable_context)
+
+            console = Console()
+            console.print(f"\n[bold blue]Synthesized JSON for scenario: {self.path.name}[/bold blue]")
+            console.print(Syntax(json.dumps(synthesized_json, indent=2), "json", theme="github-dark"))
+
+            pytest.skip("Synth mode - JSON output printed")
+
+        # Set up function signature for fixtures if needed
+        if scenario.model.fixtures:
+            import inspect
+            synth_scenario.__signature__ = inspect.Signature([
+                inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                for name in scenario.model.fixtures
+            ])
+
+        kwargs["callobj"] = synth_scenario
+        super().__init__(**kwargs)
+
+        # Apply marks from scenario
+        for mark in scenario.model.marks:
+            try:
+                mark_obj = eval(f"pytest.mark.{mark}")
+                self.add_marker(mark_obj)
+            except Exception as e:
+                pytest.fail(f"Failed to apply mark '{mark}' to scenario: {e}")
+
+
 class JSONStage(Function):
     def __init__(self, model: Stage, scenario: JSONScenario, **kwargs: Any) -> None:
         self._model = model
         self._scenario = scenario
 
         def execute_stage(**fixture_kwargs: Any) -> None:
-            # Check for synth mode - only print once per scenario (for the first stage)
-            if self.config.getoption("--synth"):
-                if not hasattr(scenario, '_synth_printed'):
-                    # Synthesize and print the scenario JSON
-                    synthesized_json = synthesize_scenario_json(scenario.model, scenario.variable_context)
-
-                    console = Console()
-                    console.print(f"\n[bold blue]Synthesized JSON for scenario: {self.path.name}[/bold blue]")
-                    console.print(Syntax(json.dumps(synthesized_json, indent=2), "json", theme="github-dark"))
-
-                    scenario._synth_printed = True
-
-                pytest.skip("Skipping test execution in synth mode")
-
             # Check if we should execute this stage
             if not self._should_execute_stage():
                 pytest.skip(f"Skipping stage '{model.name}' due to flow failure")
