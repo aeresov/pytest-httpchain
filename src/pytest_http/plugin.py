@@ -23,6 +23,89 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
+# Constants for variable substitution
+_EVAL_PATTERN = r"(?P<open>\{\{)(?P<expr>.+?)(?P<close>\}\})"
+
+# Safe built-ins for eval context - following established security patterns
+# Based on simpleeval and RestrictedPython safe builtins
+_SAFE_BUILTINS = {
+    # Type conversion functions
+    "str": str,
+    "int": int,
+    "float": float,
+    "bool": bool,
+    # Collection functions
+    "len": len,
+    "list": list,
+    "dict": dict,
+    "tuple": tuple,
+    "set": set,
+    # Math functions
+    "min": min,
+    "max": max,
+    "sum": sum,
+    "abs": abs,
+    "round": round,
+    # Iteration functions
+    "sorted": sorted,
+    "reversed": reversed,
+    "enumerate": enumerate,
+    "zip": zip,
+    "range": range,
+}
+
+
+def _is_expression_safe(expr: str) -> bool:
+    """Check if an expression passes security validation."""
+    return "__" not in expr and len(expr) <= 200
+
+
+def _evaluate_expression(expr: str, namespace: dict[str, Any]) -> Any:
+    """Safely evaluate an expression in the given namespace."""
+    if not _is_expression_safe(expr):
+        raise ValueError("Expression failed security validation")
+
+    return eval(expr, {"__builtins__": _SAFE_BUILTINS}, namespace)
+
+
+def _process_string_with_eval(obj: str, namespace: dict[str, Any], preserve_single_expr_types: bool = False) -> Any:
+    """
+    Process a string containing eval expressions.
+
+    Args:
+        obj: String to process
+        namespace: Variable namespace for evaluation
+        preserve_single_expr_types: If True, preserve types for single expressions
+
+    Returns:
+        Processed string or original type for single expressions when preserve_single_expr_types=True
+    """
+    # Check if the entire string is a single expression for type preservation
+    if preserve_single_expr_types:
+        single_expr_match = re.fullmatch(_EVAL_PATTERN, obj)
+        if single_expr_match:
+            expr = single_expr_match.group("expr").strip()
+
+            try:
+                # For single expressions, preserve the original type
+                return _evaluate_expression(expr, namespace)
+            except (ValueError, Exception):
+                # Return original expression on error or security failure
+                return obj
+
+    # Handle expressions in string using regex substitution
+    def replace_eval(match):
+        expr = match.group("expr").strip()
+
+        try:
+            result = _evaluate_expression(expr, namespace)
+            return str(result)
+        except (ValueError, Exception):
+            # Return original expression on error or security failure
+            return match.group(0)
+
+    return re.sub(_EVAL_PATTERN, replace_eval, obj)
+
 
 def substitute_variables_eval(obj: Any, namespace: dict[str, Any]) -> Any:
     """
@@ -44,59 +127,7 @@ def substitute_variables_eval(obj: Any, namespace: dict[str, Any]) -> Any:
     - Expression length limits (prevents DoS attacks)
     """
     if isinstance(obj, str):
-        # Pattern for {{ expression }} with named group for better readability
-        # Matches: {{ any_python_expression }}
-        eval_pattern = r"(?P<open>\{\{)(?P<expr>.+?)(?P<close>\}\})"
-
-        # Safe built-ins for eval context - following established security patterns
-        # Based on simpleeval and RestrictedPython safe builtins
-        safe_builtins = {
-            # Type conversion functions
-            "str": str,
-            "int": int,
-            "float": float,
-            "bool": bool,
-            # Collection functions
-            "len": len,
-            "list": list,
-            "dict": dict,
-            "tuple": tuple,
-            "set": set,
-            # Math functions
-            "min": min,
-            "max": max,
-            "sum": sum,
-            "abs": abs,
-            "round": round,
-            # Iteration functions
-            "sorted": sorted,
-            "reversed": reversed,
-            "enumerate": enumerate,
-            "zip": zip,
-            "range": range,
-            # String methods (safe for expressions like 'test'.upper())
-            # Note: These are accessible via method calls on strings anyway
-        }
-
-        # Handle eval expressions in string using regex substitution
-        def replace_eval(match):
-            expr = match.group("expr").strip()
-
-            # Additional safety checks following security best practices
-            if "__" in expr:  # Block double underscore access
-                return match.group(0)
-            if len(expr) > 200:  # Prevent overly complex expressions
-                return match.group(0)
-
-            try:
-                result = eval(expr, {"__builtins__": safe_builtins}, namespace)
-                return str(result)
-            except Exception:
-                # Return original expression on error
-                return match.group(0)
-
-        return re.sub(eval_pattern, replace_eval, obj)
-
+        return _process_string_with_eval(obj, namespace, preserve_single_expr_types=False)
     elif isinstance(obj, dict):
         return {key: substitute_variables_eval(value, namespace) for key, value in obj.items()}
     elif isinstance(obj, list):
@@ -110,6 +141,22 @@ def substitute_variables_eval(obj: Any, namespace: dict[str, Any]) -> Any:
             obj_dict = obj.model_dump()
             processed_dict = substitute_variables_eval(obj_dict, namespace)
             return obj.__class__.model_validate(processed_dict)
+        return obj
+
+
+def substitute_variables_eval_with_type_preservation(obj: Any, namespace: dict[str, Any]) -> Any:
+    """
+    Like substitute_variables_eval but preserves types for single expressions.
+
+    This is used specifically for verification values where type preservation is important.
+    """
+    if isinstance(obj, str):
+        return _process_string_with_eval(obj, namespace, preserve_single_expr_types=True)
+    elif isinstance(obj, dict):
+        return {key: substitute_variables_eval_with_type_preservation(value, namespace) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [substitute_variables_eval_with_type_preservation(item, namespace) for item in obj]
+    else:
         return obj
 
 
@@ -184,8 +231,23 @@ def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
     try:
         # Convert stage to dict for template processing
         stage_dict = stage.model_dump()
+
+        # Preserve original verification vars to avoid type conversion
+        original_verify_vars = None
+        if stage.response and stage.response.verify and stage.response.verify.vars:
+            original_verify_vars = stage.response.verify.vars.copy()
+
         # Apply variable substitution
         rendered_stage_dict = substitute_variables_eval(stage_dict, variables)
+
+        # Restore original verification vars to preserve their types
+        if original_verify_vars is not None:
+            if "response" not in rendered_stage_dict:
+                rendered_stage_dict["response"] = {}
+            if "verify" not in rendered_stage_dict["response"]:
+                rendered_stage_dict["response"]["verify"] = {}
+            rendered_stage_dict["response"]["verify"]["vars"] = original_verify_vars
+
         return Stage.model_validate(rendered_stage_dict)
     except ValidationError as e:
         raise VariableSubstitutionError(f"Stage validation failed after variable substitution: {e}") from e
@@ -439,8 +501,10 @@ def execute_single_stage(stage: Stage, variable_context: dict[str, Any], session
                     if var_name not in variable_context:
                         pytest.fail(f"Variable '{var_name}' not found in variable_context for stage '{stage_name}'")
                     var_value = variable_context[var_name]
-                    if var_value != expected_value:
-                        pytest.fail(f"Variable '{var_name}' verification failed for stage '{stage_name}': expected {expected_value}, got {var_value}")
+                    # Apply type-preserving substitution to expected values for proper comparison
+                    processed_expected_value = substitute_variables_eval_with_type_preservation(expected_value, variable_context)
+                    if var_value != processed_expected_value:
+                        pytest.fail(f"Variable '{var_name}' verification failed for stage '{stage_name}': expected {processed_expected_value}, got {var_value}")
             if stage.response.verify.functions:
                 for func_item in stage.response.verify.functions:
                     try:
