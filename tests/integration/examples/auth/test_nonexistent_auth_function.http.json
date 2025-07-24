@@ -8,7 +8,7 @@
         {
             "name": "test_stage",
             "request": {
-                "url": "{api_base}/api/public",
+                "url": "{{ api_base }}/api/public",
                 "method": "GET"
             },
             "response": {

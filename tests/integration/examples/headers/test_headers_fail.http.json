@@ -9,7 +9,7 @@
         {
             "name": "test_headers_verification_fail",
             "request": {
-                "url": "{api_base}/headers",
+                "url": "{{ api_base }}/headers",
                 "method": "GET"
             },
             "response": {

@@ -24,35 +24,92 @@ from rich.table import Table
 from rich.text import Text
 
 
-def substitute_variables_simple(obj: Any, variables: dict[str, Any]) -> Any:
+def substitute_variables_eval(obj: Any, namespace: dict[str, Any]) -> Any:
     """
-    Simple variable substitution that preserves types for single variable references.
+    Eval-based variable substitution with access to fixtures and variables.
 
     Syntax:
-    - Single variable: "{var_name}" -> preserves original type
-    - Multiple variables: "Hello {name}, you have {count} items" -> string interpolation
-    - No variables: "static text" -> unchanged
+    - Python expressions: "{{ expr }}" -> evaluated in namespace and converted to string
+    - Uses named regex groups for better maintainability
+    - All results are strings (appropriate for HTTP requests/responses)
+
+    The namespace includes both fixtures and variables, allowing expressions like:
+    - "{{ user_id + 1 }}" -> "43"
+    - "{{ server['url'] + '/api/v1' }}" -> "http://localhost:5000/api/v1"
+    - "Hello {{ name }}!" -> "Hello Alice!"
+
+    Security features:
+    - Restricted builtins (only safe functions available)
+    - Double underscore blocking (prevents __import__, __class__, etc.)
+    - Expression length limits (prevents DoS attacks)
     """
     if isinstance(obj, str):
-        # Check for single variable reference: "{var_name}"
-        if obj.startswith("{") and obj.endswith("}") and obj.count("{") == 1 and obj.count("}") == 1:
-            var_name = obj[1:-1].strip()
-            if var_name in variables:
-                return variables[var_name]  # Type preserved
+        # Pattern for {{ expression }} with named group for better readability
+        # Matches: {{ any_python_expression }}
+        eval_pattern = r"(?P<open>\{\{)(?P<expr>.+?)(?P<close>\}\})"
 
-        # Handle multiple placeholders in string
-        result = obj
-        for var_name, value in variables.items():
-            placeholder = f"{{{var_name}}}"
-            if placeholder in result:
-                result = result.replace(placeholder, str(value))
-        return result
+        # Safe built-ins for eval context - following established security patterns
+        # Based on simpleeval and RestrictedPython safe builtins
+        safe_builtins = {
+            # Type conversion functions
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            # Collection functions
+            "len": len,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            # Math functions
+            "min": min,
+            "max": max,
+            "sum": sum,
+            "abs": abs,
+            "round": round,
+            # Iteration functions
+            "sorted": sorted,
+            "reversed": reversed,
+            "enumerate": enumerate,
+            "zip": zip,
+            "range": range,
+            # String methods (safe for expressions like 'test'.upper())
+            # Note: These are accessible via method calls on strings anyway
+        }
+
+        # Handle eval expressions in string using regex substitution
+        def replace_eval(match):
+            expr = match.group("expr").strip()
+
+            # Additional safety checks following security best practices
+            if "__" in expr:  # Block double underscore access
+                return match.group(0)
+            if len(expr) > 200:  # Prevent overly complex expressions
+                return match.group(0)
+
+            try:
+                result = eval(expr, {"__builtins__": safe_builtins}, namespace)
+                return str(result)
+            except Exception:
+                # Return original expression on error
+                return match.group(0)
+
+        return re.sub(eval_pattern, replace_eval, obj)
 
     elif isinstance(obj, dict):
-        return {key: substitute_variables_simple(value, variables) for key, value in obj.items()}
+        return {key: substitute_variables_eval(value, namespace) for key, value in obj.items()}
     elif isinstance(obj, list):
-        return [substitute_variables_simple(item, variables) for item in obj]
+        return [substitute_variables_eval(item, namespace) for item in obj]
     else:
+        # Handle Pydantic models by converting to dict, processing, then converting back
+        from pydantic import BaseModel
+
+        if isinstance(obj, BaseModel):
+            # Convert to dict, process recursively, then validate back to original type
+            obj_dict = obj.model_dump()
+            processed_dict = substitute_variables_eval(obj_dict, namespace)
+            return obj.__class__.model_validate(processed_dict)
         return obj
 
 
@@ -110,27 +167,13 @@ class VariableSubstitutionError(Exception):
     pass
 
 
-def substitute_variables_in_auth(auth_spec: str | Any, variables: dict[str, Any]) -> str | Any:
-    """Apply variable substitution to auth specification."""
-    if isinstance(auth_spec, str):
-        # Simple function name string - use simple substitution
-        return substitute_variables_simple(auth_spec, variables)
-    else:
-        # FunctionCall object - need to substitute in kwargs
-        from pytest_http_engine.models import FunctionCall
-
-        auth_dict = auth_spec.model_dump()
-        rendered_auth_dict = substitute_variables_simple(auth_dict, variables)
-        return FunctionCall.model_validate(rendered_auth_dict)
-
-
 def synthesize_scenario_json(scenario: Scenario, variables: dict[str, Any]) -> dict[str, Any]:
     """Synthesize the complete scenario JSON with variable substitution applied."""
     try:
         # Convert scenario to dict for template processing
         scenario_dict = scenario.model_dump()
         # Apply simple variable substitution
-        rendered_scenario_dict = substitute_variables_simple(scenario_dict, variables)
+        rendered_scenario_dict = substitute_variables_eval(scenario_dict, variables)
         return rendered_scenario_dict
     except Exception:
         # If anything goes wrong, return the original dict
@@ -141,8 +184,8 @@ def substitute_variables(stage: Stage, variables: dict[str, Any]) -> Stage:
     try:
         # Convert stage to dict for template processing
         stage_dict = stage.model_dump()
-        # Apply simple variable substitution
-        rendered_stage_dict = substitute_variables_simple(stage_dict, variables)
+        # Apply variable substitution
+        rendered_stage_dict = substitute_variables_eval(stage_dict, variables)
         return Stage.model_validate(rendered_stage_dict)
     except ValidationError as e:
         raise VariableSubstitutionError(f"Stage validation failed after variable substitution: {e}") from e
@@ -163,7 +206,7 @@ def _format_request_response_details(stage: Stage, request_params: dict[str, Any
     request_table.add_row("Method", stage.request.method.value)
 
     # Show full URL with query parameters if available from response
-    full_url = response.url if response and hasattr(response, 'url') else stage.request.url
+    full_url = response.url if response and hasattr(response, "url") else stage.request.url
     request_table.add_row("URL", full_url)
 
     # Add query parameters if present
@@ -549,7 +592,7 @@ class JSONScenario(Collector):
         if self.model.auth:
             try:
                 # Apply variable substitution to auth spec
-                resolved_auth = substitute_variables_in_auth(self.model.auth, self.variable_context)
+                resolved_auth = substitute_variables_eval(self.model.auth, self.variable_context)
                 auth_instance = UserFunction.call_auth_function_from_spec(resolved_auth)
                 self._http_session.auth = auth_instance
             except Exception as e:
@@ -641,7 +684,7 @@ class JSONStage(Function):
             # Add stage seed variables to variable context (overwriting existing values)
             if model.vars:
                 # Apply variable substitution to stage vars before adding to context
-                substituted_vars = substitute_variables_simple(model.vars, scenario.variable_context)
+                substituted_vars = substitute_variables_eval(model.vars, scenario.variable_context)
                 scenario.variable_context.update(substituted_vars)
 
             # Execute the stage and handle failures

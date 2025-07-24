@@ -8,7 +8,7 @@
         {
             "name": "test_with_scenario_auth",
             "request": {
-                "url": "{api_base}/api/protected",
+                "url": "{{ api_base }}/api/protected",
                 "method": "GET"
             },
             "response": {
@@ -23,7 +23,7 @@
         {
             "name": "test_with_stage_auth_override",
             "request": {
-                "url": "{api_base}/api/protected",
+                "url": "{{ api_base }}/api/protected",
                 "method": "GET",
                 "auth": {
                     "function": "auth_functions:basic_auth_with_args",

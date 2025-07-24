@@ -12,7 +12,7 @@
                 "stage_only_var": "only_in_stage"
             },
             "request": {
-                "url": "{api_base}/echo/{initial_value}",
+                "url": "{{ api_base }}/echo/{{ initial_value }}",
                 "method": "GET"
             },
             "response": {
@@ -29,7 +29,7 @@
         {
             "name": "verify_stage_vars_persist",
             "request": {
-                "url": "{api_base}/echo/{stage_only_var}",
+                "url": "{{ api_base }}/echo/{{ stage_only_var }}",
                 "method": "GET"
             },
             "response": {

@@ -9,7 +9,7 @@
         {
             "name": "get_valid_user",
             "request": {
-                "url": "{api_base}/user/valid",
+                "url": "{{ api_base }}/user/valid",
                 "method": "GET"
             },
             "response": {

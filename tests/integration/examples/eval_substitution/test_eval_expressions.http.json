@@ -1,0 +1,94 @@
+{
+    "fixtures": ["server"],
+    "vars": {
+        "base_user_id": 50,
+        "api_version": "v1"
+    },
+    "stages": [
+        {
+            "name": "test_math_expression",
+            "request": {
+                "url": "{{ server['url'] + '/api/' + api_version + '/users/' + str(base_user_id + 5) }}",
+                "method": "GET"
+            },
+            "response": {
+                "save": {
+                    "vars": {
+                        "user": "@",
+                        "user_id": "id",
+                        "user_name": "name",
+                        "premium_status": "is_premium"
+                    }
+                },
+                "verify": {
+                    "status": 200,
+                    "vars": {
+                        "user_id": 55,
+                        "user_name": "User 55"
+                    }
+                }
+            }
+        },
+        {
+            "name": "test_conditional_expression",
+            "request": {
+                "url": "{{ server['url'] }}/api/v1/users/{{ 10 if premium_status else 200 }}",
+                "method": "GET"
+            },
+            "response": {
+                "save": {
+                    "vars": {
+                        "conditional_id": "id"
+                    }
+                },
+                "verify": {
+                    "status": 200,
+                    "vars": {
+                        "conditional_id": 10
+                    }
+                }
+            }
+        },
+        {
+            "name": "test_complex_expression",
+            "request": {
+                "url": "{{ server['url'] }}/api/v1/calculate",
+                "method": "POST",
+                "headers": {
+                    "X-User-Credits": "{{ user['credits'] * 2 }}",
+                    "X-User-Info": "{{ user['name'] + ' (Premium)' if premium_status else user['name'] + ' (Standard)' }}"
+                }
+            },
+            "response": {
+                "verify": {
+                    "status": 200
+                },
+                "save": {
+                    "vars": {
+                        "calc_result": "result",
+                        "multiplier": "multiplier"
+                    }
+                }
+            }
+        },
+        {
+            "name": "test_stage_variables",
+            "vars": {
+                "final_result": "{{ calc_result * multiplier }}"
+            },
+            "request": {
+                "url": "{{ server['url'] }}/api/v1/users/{{ base_user_id }}",
+                "method": "GET",
+                "headers": {
+                    "X-Final-Result": "{{ final_result }}",
+                    "X-Expression-Result": "{{ str(calc_result) + ' * ' + str(multiplier) + ' = ' + str(final_result) }}"
+                }
+            },
+            "response": {
+                "verify": {
+                    "status": 200
+                }
+            }
+        }
+    ]
+}

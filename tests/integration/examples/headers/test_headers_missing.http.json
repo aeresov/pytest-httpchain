@@ -9,7 +9,7 @@
         {
             "name": "test_missing_header_verification",
             "request": {
-                "url": "{api_base}/headers",
+                "url": "{{ api_base }}/headers",
                 "method": "GET"
             },
             "response": {

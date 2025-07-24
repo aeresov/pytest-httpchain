@@ -9,7 +9,7 @@
         {
             "name": "test_substring_should_not_be_present",
             "request": {
-                "url": "{api_base}/error-response",
+                "url": "{{ api_base }}/error-response",
                 "method": "GET"
             },
             "response": {

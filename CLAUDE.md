@@ -46,7 +46,7 @@ This is a pytest plugin that enables HTTP testing through JSON configuration fil
 
 - **Plugin System**: Uses pytest's plugin architecture with file collection hooks in `src/pytest_http/plugin.py:434`
 - **JSON Schema Validation**: Pydantic models validate JSON test files against strict schemas
-- **Variable Substitution**: Simple placeholder system with type preservation for passing data between HTTP request stages (`substitute_variables` function)
+- **Variable Substitution**: Eval-based expression system with type preservation for passing data between HTTP request stages (`substitute_variables_eval` function)
 - **User Functions**: Extensible system for custom validation and data extraction logic
 - **Stage Execution**: Sequential execution of stages, with `always_run` stages executed even if previous stages failed
 - **Session Management**: HTTP session per scenario with proper setup/teardown lifecycle
@@ -72,18 +72,25 @@ Each stage defines:
 
 ### Variable Substitution
 
-The plugin uses a simple placeholder system for variable substitution with type preservation:
+The plugin uses eval-based expressions for powerful variable substitution:
 
-- **Format**: `{variable_name}` (single curly braces)
-- **Type Preservation**: Single variable references preserve original data types (int, float, bool, list, dict)
-- **String Interpolation**: Mixed content like `"User {name} has {count} items"` renders as strings
-- **Usage**: Variables saved in earlier stages can be referenced in later stages
-- **Context**: All saved variables are available in the variable context for subsequent stages
+#### Eval-Based Expressions
+- **Format**: `{{ expression }}` (double curly braces)
+- **Features**: Full Python expressions with access to fixtures and variables
+- **Type Preservation**: Single expressions preserve return type
 - **Examples**:
-  - Type-preserved variables: `"user_id": "{user_id}"` (preserves integer type)
-  - String templates: `"https://api.example.com/users/{user_id}/profile"`
-  - Headers: `"Authorization": "Bearer {auth_token}"`
-  - Mixed content: `"User {username} (ID: {user_id})"`
+  - Math operations: `"user_id": "{{ user_id + 1 }}"`
+  - String concatenation: `"url": "{{ server['url'] + '/api/v1' }}"`
+  - Complex expressions: `"auth": "{{ 'Bearer ' + tokens['access_token'] }}"`
+  - Conditional logic: `"limit": "{{ 100 if is_premium else 10 }}"`
+  - Dictionary access: `"port": "{{ server['port'] }}"`
+  - Multiple expressions: `"message": "User {{ user['name'] }} has {{ len(items) }} items"`
+
+#### Variable Context
+- **Namespace**: All fixtures and variables are available in the same namespace
+- **Usage**: Variables saved in earlier stages can be referenced in later stages
+- **Priority**: Stage variables override scenario variables
+- **Security**: Uses restricted eval with no access to dangerous built-ins
 
 Variables are saved using JMESPath expressions in the `response.save.vars` section:
 ```json

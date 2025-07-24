@@ -9,7 +9,7 @@
         {
             "name": "test_no_follow_redirect",
             "request": {
-                "url": "{api_base}/redirect-source",
+                "url": "{{ api_base }}/redirect-source",
                 "method": "GET",
                 "allow_redirects": false
             },

@@ -9,7 +9,7 @@
         {
             "name": "test_invalid_schema",
             "request": {
-                "url": "{api_base}/user/valid",
+                "url": "{{ api_base }}/user/valid",
                 "method": "GET"
             },
             "response": {

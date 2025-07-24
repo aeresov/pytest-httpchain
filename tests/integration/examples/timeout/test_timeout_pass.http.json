@@ -9,7 +9,7 @@
         {
             "name": "quick_test",
             "request": {
-                "url": "{api_base}/quick",
+                "url": "{{ api_base }}/quick",
                 "method": "GET",
                 "timeout": 5.0
             },

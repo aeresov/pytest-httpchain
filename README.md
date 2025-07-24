@@ -68,11 +68,11 @@ Create a JSON test file following the pattern `test_<name>.<suffix>.json` (defau
         {
             "name": "update_user",
             "request": {
-                "url": "https://api.example.com/users/{user_id}",
+                "url": "https://api.example.com/users/{{ user_id }}",
                 "method": "PUT",
                 "body": {
                     "json": {
-                        "name": "{username}_updated"
+                        "name": "{{ username }}_updated"
                     }
                 }
             },
@@ -403,7 +403,7 @@ By default, if any stage in a scenario fails, subsequent stages are skipped. How
         {
             "name": "test_resource",
             "request": {
-                "url": "https://api.example.com/resources/{resource_id}/test",
+                "url": "https://api.example.com/resources/{{ resource_id }}/test",
                 "method": "POST"
             },
             "response": {
@@ -414,7 +414,7 @@ By default, if any stage in a scenario fails, subsequent stages are skipped. How
             "name": "cleanup_resource",
             "always_run": true,
             "request": {
-                "url": "https://api.example.com/resources/{resource_id}",
+                "url": "https://api.example.com/resources/{{ resource_id }}",
                 "method": "DELETE"
             }
         }
@@ -430,7 +430,7 @@ In this example:
 
 ### Variable Substitution
 
-The plugin uses a **simple placeholder system** for variable substitution with type preservation. Variables are referenced using `{variable_name}` syntax within strings.
+The plugin uses an **eval-based expression system** for variable substitution with access to fixtures and variables. Expressions are referenced using `{{ expression }}` syntax within strings.
 
 #### Initial Variables
 
@@ -447,8 +447,8 @@ You can define initial variables at the scenario level using the `vars` field. T
         {
             "name": "get_users",
             "request": {
-                "url": "{base_url}/{api_version}/users",
-                "timeout": "{default_timeout}"
+                "url": "{{ base_url }}/{{ api_version }}/users",
+                "timeout": "{{ default_timeout }}"
             }
         }
     ]
@@ -467,43 +467,44 @@ Initial variables are useful for:
 -   Fixtures cannot be overwritten and cannot shadow initial variables
 -   Saved variables cannot conflict with fixture names
 
-#### Variable Syntax and Type Preservation
+#### Expression Syntax and Features
 
-**Single Variable References** (preserves original data types):
+**Python Expressions** (all results converted to strings):
 ```json
 {
     "request": {
+        "url": "{{ server['url'] + '/api/v1/users/' + str(user_id) }}",
+        "headers": { 
+            "Authorization": "Bearer {{ token }}",
+            "X-User-Count": "{{ len(users) }}",
+            "X-User-Info": "{{ 'Premium' if is_premium else 'Standard' }}"
+        },
         "body": {
             "json": {
-                "user_id": "{user_id}",           // Preserves integer type
-                "price": "{price}",               // Preserves float type  
-                "active": "{is_active}",          // Preserves boolean type
-                "metadata": "{user_metadata}"     // Preserves object/array type
+                "user_id": "{{ user_id }}",
+                "calculated_price": "{{ base_price * 1.2 }}",
+                "is_active": "{{ user_status == 'active' }}"
             }
         }
     }
 }
 ```
 
-**String Templates** (converts to strings):
-```json
-{
-    "request": {
-        "url": "https://api.example.com/users/{user_id}/profile",
-        "headers": { 
-            "Authorization": "Bearer {auth_token}",
-            "X-User-Info": "User {username} (ID: {user_id})"
-        }
-    }
-}
-```
+**Available in expressions**:
+- All saved variables from previous stages
+- All pytest fixtures
+- Safe built-in functions: `str`, `int`, `float`, `len`, `min`, `max`, etc.
+- Math operations: `+`, `-`, `*`, `/`, `%`
+- Comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`
+- Boolean logic: `and`, `or`, `not`
+- Conditional expressions: `value if condition else other_value`
 
 #### Key Features
 
-- **Type Preservation**: Single variable references like `"{user_id}"` preserve the original data type (int, float, bool, list, dict)
-- **String Interpolation**: Mixed content like `"User {name} has {count} items"` renders as strings
-- **Simple Syntax**: Use `{variable_name}` instead of complex template syntax
-- **No Complex Patterns**: Object dot notation and array access should be handled via JMESPath in the `save.vars` section
+- **Full Python expressions**: Use complex logic, math operations, and conditionals
+- **Secure evaluation**: Restricted built-ins prevent malicious code execution
+- **Access to context**: Both fixtures and variables are available in expressions
+- **String conversion**: All expression results are converted to strings for HTTP compatibility
 
 ### Using saved data
 
@@ -525,7 +526,7 @@ Use saved data from previous stages to alter URLs, query parameters, headers etc
             "name": "api_call",
             "request": {
                 "url": "/api/data",
-                "headers": { "Authorization": "Bearer {token}" }
+                "headers": { "Authorization": "Bearer {{ token }}" }
             }
         }
     ]
@@ -728,7 +729,7 @@ Reuse common pieces across multiple test files. Common **$ref** syntax is suppor
             "name": "get_data",
             "request": {
                 "url": "/data",
-                "headers": { "Authorization": "Bearer {token}" }
+                "headers": { "Authorization": "Bearer {{ token }}" }
             }
         }
     ]
@@ -747,7 +748,7 @@ Use pytest fixtures in your JSON tests:
     "stages": [
         {
             "name": "test_with_fixtures",
-            "request": { "url": "http://{server}/api/{auth_token}" }
+            "request": { "url": "http://{{ server }}/api/{{ auth_token }}" }
         }
     ]
 }

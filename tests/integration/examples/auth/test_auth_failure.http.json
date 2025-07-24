@@ -7,7 +7,7 @@
         {
             "name": "test_no_auth_fails",
             "request": {
-                "url": "{api_base}/api/protected",
+                "url": "{{ api_base }}/api/protected",
                 "method": "GET"
             },
             "response": {

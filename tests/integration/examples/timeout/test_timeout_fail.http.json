@@ -9,7 +9,7 @@
         {
             "name": "timeout_test",
             "request": {
-                "url": "{api_base}/slow",
+                "url": "{{ api_base }}/slow",
                 "method": "GET",
                 "timeout": 0.5
             },

@@ -7,7 +7,7 @@
         {
             "name": "success_stage",
             "request": {
-                "url": "{api_base}/success",
+                "url": "{{ api_base }}/success",
                 "method": "GET"
             },
             "response": {
@@ -25,7 +25,7 @@
             "name": "xfail_stage_expected_to_fail",
             "marks": ["xfail(reason='This stage is expected to fail but should not stop flow')"],
             "request": {
-                "url": "{api_base}/failure",
+                "url": "{{ api_base }}/failure",
                 "method": "GET"
             },
             "response": {
@@ -37,7 +37,7 @@
         {
             "name": "should_still_run",
             "request": {
-                "url": "{api_base}/success",
+                "url": "{{ api_base }}/success",
                 "method": "GET"
             },
             "response": {
