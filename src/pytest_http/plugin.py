@@ -748,7 +748,8 @@ class JSONStage(Function):
             # Add stage seed variables to variable context (overwriting existing values)
             if model.vars:
                 # Apply variable substitution to stage vars before adding to context
-                substituted_vars = substitute_variables_eval(model.vars, scenario.variable_context)
+                # Use type-preserving substitution to avoid converting referenced variables to strings
+                substituted_vars = substitute_variables_eval_with_type_preservation(model.vars, scenario.variable_context)
                 scenario.variable_context.update(substituted_vars)
 
             # Execute the stage and handle failures
