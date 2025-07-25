@@ -745,11 +745,10 @@ class JSONStage(Function):
                 if fixture_name in fixture_kwargs:
                     scenario.variable_context[fixture_name] = fixture_kwargs[fixture_name]
 
-            # Add stage seed variables to variable context (overwriting existing values)
+            # Add stage seed variables to variable context first (overwriting existing values)
             if model.vars:
                 # Apply variable substitution to stage vars before adding to context
-                # Use type-preserving substitution to avoid converting referenced variables to strings
-                substituted_vars = substitute_variables_eval_with_type_preservation(model.vars, scenario.variable_context)
+                substituted_vars = substitute_variables_eval(model.vars, scenario.variable_context)
                 scenario.variable_context.update(substituted_vars)
 
             # Execute the stage and handle failures
