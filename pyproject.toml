@@ -11,7 +11,12 @@ dependencies = ["pytest-http-engine", "rich>=13.7.0"]
 mcp = ["pytest-http-mcp"]
 
 [dependency-groups]
-dev = ["http-server-mock>=1.7", "responses>=0.25.7", "ruff>=0.12.1"]
+dev = [
+    "http-server-mock>=1.7",
+    "pytest-xdist>=3.8.0",
+    "responses>=0.25.7",
+    "ruff>=0.12.1",
+]
 
 [tool.uv.workspace]
 members = ["packages/*"]
