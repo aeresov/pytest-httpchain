@@ -6,7 +6,7 @@
         "dict_value"
     ],
     "vars": {
-        "api_base": "{{ server }}"
+        "api_base": "http://localhost:5000"
     },
     "stages": [
         {

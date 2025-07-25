@@ -2,7 +2,6 @@ import time
 from http import HTTPStatus
 
 import pytest
-from fixtures import server_factory  # noqa
 from http_server_mock import HttpServerMock
 
 
@@ -51,6 +50,6 @@ def delay(seconds: int):
 
 
 @pytest.fixture
-def server(server_factory):
-    with server_factory(app) as url:
-        yield url
+def server():
+    with app.run("localhost", 5000):
+        yield "http://localhost:5000"
