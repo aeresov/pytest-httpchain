@@ -840,21 +840,26 @@ class JSONFile(pytest.File):
             return
 
         try:
-            # Create the scenario class
-            scenario_class = JSONScenario.from_parent(self, name=f"Test{self.name.title().replace('_', '')}", model=scenario)
+            # Create the scenario as a Collector that works like a class
+            scenario_collector = JSONScenario.from_parent(self, name=f"Test{self.name.title().replace('_', '')}", model=scenario)
 
-            # Apply marks to the class
+            # Apply marks to the collector, including usefixtures support
             for mark in scenario.marks:
                 try:
                     mark_obj = eval(f"pytest.mark.{mark}")
-                    scenario_class.add_marker(mark_obj)
+                    scenario_collector.add_marker(mark_obj)
                 except Exception as e:
                     yield self._failed_validation_item(f"Failed to apply mark '{mark}': {e}")
                     return
 
-            yield scenario_class
+            # Add fixtures from the scenario to usefixtures if they exist
+            if scenario.fixtures:
+                usefixtures_mark = pytest.mark.usefixtures(*scenario.fixtures)
+                scenario_collector.add_marker(usefixtures_mark)
+
+            yield scenario_collector
         except Exception as e:
-            yield self._failed_validation_item(f"Error creating scenario class: {e}")
+            yield self._failed_validation_item(f"Error creating scenario collector: {e}")
 
 
 def pytest_collect_file(file_path: Path, parent: Collector) -> JSONFile | None:
