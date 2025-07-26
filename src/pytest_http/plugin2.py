@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 import pytest_http_engine.loader
+import pytest_http_engine.substitution
 import requests
 from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
