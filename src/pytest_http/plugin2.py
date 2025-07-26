@@ -70,7 +70,7 @@ class JsonModule(python.Module):
                 logging.info("executing stage")
                 for fixture_name, fixture_value in fixture_kwargs.items():
                     logging.info(f"received fixture {fixture_name} = {fixture_value}")
-                assert False
+                pass
 
             # inject fixtures to request
             _exec_stage.__signature__ = inspect.Signature(

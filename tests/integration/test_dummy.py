@@ -7,6 +7,6 @@ def test_blip(pytester):
         failed=0,
         passed=0,
         skipped=0,
-        xfailed=1,
-        xpassed=0,
+        xfailed=0,
+        xpassed=1,
     )
