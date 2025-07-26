@@ -19,10 +19,6 @@ SUFFIX: str = "suffix"
 logger = logging.Logger(__name__)
 
 
-class JsonClass(python.Class):
-    pass
-
-
 class JsonModule(python.Module):
     def collect(self) -> Iterable[nodes.Item | nodes.Collector]:
         # load JSON and resolve references
@@ -105,7 +101,7 @@ class JsonModule(python.Module):
         dummy_module = types.ModuleType("dummy")
         setattr(dummy_module, self.name, Carrier)
         self._getobj = lambda: dummy_module
-        json_class = JsonClass.from_parent(self, path=self.path, name=self.name, obj=Carrier)
+        json_class = python.Class.from_parent(self, path=self.path, name=self.name, obj=Carrier)
 
         # add markers
         for mark in scenario.marks:
@@ -140,7 +136,7 @@ def _get_test_name_pattern(config: config.Config) -> tuple[re.Pattern[str], str]
     return re.compile(rf"^test_(?P<{group_name}>.+)\.{re.escape(suffix)}\.json$"), group_name
 
 
-def pytest_collect_file(file_path: Path, parent: nodes.Collector) -> JsonClass | None:
+def pytest_collect_file(file_path: Path, parent: nodes.Collector) -> nodes.Collector | None:
     pattern, group_name = _get_test_name_pattern(parent.config)
     match: re.Match[str] | None = pattern.match(file_path.name)
     if match:
