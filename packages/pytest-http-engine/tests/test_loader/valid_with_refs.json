@@ -1,0 +1,10 @@
+{
+    "data": [
+        {
+            "$ref": "shared_stage.json"
+        },
+        {
+            "local_key": "local_value"
+        }
+    ]
+}

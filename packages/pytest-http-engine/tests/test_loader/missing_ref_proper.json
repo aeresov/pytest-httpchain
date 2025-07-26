@@ -1,0 +1,5 @@
+{
+    "data": {
+        "$ref": "nonexistent_file.json"
+    }
+}

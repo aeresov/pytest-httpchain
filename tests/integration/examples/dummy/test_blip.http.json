@@ -1,0 +1,16 @@
+{
+    "marks": [],
+    "fixtures": [
+        "yielding"
+    ],
+    "stages": [
+        {
+            "name": "bloop",
+            "marks": ["xfail"],
+            "fixtures": ["string_value"],
+            "request": {
+                "url": "dummy"
+            }
+        }
+    ]
+}
