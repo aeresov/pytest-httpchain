@@ -64,33 +64,43 @@ class JsonModule(python.Module):
                 pass
 
         for i, stage in enumerate(scenario.stages):
-            # runner function for scenario's stage
-            def _exec_stage(self, **fixture_kwargs: Any):
-                logging.info("executing stage")
-                for fixture_name, fixture_value in fixture_kwargs.items():
-                    logging.info(f"received fixture {fixture_name} = {fixture_value}")
+            # Create a closure to capture the current stage
+            def make_stage_executor(current_stage):
+                def _exec_stage(self, **fixture_kwargs: Any):
+                    logging.info("executing stage")
+                    for fixture_name, fixture_value in fixture_kwargs.items():
+                        logging.info(f"received fixture {fixture_name} = {fixture_value}")
 
-                # Access the class-level HTTP session
-                session = self.__class__._http_session
-                if session is None:
-                    raise RuntimeError("HTTP session not initialized. Ensure setup_class was called.")
+                    # Access the class-level HTTP session
+                    session = self.__class__._http_session
+                    if session is None:
+                        raise RuntimeError("HTTP session not initialized. Ensure setup_class was called.")
 
-                logging.info(f"Using HTTP session: {session} (ID: {id(session)})")
-                # Here you would make HTTP requests using the session
-                # Example: response = session.get(stage.request.url)
+                    # Access the Stage model from closure
+                    logging.info(f"Executing stage: {current_stage.name}")
+                    logging.info(f"Stage request URL: {current_stage.request.url}")
+                    logging.info(f"Using HTTP session: {session} (ID: {id(session)})")
+
+                    # Here you would make HTTP requests using the session and stage model
+                    # Example: response = session.request(current_stage.request.method, current_stage.request.url)
+
+                return _exec_stage
+
+            # Create the stage executor function
+            stage_executor = make_stage_executor(stage)
 
             # inject stage fixtures to request
-            _exec_stage.__signature__ = inspect.Signature(
+            stage_executor.__signature__ = inspect.Signature(
                 [inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD)] + [inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in stage.fixtures]
             )
 
             # decorate in stage markers plus ordering
             for mark in stage.marks + [f"order({i})"]:
                 mark_obj = eval(f"pytest.mark.{mark}")
-                _exec_stage = mark_obj(_exec_stage)
+                stage_executor = mark_obj(stage_executor)
 
             # insert in carrier class
-            setattr(Carrier, f"test_{stage.name}", _exec_stage)
+            setattr(Carrier, f"test_{stage.name}", stage_executor)
 
         dummy_module = types.ModuleType("dummy")
         setattr(dummy_module, self.name, Carrier)
