@@ -34,18 +34,6 @@ class Stooge:
         pass
 
 
-class Unprocessable(pytest.Item):
-    def __init__(self, message: str, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.message: str = message
-
-    def runtest(self) -> None:
-        pytest.skip(reason=self.message)
-
-    def reportinfo(self) -> tuple[Path, int, str]:
-        return self.path, None, self.name
-
-
 class JsonClass(python.Class):
     pass
 
@@ -64,7 +52,7 @@ class JsonModule(python.Module):
         except ValidationError as e:
             raise nodes.Collector.CollectError("Cannot parse test scenario") from e
 
-        for stage in scenario.stages:
+        for i, stage in enumerate(scenario.stages):
             # runner function for scenario's stage
             def _exec_stage(self, **fixture_kwargs: Any):
                 logging.info("executing stage")
@@ -72,13 +60,13 @@ class JsonModule(python.Module):
                     logging.info(f"received fixture {fixture_name} = {fixture_value}")
                 pass
 
-            # inject fixtures to request
+            # inject stage fixtures to request
             _exec_stage.__signature__ = inspect.Signature(
                 [inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD)] + [inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in stage.fixtures]
             )
 
-            # decorate in markers
-            for mark in stage.marks:
+            # decorate in stage markers plus ordering
+            for mark in stage.marks + [f"order({i})"]:
                 mark_obj = eval(f"pytest.mark.{mark}")
                 _exec_stage = mark_obj(_exec_stage)
 
@@ -100,40 +88,6 @@ class JsonModule(python.Module):
             json_class.add_marker(usefixtures_mark)
 
         yield json_class
-
-        # dummy_module = types.ModuleType("dummy")
-
-        # # Add a dynamic test method to Victim class
-        # def test_dynamic(self, **fixture_kwargs: Any):
-        #     for fixture_name, fixture_value in fixture_kwargs.items():
-        #         logging.info(f"received fixture {fixture_name} = {fixture_value}")
-        #     assert False
-
-        # # Dynamically add the test method to Victim
-        # Stooge.test_dynamic = test_dynamic
-
-        # # Dynamically modify the method signature directly using the JSONStage approach
-        # fixtures_to_inject = ["string_value", "int_value"]
-        # Stooge.test_dynamic.__signature__ = inspect.Signature(
-        #     [inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD)] +
-        #     [inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in fixtures_to_inject]
-        # )
-
-        # # Dynamically add an arbitrary mark to the test method
-        # arbitrary_mark = "slow"  # This could be any string
-        # mark_obj = eval(f"pytest.mark.{arbitrary_mark}")
-        # Stooge.test_dynamic = mark_obj(Stooge.test_dynamic)
-
-        # setattr(dummy_module, self.name, Stooge)
-        # self._getobj = lambda: dummy_module
-        # json_file = JsonFile.from_parent(self, path=self.path, name=self.name, obj=Stooge)
-        # for mark in ["usefixtures('string_value')", "xfail"]:
-        #     mark_obj = eval(f"pytest.mark.{mark}")
-        #     json_file.add_marker(mark_obj)
-        # yield json_file
-
-        def _unprocessable(self, message: str) -> Unprocessable:
-            return Unprocessable.from_parent(self, name=self.name, message=message)
 
 
 def pytest_addoption(parser: argparsing.Parser) -> None:
