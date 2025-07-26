@@ -62,6 +62,7 @@ known-first-party = ["tests", "utils"]
 [tool.pytest.ini_options]
 log_cli = true
 log_cli_level = "INFO"
+testpaths = ["tests"]
 norecursedirs = ["examples"]
 pytester_example_dir = "tests/integration/examples"
 addopts = "--log-disable=werkzeug"

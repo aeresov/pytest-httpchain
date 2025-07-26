@@ -14,6 +14,7 @@ from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
 from pydantic import ValidationError
 from pytest_http_engine.models import Scenario
+from pytest_http_engine.user_function import UserFunction
 
 SUFFIX: str = "suffix"
 
@@ -36,6 +37,7 @@ class JsonModule(python.Module):
 
         # Carrier class for reusing pytest magic
         class Carrier:
+            _scenario: Scenario = scenario
             _data_context: dict[str, Any] = {}
             _http_session: requests.Session | None = None
             _aborted: bool = False
@@ -43,8 +45,19 @@ class JsonModule(python.Module):
             @classmethod
             def setup_class(cls) -> None:
                 cls._http_session = requests.Session()
-                # TODO: ssl
-                # TODO: auth
+
+                # Configure SSL settings for the session
+                if cls._scenario.ssl:
+                    if cls._scenario.ssl.verify is not None:
+                        cls._http_session.verify = cls._scenario.ssl.verify
+                    if cls._scenario.ssl.cert is not None:
+                        cls._http_session.cert = cls._scenario.ssl.cert
+
+                # Configure authentication for the session
+                if cls._scenario.auth:
+                    resolved_auth = pytest_http_engine.substitution.walk(cls._scenario.auth, cls._data_context)
+                    auth_instance = UserFunction.call_auth_function_from_spec(resolved_auth)
+                    cls._http_session.auth = auth_instance
 
             @classmethod
             def teardown_class(cls) -> None:
@@ -88,7 +101,7 @@ class JsonModule(python.Module):
 
             # inject stage fixtures to request
             stage_executor.__signature__ = inspect.Signature(
-                [inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD)] + [inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in stage.fixtures]
+                [inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in ["self"] + stage.fixtures + scenario.fixtures]
             )
 
             # decorate in stage markers plus ordering
@@ -108,10 +121,6 @@ class JsonModule(python.Module):
         for mark in scenario.marks:
             mark_obj = eval(f"pytest.mark.{mark}")
             json_class.add_marker(mark_obj)
-        # in case user added scenario-level fixtures, transform them into "usefixtures" marker
-        if scenario.fixtures:
-            usefixtures_mark = pytest.mark.usefixtures(*scenario.fixtures)
-            json_class.add_marker(usefixtures_mark)
 
         yield json_class
 
