@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 import pytest_http_engine.loader
+import requests
 from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
 from pydantic import ValidationError
@@ -16,22 +17,6 @@ from pytest_http_engine.models import Scenario
 SUFFIX: str = "suffix"
 
 logger = logging.Logger(__name__)
-
-
-class Stooge:
-    @classmethod
-    def setup_class(cls) -> None:
-        pass
-
-    @classmethod
-    def teardown_class(cls) -> None:
-        pass
-
-    def setup_method(self) -> None:
-        pass
-
-    def teardown_method(self) -> None:
-        pass
 
 
 class JsonClass(python.Class):
@@ -52,13 +37,47 @@ class JsonModule(python.Module):
         except ValidationError as e:
             raise nodes.Collector.CollectError("Cannot parse test scenario") from e
 
+        # Carrier class for reusing pytest magic
+        class Carrier:
+            _data_context: dict[str, Any] = {}
+            _http_session: requests.Session | None = None
+            _aborted: bool = False
+
+            @classmethod
+            def setup_class(cls) -> None:
+                cls._http_session = requests.Session()
+                # TODO: ssl
+                # TODO: auth
+
+            @classmethod
+            def teardown_class(cls) -> None:
+                cls._data_context.clear()
+                if cls._http_session:
+                    cls._http_session.close()
+                    cls._http_session = None
+                cls._aborted = False
+
+            def setup_method(self) -> None:
+                pass
+
+            def teardown_method(self) -> None:
+                pass
+
         for i, stage in enumerate(scenario.stages):
             # runner function for scenario's stage
             def _exec_stage(self, **fixture_kwargs: Any):
                 logging.info("executing stage")
                 for fixture_name, fixture_value in fixture_kwargs.items():
                     logging.info(f"received fixture {fixture_name} = {fixture_value}")
-                pass
+
+                # Access the class-level HTTP session
+                session = self.__class__._http_session
+                if session is None:
+                    raise RuntimeError("HTTP session not initialized. Ensure setup_class was called.")
+
+                logging.info(f"Using HTTP session: {session} (ID: {id(session)})")
+                # Here you would make HTTP requests using the session
+                # Example: response = session.get(stage.request.url)
 
             # inject stage fixtures to request
             _exec_stage.__signature__ = inspect.Signature(
@@ -71,12 +90,12 @@ class JsonModule(python.Module):
                 _exec_stage = mark_obj(_exec_stage)
 
             # insert in carrier class
-            setattr(Stooge, f"test_{stage.name}", _exec_stage)
+            setattr(Carrier, f"test_{stage.name}", _exec_stage)
 
         dummy_module = types.ModuleType("dummy")
-        setattr(dummy_module, self.name, Stooge)
+        setattr(dummy_module, self.name, Carrier)
         self._getobj = lambda: dummy_module
-        json_class = JsonClass.from_parent(self, path=self.path, name=self.name, obj=Stooge)
+        json_class = JsonClass.from_parent(self, path=self.path, name=self.name, obj=Carrier)
 
         # add markers
         for mark in scenario.marks:
