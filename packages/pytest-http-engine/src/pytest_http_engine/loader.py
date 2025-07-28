@@ -2,8 +2,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+import jsonmerge
+import jsonmerge.exceptions
 import jsonref
-import mergedeep
 
 
 class LoaderError(Exception):
@@ -18,6 +19,9 @@ def _remove_refs(data: Any) -> Any:
         return [_remove_refs(item) for item in data]
     else:
         return data
+
+
+MERGE_SCHEMA = {"properties": {"stages": {"mergeStrategy": "arrayMergeByIndex"}}}
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -54,8 +58,8 @@ def load_json(path: Path) -> dict[str, Any]:
     # merge
     try:
         test_data = _remove_refs(test_data)
-        test_data = mergedeep.merge({}, test_data, ref_data, strategy=mergedeep.Strategy.TYPESAFE_REPLACE)
-    except TypeError as e:
+        test_data = jsonmerge.merge(test_data, ref_data, MERGE_SCHEMA)
+    except jsonmerge.exceptions.JSONMergeError as e:
         raise LoaderError("Unable to merge with references") from e
 
     return test_data
