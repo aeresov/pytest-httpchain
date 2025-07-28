@@ -3,5 +3,12 @@
         "request": {
             "url": "{{ server }}/{{ string_value }}"
         }
+    },
+    "ref2": {
+        "verify": {
+            "vars": {
+                "result_one": "{{ number_value }}"
+            }
+        }
     }
 }

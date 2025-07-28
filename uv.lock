@@ -232,18 +232,6 @@ wheels = [
 ]
 
 [[package]]
-name = "jsonmerge"
-version = "1.9.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "jsonschema" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/37/9f/959b3191324d831494b81ec06cfaeb11017858fc59cd9de9c6bd757ef29e/jsonmerge-1.9.2.tar.gz", hash = "sha256:c43757e0180b0e19b7ae4c130ad42a07cc580c31912f61f4823e8eaf2fa394a3", size = 34717, upload-time = "2023-07-19T08:10:07.51Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/71/c2/1032d0dbc2152c45f3d1e582a72e68f41898de9665202392d9400dfa329d/jsonmerge-1.9.2-py3-none-any.whl", hash = "sha256:cab93ee7763fb51a4a09bbdab2eacf499ffb208ab94247ae86acea3e0e823b05", size = 19367, upload-time = "2023-07-19T08:10:06.144Z" },
-]
-
-[[package]]
 name = "jsonref"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -514,7 +502,6 @@ version = "0.1.0"
 source = { editable = "packages/pytest-http-engine" }
 dependencies = [
     { name = "jmespath" },
-    { name = "jsonmerge" },
     { name = "jsonref" },
     { name = "pydantic" },
     { name = "requests" },
@@ -528,7 +515,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "jmespath", specifier = ">=1.0.1" },
-    { name = "jsonmerge", specifier = ">=1.9.2" },
     { name = "jsonref", specifier = ">=1.1.0" },
     { name = "pydantic", specifier = ">=2.11.0" },
     { name = "requests", specifier = ">=2.32.4" },

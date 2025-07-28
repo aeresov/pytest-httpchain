@@ -1,12 +1,22 @@
 {
-    "marks": ["xfail"],
+    "marks": [
+        "xfail"
+    ],
     "stages": [
         {
             "name": "one",
-            "fixtures": ["server", "string_value", "number_value", "float_value"],
+            "fixtures": [
+                "server",
+                "string_value",
+                "number_value",
+                "float_value"
+            ],
             "request": {
                 "url": "{{ server }}/{{ string_value }}",
-                "timeout": "{{ float_value }}"
+                "timeout": "{{ float_value }}",
+                "headers": {
+                    "X-Session-Key": "{{ number_value }}"
+                }
             },
             "save": {
                 "vars": {
@@ -19,19 +29,34 @@
                     "content-type": "application/json"
                 },
                 "vars": {
-                    "result_one":"{{ number_value }}"
+                    "result_one": "{{ number_value }}"
                 }
             }
         },
         {
             "name": "two",
-            "fixtures": ["server", "number_value"],
+            "fixtures": [
+                "server",
+                "number_value"
+            ],
             "$ref": "common.json#/ref1",
             "verify": {
                 "vars": {
-                    "result_one":"{{ number_value }}"
+                    "result_one": "{{ number_value }}"
                 }
             }
+        },
+        {
+            "name": "three",
+            "fixtures": [
+                "server",
+                "string_value",
+                "number_value"
+            ],
+            "request": {
+                "url": "{{ server }}/{{ string_value }}"
+            },
+            "$ref": "common.json#/ref2"
         }
     ]
 }

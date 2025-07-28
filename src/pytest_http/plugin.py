@@ -30,6 +30,7 @@ class JsonModule(python.Module):
             test_data: dict[str, Any] = pytest_http_engine.loader.load_json(self.path)
         except pytest_http_engine.loader.LoaderError as e:
             raise nodes.Collector.CollectError("Cannot load JSON file") from e
+        print(test_data)
 
         # validate models
         try:

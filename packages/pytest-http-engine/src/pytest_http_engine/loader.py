@@ -2,8 +2,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import jsonmerge
-import jsonmerge.exceptions
 import jsonref
 
 
@@ -19,9 +17,6 @@ def _remove_refs(data: Any) -> Any:
         return [_remove_refs(item) for item in data]
     else:
         return data
-
-
-MERGE_SCHEMA = {"properties": {"stages": {"mergeStrategy": "arrayMergeByIndex"}}}
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -43,7 +38,8 @@ def load_json(path: Path) -> dict[str, Any]:
         ref_data: dict[str, Any] = jsonref.replace_refs(
             obj=test_data,
             base_uri=path.as_uri(),
-            merge_props=False,
+            merge_props=True,
+            proxies=False,
             lazy_load=False,
         )
     except json.JSONDecodeError as e:
@@ -55,11 +51,4 @@ def load_json(path: Path) -> dict[str, Any]:
     except ValueError as e:
         raise LoaderError("Malformed reference") from e
 
-    # merge
-    try:
-        test_data = _remove_refs(test_data)
-        test_data = jsonmerge.merge(test_data, ref_data, MERGE_SCHEMA)
-    except jsonmerge.exceptions.JSONMergeError as e:
-        raise LoaderError("Unable to merge with references") from e
-
-    return test_data
+    return ref_data

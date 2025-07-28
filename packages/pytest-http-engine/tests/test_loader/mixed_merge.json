@@ -1,0 +1,18 @@
+{
+    "stages": [
+        {
+            "vars": {
+                "api_base": "https://localhost:5000",
+                "username": "me",
+                "password": "secret"
+            },
+            "$ref": "some_refs.json#/login"
+        },
+        {
+            "vars": {
+                "api_base": "https://localhost:5000"
+            },
+            "$ref": "some_refs.json#/logout"
+        }
+    ]
+}

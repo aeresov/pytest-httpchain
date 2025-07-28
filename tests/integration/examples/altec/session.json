@@ -1,0 +1,57 @@
+{
+    "login": {
+        "name": "Login and acquire session key",
+        "request": {
+            "url": "{{ api_base }}/services/user/login/",
+            "method": "GET",
+            "params": {
+                "username": "{{ username }}",
+                "auth": "{{ password }}",
+                "format": "json",
+                "slogin": true
+            },
+            "auth": {
+                "function": "altec_auth",
+                "kwargs": {
+                    "method": "login"
+                }
+            },
+            "ssl": {
+                "verify": false
+            }
+        },
+        "save": {
+            "vars": {
+                "session_key": "User.SessionKey"
+            }
+        },
+        "verify": {
+            "status": 200
+        }
+    },
+    "logout": {
+        "name": "Logout with session key",
+        "always_run": true,
+        "request": {
+            "url": "{{ api_base }}/services/user/logout/",
+            "method": "GET",
+            "headers": {
+                "X-Session-Key": "{{ session_key }}"
+            },
+            "params": {
+                "format": "json"
+            },
+            "auth": {
+                "function": "altec_auth",
+                "kwargs": {
+                    "method": "logout",
+                    "session_key": "{{ session_key }}"
+                }
+            },
+            "ssl": {
+                "verify": false
+            }
+        },
+        "$ref": "status.json#/ok"
+    }
+}

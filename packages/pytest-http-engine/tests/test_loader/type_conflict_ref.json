@@ -1,6 +1,0 @@
-{
-    "data": "local_string",
-    "merge_target": {
-        "$ref": "string_ref.json"
-    }
-}
