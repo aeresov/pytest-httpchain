@@ -4,7 +4,7 @@ from typing import Any
 from pydantic import BaseModel
 
 # Constants for variable substitution
-_EVAL_PATTERN = r"(?P<open>\{\{)(?P<expr>.+?)(?P<close>\}\})"
+_EVAL_PATTERN = r"(?P<open>\{\{)(?P<expr>[^}]+?)(?P<close>\}\})"
 
 # Safe built-ins for eval context - following established security patterns
 # Based on simpleeval and RestrictedPython safe builtins

@@ -11,8 +11,8 @@ class TestWalk:
         value: int
 
     def test_string_with_substitution(self):
-        result = walk("Hello {{ name }}", {"name": "World"})
-        assert result == "Hello World"
+        result = walk("{{ greeting }} {{ name }}", {"greeting": "hello", "name": "World"})
+        assert result == "hello World"
 
     def test_string_single_expression(self):
         result = walk("{{ value }}", {"value": 42})
