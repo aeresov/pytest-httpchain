@@ -114,6 +114,7 @@ class JsonModule(python.Module):
                         pytest_http.tester.verify(
                             response=call_response,
                             model=verify_model,
+                            context=data_context,
                         )
                         # update carried-on data context
                         self.__class__._data_context.update(context_update)
