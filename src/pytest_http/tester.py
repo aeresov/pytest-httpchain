@@ -15,7 +15,7 @@ class TesterError(Exception):
     """An error making HTTP call."""
 
 
-def request(session: requests.Session, model: pytest_http_engine.models.entities.Request) -> requests.Response:
+def call(session: requests.Session, model: pytest_http_engine.models.entities.Request) -> requests.Response:
     request_params: dict[str, Any] = {}
     if model.params:
         request_params["params"] = model.params

@@ -13,10 +13,10 @@ import requests
 from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
 from pydantic import ValidationError
-from pytest_http_engine.models.entities import Scenario, Stage, StageCanvas
+from pytest_http_engine.models.entities import Request, Save, Scenario, Stage, StageCanvas, Verify
 from pytest_http_engine.user_function import UserFunction
 
-from pytest_http.tester import TesterError, request, save, verify
+import pytest_http.tester
 
 SUFFIX: str = "suffix"
 
@@ -83,7 +83,7 @@ class JsonModule(python.Module):
 
                     try:
                         # prepare and validate Stage
-                        stage_dict = pytest_http_engine.substitution.walk(stage_canvas, data_context)
+                        stage_dict = pytest_http_engine.substitution.walk(stage_canvas.model_dump(), data_context)
                         stage: Stage = Stage.model_validate(stage_dict)
 
                         # skip if the flow is aborted
@@ -91,27 +91,33 @@ class JsonModule(python.Module):
                             pytest.skip(reason="Flow aborted")
 
                         # make http call
-                        response: requests.Response = request(
+                        request_dict = pytest_http_engine.substitution.walk(stage.request, data_context)
+                        request_model: Request = Request.model_validate(request_dict)
+                        call_response: requests.Response = pytest_http.tester.call(
                             session=self.__class__._http_session,
-                            model=pytest_http_engine.substitution.walk(stage.request, data_context),
+                            model=request_model,
                         )
 
                         # save data from reponse
-                        context_update: dict[str, Any] = save(
-                            response=response,
-                            model=pytest_http_engine.substitution.walk(stage.response.save, data_context),
+                        save_dict = pytest_http_engine.substitution.walk(stage.save, data_context)
+                        save_model: Save = Save.model_validate(save_dict)
+                        context_update: dict[str, Any] = pytest_http.tester.save(
+                            response=call_response,
+                            model=save_model,
                         )
                         # inject this stage saves
                         data_context.update(context_update)
 
                         # run verifications
-                        verify(
-                            response=response,
-                            model=pytest_http_engine.substitution.walk(stage.response.verify, data_context),
+                        verify_dict = pytest_http_engine.substitution.walk(stage.verify, data_context)
+                        verify_model: Verify = Verify.model_validate(verify_dict)
+                        pytest_http.tester.verify(
+                            response=call_response,
+                            model=verify_model,
                         )
                         # update carried-on data context
                         self.__class__._data_context.update(context_update)
-                    except (pytest_http_engine.substitution.SubstitutionError, ValidationError, TesterError) as e:
+                    except (pytest_http_engine.substitution.SubstitutionError, ValidationError, pytest_http.tester.TesterError) as e:
                         logger.exception(str(e))
                         self.__class__._aborted = True
                         pytest.fail(reason=str(e), pytrace=False)

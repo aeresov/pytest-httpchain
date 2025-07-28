@@ -1,7 +1,7 @@
 from http import HTTPMethod, HTTPStatus
 from typing import Any, Self
 
-from pydantic import BaseModel, Field, JsonValue, RootModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, model_validator
 from pydantic.networks import HttpUrl
 
 from pytest_http_engine.models.types import FunctionName, JMESPathExpression, JSONSchemaInline, RegexPattern, SerializablePath, VariableName, XMLSting
@@ -106,11 +106,6 @@ class Verify(BaseModel):
     body: ResponseBody = Field(default_factory=ResponseBody, description="Response body validation (schema and regex patterns).")
 
 
-class Response(BaseModel):
-    save: Save = Field(default_factory=Save)
-    verify: Verify = Field(default_factory=Verify)
-
-
 class Decorated(BaseModel):
     marks: list[str] = Field(default_factory=list, description="List of marks to be applied to this stage", examples=["xfail", "skip"])
     vars: dict[str, Any] = Field(default_factory=dict, description="Initial variables for the stage context")
@@ -119,6 +114,8 @@ class Decorated(BaseModel):
 class StageCanvas(Decorated):
     name: str = Field()
     fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names for this stage")
+
+    model_config = ConfigDict(extra="allow")
 
     @model_validator(mode="after")
     def validate_variable_naming_conflicts(self) -> Self:
@@ -134,7 +131,8 @@ class StageCanvas(Decorated):
 class Stage(StageCanvas):
     always_run: bool = Field(default=False, description="Run this stage even if previous stages failed")
     request: Any = Field()
-    response: Any = Field(default_factory=dict)
+    save: Any = Field(default_factory=Save)
+    verify: Any = Field(default_factory=Verify)
 
 
 class Scenario(Decorated):
