@@ -76,13 +76,13 @@ class JsonModule(python.Module):
             # Create a closure to capture the current stage
             def make_stage_executor(stage_canvas: StageCanvas):
                 def _exec_stage(self, **fixture_kwargs: Any):
-                    # prepare global data context
-                    data_context = deepcopy(self.__class__._data_context)
-                    data_context.update(fixture_kwargs)
-                    data_context.update(pytest_http_engine.substitution.walk(scenario.vars, data_context))
-                    data_context.update(pytest_http_engine.substitution.walk(stage_canvas.vars, data_context))
-
                     try:
+                        # prepare global data context
+                        data_context = deepcopy(self.__class__._data_context)
+                        data_context.update(fixture_kwargs)
+                        data_context.update(pytest_http_engine.substitution.walk(scenario.vars, data_context))
+                        data_context.update(pytest_http_engine.substitution.walk(stage_canvas.vars, data_context))
+
                         # prepare and validate Stage
                         stage_dict = pytest_http_engine.substitution.walk(stage_canvas.model_dump(), data_context)
                         stage: Stage = Stage.model_validate(stage_dict)
