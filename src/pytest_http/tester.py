@@ -103,6 +103,8 @@ def save(response: requests.Response, model: pytest_http_engine.models.entities.
         except Exception as e:
             raise TesterError(f"Error calling user function {func_item}") from e
 
+    return result
+
 
 def verify(response: requests.Response, model: pytest_http_engine.models.entities.Verify, context: dict[str, Any]):
     # HTTP status code
