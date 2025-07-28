@@ -1,15 +1,38 @@
 {
-    "marks": [],
-    "fixtures": [
-        "yielding"
-    ],
+    "marks": ["xfail"],
     "stages": [
         {
-            "name": "bloop",
-            "marks": ["xfail"],
-            "fixtures": ["string_value"],
+            "name": "one",
+            "fixtures": ["server", "string_value", "number_value", "float_value"],
             "request": {
-                "url": "dummy"
+                "url": "{{ server }}/{{ string_value }}",
+                "timeout": "{{ float_value }}"
+            },
+            "save": {
+                "vars": {
+                    "result_one": "{{ string_value }}"
+                }
+            },
+            "verify": {
+                "status": 200,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "vars": {
+                    "result_one":"{{ number_value }}"
+                }
+            }
+        },
+        {
+            "name": "two",
+            "fixtures": ["server", "number_value"],
+            "request": {
+                "url": "{{ server }}/{{ string_value }}"
+            },
+            "verify": {
+                "vars": {
+                    "result_one":"{{ number_value }}"
+                }
             }
         }
     ]

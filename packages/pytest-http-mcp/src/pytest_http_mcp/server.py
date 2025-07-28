@@ -4,7 +4,7 @@ from typing import Any
 import jsonref
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, ValidationError
-from pytest_http_engine.models import Scenario
+from pytest_http_engine.models.entities import Scenario
 
 mcp = FastMCP("pytest-http")
 

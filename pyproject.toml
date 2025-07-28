@@ -34,7 +34,7 @@ requires = ["uv_build>=0.7.21,<0.8.0"]
 build-backend = "uv_build"
 
 [project.entry-points.pytest11]
-pytest_http = "pytest_http.plugin2"
+pytest_http = "pytest_http.plugin"
 
 [tool.ruff]
 line-length = 180

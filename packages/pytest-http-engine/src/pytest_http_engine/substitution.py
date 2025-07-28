@@ -65,6 +65,7 @@ def _sub_string(line: str, context: dict[str, Any]) -> Any:
 
 
 def walk(obj: Any, context: dict[str, Any]) -> Any:
+    """Recursively substitute values in string attributes of an arbitrary object."""
     match obj:
         case str():
             return _sub_string(obj, context)
