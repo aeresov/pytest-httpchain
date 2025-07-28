@@ -3,6 +3,7 @@ import logging
 import re
 import types
 from collections.abc import Iterable
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -76,10 +77,10 @@ class JsonModule(python.Module):
             def make_stage_executor(stage_canvas: StageCanvas):
                 def _exec_stage(self, **fixture_kwargs: Any):
                     # prepare global data context
-                    data_context: dict[str, Any] = fixture_kwargs
-                    data_context.update(pytest_http_engine.substitution.walk(stage_canvas.vars, fixture_kwargs))
-                    # inject carried-on data context
-                    data_context.update(self.__class__._data_context)
+                    data_context = deepcopy(self.__class__._data_context)
+                    data_context.update(fixture_kwargs)
+                    data_context.update(pytest_http_engine.substitution.walk(scenario.vars, data_context))
+                    data_context.update(pytest_http_engine.substitution.walk(stage_canvas.vars, data_context))
 
                     try:
                         # prepare and validate Stage
@@ -116,6 +117,7 @@ class JsonModule(python.Module):
                             model=verify_model,
                             context=data_context,
                         )
+
                         # update carried-on data context
                         self.__class__._data_context.update(context_update)
                     except (pytest_http_engine.substitution.SubstitutionError, ValidationError, pytest_http.tester.TesterError) as e:
@@ -129,7 +131,8 @@ class JsonModule(python.Module):
             stage_executor = make_stage_executor(stage_canvas)
 
             # inject stage fixtures to request
-            stage_executor.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in ["self"] + stage_canvas.fixtures])
+            all_fixtures = ["self"] + stage_canvas.fixtures + scenario.fixtures
+            stage_executor.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])
 
             # decorate in stage markers plus ordering
             for mark in stage_canvas.marks + [f"order({i})"]:

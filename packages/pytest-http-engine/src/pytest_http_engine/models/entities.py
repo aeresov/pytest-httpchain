@@ -108,14 +108,8 @@ class Verify(BaseModel):
 
 class Decorated(BaseModel):
     marks: list[str] = Field(default_factory=list, description="List of marks to be applied to this stage", examples=["xfail", "skip"])
-    vars: dict[str, Any] = Field(default_factory=dict, description="Initial variables for the stage context")
-
-
-class StageCanvas(Decorated):
-    name: str = Field()
     fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names for this stage")
-
-    model_config = ConfigDict(extra="allow")
+    vars: dict[str, Any] = Field(default_factory=dict, description="Initial variables for the stage context")
 
     @model_validator(mode="after")
     def validate_variable_naming_conflicts(self) -> Self:
@@ -126,6 +120,12 @@ class StageCanvas(Decorated):
             raise ValueError(f"Conflicting fixtures and vars: {var_names}")
 
         return self
+
+
+class StageCanvas(Decorated):
+    name: str = Field()
+
+    model_config = ConfigDict(extra="allow")
 
 
 class Stage(StageCanvas):
