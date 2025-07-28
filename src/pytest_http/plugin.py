@@ -75,11 +75,15 @@ class JsonModule(python.Module):
             # Create a closure to capture the current stage
             def make_stage_executor(stage_canvas: StageCanvas):
                 def _exec_stage(self, **fixture_kwargs: Any):
+                    print("CLASS_DATA_CONTEXT")
+                    print(self.__class__._data_context)
                     # prepare global data context
                     data_context: dict[str, Any] = fixture_kwargs
                     data_context.update(pytest_http_engine.substitution.walk(stage_canvas.vars, fixture_kwargs))
                     # inject carried-on data context
                     data_context.update(self.__class__._data_context)
+                    print("DATA_CONTEXT")
+                    print(data_context)
 
                     try:
                         # prepare and validate Stage
@@ -109,6 +113,8 @@ class JsonModule(python.Module):
                         )
                         # inject this stage saves
                         data_context.update(context_update)
+                        print("DATA_CONTEXT")
+                        print(data_context)
 
                         # run verifications
                         verify_dict = pytest_http_engine.substitution.walk(stage.verify, data_context)
@@ -120,6 +126,8 @@ class JsonModule(python.Module):
                         )
                         # update carried-on data context
                         self.__class__._data_context.update(context_update)
+                        print("CLASS_DATA_CONTEXT")
+                        print(self.__class__._data_context)
                     except (pytest_http_engine.substitution.SubstitutionError, ValidationError, pytest_http.tester.TesterError) as e:
                         logger.exception(str(e))
                         self.__class__._aborted = True
