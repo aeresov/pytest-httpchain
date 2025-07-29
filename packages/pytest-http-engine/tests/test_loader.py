@@ -13,3 +13,6 @@ class TestLoadJson:
         logging.info(json.dumps(result))
         assert "altec_status_text" in result["stages"][1]["save"]["vars"]
         assert "another_var" in result["stages"][1]["save"]["vars"]
+        assert "url" in result["stages"][0]["request"]
+        assert "format" in result["stages"][0]["request"]["params"]
+        assert "data" in result["stages"][0]["request"]["params"]

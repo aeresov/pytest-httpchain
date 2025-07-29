@@ -23,6 +23,18 @@
                     "somemodule:somefunc"
                 ]
             }
+        },
+        {
+            "vars": {
+                "api_base": "https://localhost:5000"
+            },
+            "request": {
+                "$ref": "some_refs.json#/just_request",
+                "params": {
+                    "data": "value"
+                }
+            },
+            "$ref": "more_refs.json#/ok"
         }
     ]
 }

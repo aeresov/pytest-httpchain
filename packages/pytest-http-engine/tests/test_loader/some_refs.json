@@ -36,5 +36,19 @@
             }
         },
         "$ref": "more_refs.json#/ok"
+    },
+    "just_request": {
+        "request": {
+            "url": "http://{{ api_base }}/logout",
+            "headers": {
+                "X-Session-Key": "{{ session_key }}"
+            },
+            "params": {
+                "format": "json"
+            },
+            "ssl": {
+                "verify": false
+            }
+        }
     }
 }
