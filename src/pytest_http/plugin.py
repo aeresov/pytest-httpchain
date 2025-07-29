@@ -14,8 +14,8 @@ import requests
 from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
 from pydantic import ValidationError
-from pytest_http_engine.models.entities import Request, Save, Scenario, Stage, StageCanvas, Verify
-from pytest_http_engine.user_function import UserFunction
+from pytest_http_engine.models.entities import FunctionCall, Request, Save, Scenario, Stage, StageCanvas, Verify
+from pytest_http_engine.user_function import AuthFunction
 
 import pytest_http.tester
 
@@ -55,7 +55,11 @@ class JsonModule(python.Module):
                 # Configure authentication for the session
                 if cls._scenario.auth:
                     resolved_auth = pytest_http_engine.substitution.walk(cls._scenario.auth, cls._data_context)
-                    auth_instance = UserFunction.call_auth_function_from_spec(resolved_auth)
+                    match resolved_auth:
+                        case str():
+                            auth_instance = AuthFunction.call(resolved_auth)
+                        case FunctionCall():
+                            auth_instance = AuthFunction.call_with_kwargs(resolved_auth.function, resolved_auth.kwargs)
                     cls._http_session.auth = auth_instance
 
             @classmethod

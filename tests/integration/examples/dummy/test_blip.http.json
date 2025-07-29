@@ -15,7 +15,7 @@
                 "url": "{{ server }}/{{ string_value }}",
                 "timeout": "{{ float_value }}",
                 "headers": {
-                    "X-Session-Key": "{{ number_value }}"
+                    "X-Session-Key": "{{ str(number_value) }}"
                 }
             },
             "save": {
@@ -37,6 +37,7 @@
             "name": "two",
             "fixtures": [
                 "server",
+                "string_value",
                 "number_value"
             ],
             "$ref": "common.json#/ref1",

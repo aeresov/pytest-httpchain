@@ -8,7 +8,7 @@ from typing import Annotated, Any
 import jmespath
 from pydantic import AfterValidator, PlainSerializer
 
-from pytest_http_engine.user_function import UserFunction
+from pytest_http_engine.user_function import BaseUserFunction
 
 
 def validate_python_identifier(v: str) -> str:
@@ -65,7 +65,7 @@ def validate_xml(v: str) -> str:
 
 
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
-FunctionName = Annotated[str, AfterValidator(UserFunction.validate_name)]
+FunctionName = Annotated[str, AfterValidator(BaseUserFunction.validate_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
 JSONSchemaInline = Annotated[dict[str, Any], AfterValidator(validate_json_schema_inline)]
 SerializablePath = Annotated[Path, PlainSerializer(lambda x: str(x), return_type=str)]

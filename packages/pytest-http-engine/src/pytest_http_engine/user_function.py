@@ -7,7 +7,9 @@ import requests
 from requests.auth import AuthBase
 
 
-class UserFunction:
+class BaseUserFunction:
+    """Base class for user-defined functions."""
+
     @staticmethod
     def _parse_given_name(func_name: str) -> tuple[str | None, str]:
         # First try the full 'module:function' format
@@ -77,24 +79,58 @@ class UserFunction:
         # expect ValueError raised here on any error
         return func_name
 
-    @classmethod
-    def call_with_kwargs(cls, func_name: str, response: requests.Response, kwargs: dict[str, Any] | None = None) -> Any:
-        module_path, function_name = cls._parse_given_name(func_name)
-        func = cls._import_function(module_path, function_name)
 
-        if kwargs:
-            return func(response, **kwargs)
-        else:
-            return func(response)
+class VerificationFunction(BaseUserFunction):
+    """User function for response verification."""
 
     @classmethod
-    def call_auth_function(cls, func_name: str, kwargs: dict[str, Any] | None = None) -> AuthBase:
-        """
-        Call an authentication function that returns a requests.AuthBase instance.
+    def call(cls, func_name: str, response: requests.Response) -> Any:
+        """Call a verification function with response only.
 
         Args:
             func_name: Function name in 'module:function' format or just 'function' for local imports
-            kwargs: Optional keyword arguments to pass to the function
+            response: The HTTP response object
+
+        Returns:
+            The result of the verification function
+
+        Raises:
+            ValueError: If function doesn't exist or call fails
+        """
+        module_path, function_name = cls._parse_given_name(func_name)
+        func = cls._import_function(module_path, function_name)
+        return func(response)
+
+    @classmethod
+    def call_with_kwargs(cls, func_name: str, response: requests.Response, kwargs: dict[str, Any]) -> Any:
+        """Call a verification function with response and keyword arguments.
+
+        Args:
+            func_name: Function name in 'module:function' format or just 'function' for local imports
+            response: The HTTP response object
+            kwargs: Keyword arguments to pass to the function
+
+        Returns:
+            The result of the verification function
+
+        Raises:
+            ValueError: If function doesn't exist or call fails
+        """
+        module_path, function_name = cls._parse_given_name(func_name)
+        func = cls._import_function(module_path, function_name)
+        return func(response, **kwargs)
+
+
+class AuthFunction(BaseUserFunction):
+    """User function for authentication."""
+
+    @classmethod
+    def call(cls, func_name: str) -> AuthBase:
+        """
+        Call an authentication function without arguments.
+
+        Args:
+            func_name: Function name in 'module:function' format or just 'function' for local imports
 
         Returns:
             AuthBase: Authentication instance to be used with requests
@@ -106,10 +142,7 @@ class UserFunction:
         func = cls._import_function(module_path, function_name)
 
         try:
-            if kwargs:
-                auth_instance = func(**kwargs)
-            else:
-                auth_instance = func()
+            auth_instance = func()
         except Exception as e:
             raise ValueError(f"Error calling authentication function '{func_name}': {e}") from e
 
@@ -119,12 +152,13 @@ class UserFunction:
         return auth_instance
 
     @classmethod
-    def call_auth_function_from_spec(cls, auth_spec: str | Any) -> AuthBase:
+    def call_with_kwargs(cls, func_name: str, kwargs: dict[str, Any]) -> AuthBase:
         """
-        Call an authentication function from either a string or FunctionCall spec.
+        Call an authentication function with keyword arguments.
 
         Args:
-            auth_spec: Either a function name string ('module:function' or 'function') or FunctionCall object
+            func_name: Function name in 'module:function' format or just 'function' for local imports
+            kwargs: Keyword arguments to pass to the function
 
         Returns:
             AuthBase: Authentication instance to be used with requests
@@ -132,12 +166,15 @@ class UserFunction:
         Raises:
             ValueError: If function doesn't exist or doesn't return AuthBase instance
         """
-        if isinstance(auth_spec, str):
-            # Simple function name, call without kwargs
-            return cls.call_auth_function(auth_spec)
-        else:
-            # FunctionCall object with kwargs (already resolved by variable substitution)
-            func_name = auth_spec.function
-            kwargs = auth_spec.kwargs
+        module_path, function_name = cls._parse_given_name(func_name)
+        func = cls._import_function(module_path, function_name)
 
-            return cls.call_auth_function(func_name, kwargs)
+        try:
+            auth_instance = func(**kwargs)
+        except Exception as e:
+            raise ValueError(f"Error calling authentication function '{func_name}': {e}") from e
+
+        if not isinstance(auth_instance, AuthBase):
+            raise ValueError(f"Authentication function '{func_name}' must return a requests.AuthBase instance, got {type(auth_instance)}")
+
+        return auth_instance

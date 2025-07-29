@@ -8,7 +8,7 @@ import jmespath
 import jsonschema
 import pytest_http_engine.models.entities
 import requests
-from pytest_http_engine.user_function import UserFunction
+from pytest_http_engine.user_function import AuthFunction, VerificationFunction
 
 
 class TesterError(Exception):
@@ -34,7 +34,11 @@ def call(session: requests.Session, model: pytest_http_engine.models.entities.Re
     # Add authentication for this specific request (overrides session auth)
     if model.auth:
         try:
-            auth_instance = UserFunction.call_auth_function_from_spec(model.auth)
+            match model.auth:
+                case str():
+                    auth_instance = AuthFunction.call(model.auth)
+                case pytest_http_engine.models.entities.FunctionCall():
+                    auth_instance = AuthFunction.call_with_kwargs(model.auth.function, model.auth.kwargs)
             request_params["auth"] = auth_instance
         except Exception as e:
             raise TesterError("Failed to configure stage authentication") from e
@@ -43,15 +47,15 @@ def call(session: requests.Session, model: pytest_http_engine.models.entities.Re
     match model.body:
         case None:
             pass
-        case pytest_http_engine.models.full.JsonBody(json=data):
+        case pytest_http_engine.models.entities.JsonBody(json=data):
             request_params["json"] = data
-        case pytest_http_engine.models.full.FormBody(form=data):
+        case pytest_http_engine.models.entities.FormBody(form=data):
             request_params["data"] = data
-        case pytest_http_engine.models.full.XmlBody(xml=data):
+        case pytest_http_engine.models.entities.XmlBody(xml=data):
             request_params["data"] = data
-        case pytest_http_engine.models.full.RawBody(raw=data):
+        case pytest_http_engine.models.entities.RawBody(raw=data):
             request_params["data"] = data
-        case pytest_http_engine.models.full.FilesBody(files=data):
+        case pytest_http_engine.models.entities.FilesBody(files=data):
             request_params["files"] = data
 
     with ExitStack() as stack:
@@ -97,9 +101,9 @@ def save(response: requests.Response, model: pytest_http_engine.models.entities.
         try:
             match func_item:
                 case str():
-                    result.update(UserFunction.call_with_kwargs(func_item, response, None))
-                case pytest_http_engine.models.full.FunctionCall():
-                    result.update(UserFunction.call_with_kwargs(func_item.function, response, func_item.kwargs))
+                    result.update(VerificationFunction.call(func_item, response))
+                case pytest_http_engine.models.entities.FunctionCall():
+                    result.update(VerificationFunction.call_with_kwargs(func_item.function, response, func_item.kwargs))
         except Exception as e:
             raise TesterError(f"Error calling user function {func_item}") from e
 
@@ -133,9 +137,9 @@ def verify(response: requests.Response, model: pytest_http_engine.models.entitie
         try:
             match func_item:
                 case str():
-                    actual_value = UserFunction.call_with_kwargs(func_item, response, None)
-                case pytest_http_engine.models.full.FunctionCall():
-                    actual_value = UserFunction.call_with_kwargs(func_item.function, response, func_item.kwargs)
+                    actual_value = VerificationFunction.call(func_item, response)
+                case pytest_http_engine.models.entities.FunctionCall():
+                    actual_value = VerificationFunction.call_with_kwargs(func_item.function, response, func_item.kwargs)
         except Exception as e:
             raise TesterError(f"Error calling user function '{func_item}'") from e
 
