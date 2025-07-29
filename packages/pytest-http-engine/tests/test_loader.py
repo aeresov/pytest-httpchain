@@ -11,5 +11,5 @@ class TestLoadJson:
         json_file = datadir / "mixed_merge.json"
         result = load_json(json_file)
         logging.info(json.dumps(result))
-        assert "request" in result["stages"][0]
-        assert "request" in result["stages"][1]
+        assert "altec_status_text" in result["stages"][1]["save"]["vars"]
+        assert "another_var" in result["stages"][1]["save"]["vars"]

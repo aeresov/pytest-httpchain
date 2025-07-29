@@ -12,7 +12,17 @@
             "vars": {
                 "api_base": "https://localhost:5000"
             },
-            "$ref": "some_refs.json#/logout"
+            "$ref": "some_refs.json#/logout",
+            "save": {
+                "vars": {
+                    "another_var": "Status.Code"
+                }
+            },
+            "verify": {
+                "functions": [
+                    "somemodule:somefunc"
+                ]
+            }
         }
     ]
 }
