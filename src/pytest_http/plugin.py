@@ -144,7 +144,7 @@ class JsonModule(python.Module):
                 stage_executor = mark_obj(stage_executor)
 
             # insert in carrier class
-            setattr(Carrier, f"test_{stage_canvas.name}", stage_executor)
+            setattr(Carrier, f"test_{i}_{stage_canvas.name}", stage_executor)
 
         dummy_module = types.ModuleType("dummy")
         setattr(dummy_module, self.name, Carrier)
