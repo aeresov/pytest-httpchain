@@ -41,7 +41,7 @@ def _resolve_refs(data: Any, base_path: Path, context_key: str = None, root_data
     match data:
         case dict() if "$ref" in data:
             # Load and resolve referenced content
-            ref_content = _load_ref(data["$ref"], base_path, current_data=root_data)
+            ref_content, new_base_path = _load_ref(data["$ref"], base_path, current_data=root_data)
 
             # Extract sibling properties (everything except $ref)
             siblings = {k: v for k, v in data.items() if k != "$ref"}
@@ -51,7 +51,8 @@ def _resolve_refs(data: Any, base_path: Path, context_key: str = None, root_data
                 ref_content = ref_content[context_key]
 
             # Recursively resolve both referenced content and siblings
-            resolved_ref = _resolve_refs(ref_content, base_path, root_data=root_data)
+            # Use new_base_path for ref_content, original base_path for siblings
+            resolved_ref = _resolve_refs(ref_content, new_base_path, root_data=root_data)
             resolved_siblings = _resolve_refs(siblings, base_path, root_data=root_data)
 
             # Deep merge with siblings taking precedence
@@ -68,13 +69,16 @@ def _resolve_refs(data: Any, base_path: Path, context_key: str = None, root_data
             return data
 
 
-def _load_ref(ref: str, base_path: Path, current_data: Any = None) -> Any:
+def _load_ref(ref: str, base_path: Path, current_data: Any = None) -> tuple[Any, Path]:
     """Load content from a $ref string (file#/json/path format).
 
     Args:
         ref: The $ref string to resolve
         base_path: Base path for resolving relative file references
         current_data: Current document data for self-references (starts with #)
+
+    Returns:
+        Tuple of (loaded content, new base path for further resolution)
     """
     # Parse the reference using regex
     match = REF_PATTERN.match(ref)
@@ -90,11 +94,14 @@ def _load_ref(ref: str, base_path: Path, current_data: Any = None) -> Any:
         ref_file_path = base_path / file_part
         with open(ref_file_path, encoding="utf-8") as f:
             ref_data = json.load(f)
+        # Update base_path to the directory of the loaded file
+        new_base_path = ref_file_path.parent
     else:
         # Self-reference - use current document
         if current_data is None:
             raise LoaderError(f"Self-reference {ref} requires current document context")
         ref_data = current_data
+        new_base_path = base_path
 
     # Navigate to specific path if provided (JSON Pointer format)
     if json_path:
@@ -102,6 +109,6 @@ def _load_ref(ref: str, base_path: Path, current_data: Any = None) -> Any:
         for part in json_path.lstrip("/").split("/"):
             if part:  # Skip empty parts
                 current = current[part]
-        return current
+        return current, new_base_path
     else:
-        return ref_data
+        return ref_data, new_base_path

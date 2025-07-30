@@ -1,0 +1,20 @@
+{
+    "simple": {
+        "a": "refs"
+    },
+    "ref_sibling_simple": {
+        "$ref": "sibling.json#/simple"
+    },
+    "ref_sibling_nested": {
+        "$ref": "sibling.json#/nested"
+    },
+    "ref_nested_simple": {
+        "$ref": "nested_one/refs.json#/simple"
+    },
+    "ref_nested_sibling": {
+        "$ref": "nested_one/refs.json#/sibling"
+    },
+    "ref_nested_nested": {
+        "$ref": "nested_one/refs.json#/nested"
+    }
+}

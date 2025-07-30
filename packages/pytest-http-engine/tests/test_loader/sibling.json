@@ -1,0 +1,8 @@
+{
+    "simple": {
+        "a": "sibling"
+    },
+    "nested": {
+        "$ref": "nested_one/refs.json#/simple"
+    }
+}
