@@ -80,7 +80,6 @@ def _load_ref(ref: str, base_path: Path, current_data: Any = None) -> tuple[Any,
     Returns:
         Tuple of (loaded content, new base path for further resolution)
     """
-    # Parse the reference using regex
     match = REF_PATTERN.match(ref)
     if not match:
         raise LoaderError(f"Invalid $ref format: {ref}")
@@ -88,27 +87,22 @@ def _load_ref(ref: str, base_path: Path, current_data: Any = None) -> tuple[Any,
     file_part = match.group("file")
     json_path = match.group("path")
 
-    # Determine data source: external file or current document (self-reference)
+    # Load data from file or use current document
     if file_part:
-        # External reference - load from file
         ref_file_path = base_path / file_part
         with open(ref_file_path, encoding="utf-8") as f:
-            ref_data = json.load(f)
-        # Update base_path to the directory of the loaded file
+            data = json.load(f)
         new_base_path = ref_file_path.parent
     else:
-        # Self-reference - use current document
         if current_data is None:
             raise LoaderError(f"Self-reference {ref} requires current document context")
-        ref_data = current_data
+        data = current_data
         new_base_path = base_path
 
-    # Navigate to specific path if provided (JSON Pointer format)
+    # Navigate JSON path if present
     if json_path:
-        current = ref_data
         for part in json_path.lstrip("/").split("/"):
-            if part:  # Skip empty parts
-                current = current[part]
-        return current, new_base_path
-    else:
-        return ref_data, new_base_path
+            if part:
+                data = data[part]
+
+    return data, new_base_path

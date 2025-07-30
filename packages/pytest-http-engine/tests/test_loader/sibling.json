@@ -4,5 +4,10 @@
     },
     "nested": {
         "$ref": "nested_one/refs.json#/simple"
+    },
+    "complex": {
+        "a": {
+            "b": "complex_a_b"
+        }
     }
 }
