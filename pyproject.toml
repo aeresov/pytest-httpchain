@@ -68,7 +68,7 @@ pytester_example_dir = "tests/integration/examples"
 addopts = "--log-disable=werkzeug"
 
 [tool.pyright]
-exclude = ["cdk.out/"]
+exclude = [".tox/"]
 ignore = [".venv/"]
 reportMissingImports = "error"
 reportMissingTypeStubs = false

@@ -1,0 +1,12 @@
+{
+    "simple": {
+        "a": "merge",
+        "b": {
+            "$ref": "sibling.json#/simple"
+        }
+    },
+    "sibling_props": {
+        "$ref": "sibling.json#/simple",
+        "b": "merge"
+    }
+}
