@@ -1,0 +1,20 @@
+{
+    "string_override": {
+        "$ref": "#/base_string",
+        "value": "try_to_override"
+    },
+    "base_string": {
+        "value": "original"
+    },
+    "dict_merge_ok": {
+        "$ref": "#/base_dict",
+        "data": {
+            "new_key": "added"
+        }
+    },
+    "base_dict": {
+        "data": {
+            "existing_key": "stays"
+        }
+    }
+}

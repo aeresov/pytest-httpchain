@@ -1,0 +1,8 @@
+{
+    "conflict_case": {
+        "$ref": "sibling.json#/simple",
+        "a": {
+            "b": "this_will_conflict"
+        }
+    }
+}

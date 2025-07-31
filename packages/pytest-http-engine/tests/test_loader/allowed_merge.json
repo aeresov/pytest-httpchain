@@ -1,0 +1,13 @@
+{
+    "dict_merge": {
+        "$ref": "#/base",
+        "config": {
+            "new_setting": "value"
+        }
+    },
+    "base": {
+        "config": {
+            "existing_setting": "original"
+        }
+    }
+}

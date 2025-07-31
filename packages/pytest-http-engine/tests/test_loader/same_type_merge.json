@@ -1,0 +1,13 @@
+{
+    "string_override": {
+        "$ref": "sibling.json#/simple",
+        "a": "override_value"
+    },
+    "valid_dict_merge": {
+        "$ref": "sibling.json#/complex",
+        "a": {
+            "c": "new_key",
+            "b": "override_b"
+        }
+    }
+}
