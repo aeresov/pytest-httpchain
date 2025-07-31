@@ -1,0 +1,13 @@
+{
+    "l0-a": {
+        "l1-a": {
+            "$ref": "sibling.json#/l0-a"
+        },
+        "l1-b": {
+            "$ref": "sibling.json#/l0-b",
+            "l2-a": {
+                "$ref": "sibling.json#/l0-c"
+            }
+        }
+    }
+}

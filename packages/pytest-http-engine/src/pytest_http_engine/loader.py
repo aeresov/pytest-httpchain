@@ -14,6 +14,30 @@ class LoaderError(Exception):
     """An error parsing JSON test scenario."""
 
 
+def load_json(path: Path, merge_lists: bool = False) -> dict[str, Any]:
+    """Load JSON from file and resolve all $ref statements.
+
+    Args:
+        path: Path to the JSON file to load
+        merge_lists: If True, lists will be appended during merge. If False (default),
+                     attempting to merge lists will raise a conflict error.
+
+    Returns:
+        Dictionary with all $ref statements resolved
+
+    Raises:
+        LoaderError: If the file cannot be loaded or parsed, or if merge conflicts occur
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        return _resolve_refs(data, path.parent, root_data=data, merge_lists=merge_lists)
+
+    except (OSError, json.JSONDecodeError) as e:
+        raise LoaderError(f"Failed to load JSON from {path}: {e}") from e
+
+
 def _detect_merge_conflicts(base: Any, overlay: Any, path: str = "", merge_lists: bool = False) -> None:
     """Detect conflicts that would occur during merge.
 
@@ -53,30 +77,6 @@ def _detect_merge_conflicts(base: Any, overlay: Any, path: str = "", merge_lists
             raise LoaderError(f"Merge conflict: Cannot override {base_type} value{path_str}")
 
 
-def load_json(path: Path, merge_lists: bool = False) -> dict[str, Any]:
-    """Load JSON from file and resolve all $ref statements.
-
-    Args:
-        path: Path to the JSON file to load
-        merge_lists: If True, lists will be appended during merge. If False (default),
-                     attempting to merge lists will raise a conflict error.
-
-    Returns:
-        Dictionary with all $ref statements resolved
-
-    Raises:
-        LoaderError: If the file cannot be loaded or parsed, or if merge conflicts occur
-    """
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-
-        return _resolve_refs(data, path.parent, root_data=data, merge_lists=merge_lists)
-
-    except (OSError, json.JSONDecodeError) as e:
-        raise LoaderError(f"Failed to load JSON from {path}: {e}") from e
-
-
 def _resolve_refs(data: Any, base_path: Path, context_key: str = None, root_data: Any = None, merge_lists: bool = False) -> Any:
     """Recursively resolve $ref statements while preserving sibling properties."""
     match data:
@@ -86,10 +86,6 @@ def _resolve_refs(data: Any, base_path: Path, context_key: str = None, root_data
 
             # Extract sibling properties (everything except $ref)
             siblings = {k: v for k, v in data.items() if k != "$ref"}
-
-            # Context-aware unwrapping: if we're in a context and ref has the same key, unwrap it
-            if context_key and isinstance(ref_content, dict) and context_key in ref_content:
-                ref_content = ref_content[context_key]
 
             # Recursively resolve both referenced content and siblings
             # Use new_base_path for ref_content, original base_path for siblings
