@@ -3,12 +3,23 @@ name = "pytest-http"
 version = "0.1.0"
 description = "pytest plugin for HTTP testing using JSON files"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<4.0"
 authors = [{ name = "Alexander Eresov", email = "aeresov@gmail.com" }]
 dependencies = [
     "pytest-http-engine",
     "pytest-order>=1.3.0",
     "rich>=13.7.0",
+]
+keywords = ["testing", "pytest"]
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
 ]
 
 [project.optional-dependencies]

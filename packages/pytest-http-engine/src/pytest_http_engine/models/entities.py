@@ -69,7 +69,18 @@ class FilesBody(BaseModel):
 RequestBody = JsonBody | XmlBody | FormBody | RawBody | FilesBody
 
 
-class Request(BaseModel):
+class Security(BaseModel):
+    ssl: SSLConfig = Field(
+        default_factory=SSLConfig,
+        description="SSL/TLS configuration for this specific request (overrides scenario SSL settings)",
+    )
+    auth: FunctionName | FunctionCall | None = Field(
+        default=None,
+        description="Authentication function name or function call (overrides scenario auth settings)",
+    )
+
+
+class Request(Security):
     url: HttpUrl = Field()
     method: HTTPMethod = Field(default=HTTPMethod.GET)
     params: dict[str, Any] = Field(default_factory=dict)
@@ -77,18 +88,6 @@ class Request(BaseModel):
     body: RequestBody | None = Field(default=None, description="Request body configuration")
     timeout: float = Field(default=30.0, description="Request timeout in seconds", gt=0)
     allow_redirects: bool = Field(default=True, description="Whether to follow redirects")
-    ssl: SSLConfig = Field(
-        default_factory=SSLConfig,
-        description="SSL/TLS configuration for this specific request (overrides scenario SSL settings)",
-        examples=[
-            {"verify": True},
-            {"verify": False},
-            {"verify": "/path/to/ca-bundle.crt"},
-            {"cert": "/path/to/client.pem"},
-            {"cert": ["/path/to/client.crt", "/path/to/client.key"]},
-        ],
-    )
-    auth: FunctionName | FunctionCall | None = Field(default=None, description="Authentication function name or function call (overrides scenario auth settings)")
 
 
 class Save(BaseModel):
@@ -141,13 +140,5 @@ class Stage(StageCanvas):
     verify: Any = Field(default_factory=Verify, description="Configuration for verifications (asserts) on available data")
 
 
-class Scenario(Decorated):
-    ssl: SSLConfig = Field(
-        default_factory=SSLConfig,
-        description="SSL/TLS configuration applied to the HTTP session for all requests",
-    )
-    auth: FunctionName | FunctionCall | None = Field(
-        default=None,
-        description="Authentication set to the HTTP session for all requests",
-    )
+class Scenario(Decorated, Security):
     stages: list[StageCanvas] = Field(default_factory=list, description="Stages collection")
