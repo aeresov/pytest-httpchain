@@ -513,6 +513,7 @@ dependencies = [
     { name = "deepmerge" },
     { name = "jmespath" },
     { name = "jsonref" },
+    { name = "jsonschema" },
     { name = "pydantic" },
     { name = "requests" },
 ]
@@ -527,6 +528,7 @@ requires-dist = [
     { name = "deepmerge", specifier = ">=2.0" },
     { name = "jmespath", specifier = ">=1.0.1" },
     { name = "jsonref", specifier = ">=1.1.0" },
+    { name = "jsonschema", specifier = ">=4.0.0" },
     { name = "pydantic", specifier = ">=2.11.0" },
     { name = "requests", specifier = ">=2.32.4" },
 ]

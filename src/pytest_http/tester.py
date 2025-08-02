@@ -8,6 +8,7 @@ import jmespath
 import jsonschema
 import pytest_http_engine.models.entities
 import requests
+from pytest_http_engine.models.types import check_json_schema
 from pytest_http_engine.user_function import AuthFunction, VerificationFunction
 
 
@@ -37,7 +38,7 @@ def call(session: requests.Session, model: pytest_http_engine.models.entities.Re
             match model.auth:
                 case str():
                     auth_instance = AuthFunction.call(model.auth)
-                case pytest_http_engine.models.entities.FunctionCall():
+                case pytest_http_engine.models.entities.UserFunctionKwargs():
                     auth_instance = AuthFunction.call_with_kwargs(model.auth.function, model.auth.kwargs)
             request_params["auth"] = auth_instance
         except Exception as e:
@@ -102,7 +103,7 @@ def save(response: requests.Response, model: pytest_http_engine.models.entities.
             match func_item:
                 case str():
                     result.update(VerificationFunction.call(func_item, response))
-                case pytest_http_engine.models.entities.FunctionCall():
+                case pytest_http_engine.models.entities.UserFunctionKwargs():
                     result.update(VerificationFunction.call_with_kwargs(func_item.function, response, func_item.kwargs))
         except Exception as e:
             raise TesterError(f"Error calling user function {func_item}") from e
@@ -138,7 +139,7 @@ def verify(response: requests.Response, model: pytest_http_engine.models.entitie
             match func_item:
                 case str():
                     actual_value = VerificationFunction.call(func_item, response)
-                case pytest_http_engine.models.entities.FunctionCall():
+                case pytest_http_engine.models.entities.UserFunctionKwargs():
                     actual_value = VerificationFunction.call_with_kwargs(func_item.function, response, func_item.kwargs)
         except Exception as e:
             raise TesterError(f"Error calling user function '{func_item}'") from e
@@ -159,8 +160,15 @@ def verify(response: requests.Response, model: pytest_http_engine.models.entitie
                         schema = json.load(f)
                 except (FileNotFoundError, OSError, PermissionError, UnicodeDecodeError, json.JSONDecodeError) as e:
                     raise TesterError(f"Error reading body schema file '{schema_path}'") from e
+
+                # Validate the loaded schema using the same validation as inline schemas
+                try:
+                    check_json_schema(schema)
+                except jsonschema.SchemaError as e:
+                    raise TesterError(f"Invalid JSON Schema in file '{schema_path}': {e.message}") from e
+
             case dict():
-                # use inline schema
+                # use inline schema (already validated by Pydantic)
                 schema = model.body.schema
         try:
             jsonschema.validate(instance=response_json, schema=schema)

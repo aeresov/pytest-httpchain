@@ -14,7 +14,7 @@ import requests
 from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
 from pydantic import ValidationError
-from pytest_http_engine.models.entities import FunctionCall, Request, Save, Scenario, Stage, StageCanvas, Verify
+from pytest_http_engine.models.entities import Request, Save, Scenario, Stage, UserFunctionKwargs, Verify
 from pytest_http_engine.user_function import AuthFunction
 
 import pytest_http.tester
@@ -58,7 +58,7 @@ class JsonModule(python.Module):
                     match resolved_auth:
                         case str():
                             auth_instance = AuthFunction.call(resolved_auth)
-                        case FunctionCall():
+                        case UserFunctionKwargs():
                             auth_instance = AuthFunction.call_with_kwargs(resolved_auth.function, resolved_auth.kwargs)
                     cls._http_session.auth = auth_instance
 
@@ -78,17 +78,17 @@ class JsonModule(python.Module):
 
         for i, stage_canvas in enumerate(scenario.stages):
             # Create a closure to capture the current stage
-            def make_stage_executor(stage_canvas: StageCanvas):
+            def make_stage_executor(stage_template: Stage):
                 def _exec_stage(self, **fixture_kwargs: Any):
                     try:
                         # prepare global data context
                         data_context = deepcopy(self.__class__._data_context)
                         data_context.update(fixture_kwargs)
                         data_context.update(pytest_http_engine.substitution.walk(scenario.vars, data_context))
-                        data_context.update(pytest_http_engine.substitution.walk(stage_canvas.vars, data_context))
+                        data_context.update(pytest_http_engine.substitution.walk(stage_template.vars, data_context))
 
                         # prepare and validate Stage
-                        stage_dict = pytest_http_engine.substitution.walk(stage_canvas.model_dump(), data_context)
+                        stage_dict = pytest_http_engine.substitution.walk(stage_template.model_dump(), data_context)
                         stage: Stage = Stage.model_validate(stage_dict)
 
                         # skip if the flow is aborted

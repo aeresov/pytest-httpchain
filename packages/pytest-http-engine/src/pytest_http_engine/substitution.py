@@ -3,8 +3,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-# Constants for variable substitution
-_EVAL_PATTERN = r"(?P<open>\{\{)(?P<expr>[^}]+?)(?P<close>\}\})"
+from pytest_http_engine.template_pattern import TEMPLATE_PATTERN
 
 # Safe built-ins for eval context - following established security patterns
 # Based on simpleeval and RestrictedPython safe builtins
@@ -55,13 +54,13 @@ def _sub_string(line: str, context: dict[str, Any]) -> Any:
         expr: str = match.group("expr").strip()
         return _eval_with_context(expr, context)
 
-    single_expr_match: re.Match[str] | None = re.fullmatch(_EVAL_PATTERN, line)
+    single_expr_match: re.Match[str] | None = re.fullmatch(TEMPLATE_PATTERN, line)
     if single_expr_match:
         # whole string is a substitution, use eval result directly
         return _repl(single_expr_match)
     else:
         # replace bits in string
-        return re.sub(_EVAL_PATTERN, lambda m: str(_repl(m)), line)
+        return re.sub(TEMPLATE_PATTERN, lambda m: str(_repl(m)), line)
 
 
 def walk(obj: Any, context: dict[str, Any]) -> Any:

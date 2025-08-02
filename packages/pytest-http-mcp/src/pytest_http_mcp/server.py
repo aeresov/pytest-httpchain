@@ -7,12 +7,12 @@ from pydantic import BaseModel
 mcp = FastMCP("pytest-http")
 
 
-class VerifyJsonResult(BaseModel):
+class ValidateResult(BaseModel):
     valid: bool
     errors: list[str]
     scenario_info: dict[str, Any]
 
 
 @mcp.tool()
-def validate(path: Path) -> VerifyJsonResult:
+def validate(path: Path) -> ValidateResult:
     raise NotImplementedError()
