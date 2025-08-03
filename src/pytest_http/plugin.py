@@ -20,15 +20,18 @@ from pytest_http_engine.user_function import AuthFunction
 import pytest_http.tester
 
 SUFFIX: str = "suffix"
+REF_PARENT_TRAVERSAL_DEPTH: str = "ref_parent_traversal_depth"
 
 logger = logging.Logger(__name__)
 
 
 class JsonModule(python.Module):
     def collect(self) -> Iterable[nodes.Item | nodes.Collector]:
+        ref_parent_traversal_depth = int(self.config.getini(REF_PARENT_TRAVERSAL_DEPTH))
+
         # load JSON and resolve references
         try:
-            test_data: dict[str, Any] = pytest_http_engine.loader.load_json(self.path)
+            test_data: dict[str, Any] = pytest_http_engine.loader.load_json(self.path, max_parent_traversal_depth=ref_parent_traversal_depth)
         except pytest_http_engine.loader.LoaderError as e:
             raise nodes.Collector.CollectError("Cannot load JSON file") from e
 
@@ -162,9 +165,15 @@ class JsonModule(python.Module):
 def pytest_addoption(parser: argparsing.Parser) -> None:
     parser.addini(
         name=SUFFIX,
-        help="File suffix for HTTP test files (default: http).",
+        help="File suffix for HTTP test files.",
         type="string",
         default="http",
+    )
+    parser.addini(
+        name=REF_PARENT_TRAVERSAL_DEPTH,
+        help="Maximum number of parent directory traversals allowed in $ref paths.",
+        type="string",
+        default="3",
     )
 
 
@@ -172,6 +181,13 @@ def pytest_configure(config: config.Config) -> None:
     suffix: str = config.getini(SUFFIX)
     if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", suffix):
         raise ValueError("suffix must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
+
+    try:
+        ref_parent_traversal_depth = int(config.getini(REF_PARENT_TRAVERSAL_DEPTH))
+        if ref_parent_traversal_depth < 0:
+            raise ValueError("Maximum number of parent directory traversals must be non-negative")
+    except ValueError as e:
+        raise ValueError("Maximum number of parent directory traversals must be a non-negative integer") from e
 
 
 def _get_test_name_pattern(config: config.Config) -> tuple[re.Pattern[str], str]:
