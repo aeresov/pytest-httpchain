@@ -175,3 +175,15 @@ class Stage(Decorated):
 
 class Scenario(Decorated, CallSecurity):
     stages: list[Stage] = Field(default_factory=list, description="Stages collection.")
+
+    @model_validator(mode="after")
+    def validate_saved_vars_not_conflicting_with_fixtures(self) -> Self:
+        """Validate that stage saved variables don't conflict with scenario fixtures."""
+        for stage in self.stages:
+            if stage.save.vars:
+                conflicting_vars = set(set(stage.save.vars.keys()) & set(self.fixtures))
+                if len(conflicting_vars) > 0:
+                    var_names = ",".join(conflicting_vars)
+                    raise ValueError(f"Stage '{stage.name}' conflicting saved vars and scenario fixtures: {var_names}")
+
+        return self
