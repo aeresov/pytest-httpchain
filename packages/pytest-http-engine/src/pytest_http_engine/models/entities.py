@@ -1,7 +1,7 @@
 from http import HTTPMethod, HTTPStatus
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, Field, JsonValue, PositiveFloat, RootModel, model_validator
+from pydantic import BaseModel, Discriminator, Field, JsonValue, PositiveFloat, RootModel, Tag, model_validator
 from pydantic.networks import HttpUrl
 
 from pytest_http_engine.models.types import (
@@ -63,38 +63,65 @@ class Functions(RootModel):
         return self.root[item]
 
 
+def get_body_discriminator(v: Any) -> str:
+    """Discriminator function that determines body type from the data structure."""
+    if isinstance(v, dict):
+        # Check for explicit body_type field first
+        if "body_type" in v:
+            return v["body_type"]
+
+        # Infer from field names for backward compatibility
+        body_fields = {"json", "xml", "form", "raw", "files"}
+        found_fields = body_fields & set(v.keys())
+
+        if len(found_fields) > 1:
+            raise ValueError(f"Multiple body type fields found: {', '.join(sorted(found_fields))}. Only one is allowed.")
+        elif len(found_fields) == 1:
+            return found_fields.pop()
+
+    raise ValueError("Unable to determine body type from fields. Must have one of: json, xml, form, raw, files")
+
+
 class JsonBody(BaseModel):
     """JSON request body."""
 
+    body_type: Literal["json"] = Field(default="json", description="Discriminator field for body type.", exclude=True)
     json: JsonValue = Field(description="JSON data to send.")
 
 
 class XmlBody(BaseModel):
     """XML request body."""
 
+    body_type: Literal["xml"] = Field(default="xml", description="Discriminator field for body type.", exclude=True)
     xml: XMLSting | PartialTemplateStr = Field(description="XML content as string.")
 
 
 class FormBody(BaseModel):
     """Form-encoded request body."""
 
+    body_type: Literal["form"] = Field(default="form", description="Discriminator field for body type.", exclude=True)
     form: dict[str, Any] = Field(description="Form data to be URL-encoded.")
 
 
 class RawBody(BaseModel):
     """Raw text request body."""
 
+    body_type: Literal["raw"] = Field(default="raw", description="Discriminator field for body type.", exclude=True)
     raw: str = Field(description="Raw text content.")
 
 
 class FilesBody(BaseModel):
     """Multipart file upload request body."""
 
+    body_type: Literal["files"] = Field(default="files", description="Discriminator field for body type.", exclude=True)
     files: dict[str, SerializablePath | PartialTemplateStr] = Field(description="Files to upload from file paths.")
 
 
-# Union type for all possible body types
-RequestBody = JsonBody | XmlBody | FormBody | RawBody | FilesBody
+# Discriminated union for all possible body types
+RequestBody = Annotated[
+    Annotated[JsonBody, Tag("json")] | Annotated[XmlBody, Tag("xml")] | Annotated[FormBody, Tag("form")] | Annotated[RawBody, Tag("raw")] | Annotated[FilesBody, Tag("files")],
+    Discriminator(get_body_discriminator),
+]
 
 
 class CallSecurity(BaseModel):
