@@ -56,7 +56,7 @@ class TestLoadJson:
 
     def test_merge_list(self, datadir):
         json_file = datadir / "case_merge_list.json"
-        result = load_json(json_file, merge_lists=True)
+        result = load_json(json_file)
         assert "l2-a" in result["l0-a"]["l1-e"]
         assert "l2-b" in result["l0-a"]["l1-e"]
 

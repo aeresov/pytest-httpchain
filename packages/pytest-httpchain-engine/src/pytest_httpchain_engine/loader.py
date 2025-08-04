@@ -20,13 +20,11 @@ class LoaderError(Exception):
     """An error parsing JSON test scenario."""
 
 
-def load_json(path: Path, merge_lists: bool = False, max_parent_traversal_depth: int = MAX_PARENT_TRAVERSAL_DEPTH) -> dict[str, Any]:
+def load_json(path: Path, max_parent_traversal_depth: int = MAX_PARENT_TRAVERSAL_DEPTH) -> dict[str, Any]:
     """Load JSON from file and resolve all $ref statements with circular reference protection.
 
     Args:
         path: Path to the JSON file to load
-        merge_lists: If True, lists will be appended during merge. If False (default),
-                     attempting to merge lists will raise a conflict error.
         max_parent_traversal_depth: Maximum number of parent directory traversals allowed in $ref paths
 
     Returns:
@@ -46,7 +44,6 @@ def load_json(path: Path, merge_lists: bool = False, max_parent_traversal_depth:
             data,
             path.parent,
             root_data=data,
-            merge_lists=merge_lists,
             external_refs=external_refs,
             internal_refs=internal_refs,
             max_parent_traversal_depth=max_parent_traversal_depth,
@@ -60,7 +57,6 @@ def _detect_merge_conflicts(
     base: Any,
     overlay: Any,
     path: str = "",
-    merge_lists: bool = False,
 ) -> None:
     """Detect conflicts during merge.
 
@@ -68,7 +64,6 @@ def _detect_merge_conflicts(
         base: The base dictionary/value to merge into
         overlay: The overlay dictionary/value to merge from
         path: Current path in the data structure (for error messages)
-        merge_lists: If True, lists can be merged without conflict
 
     Raises:
         LoaderError: If a merge conflict is detected
@@ -80,10 +75,11 @@ def _detect_merge_conflicts(
         for key, value in overlay.items():
             if key in base:
                 new_path = f"{path}.{key}" if path else key
-                _detect_merge_conflicts(base[key], value, new_path, merge_lists)
+                _detect_merge_conflicts(base[key], value, new_path)
         return
 
-    if isinstance(base, list) and isinstance(overlay, list) and merge_lists:
+    if isinstance(base, list) and isinstance(overlay, list):
+        # Always allow list merging since deepmerge.always_merger handles it
         return
 
     # Allow merging of identical values
@@ -97,7 +93,6 @@ def _resolve_refs(
     data: Any,
     base_path: Path,
     root_data: Any,
-    merge_lists: bool,
     external_refs: set,
     internal_refs: set,
     max_parent_traversal_depth: int,
@@ -108,7 +103,6 @@ def _resolve_refs(
         data: The data structure to process
         base_path: Base path for resolving relative file references
         root_data: Root document data for self-references
-        merge_lists: Whether to merge lists or raise conflict error
         external_refs: Set of visited file references to detect circular dependencies
         internal_refs: Set of visited internal JSON pointers to detect circular dependencies
         max_parent_traversal_depth: Maximum number of parent directory traversals allowed
@@ -160,9 +154,9 @@ def _resolve_refs(
                 ref_content, new_base_path, full_document = _load_ref(ref_value, base_path, current_data_for_ref, max_parent_traversal_depth)
                 # When loading a file reference, the full document becomes the new root for self-references
                 new_root_data = full_document if is_file_ref else root_data
-                resolved_ref = _resolve_refs(ref_content, new_base_path, new_root_data, merge_lists, external_refs, internal_refs, max_parent_traversal_depth)
-                resolved_siblings = _resolve_refs(siblings, base_path, root_data, merge_lists, external_refs, internal_refs, max_parent_traversal_depth)
-                _detect_merge_conflicts(resolved_ref, resolved_siblings, merge_lists=merge_lists)
+                resolved_ref = _resolve_refs(ref_content, new_base_path, new_root_data, external_refs, internal_refs, max_parent_traversal_depth)
+                resolved_siblings = _resolve_refs(siblings, base_path, root_data, external_refs, internal_refs, max_parent_traversal_depth)
+                _detect_merge_conflicts(resolved_ref, resolved_siblings)
                 return always_merger.merge(resolved_ref, resolved_siblings)
             finally:
                 # Remove from visited set after processing to allow the same ref in different branches
@@ -172,9 +166,9 @@ def _resolve_refs(
                     internal_refs.remove(ref_key)
 
         case dict():
-            return {k: _resolve_refs(v, base_path, root_data, merge_lists, external_refs, internal_refs, max_parent_traversal_depth) for k, v in data.items()}
+            return {k: _resolve_refs(v, base_path, root_data, external_refs, internal_refs, max_parent_traversal_depth) for k, v in data.items()}
         case list():
-            return [_resolve_refs(item, base_path, root_data, merge_lists, external_refs, internal_refs, max_parent_traversal_depth) for item in data]
+            return [_resolve_refs(item, base_path, root_data, external_refs, internal_refs, max_parent_traversal_depth) for item in data]
         case _:
             return data
 
