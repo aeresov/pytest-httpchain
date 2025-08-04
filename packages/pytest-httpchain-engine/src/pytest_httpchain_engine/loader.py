@@ -128,11 +128,12 @@ def _resolve_refs(
             # Determine reference type and check for circular dependencies
             if file_part:
                 # File reference (with or without pointer)
-                ref_key = (base_path / file_part).resolve()
+                # Use the full reference string as the key to allow different pointers to the same file
+                ref_key = str((base_path / file_part).resolve()) + (f"#{match.group('pointer')}" if match.group("pointer") else "")
 
                 # Check for circular file reference
                 if ref_key in external_refs:
-                    raise LoaderError(f"Circular reference detected: {ref_value} (resolved to: {ref_key})")
+                    raise LoaderError(f"Circular reference detected: {ref_value}")
 
                 # Add to visited set
                 external_refs.add(ref_key)
@@ -150,8 +151,12 @@ def _resolve_refs(
                 is_file_ref = False
 
             try:
-                ref_content, new_base_path = _load_ref(ref_value, base_path, root_data, max_parent_traversal_depth)
-                resolved_ref = _resolve_refs(ref_content, new_base_path, root_data, merge_lists, external_refs, internal_refs, max_parent_traversal_depth)
+                # Pass None as current_data if this is a file reference, otherwise pass root_data
+                current_data_for_ref = None if is_file_ref else root_data
+                ref_content, new_base_path, full_document = _load_ref(ref_value, base_path, current_data_for_ref, max_parent_traversal_depth)
+                # When loading a file reference, the full document becomes the new root for self-references
+                new_root_data = full_document if is_file_ref else root_data
+                resolved_ref = _resolve_refs(ref_content, new_base_path, new_root_data, merge_lists, external_refs, internal_refs, max_parent_traversal_depth)
                 resolved_siblings = _resolve_refs(siblings, base_path, root_data, merge_lists, external_refs, internal_refs, max_parent_traversal_depth)
                 _detect_merge_conflicts(resolved_ref, resolved_siblings, merge_lists=merge_lists)
                 return always_merger.merge(resolved_ref, resolved_siblings)
@@ -170,7 +175,7 @@ def _resolve_refs(
             return data
 
 
-def _load_ref(ref: str, base_path: Path, current_data: Any = None, max_parent_traversal_depth: int = MAX_PARENT_TRAVERSAL_DEPTH) -> tuple[Any, Path]:
+def _load_ref(ref: str, base_path: Path, current_data: Any = None, max_parent_traversal_depth: int = MAX_PARENT_TRAVERSAL_DEPTH) -> tuple[Any, Path, Any]:
     """Load content from a $ref string (file#/json/path format) with security validation.
 
     Args:
@@ -180,7 +185,7 @@ def _load_ref(ref: str, base_path: Path, current_data: Any = None, max_parent_tr
         max_parent_traversal_depth: Maximum number of parent directory traversals allowed
 
     Returns:
-        Tuple of (loaded content, new base path for further resolution)
+        Tuple of (loaded content, new base path for further resolution, full document for self-references)
 
     Raises:
         LoaderError: If path validation fails or file cannot be loaded
@@ -230,7 +235,8 @@ def _load_ref(ref: str, base_path: Path, current_data: Any = None, max_parent_tr
 
         try:
             with open(resolved_path, encoding="utf-8") as f:
-                data = json.load(f)
+                full_document = json.load(f)
+            data = full_document
             new_base_path = resolved_path.parent
         except (OSError, json.JSONDecodeError) as e:
             raise LoaderError(f"Failed to load referenced file {resolved_path}: {e}") from e
@@ -238,8 +244,10 @@ def _load_ref(ref: str, base_path: Path, current_data: Any = None, max_parent_tr
         if current_data is None:
             raise LoaderError(f"Self-reference {ref} requires current document context")
         data = current_data
+        full_document = current_data
         new_base_path = base_path
 
+    # Extract the pointed-to content if there's a JSON pointer
     if pointer_part:
         try:
             parts = [p for p in pointer_part.split("/") if p]
@@ -247,4 +255,5 @@ def _load_ref(ref: str, base_path: Path, current_data: Any = None, max_parent_tr
         except (KeyError, TypeError, IndexError) as e:
             raise LoaderError(f"Invalid JSON pointer in $ref: {pointer_part}") from e
 
-    return data, new_base_path
+    # Return extracted content, base path, and full document
+    return data, new_base_path, full_document

@@ -1,0 +1,20 @@
+{
+    "fixtures": [
+        "settings"
+    ],
+    "vars": {
+        "api_base": "https://{{ settings.host }}:{{ settings.port }}"
+    },
+    "stages": [
+        {
+            "vars": {
+                "username": "{{ settings.username }}",
+                "password": "{{ settings.password }}"
+            },
+            "$ref": "api/user/session.json#/login"
+        },
+        {
+            "$ref": "api/user/session.json#/logout"
+        }
+    ]
+}
