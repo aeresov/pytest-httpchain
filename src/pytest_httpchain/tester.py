@@ -8,6 +8,7 @@ import jmespath
 import jsonschema
 import pytest_httpchain_engine.models.entities
 import requests
+from pytest_httpchain_engine.models.entities import UserFunctionKwargs, UserFunctionName
 from pytest_httpchain_engine.models.types import check_json_schema
 from pytest_httpchain_engine.user_function import AuthFunction, VerificationFunction
 
@@ -36,10 +37,10 @@ def call(session: requests.Session, model: pytest_httpchain_engine.models.entiti
     if model.auth:
         try:
             match model.auth:
-                case str():
-                    auth_instance = AuthFunction.call(model.auth)
-                case pytest_httpchain_engine.models.entities.UserFunctionKwargs():
+                case UserFunctionKwargs():
                     auth_instance = AuthFunction.call_with_kwargs(model.auth.function.root, model.auth.kwargs)
+                case UserFunctionName():
+                    auth_instance = AuthFunction.call(model.auth.root)
             request_params["auth"] = auth_instance
         except Exception as e:
             raise TesterError("Failed to configure stage authentication") from e
@@ -101,10 +102,10 @@ def save(response: requests.Response, model: pytest_httpchain_engine.models.enti
     for func_item in model.functions:
         try:
             match func_item:
-                case str():
-                    result.update(VerificationFunction.call(func_item, response))
-                case pytest_httpchain_engine.models.entities.UserFunctionKwargs():
+                case UserFunctionKwargs():
                     result.update(VerificationFunction.call_with_kwargs(func_item.function.root, response, func_item.kwargs))
+                case UserFunctionName():
+                    result.update(VerificationFunction.call(func_item.root, response))
         except Exception as e:
             raise TesterError(f"Error calling user function {func_item}") from e
 
@@ -137,10 +138,10 @@ def verify(response: requests.Response, model: pytest_httpchain_engine.models.en
     for func_item in model.functions:
         try:
             match func_item:
-                case str():
-                    actual_value = VerificationFunction.call(func_item, response)
-                case pytest_httpchain_engine.models.entities.UserFunctionKwargs():
+                case UserFunctionKwargs():
                     actual_value = VerificationFunction.call_with_kwargs(func_item.function.root, response, func_item.kwargs)
+                case UserFunctionName():
+                    actual_value = VerificationFunction.call(func_item.root, response)
         except Exception as e:
             raise TesterError(f"Error calling user function '{func_item}'") from e
 
