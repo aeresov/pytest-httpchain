@@ -29,7 +29,8 @@
                 "astral-sh.ty",
                 "anthropic.claude-code",
                 "tamasfe.even-better-toml",
-                "esbenp.prettier-vscode"
+                "esbenp.prettier-vscode",
+                "github.vscode-github-actions"
             ]
         }
     }
