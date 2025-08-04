@@ -3,8 +3,7 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, Discriminator, Field, JsonValue, PositiveFloat, RootModel, Tag, model_validator
 from pydantic.networks import HttpUrl
-
-from pytest_http_engine.models.types import (
+from pytest_httpchain_engine.models.types import (
     FunctionImportName,
     JMESPathExpression,
     JSONSchemaInline,

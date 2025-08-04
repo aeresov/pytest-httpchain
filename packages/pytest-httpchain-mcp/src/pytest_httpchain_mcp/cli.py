@@ -1,6 +1,5 @@
 import click
-
-from pytest_http_mcp.server import mcp
+from pytest_httpchain_mcp.server import mcp
 
 
 @click.command()

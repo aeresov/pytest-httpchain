@@ -5,7 +5,7 @@
 Install normally via package manager of your choice from PyPi:
 
 ```bash
-pip install pytest-http
+pip install pytest-httpchain
 ```
 
 ## Pytest features

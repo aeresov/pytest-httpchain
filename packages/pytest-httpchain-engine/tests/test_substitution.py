@@ -1,6 +1,6 @@
 import pytest
 from pydantic import BaseModel
-from pytest_http_engine.substitution import SubstitutionError, walk
+from pytest_httpchain_engine.substitution import SubstitutionError, walk
 
 
 class TestWalk:

@@ -6,17 +6,17 @@ from typing import Any
 
 import jmespath
 import jsonschema
-import pytest_http_engine.models.entities
+import pytest_httpchain_engine.models.entities
 import requests
-from pytest_http_engine.models.types import check_json_schema
-from pytest_http_engine.user_function import AuthFunction, VerificationFunction
+from pytest_httpchain_engine.models.types import check_json_schema
+from pytest_httpchain_engine.user_function import AuthFunction, VerificationFunction
 
 
 class TesterError(Exception):
     """An error making HTTP call."""
 
 
-def call(session: requests.Session, model: pytest_http_engine.models.entities.Request) -> requests.Response:
+def call(session: requests.Session, model: pytest_httpchain_engine.models.entities.Request) -> requests.Response:
     request_params: dict[str, Any] = {}
     if model.params:
         request_params["params"] = model.params
@@ -38,7 +38,7 @@ def call(session: requests.Session, model: pytest_http_engine.models.entities.Re
             match model.auth:
                 case str():
                     auth_instance = AuthFunction.call(model.auth)
-                case pytest_http_engine.models.entities.UserFunctionKwargs():
+                case pytest_httpchain_engine.models.entities.UserFunctionKwargs():
                     auth_instance = AuthFunction.call_with_kwargs(model.auth.function, model.auth.kwargs)
             request_params["auth"] = auth_instance
         except Exception as e:
@@ -48,15 +48,15 @@ def call(session: requests.Session, model: pytest_http_engine.models.entities.Re
     match model.body:
         case None:
             pass
-        case pytest_http_engine.models.entities.JsonBody(json=data):
+        case pytest_httpchain_engine.models.entities.JsonBody(json=data):
             request_params["json"] = data
-        case pytest_http_engine.models.entities.FormBody(form=data):
+        case pytest_httpchain_engine.models.entities.FormBody(form=data):
             request_params["data"] = data
-        case pytest_http_engine.models.entities.XmlBody(xml=data):
+        case pytest_httpchain_engine.models.entities.XmlBody(xml=data):
             request_params["data"] = data
-        case pytest_http_engine.models.entities.RawBody(raw=data):
+        case pytest_httpchain_engine.models.entities.RawBody(raw=data):
             request_params["data"] = data
-        case pytest_http_engine.models.entities.FilesBody(files=data):
+        case pytest_httpchain_engine.models.entities.FilesBody(files=data):
             request_params["files"] = data
 
     with ExitStack() as stack:
@@ -84,7 +84,7 @@ def _get_response_json(response: requests.Response) -> dict[str, Any]:
         raise TesterError("Error getting jSON from response") from e
 
 
-def save(response: requests.Response, model: pytest_http_engine.models.entities.Save) -> dict[str, Any]:
+def save(response: requests.Response, model: pytest_httpchain_engine.models.entities.Save) -> dict[str, Any]:
     result: dict[str, Any] = {}
 
     # vars first
@@ -103,7 +103,7 @@ def save(response: requests.Response, model: pytest_http_engine.models.entities.
             match func_item:
                 case str():
                     result.update(VerificationFunction.call(func_item, response))
-                case pytest_http_engine.models.entities.UserFunctionKwargs():
+                case pytest_httpchain_engine.models.entities.UserFunctionKwargs():
                     result.update(VerificationFunction.call_with_kwargs(func_item.function, response, func_item.kwargs))
         except Exception as e:
             raise TesterError(f"Error calling user function {func_item}") from e
@@ -111,7 +111,7 @@ def save(response: requests.Response, model: pytest_http_engine.models.entities.
     return result
 
 
-def verify(response: requests.Response, model: pytest_http_engine.models.entities.Verify, context: dict[str, Any]):
+def verify(response: requests.Response, model: pytest_httpchain_engine.models.entities.Verify, context: dict[str, Any]):
     # HTTP status code
     if model.status:
         expected_value = model.status.value
@@ -139,7 +139,7 @@ def verify(response: requests.Response, model: pytest_http_engine.models.entitie
             match func_item:
                 case str():
                     actual_value = VerificationFunction.call(func_item, response)
-                case pytest_http_engine.models.entities.UserFunctionKwargs():
+                case pytest_httpchain_engine.models.entities.UserFunctionKwargs():
                     actual_value = VerificationFunction.call_with_kwargs(func_item.function, response, func_item.kwargs)
         except Exception as e:
             raise TesterError(f"Error calling user function '{func_item}'") from e

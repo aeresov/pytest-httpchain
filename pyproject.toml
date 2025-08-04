@@ -1,12 +1,12 @@
 [project]
-name = "pytest-http"
+name = "pytest-httpchain"
 version = "0.1.0"
 description = "pytest plugin for HTTP testing using JSON files"
 readme = "README.md"
 requires-python = ">=3.13,<4.0"
 authors = [{ name = "Alexander Eresov", email = "aeresov@gmail.com" }]
 dependencies = [
-    "pytest-http-engine",
+    "pytest-httpchain-engine",
     "pytest-order>=1.3.0",
     "rich>=13.7.0",
 ]
@@ -23,11 +23,15 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-mcp = ["pytest-http-mcp"]
+mcp = ["pytest-httpchain-mcp"]
 
 [dependency-groups]
 dev = [
     "http-server-mock>=1.7",
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.6.16",
+    "mkdocstrings>=0.30.0",
+    "mkdocstrings-python>=1.16.12",
     "pytest-xdist>=3.8.0",
     "responses>=0.25.7",
     "ruff>=0.12.1",
@@ -37,15 +41,15 @@ dev = [
 members = ["packages/*"]
 
 [tool.uv.sources]
-pytest-http-engine = { workspace = true }
-pytest-http-mcp = { workspace = true }
+pytest-httpchain-engine = { workspace = true }
+pytest-httpchain-mcp = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.7.21,<0.8.0"]
 build-backend = "uv_build"
 
 [project.entry-points.pytest11]
-pytest_http = "pytest_http.plugin"
+pytest_httpchain = "pytest_httpchain.plugin"
 
 [tool.ruff]
 line-length = 180

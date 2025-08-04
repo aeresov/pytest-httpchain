@@ -7,9 +7,8 @@ from typing import Annotated, Any
 import jmespath
 import jsonschema
 from pydantic import AfterValidator, PlainSerializer
-
-from pytest_http_engine.template_pattern import TEMPLATE_REGEX, is_complete_template
-from pytest_http_engine.user_function import BaseUserFunction
+from pytest_httpchain_engine.template_pattern import TEMPLATE_REGEX, is_complete_template
+from pytest_httpchain_engine.user_function import BaseUserFunction
 
 
 def validate_python_identifier(v: str) -> str:

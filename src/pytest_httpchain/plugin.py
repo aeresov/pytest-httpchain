@@ -8,17 +8,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import pytest_http_engine.loader
-import pytest_http_engine.models.entities
-import pytest_http_engine.substitution
+import pytest_httpchain_engine.loader
+import pytest_httpchain_engine.models.entities
+import pytest_httpchain_engine.substitution
 import requests
 from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
 from pydantic import ValidationError
-from pytest_http_engine.models.entities import Request, Save, Scenario, Stage, UserFunctionKwargs, Verify
-from pytest_http_engine.user_function import AuthFunction
+from pytest_httpchain_engine.models.entities import Request, Save, Scenario, Stage, UserFunctionKwargs, Verify
+from pytest_httpchain_engine.user_function import AuthFunction
 
-import pytest_http.tester
+import pytest_httpchain.tester
 
 SUFFIX: str = "suffix"
 REF_PARENT_TRAVERSAL_DEPTH: str = "ref_parent_traversal_depth"
@@ -32,8 +32,8 @@ class JsonModule(python.Module):
 
         # load JSON and resolve references
         try:
-            test_data: dict[str, Any] = pytest_http_engine.loader.load_json(self.path, max_parent_traversal_depth=ref_parent_traversal_depth)
-        except pytest_http_engine.loader.LoaderError as e:
+            test_data: dict[str, Any] = pytest_httpchain_engine.loader.load_json(self.path, max_parent_traversal_depth=ref_parent_traversal_depth)
+        except pytest_httpchain_engine.loader.LoaderError as e:
             raise nodes.Collector.CollectError("Cannot load JSON file") from e
 
         # validate models
@@ -58,7 +58,7 @@ class JsonModule(python.Module):
 
                 # Configure authentication for the session
                 if cls._scenario.auth:
-                    resolved_auth = pytest_http_engine.substitution.walk(cls._scenario.auth, cls._data_context)
+                    resolved_auth = pytest_httpchain_engine.substitution.walk(cls._scenario.auth, cls._data_context)
                     match resolved_auth:
                         case str():
                             auth_instance = AuthFunction.call(resolved_auth)
@@ -88,11 +88,11 @@ class JsonModule(python.Module):
                         # prepare data context
                         data_context = deepcopy(self.__class__._data_context)
                         data_context.update(fixture_kwargs)
-                        data_context.update(pytest_http_engine.substitution.walk(scenario.vars, data_context))
-                        data_context.update(pytest_http_engine.substitution.walk(stage_template.vars, data_context))
+                        data_context.update(pytest_httpchain_engine.substitution.walk(scenario.vars, data_context))
+                        data_context.update(pytest_httpchain_engine.substitution.walk(stage_template.vars, data_context))
 
                         # prepare and validate Stage
-                        stage_dict = pytest_http_engine.substitution.walk(stage_template.model_dump(), data_context)
+                        stage_dict = pytest_httpchain_engine.substitution.walk(stage_template.model_dump(), data_context)
                         stage: Stage = Stage.model_validate(stage_dict)
 
                         # skip if the flow is aborted
@@ -100,24 +100,24 @@ class JsonModule(python.Module):
                             pytest.skip(reason="Flow aborted")
 
                         # make http call
-                        request_dict = pytest_http_engine.substitution.walk(stage.request, data_context)
+                        request_dict = pytest_httpchain_engine.substitution.walk(stage.request, data_context)
                         request_model: Request = Request.model_validate(request_dict)
-                        call_response: requests.Response = pytest_http.tester.call(
+                        call_response: requests.Response = pytest_httpchain.tester.call(
                             session=self.__class__._http_session,
                             model=request_model,
                         )
 
                         # process response steps sequentially
                         context_update: dict[str, Any] = {}
-                        response_dict = pytest_http_engine.substitution.walk(stage.response, data_context)
-                        response_model: pytest_http_engine.models.entities.Response = pytest_http_engine.models.entities.Response.model_validate(response_dict)
+                        response_dict = pytest_httpchain_engine.substitution.walk(stage.response, data_context)
+                        response_model: pytest_httpchain_engine.models.entities.Response = pytest_httpchain_engine.models.entities.Response.model_validate(response_dict)
 
                         for step in response_model:
                             match step:
-                                case pytest_http_engine.models.entities.SaveStep():
-                                    save_dict = pytest_http_engine.substitution.walk(step.save, data_context)
+                                case pytest_httpchain_engine.models.entities.SaveStep():
+                                    save_dict = pytest_httpchain_engine.substitution.walk(step.save, data_context)
                                     save_model: Save = Save.model_validate(save_dict)
-                                    step_update: dict[str, Any] = pytest_http.tester.save(
+                                    step_update: dict[str, Any] = pytest_httpchain.tester.save(
                                         response=call_response,
                                         model=save_model,
                                     )
@@ -126,10 +126,10 @@ class JsonModule(python.Module):
                                     # update changes pack for common data context
                                     context_update.update(step_update)
 
-                                case pytest_http_engine.models.entities.VerifyStep():
-                                    verify_dict = pytest_http_engine.substitution.walk(step.verify, data_context)
+                                case pytest_httpchain_engine.models.entities.VerifyStep():
+                                    verify_dict = pytest_httpchain_engine.substitution.walk(step.verify, data_context)
                                     verify_model: Verify = Verify.model_validate(verify_dict)
-                                    pytest_http.tester.verify(
+                                    pytest_httpchain.tester.verify(
                                         response=call_response,
                                         model=verify_model,
                                         context=data_context,
@@ -137,7 +137,7 @@ class JsonModule(python.Module):
 
                         # update common data context
                         self.__class__._data_context.update(context_update)
-                    except (pytest_http_engine.substitution.SubstitutionError, ValidationError, pytest_http.tester.TesterError) as e:
+                    except (pytest_httpchain_engine.substitution.SubstitutionError, ValidationError, pytest_httpchain.tester.TesterError) as e:
                         logger.exception(str(e))
                         self.__class__._aborted = True
                         pytest.fail(reason=str(e), pytrace=False)

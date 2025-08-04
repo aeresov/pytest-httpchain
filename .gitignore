@@ -7,3 +7,6 @@ __pycache__/
 /.tox/
 .claude/
 .cursor/
+
+# mkdocs
+/site/

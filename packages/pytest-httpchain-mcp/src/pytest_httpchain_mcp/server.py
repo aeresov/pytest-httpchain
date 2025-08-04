@@ -4,7 +4,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
-mcp = FastMCP("pytest-http")
+mcp = FastMCP("pytest-httpchain")
 
 
 class ValidateResult(BaseModel):
