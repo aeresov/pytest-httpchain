@@ -104,7 +104,7 @@ def save(response: requests.Response, model: pytest_httpchain_engine.models.enti
                 case str():
                     result.update(VerificationFunction.call(func_item, response))
                 case pytest_httpchain_engine.models.entities.UserFunctionKwargs():
-                    result.update(VerificationFunction.call_with_kwargs(func_item.function, response, func_item.kwargs))
+                    result.update(VerificationFunction.call_with_kwargs(func_item.function.root, response, func_item.kwargs))
         except Exception as e:
             raise TesterError(f"Error calling user function {func_item}") from e
 
@@ -140,7 +140,7 @@ def verify(response: requests.Response, model: pytest_httpchain_engine.models.en
                 case str():
                     actual_value = VerificationFunction.call(func_item, response)
                 case pytest_httpchain_engine.models.entities.UserFunctionKwargs():
-                    actual_value = VerificationFunction.call_with_kwargs(func_item.function, response, func_item.kwargs)
+                    actual_value = VerificationFunction.call_with_kwargs(func_item.function.root, response, func_item.kwargs)
         except Exception as e:
             raise TesterError(f"Error calling user function '{func_item}'") from e
 
