@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 import pytest_http_engine.loader
+import pytest_http_engine.models.entities
 import pytest_http_engine.substitution
 import requests
 from _pytest import config, nodes, python, reports, runner
@@ -84,7 +85,7 @@ class JsonModule(python.Module):
             def make_stage_executor(stage_template: Stage):
                 def _exec_stage(self, **fixture_kwargs: Any):
                     try:
-                        # prepare global data context
+                        # prepare data context
                         data_context = deepcopy(self.__class__._data_context)
                         data_context.update(fixture_kwargs)
                         data_context.update(pytest_http_engine.substitution.walk(scenario.vars, data_context))
@@ -106,26 +107,35 @@ class JsonModule(python.Module):
                             model=request_model,
                         )
 
-                        # save data from reponse
-                        save_dict = pytest_http_engine.substitution.walk(stage.save, data_context)
-                        save_model: Save = Save.model_validate(save_dict)
-                        context_update: dict[str, Any] = pytest_http.tester.save(
-                            response=call_response,
-                            model=save_model,
-                        )
-                        # inject this stage saves
-                        data_context.update(context_update)
+                        # process response steps sequentially
+                        context_update: dict[str, Any] = {}
+                        response_dict = pytest_http_engine.substitution.walk(stage.response, data_context)
+                        response_model: pytest_http_engine.models.entities.Response = pytest_http_engine.models.entities.Response.model_validate(response_dict)
 
-                        # run verifications
-                        verify_dict = pytest_http_engine.substitution.walk(stage.verify, data_context)
-                        verify_model: Verify = Verify.model_validate(verify_dict)
-                        pytest_http.tester.verify(
-                            response=call_response,
-                            model=verify_model,
-                            context=data_context,
-                        )
+                        for step in response_model:
+                            match step:
+                                case pytest_http_engine.models.entities.SaveStep():
+                                    save_dict = pytest_http_engine.substitution.walk(step.save, data_context)
+                                    save_model: Save = Save.model_validate(save_dict)
+                                    step_update: dict[str, Any] = pytest_http.tester.save(
+                                        response=call_response,
+                                        model=save_model,
+                                    )
+                                    # update context with saved data immediately
+                                    data_context.update(step_update)
+                                    # update changes pack for common data context
+                                    context_update.update(step_update)
 
-                        # update carried-on data context
+                                case pytest_http_engine.models.entities.VerifyStep():
+                                    verify_dict = pytest_http_engine.substitution.walk(step.verify, data_context)
+                                    verify_model: Verify = Verify.model_validate(verify_dict)
+                                    pytest_http.tester.verify(
+                                        response=call_response,
+                                        model=verify_model,
+                                        context=data_context,
+                                    )
+
+                        # update common data context
                         self.__class__._data_context.update(context_update)
                     except (pytest_http_engine.substitution.SubstitutionError, ValidationError, pytest_http.tester.TesterError) as e:
                         logger.exception(str(e))

@@ -5,10 +5,14 @@
         }
     },
     "ref2": {
-        "verify": {
-            "vars": {
-                "result_one": "{{ number_value }}"
+        "response": [
+            {
+                "verify": {
+                    "vars": {
+                        "result_one": "{{ number_value }}"
+                    }
+                }
             }
-        }
+        ]
     }
 }

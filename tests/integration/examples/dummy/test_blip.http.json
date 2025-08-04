@@ -18,20 +18,30 @@
                     "X-Session-Key": "{{ str(number_value) }}"
                 }
             },
-            "save": {
-                "vars": {
-                    "result_one": "{{ string_value }}"
-                }
-            },
-            "verify": {
-                "status": 200,
-                "headers": {
-                    "content-type": "application/json"
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "headers": {
+                            "content-type": "application/json"
+                        }
+                    }
                 },
-                "vars": {
-                    "result_one": "{{ number_value }}"
+                {
+                    "save": {
+                        "vars": {
+                            "result_one": "{{ string_value }}"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "vars": {
+                            "result_one": "{{ number_value }}"
+                        }
+                    }
                 }
-            }
+            ]
         },
         {
             "name": "two",
@@ -41,11 +51,15 @@
                 "number_value"
             ],
             "$ref": "common.json#/ref1",
-            "verify": {
-                "vars": {
-                    "result_one": "{{ number_value }}"
+            "response": [
+                {
+                    "verify": {
+                        "vars": {
+                            "result_one": "{{ number_value }}"
+                        }
+                    }
                 }
-            }
+            ]
         },
         {
             "name": "three",

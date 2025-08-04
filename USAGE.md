@@ -113,9 +113,13 @@ If `always_run` field is set, the stage is executed regardless of previous error
             "request": {
                 "url": "https://api.example.com/login"
             },
-            "verify": {
-                "status": 200
-            }
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
         },
         {
             "name": "operation",
@@ -123,9 +127,13 @@ If `always_run` field is set, the stage is executed regardless of previous error
                 "url": "https://api.example.com/operation",
                 "method": "POST"
             },
-            "verify": {
-                "status": 200
-            }
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
         },
         {
             "name": "logout",
@@ -156,9 +164,13 @@ Down the stages chain, common data context can be used in jinja-style variable s
                 "url": "https://api.example.com/operation/{{ id }}",
                 "method": "POST"
             },
-            "verify": {
-                "status": 200
-            }
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
         }
     ]
 }
@@ -195,14 +207,20 @@ def extract_xml(response: requests.Response) -> dict[str, Any]
             "request": {
                 "url": "https://api.example.com"
             },
-            "save": {
-                "functions": ["utilities.save:extract_xml"]
-            },
-            "verify": {
-                "vars": {
-                    "author": "Jack London"
+            "response": [
+                {
+                    "save": {
+                        "functions": ["utilities.save:extract_xml"]
+                    }
+                },
+                {
+                    "verify": {
+                        "vars": {
+                            "author": "Jack London"
+                        }
+                    }
                 }
-            }
+            ]
         }
     ]
 }
@@ -239,16 +257,20 @@ def check_xml(response: requests.Response, desired_author: str) -> bool
             "request": {
                 "url": "https://api.example.com"
             },
-            "verify": {
-                "functions": [
-                    {
-                        "function": "utilities.verify:check_xml",
-                        "kwargs": {
-                            "desired_author": "{{ author }}"
-                        }
+            "response": [
+                {
+                    "verify": {
+                        "functions": [
+                            {
+                                "function": "utilities.verify:check_xml",
+                                "kwargs": {
+                                    "desired_author": "{{ author }}"
+                                }
+                            }
+                        ]
                     }
-                ]
-            }
+                }
+            ]
         }
     ]
 }
@@ -294,9 +316,13 @@ def aws_sigv4(service: str, region: str) -> AuthBase
                     }
                 }
             },
-            "verify": {
-                "status": 200
-            }
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
         }
     ]
 }
@@ -314,11 +340,15 @@ In this example, stage extracts value directly from response JSON body and saves
             "request": {
                 "url": "https://api.example.com"
             },
-            "save": {
-                "vars": {
-                    "id": "collection[0].entity.id"
+            "response": [
+                {
+                    "save": {
+                        "vars": {
+                            "id": "$.collection[0].entity.id"
+                        }
+                    }
                 }
-            }
+            ]
         }
     ]
 }
@@ -336,21 +366,25 @@ In this example we verify response body using inline JSON schema.
             "request": {
                 "url": "https://api.example.com"
             },
-            "verify": {
-                "body": {
-                    "schema": {
-                        "$schema": "https://json-schema.org/draft/2020-12/schema",
-                        "type": "object",
-                        "properties": {
-                            "message": {
-                                "type": "string"
+            "response": [
+                {
+                    "verify": {
+                        "body": {
+                            "schema": {
+                                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                                "type": "object",
+                                "properties": {
+                                    "message": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": ["message"],
+                                "additionalProperties": false
                             }
-                        },
-                        "required": ["message"],
-                        "additionalProperties": false
+                        }
                     }
                 }
-            }
+            ]
         }
     ]
 }

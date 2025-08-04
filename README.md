@@ -36,6 +36,7 @@ The following optional dependencies are available:
 ### Pytest integration
 
 Most of pytest magic can be used: markers, fixtures, other plugins.\
+
 > NOTE: parametrization is not yet implemented, therefore `parametrize` marker won't have any effect.
 
 ### Declarative format
@@ -59,9 +60,10 @@ Values from common data context also might be verified during verified/asserted.
 ### User functions
 
 `pytest-http` can import and call regular python functions:
-- to extract data from HTTP response
-- to verify HTTP response and values in common data context
-- to provide [custom authentication for requests](https://requests.readthedocs.io/en/latest/user/advanced/#custom-authentication)
+
+-   to extract data from HTTP response
+-   to verify HTTP response and values in common data context
+-   to provide [custom authentication for requests](https://requests.readthedocs.io/en/latest/user/advanced/#custom-authentication)
 
 ### JMESPath support
 
@@ -96,14 +98,20 @@ def now_utc():
             "request": {
                 "url": "https://api.example.com/users/{{ user_id }}"
             },
-            "save": {
-                "vars": {
-                    "user_name": "user.name"
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "vars": {
+                            "user_name": "user.name"
+                        }
+                    }
                 }
-            },
-            "verify": {
-                "status": 200
-            }
+            ]
         },
         {
             "name": "update_user",
@@ -120,9 +128,13 @@ def now_utc():
                     }
                 }
             },
-            "verify": {
-                "status": 200
-            }
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
         },
         {
             "name": "cleanup",
@@ -137,30 +149,31 @@ def now_utc():
 ```
 
 Scenario we created:
-- common data context is seeded with the first variable `user_id`
-- **get_user**\
-url is assembled using `user_id` variable from common data context\
-HTTP GET call is made\
-we verify the call returned code 200\
-assuming JSON body is returned, we extract a value by JMESPath expression `user.name` and save it to common data context under `user_name` key
-- **update_user**\
-`now_utc` fixture value is injected into common data context\
-url is assembled using `user_id` variable from common data context\
-we create JSON body in place using values from common data context, note that `now_utc` is converted to string in place\
-HTTP PUT call with body is made\
-we verify the call returned code 200\
-- **cleanup**\
-finalizing call meant for graceful exit\
-`always_run` parameter means this stage will be executed regardless of errors in previous stages
+
+-   common data context is seeded with the first variable `user_id`
+-   **get_user**\
+    url is assembled using `user_id` variable from common data context\
+    HTTP GET call is made\
+    we verify the call returned code 200\
+    assuming JSON body is returned, we extract a value by JMESPath expression `user.name` and save it to common data context under `user_name` key
+-   **update_user**\
+    `now_utc` fixture value is injected into common data context\
+    url is assembled using `user_id` variable from common data context\
+    we create JSON body in place using values from common data context, note that `now_utc` is converted to string in place\
+    HTTP PUT call with body is made\
+    we verify the call returned code 200\
+-   **cleanup**\
+    finalizing call meant for graceful exit\
+    `always_run` parameter means this stage will be executed regardless of errors in previous stages
 
 For detailed examples see [USAGE.md](USAGE.md).
 
 ## Configuration
 
-- Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`.\
-The `suffix` is configurable as pytest ini option, default value is **http**.
-- `$ref` instructions can point to other files; absolute and relative paths are supported.\
-You can limit the depth of relative path traversal using `ref_parent_traversal_depth` ini option, default value is **3**.
+-   Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`.\
+    The `suffix` is configurable as pytest ini option, default value is **http**.
+-   `$ref` instructions can point to other files; absolute and relative paths are supported.\
+    You can limit the depth of relative path traversal using `ref_parent_traversal_depth` ini option, default value is **3**.
 
 ## MCP Server
 
@@ -172,6 +185,7 @@ The optional dependency `mcp` installs MCP server's package and `pytest-http-mcp
 Use this script as call target for your MCP configuration.
 
 Claude Code `.mcp.json` example:
+
 ```json
 {
     "mcpServers": {
@@ -193,9 +207,9 @@ The MCP server provides:
 
 ## Documentation
 
-- [Usage Examples](USAGE.md) - Practical code examples
-- [Full Documentation](https://aeresov.github.io/pytest-http) - Complete guide
-- [Changelog](CHANGELOG.md) - Release notes
+-   [Usage Examples](USAGE.md) - Practical code examples
+-   [Full Documentation](https://aeresov.github.io/pytest-http) - Complete guide
+-   [Changelog](CHANGELOG.md) - Release notes
 
 ## Thanks
 

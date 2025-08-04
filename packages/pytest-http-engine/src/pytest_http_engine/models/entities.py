@@ -182,6 +182,71 @@ class Decorated(BaseModel):
         return self
 
 
+def get_response_step_discriminator(v: Any) -> str:
+    """Discriminator function that determines response step type from the data structure."""
+    if isinstance(v, dict):
+        if "step_type" in v:
+            return v["step_type"]
+
+        # Infer from field names
+        step_fields = {"save", "verify"}
+        found_fields = step_fields & set(v.keys())
+
+        if len(found_fields) > 1:
+            raise ValueError(f"Multiple step type fields found: {', '.join(sorted(found_fields))}. Only one is allowed.")
+        elif len(found_fields) == 1:
+            return found_fields.pop()
+
+    raise ValueError("Unable to determine response step type from fields. Must have one of: save, verify")
+
+
+class SaveStep(BaseModel):
+    """Save data from HTTP response."""
+
+    step_type: Literal["save"] = Field(default="save", description="Discriminator field for step type.", exclude=True)
+    save: Save = Field(description="Save configuration.")
+
+
+class VerifyStep(BaseModel):
+    """Verify HTTP response and data context."""
+
+    step_type: Literal["verify"] = Field(default="verify", description="Discriminator field for step type.", exclude=True)
+    verify: Verify = Field(description="Verify configuration.")
+
+
+# Discriminated union for response steps
+ResponseStep = Annotated[
+    Annotated[SaveStep, Tag("save")] | Annotated[VerifyStep, Tag("verify")],
+    Discriminator(get_response_step_discriminator),
+]
+
+
+class Response(RootModel):
+    """Sequential response processing configuration."""
+
+    root: list[ResponseStep] = Field(
+        default_factory=list,
+        description="Sequential steps to process the response. Each step is either a save or verify action.",
+        examples=[
+            [
+                {"verify": {"status": 200}},
+                {"save": {"vars": {"user_id": "$.id"}}},
+                {"verify": {"vars": {"user_id": "12345"}}},
+            ],
+            [
+                {"verify": {"status": 500}},
+                {"verify": {"body": {"contains": ["error", "failed"]}}},
+            ],
+        ],
+    )
+
+    def __iter__(self):
+        return iter(self.root)
+
+    def __getitem__(self, item):
+        return self.root[item]
+
+
 class Stage(Decorated):
     name: str = Field(description="Stage name. Human readable, no need to be unique.")
     always_run: Literal[True, False] | TemplateExpression = Field(
@@ -196,8 +261,7 @@ class Stage(Decorated):
         ],
     )
     request: Any = Field(description="HTTP request details.")
-    save: Any = Field(default_factory=Save, description="Configuration for saving data from HTTP response.")
-    verify: Any = Field(default_factory=Verify, description="Configuration for verifications (asserts) on available data.")
+    response: Response = Field(default_factory=Response, description="Sequential response processing configuration.")
 
 
 class Scenario(Decorated, CallSecurity):
@@ -207,10 +271,11 @@ class Scenario(Decorated, CallSecurity):
     def validate_saved_vars_not_conflicting_with_fixtures(self) -> Self:
         """Validate that stage saved variables don't conflict with scenario fixtures."""
         for stage in self.stages:
-            if stage.save.vars:
-                conflicting_vars = set(set(stage.save.vars.keys()) & set(self.fixtures))
-                if len(conflicting_vars) > 0:
-                    var_names = ",".join(conflicting_vars)
-                    raise ValueError(f"Stage '{stage.name}' conflicting saved vars and scenario fixtures: {var_names}")
+            for step in stage.response:
+                if isinstance(step, SaveStep) and step.save.vars:
+                    conflicting_vars = set(set(step.save.vars.keys()) & set(self.fixtures))
+                    if len(conflicting_vars) > 0:
+                        var_names = ",".join(conflicting_vars)
+                        raise ValueError(f"Stage '{stage.name}' conflicting saved vars and scenario fixtures: {var_names}")
 
         return self
