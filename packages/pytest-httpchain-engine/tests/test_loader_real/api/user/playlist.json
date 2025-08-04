@@ -1,0 +1,123 @@
+{
+    "get": {
+        "vars": {
+            "service": "user",
+            "method": "playlist"
+        },
+        "request": {
+            "$ref": "../requests.json#/service_call_session",
+            "method": "GET",
+            "params": {
+                "pid": "{{ playlist_id }}"
+            }
+        }
+    },
+    "get_all": {
+        "vars": {
+            "service": "user",
+            "method": "playlists"
+        },
+        "request": {
+            "$ref": "../requests.json#/service_call_session",
+            "method": "GET"
+        }
+    },
+    "add": {
+        "vars": {
+            "service": "user",
+            "method": "playlist/add"
+        },
+        "request": {
+            "$ref": "../requests.json#/service_call_session",
+            "method": "GET",
+            "params": {
+                "name": "{{ playlist_name }}",
+                "desc": "{{ playlist_desc }}"
+            }
+        },
+        "$ref": "../../common/responses/status.json#/ok"
+    },
+    "remove": {
+        "vars": {
+            "service": "user",
+            "method": "playlist/remove"
+        },
+        "request": {
+            "$ref": "../requests.json#/service_call_session",
+            "method": "GET",
+            "params": {
+                "pid": "{{ playlist_id }}"
+            }
+        }
+    },
+    "remove_all": {
+        "vars": {
+            "service": "user",
+            "method": "playlists/remove"
+        },
+        "request": {
+            "$ref": "../requests.json#/service_call_session",
+            "method": "GET"
+        },
+        "$ref": "../../common/responses/status.json#/ok"
+    },
+    "update": {
+        "vars": {
+            "service": "user",
+            "method": "playlist/update"
+        },
+        "request": {
+            "$ref": "../requests.json#/service_call_session",
+            "method": "GET",
+            "params": {
+                "pid": "{{ playlist_id }}",
+                "name": "{{ playlist_name }}",
+                "desc": "{{ playlist_desc }}",
+                "order": "{{ playlist_order }}"
+            }
+        }
+    },
+    "update_all": {
+        "vars": {
+            "service": "user",
+            "method": "playlists/update"
+        },
+        "request": {
+            "$ref": "../requests.json#/service_call_session",
+            "method": "GET",
+            "params": {
+                "order": "{{ playlists_order }}"
+            }
+        }
+    },
+    "get_tracks": {
+        "vars": {
+            "service": "user",
+            "method": "playlist/tracks"
+        },
+        "request": {
+            "$ref": "../requests.json#/service_call_session",
+            "method": "GET"
+        }
+    },
+    "add_track": {
+        "vars": {
+            "service": "user",
+            "method": "playlist/track/add"
+        },
+        "request": {
+            "$ref": "../requests.json#/service_call_session",
+            "method": "POST"
+        }
+    },
+    "remove_track": {
+        "vars": {
+            "service": "user",
+            "method": "playlist/track/remove"
+        },
+        "request": {
+            "$ref": "../requests.json#/service_call_session",
+            "method": "GET"
+        }
+    }
+}

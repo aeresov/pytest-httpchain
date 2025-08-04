@@ -40,15 +40,6 @@
             "$ref": "../requests.json#/service_call_session",
             "method": "GET"
         },
-        "response": [
-            {
-                "verify": {
-                    "functions": [
-                        "utils.verify:log"
-                    ]
-                }
-            }
-        ],
         "$ref": "../../common/responses/status.json#/ok"
     }
 }
