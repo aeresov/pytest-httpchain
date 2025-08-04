@@ -32,7 +32,11 @@ class JsonModule(python.Module):
 
         # load JSON and resolve references
         try:
-            test_data: dict[str, Any] = pytest_httpchain_engine.loader.load_json(self.path, max_parent_traversal_depth=ref_parent_traversal_depth)
+            test_data: dict[str, Any] = pytest_httpchain_engine.loader.load_json(
+                self.path,
+                merge_lists=True,
+                max_parent_traversal_depth=ref_parent_traversal_depth,
+            )
         except pytest_httpchain_engine.loader.LoaderError as e:
             raise nodes.Collector.CollectError("Cannot load JSON file") from e
 
