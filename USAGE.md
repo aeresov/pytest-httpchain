@@ -284,10 +284,10 @@ import boto3
 import requests.auth
 from requests_aws4auth import AWS4Auth
 
-def dummy() -> AuthBase:
-    return HTTPBasicAuth("dummy_user", "dummy_password")
+def dummy() -> requests.auth.AuthBase:
+    return requests.auth.HTTPBasicAuth("dummy_user", "dummy_password")
 
-def aws_sigv4(service: str, region: str) -> AuthBase
+def aws_sigv4(service: str, region: str) -> requests.auth.AuthBase
     session = boto3.Session()
     credentials = session.get_credentials()
     return AWS4Auth(credentials.access_key, credentials.secret_key, region, service, session_token=credentials.token)

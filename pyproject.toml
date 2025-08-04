@@ -27,6 +27,7 @@ mcp = ["pytest-httpchain-mcp"]
 
 [dependency-groups]
 dev = [
+    "flask-httpauth>=4.8.0",
     "http-server-mock>=1.7",
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.6.16",

@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.13, <4.0"
 
 [manifest]
@@ -157,6 +157,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c0/de/e47735752347f4128bcf354e0da07ef311a78244eba9e3dc1d4a5ab21a98/flask-3.1.1.tar.gz", hash = "sha256:284c7b8f2f58cb737f0cf1c30fd7eaf0ccfcde196099d24ecede3fc2005aa59e", size = 753440, upload-time = "2025-05-13T15:01:17.447Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3d/68/9d4508e893976286d2ead7f8f571314af6c2037af34853a30fd769c02e9d/flask-3.1.1-py3-none-any.whl", hash = "sha256:07aae2bb5eaf77993ef57e357491839f5fd9f4dc281593a81a9e4d79a24f295c", size = 103305, upload-time = "2025-05-13T15:01:15.591Z" },
+]
+
+[[package]]
+name = "flask-httpauth"
+version = "4.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flask" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/22/21/0160aa217c4df74e44a04919213f9c8af7e68551c10267b055f1e09d421c/Flask-HTTPAuth-4.8.0.tar.gz", hash = "sha256:66568a05bc73942c65f1e2201ae746295816dc009edd84b482c44c758d75097a", size = 230314, upload-time = "2023-04-27T09:25:57.48Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/83/c4/e64ace124b927cd1f29270050ee0e0ef5faad75a512c5c8d733961dda9ca/Flask_HTTPAuth-4.8.0-py3-none-any.whl", hash = "sha256:a58fedd09989b9975448eef04806b096a3964a7feeebc0a78831ff55685b62b0", size = 6958, upload-time = "2023-04-27T09:25:55.803Z" },
 ]
 
 [[package]]
@@ -701,6 +713,7 @@ mcp = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "flask-httpauth" },
     { name = "http-server-mock" },
     { name = "mkdocs" },
     { name = "mkdocs-material" },
@@ -722,6 +735,7 @@ provides-extras = ["mcp"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "flask-httpauth", specifier = ">=4.8.0" },
     { name = "http-server-mock", specifier = ">=1.7" },
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "mkdocs-material", specifier = ">=9.6.16" },

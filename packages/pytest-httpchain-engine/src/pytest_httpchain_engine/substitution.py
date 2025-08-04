@@ -2,6 +2,7 @@ import re
 from typing import Any
 
 from pydantic import BaseModel
+
 from pytest_httpchain_engine.template_pattern import TEMPLATE_PATTERN
 
 # Safe built-ins for eval context - following established security patterns

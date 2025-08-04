@@ -16,6 +16,13 @@
                 "timeout": "{{ float_value }}",
                 "headers": {
                     "X-Session-Key": "{{ str(number_value) }}"
+                },
+                "auth": {
+                    "function": "auth:basic",
+                    "kwargs": {
+                        "username": "user",
+                        "password": "pass"
+                    }
                 }
             },
             "response": [

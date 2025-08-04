@@ -39,7 +39,7 @@ def call(session: requests.Session, model: pytest_httpchain_engine.models.entiti
                 case str():
                     auth_instance = AuthFunction.call(model.auth)
                 case pytest_httpchain_engine.models.entities.UserFunctionKwargs():
-                    auth_instance = AuthFunction.call_with_kwargs(model.auth.function, model.auth.kwargs)
+                    auth_instance = AuthFunction.call_with_kwargs(model.auth.function.root, model.auth.kwargs)
             request_params["auth"] = auth_instance
         except Exception as e:
             raise TesterError("Failed to configure stage authentication") from e

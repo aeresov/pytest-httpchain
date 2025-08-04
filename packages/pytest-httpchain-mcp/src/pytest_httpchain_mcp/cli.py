@@ -1,4 +1,5 @@
 import click
+
 from pytest_httpchain_mcp.server import mcp
 
 
