@@ -40,8 +40,6 @@
             "$ref": "../requests.json#/service_call_session",
             "method": "GET"
         },
-        "response": {
-            "$ref": "../../common/responses/status.json#/ok"
-        }
+        "$ref": "../../common/responses/status.json#/ok"
     }
 }

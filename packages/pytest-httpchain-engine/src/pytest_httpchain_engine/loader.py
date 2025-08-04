@@ -86,6 +86,10 @@ def _detect_merge_conflicts(
     if isinstance(base, list) and isinstance(overlay, list) and merge_lists:
         return
 
+    # Allow merging of identical values
+    if base == overlay:
+        return
+
     raise LoaderError(f"Merge conflict at {path if path else 'root'}")
 
 

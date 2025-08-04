@@ -18,6 +18,12 @@
         "$ref": "#/service_call",
         "headers": {
             "X-Session-Key": "{{ session_key }}"
+        },
+        "auth": {
+            "function": "utils.auth:altec_auth",
+            "kwargs": {
+                "session_key": "{{ session_key }}"
+            }
         }
     }
 }
