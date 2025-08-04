@@ -65,6 +65,11 @@ class Functions(RootModel):
 
 def get_body_discriminator(v: Any) -> str:
     """Discriminator function that determines body type from the data structure."""
+    # Handle BaseModel instances by checking for the body_type attribute
+    if hasattr(v, 'body_type'):
+        return v.body_type
+    
+    # Handle dict input
     if isinstance(v, dict):
         # Check for explicit body_type field first
         if "body_type" in v:
@@ -85,35 +90,35 @@ def get_body_discriminator(v: Any) -> str:
 class JsonBody(BaseModel):
     """JSON request body."""
 
-    body_type: Literal["json"] = Field(default="json", description="Discriminator field for body type.", exclude=True)
+    body_type: Literal["json"] = Field(default="json", description="Discriminator field for body type.")
     json: JsonValue = Field(description="JSON data to send.")
 
 
 class XmlBody(BaseModel):
     """XML request body."""
 
-    body_type: Literal["xml"] = Field(default="xml", description="Discriminator field for body type.", exclude=True)
+    body_type: Literal["xml"] = Field(default="xml", description="Discriminator field for body type.")
     xml: XMLSting | PartialTemplateStr = Field(description="XML content as string.")
 
 
 class FormBody(BaseModel):
     """Form-encoded request body."""
 
-    body_type: Literal["form"] = Field(default="form", description="Discriminator field for body type.", exclude=True)
+    body_type: Literal["form"] = Field(default="form", description="Discriminator field for body type.")
     form: dict[str, Any] = Field(description="Form data to be URL-encoded.")
 
 
 class RawBody(BaseModel):
     """Raw text request body."""
 
-    body_type: Literal["raw"] = Field(default="raw", description="Discriminator field for body type.", exclude=True)
+    body_type: Literal["raw"] = Field(default="raw", description="Discriminator field for body type.")
     raw: str = Field(description="Raw text content.")
 
 
 class FilesBody(BaseModel):
     """Multipart file upload request body."""
 
-    body_type: Literal["files"] = Field(default="files", description="Discriminator field for body type.", exclude=True)
+    body_type: Literal["files"] = Field(default="files", description="Discriminator field for body type.")
     files: dict[str, SerializablePath | PartialTemplateStr] = Field(description="Files to upload from file paths.")
 
 
@@ -184,6 +189,11 @@ class Decorated(BaseModel):
 
 def get_response_step_discriminator(v: Any) -> str:
     """Discriminator function that determines response step type from the data structure."""
+    # Handle BaseModel instances by checking for the step_type attribute
+    if hasattr(v, 'step_type'):
+        return v.step_type
+    
+    # Handle dict input
     if isinstance(v, dict):
         if "step_type" in v:
             return v["step_type"]
@@ -203,14 +213,14 @@ def get_response_step_discriminator(v: Any) -> str:
 class SaveStep(BaseModel):
     """Save data from HTTP response."""
 
-    step_type: Literal["save"] = Field(default="save", description="Discriminator field for step type.", exclude=True)
+    step_type: Literal["save"] = Field(default="save", description="Discriminator field for step type.")
     save: Save = Field(description="Save configuration.")
 
 
 class VerifyStep(BaseModel):
     """Verify HTTP response and data context."""
 
-    step_type: Literal["verify"] = Field(default="verify", description="Discriminator field for step type.", exclude=True)
+    step_type: Literal["verify"] = Field(default="verify", description="Discriminator field for step type.")
     verify: Verify = Field(description="Verify configuration.")
 
 

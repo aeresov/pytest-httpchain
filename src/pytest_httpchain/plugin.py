@@ -92,8 +92,7 @@ class JsonModule(python.Module):
                         data_context.update(pytest_httpchain_engine.substitution.walk(stage_template.vars, data_context))
 
                         # prepare and validate Stage
-                        stage_dict = pytest_httpchain_engine.substitution.walk(stage_template.model_dump(), data_context)
-                        stage: Stage = Stage.model_validate(stage_dict)
+                        stage: Stage = pytest_httpchain_engine.substitution.walk(stage_template, data_context)
 
                         # skip if the flow is aborted
                         if self.__class__._aborted and not stage.always_run:

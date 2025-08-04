@@ -63,6 +63,22 @@ def _sub_string(line: str, context: dict[str, Any]) -> Any:
         return re.sub(TEMPLATE_PATTERN, lambda m: str(_repl(m)), line)
 
 
+def _contains_template(obj: Any) -> bool:
+    """Check if an object contains any template strings."""
+    match obj:
+        case str():
+            return bool(re.search(TEMPLATE_PATTERN, obj))
+        case dict():
+            return any(_contains_template(value) for value in obj.values())
+        case list():
+            return any(_contains_template(item) for item in obj)
+        case BaseModel():
+            obj_dict = obj.model_dump(mode='python')
+            return _contains_template(obj_dict)
+        case _:
+            return False
+
+
 def walk(obj: Any, context: dict[str, Any]) -> Any:
     """Recursively substitute values in string attributes of an arbitrary object."""
     match obj:
@@ -73,7 +89,11 @@ def walk(obj: Any, context: dict[str, Any]) -> Any:
         case list():
             return [walk(item, context) for item in obj]
         case BaseModel():
-            obj_dict = obj.model_dump()
+            # Check if this object or any nested object contains template strings
+            if not _contains_template(obj):
+                return obj
+            
+            obj_dict = obj.model_dump(mode='python')
             processed_dict = walk(obj_dict, context)
             return obj.__class__.model_validate(processed_dict)
         case _:
