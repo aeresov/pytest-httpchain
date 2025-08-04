@@ -159,7 +159,7 @@ For detailed examples see [USAGE.md](USAGE.md).
 
 - Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`.\
 The `suffix` is configurable as pytest ini option, default value is **http**.
-- `$ref` instructions can point to other files; relative paths are generally used.\
+- `$ref` instructions can point to other files; absolute and relative paths are supported.\
 You can limit the depth of relative path traversal using `ref_parent_traversal_depth` ini option, default value is **3**.
 
 ## MCP Server
@@ -171,8 +171,8 @@ You can limit the depth of relative path traversal using `ref_parent_traversal_d
 The optional dependency `mcp` installs MCP server's package and `pytest-http-mcp` script.\
 Use this script as call target for your MCP configuration.
 
+Claude Code `.mcp.json` example:
 ```json
-// .mcp.json for Claude Code
 {
     "mcpServers": {
         "pytest-http": {

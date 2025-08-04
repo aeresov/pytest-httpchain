@@ -62,8 +62,8 @@ def int_value():
 
 Example of using `$ref` and greedy props merge.
 
+`requests.json`
 ```json
-// requests.json
 {
     "login": {
         "request": {
@@ -73,8 +73,8 @@ Example of using `$ref` and greedy props merge.
 }
 ```
 
+`stages.json`
 ```json
-// stages.json
 {
     "auth": {
         "$ref": "requests.json#/login",
@@ -87,8 +87,8 @@ Example of using `$ref` and greedy props merge.
 }
 ```
 
+`test_scenario.http.json`
 ```json
-// test_scenario.http.json
 {
     "stages": [
         {
