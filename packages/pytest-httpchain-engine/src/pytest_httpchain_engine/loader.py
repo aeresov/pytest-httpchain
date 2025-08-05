@@ -6,6 +6,8 @@ from typing import Any
 
 from deepmerge import always_merger
 
+from pytest_httpchain_engine.exceptions import LoaderError
+
 # Regex pattern for parsing $ref values
 # External file: "file.json"
 # External reference: "file.json#/path/to/node"
@@ -14,10 +16,6 @@ REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 
 # Maximum number of parent directory traversals allowed in $ref paths
 MAX_PARENT_TRAVERSAL_DEPTH = 3
-
-
-class LoaderError(Exception):
-    """An error parsing JSON test scenario."""
 
 
 def load_json(path: Path, max_parent_traversal_depth: int = MAX_PARENT_TRAVERSAL_DEPTH) -> dict[str, Any]:

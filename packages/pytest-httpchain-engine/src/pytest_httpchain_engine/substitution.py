@@ -3,6 +3,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from pytest_httpchain_engine.exceptions import SubstitutionError
 from pytest_httpchain_engine.template_pattern import TEMPLATE_PATTERN
 
 # Safe built-ins for eval context - following established security patterns
@@ -32,10 +33,6 @@ _SAFE_BUILTINS = {
     "zip": zip,
     "range": range,
 }
-
-
-class SubstitutionError(Exception):
-    """An error substituting variables."""
 
 
 def _eval_with_context(expr: str, context: dict[str, Any]) -> Any:
