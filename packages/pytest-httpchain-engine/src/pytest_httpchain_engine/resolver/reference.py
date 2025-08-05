@@ -140,9 +140,7 @@ class ReferenceResolver:
         Returns:
             Resolved data from the external file
         """
-        resolved_path = self.path_validator.validate_ref_path(
-            file_path, current_path, self.root_path or current_path, self.max_parent_traversal_depth
-        )
+        resolved_path = self.path_validator.validate_ref_path(file_path, current_path, self.root_path or current_path, self.max_parent_traversal_depth)
 
         self.tracker.check_external_ref(resolved_path, pointer)
 

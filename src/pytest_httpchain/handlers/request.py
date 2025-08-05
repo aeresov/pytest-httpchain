@@ -7,11 +7,9 @@ import requests
 from pytest_httpchain_engine.functions import AuthFunction
 from pytest_httpchain_engine.models.entities import Request, UserFunctionKwargs, UserFunctionName
 
+from pytest_httpchain.exceptions import RequestError
+
 logger = logging.getLogger(__name__)
-
-
-class RequestError(Exception):
-    """An error making HTTP request."""
 
 
 class RequestHandler:

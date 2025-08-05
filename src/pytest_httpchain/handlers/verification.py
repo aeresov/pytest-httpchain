@@ -10,13 +10,10 @@ from pytest_httpchain_engine.functions import VerificationFunction
 from pytest_httpchain_engine.models.entities import UserFunctionKwargs, UserFunctionName, Verify
 from pytest_httpchain_engine.models.types import check_json_schema
 
+from pytest_httpchain.exceptions import VerificationError
 from pytest_httpchain.handlers.response import ResponseHandler
 
 logger = logging.getLogger(__name__)
-
-
-class VerificationError(Exception):
-    """An error during response verification."""
 
 
 class VerificationHandler:

@@ -4,7 +4,6 @@ import types
 from collections.abc import Iterable
 from typing import Any
 
-import pytest  # Used in eval() for marker creation
 import pytest_httpchain_engine.loader
 import pytest_httpchain_engine.models.entities
 from _pytest import nodes, python

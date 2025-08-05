@@ -55,10 +55,7 @@ class UserFunctionHandler:
         if match:
             return None, match.group("function")
 
-        raise LoaderError(
-            f"Invalid function name: '{func_name}'. "
-            f"Expected format: 'module.path:function_name' or 'function_name'"
-        )
+        raise LoaderError(f"Invalid function name: '{func_name}'. Expected format: 'module.path:function_name' or 'function_name'")
 
     @classmethod
     def import_function(cls, module_path: str | None, function_name: str) -> Callable[..., Any]:

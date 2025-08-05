@@ -6,11 +6,9 @@ import requests
 from pytest_httpchain_engine.functions import VerificationFunction
 from pytest_httpchain_engine.models.entities import Save, UserFunctionKwargs, UserFunctionName
 
+from pytest_httpchain.exceptions import ResponseError
+
 logger = logging.getLogger(__name__)
-
-
-class ResponseError(Exception):
-    """An error processing HTTP response."""
 
 
 class ResponseHandler:
