@@ -88,7 +88,6 @@ def walk(obj: Any, context: dict[str, Any]) -> Any:
         case list():
             return [walk(item, context) for item in obj]
         case BaseModel():
-            # Check if this object or any nested object contains template strings
             if not _contains_template(obj):
                 return obj
 

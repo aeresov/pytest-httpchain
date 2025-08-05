@@ -1,5 +1,6 @@
 import pytest
-from pytest_httpchain_engine.loader import LoaderError, load_json
+from pytest_httpchain_engine.exceptions import LoaderError
+from pytest_httpchain_engine.loader import load_json
 
 
 class TestLoadJson:

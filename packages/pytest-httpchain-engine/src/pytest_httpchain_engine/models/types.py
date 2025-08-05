@@ -8,8 +8,8 @@ import jmespath
 import jsonschema
 from pydantic import AfterValidator, PlainSerializer
 
+from pytest_httpchain_engine.functions.base import UserFunctionHandler
 from pytest_httpchain_engine.template_pattern import TEMPLATE_REGEX, is_complete_template
-from pytest_httpchain_engine.user_function import BaseUserFunction
 
 
 def validate_python_identifier(v: str) -> str:
@@ -113,7 +113,6 @@ def validate_partial_template_str(v: str) -> str:
     if not matches:
         raise ValueError(f"Must contain at least one template expression like '{{{{ expr }}}}', got: {v!r}")
 
-    # Check that all template expressions are non-empty
     for match in matches:
         if not match.group("expr").strip():
             raise ValueError(f"Template expression cannot be empty at position {match.start()}")
@@ -121,7 +120,7 @@ def validate_partial_template_str(v: str) -> str:
 
 
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
-FunctionImportName = Annotated[str, AfterValidator(BaseUserFunction.validate_name)]
+FunctionImportName = Annotated[str, AfterValidator(UserFunctionHandler.validate_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
 JSONSchemaInline = Annotated[dict[str, Any], AfterValidator(validate_json_schema_inline)]
 SerializablePath = Annotated[Path, PlainSerializer(lambda x: str(x), return_type=str)]

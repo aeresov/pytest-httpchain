@@ -65,17 +65,13 @@ class Functions(RootModel):
 
 def get_body_discriminator(v: Any) -> str:
     """Discriminator function that determines body type from the data structure."""
-    # Handle BaseModel instances by checking for the body_type attribute
     if hasattr(v, "body_type"):
         return v.body_type
 
-    # Handle dict input
     if isinstance(v, dict):
-        # Check for explicit body_type field first
         if "body_type" in v:
             return v["body_type"]
 
-        # Infer from field names for backward compatibility
         body_fields = {"json", "xml", "form", "raw", "files"}
         found_fields = body_fields & set(v.keys())
 
@@ -189,11 +185,9 @@ class Decorated(BaseModel):
 
 def get_response_step_discriminator(v: Any) -> str:
     """Discriminator function that determines response step type from the data structure."""
-    # Handle BaseModel instances by checking for the step_type attribute
     if hasattr(v, "step_type"):
         return v.step_type
 
-    # Handle dict input
     if isinstance(v, dict):
         if "step_type" in v:
             return v["step_type"]

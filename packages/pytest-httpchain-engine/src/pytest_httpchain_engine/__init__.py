@@ -4,7 +4,6 @@ from pytest_httpchain_engine.exceptions import (
     HTTPChainError,
     LoaderError,
     SubstitutionError,
-    TesterError,
     UserFunctionError,
     ValidationError,
 )
@@ -19,7 +18,6 @@ __all__ = [
     "HTTPChainError",
     "LoaderError",
     "SubstitutionError",
-    "TesterError",
     "UserFunctionError",
     "ValidationError",
 ]
