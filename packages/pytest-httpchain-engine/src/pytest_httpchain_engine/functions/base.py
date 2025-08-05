@@ -12,6 +12,10 @@ from pytest_httpchain_engine.exceptions import LoaderError
 class UserFunctionHandler:
     """Base class for handling user-defined functions."""
 
+    # Regex patterns for function name validation
+    FULL_NAME_PATTERN = re.compile(r"^(?P<module>[a-zA-Z_][a-zA-Z0-9_.]*):(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$")
+    SIMPLE_NAME_PATTERN = re.compile(r"^(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$")
+
     @classmethod
     def validate_name(cls, func_name: str) -> str:
         """Validate a function name format.
@@ -25,14 +29,7 @@ class UserFunctionHandler:
         Raises:
             ValueError: If the name format is invalid
         """
-        # Try full 'module:function' or 'module.path:function' format
-        full_pattern = r"^(?P<module>[a-zA-Z_][a-zA-Z0-9_.]*):(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$"
-        if re.match(full_pattern, func_name):
-            return func_name
-
-        # Try just function name
-        simple_pattern = r"^(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$"
-        if re.match(simple_pattern, func_name):
+        if cls.FULL_NAME_PATTERN.match(func_name) or cls.SIMPLE_NAME_PATTERN.match(func_name):
             return func_name
 
         raise ValueError(f"'{func_name}' does not match 'module:function' or 'function' syntax with valid identifiers")
@@ -50,15 +47,11 @@ class UserFunctionHandler:
         Raises:
             LoaderError: If the name format is invalid
         """
-        # Try full 'module:function' or 'module.path:function' format
-        full_pattern = r"^(?P<module>[a-zA-Z_][a-zA-Z0-9_.]*):(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$"
-        match = re.match(full_pattern, func_name)
+        match = cls.FULL_NAME_PATTERN.match(func_name)
         if match:
             return match.group("module"), match.group("function")
 
-        # Try just function name
-        simple_pattern = r"^(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$"
-        match = re.match(simple_pattern, func_name)
+        match = cls.SIMPLE_NAME_PATTERN.match(func_name)
         if match:
             return None, match.group("function")
 
