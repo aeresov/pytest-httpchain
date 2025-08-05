@@ -9,7 +9,7 @@ import jsonschema
 from pydantic import AfterValidator, PlainSerializer
 
 from pytest_httpchain_engine.functions.base import UserFunctionHandler
-from pytest_httpchain_engine.template_pattern import TEMPLATE_REGEX, is_complete_template
+from pytest_httpchain_engine.substitution import TEMPLATE_REGEX, is_complete_template
 
 
 def validate_python_identifier(v: str) -> str:

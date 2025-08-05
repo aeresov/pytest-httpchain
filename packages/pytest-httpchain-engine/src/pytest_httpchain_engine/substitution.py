@@ -1,10 +1,21 @@
+"""Template substitution functionality."""
+
 import re
 from typing import Any
 
 from pydantic import BaseModel
 
 from pytest_httpchain_engine.exceptions import SubstitutionError
-from pytest_httpchain_engine.template_pattern import TEMPLATE_PATTERN
+
+# Pattern for matching template expressions with named groups
+# This pattern is used both for validation and substitution
+TEMPLATE_PATTERN = r"(?P<open>\{\{)(?P<expr>[^}]+?)(?P<close>\}\})"
+TEMPLATE_REGEX = re.compile(TEMPLATE_PATTERN)
+
+# Pattern for matching a complete template expression (for validation)
+# This ensures the entire string is a template, not just contains one
+COMPLETE_TEMPLATE_PATTERN = rf"^\s*{TEMPLATE_PATTERN}\s*$"
+COMPLETE_TEMPLATE_REGEX = re.compile(COMPLETE_TEMPLATE_PATTERN)
 
 # Safe built-ins for eval context - following established security patterns
 # Based on simpleeval and RestrictedPython safe builtins
@@ -33,6 +44,19 @@ _SAFE_BUILTINS = {
     "zip": zip,
     "range": range,
 }
+
+
+def is_complete_template(value: str) -> bool:
+    """Check if a string is a complete template expression."""
+    return COMPLETE_TEMPLATE_REGEX.match(value) is not None
+
+
+def extract_template_expression(value: str) -> str | None:
+    """Extract the expression part from a complete template string."""
+    match = COMPLETE_TEMPLATE_REGEX.match(value)
+    if match:
+        return match.group("expr").strip()
+    return None
 
 
 def _eval_with_context(expr: str, context: dict[str, Any]) -> Any:
