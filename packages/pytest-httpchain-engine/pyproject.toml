@@ -12,6 +12,7 @@ dependencies = [
     "requests>=2.32.4",
     "deepmerge>=2.0",
     "jsonschema>=4.0.0",
+    "simpleeval>=1.0.3",
 ]
 
 [build-system]

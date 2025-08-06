@@ -5,11 +5,8 @@ from typing import Any
 
 from pytest_httpchain_engine.resolver import ReferenceResolver
 
-# Maximum number of parent directory traversals allowed in $ref paths
-MAX_PARENT_TRAVERSAL_DEPTH = 3
 
-
-def load_json(path: Path, max_parent_traversal_depth: int = MAX_PARENT_TRAVERSAL_DEPTH) -> dict[str, Any]:
+def load_json(path: Path, max_parent_traversal_depth: int = 3) -> dict[str, Any]:
     """Load JSON from file and resolve all $ref statements with circular reference protection.
 
     Args:

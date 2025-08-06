@@ -1,8 +1,6 @@
 """Exceptions for pytest-httpchain."""
 
-
-class HTTPChainError(Exception):
-    """Base exception for all pytest-httpchain errors."""
+from pytest_httpchain_engine.exceptions import HTTPChainError
 
 
 class RequestError(HTTPChainError):
