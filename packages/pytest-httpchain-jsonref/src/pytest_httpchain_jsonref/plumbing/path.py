@@ -24,27 +24,20 @@ class PathValidator:
         Raises:
             ReferenceResolverError: If the path is invalid or violates security constraints
         """
-        # Resolve the path
-        resolved_path = (base_path / ref_path).resolve()
-        root_path_resolved = root_path.resolve()
-
-        # Ensure the resolved path doesn't escape the root directory
-        try:
-            resolved_path.relative_to(root_path_resolved)
-        except ValueError:
-            # Path is outside the root directory tree
-            raise ReferenceResolverError(f"Reference path '{ref_path}' points outside allowed directory tree") from None
-
-        # Count parent traversals by counting leading ".." components
-        parent_traversals = 0
-        for part in Path(ref_path).parts:
-            if part == "..":
-                parent_traversals += 1
-            else:
-                break
+        # Count parent traversals before resolution
+        parent_traversals = sum(1 for part in Path(ref_path).parts if part == "..")
 
         if parent_traversals > max_parent_traversal_depth:
             raise ReferenceResolverError(f"Reference path '{ref_path}' exceeds maximum parent traversal depth of {max_parent_traversal_depth}")
+
+        # Resolve and validate path containment
+        resolved_path = (base_path / ref_path).resolve()
+        root_path_resolved = root_path.resolve()
+
+        try:
+            resolved_path.relative_to(root_path_resolved)
+        except ValueError:
+            raise ReferenceResolverError(f"Reference path '{ref_path}' points outside allowed directory tree") from None
 
         return resolved_path
 

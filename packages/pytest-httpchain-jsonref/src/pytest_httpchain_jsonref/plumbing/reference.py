@@ -4,7 +4,7 @@ import json
 import re
 from functools import reduce
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from deepmerge import always_merger
 
@@ -24,6 +24,7 @@ class ReferenceResolver:
         self.tracker = CircularDependencyTracker()
         self.base_path: Path | None = None
         self.root_path: Path | None = None
+        self._cache: dict[tuple[Path, str], Any] = {}
 
     def resolve_document(self, data: dict[str, Any], base_path: Path) -> dict[str, Any]:
         """Resolve all references in a document.
@@ -95,7 +96,7 @@ class ReferenceResolver:
         pointer = match.group("pointer") or ""
 
         if file_path:
-            referenced_data = self._resolve_external_ref(file_path, pointer, current_path, root_data)
+            referenced_data = self._resolve_external_ref(file_path, pointer, current_path)
         else:
             referenced_data = self._resolve_internal_ref(pointer, root_data)
 
@@ -106,27 +107,23 @@ class ReferenceResolver:
         file_path: str,
         pointer: str,
         current_path: Path,
-        root_data: Any,
     ) -> Any:
         resolved_path = self.path_validator.validate_ref_path(file_path, current_path, self.root_path or current_path, self.max_parent_traversal_depth)
+
+        cache_key = (resolved_path, pointer)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
 
         self.tracker.check_external_ref(resolved_path, pointer)
 
         try:
-            with open(resolved_path, encoding="utf-8") as f:
-                full_external_data = json.load(f)
+            full_external_data = self._load_json_file(resolved_path)
+            external_data = self._navigate_pointer(full_external_data, pointer) if pointer else full_external_data
 
-            if pointer:
-                external_data = self._navigate_pointer(full_external_data, pointer)
-            else:
-                external_data = full_external_data
-
-            child_resolver = ReferenceResolver(self.max_parent_traversal_depth)
-            child_resolver.tracker = self.tracker.create_child_tracker()
-            child_resolver.root_path = self.root_path
-
-            # For internal references in the external file, use the full file content as root
-            return child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data)
+            child_resolver = self._create_child_resolver()
+            result = child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data)
+            self._cache[cache_key] = result
+            return result
 
         except (OSError, json.JSONDecodeError) as e:
             raise ReferenceResolverError(f"Failed to load external reference {file_path}: {e}") from e
@@ -180,13 +177,26 @@ class ReferenceResolver:
 
         return always_merger.merge(referenced_data, resolved_siblings)
 
+    def _load_json_file(self, path: Path) -> dict[str, Any]:
+        """Load and cache JSON file content."""
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def _create_child_resolver(self) -> Self:
+        """Create a child resolver with inherited state."""
+        child_resolver = type(self)(self.max_parent_traversal_depth)
+        child_resolver.tracker = self.tracker.create_child_tracker()
+        child_resolver.root_path = self.root_path
+        child_resolver._cache = self._cache.copy()
+        return child_resolver
+
     def _detect_merge_conflicts(
         self,
         base: Any,
         overlay: Any,
         path: str = "",
     ) -> None:
-        if base is None or overlay is None:
+        if base is None or overlay is None or base == overlay:
             return
 
         if isinstance(base, dict) and isinstance(overlay, dict):
@@ -197,9 +207,6 @@ class ReferenceResolver:
             return
 
         if isinstance(base, list) and isinstance(overlay, list):
-            return
-
-        if base == overlay:
             return
 
         raise ReferenceResolverError(f"Merge conflict at {path if path else 'root'}")
