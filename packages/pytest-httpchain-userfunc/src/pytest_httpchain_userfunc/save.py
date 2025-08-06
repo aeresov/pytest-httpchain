@@ -3,34 +3,24 @@ from typing import Any
 import requests
 
 from pytest_httpchain_userfunc.base import UserFunctionHandler
+from pytest_httpchain_userfunc.exceptions import UserFunctionError
 
 
-class SaveFunction(UserFunctionHandler):
-    """Handles save functions for HTTP responses."""
+def call_save_function(name: str, response: requests.Response, **kwargs: Any) -> dict[str, Any]:
+    """Call a save function for HTTP response.
 
-    @classmethod
-    def call(cls, name: str, response: requests.Response) -> dict[str, Any]:
-        """Call a verification function by name.
+    Args:
+        name: Function name in format "module.path:function_name" or "function_name"
+        response: HTTP response object to process
+        **kwargs: Optional keyword arguments for the function
 
-        Args:
-            name: Function name in format "module.path:function_name" or just "function_name"
-            response: HTTP response object to verify
+    Returns:
+        Data to insert into common data context
 
-        Returns:
-            Data to insert into common data context
-        """
-        return cls._call_function(name, response)
-
-    @classmethod
-    def call_with_kwargs(cls, name: str, response: requests.Response, kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Call a verification function with keyword arguments.
-
-        Args:
-            name: Function name in format "module.path:function_name" or just "function_name"
-            response: HTTP response object to verify
-            kwargs: Keyword arguments to pass to the function
-
-        Returns:
-            Data to insert into common data context
-        """
-        return cls._call_function(name, response, **kwargs)
+    Raises:
+        UserFunctionError: If function returns invalid type
+    """
+    result = UserFunctionHandler.call_function(name, response, **kwargs)
+    if not isinstance(result, dict):
+        raise UserFunctionError(f"Save function '{name}' must return dict, got {type(result).__name__}") from None
+    return result

@@ -82,7 +82,7 @@ def _sub_string(line: str, context: dict[str, Any]) -> Any:
     # Check if entire string is a single template expression
     if match := re.fullmatch(TEMPLATE_PATTERN, line):
         return _repl(match)
-    
+
     # Otherwise, replace template expressions in the string
     return re.sub(TEMPLATE_PATTERN, lambda m: str(_repl(m)), line)
 

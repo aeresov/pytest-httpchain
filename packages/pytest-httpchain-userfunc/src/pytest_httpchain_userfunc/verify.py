@@ -3,34 +3,24 @@ from typing import Any
 import requests
 
 from pytest_httpchain_userfunc.base import UserFunctionHandler
+from pytest_httpchain_userfunc.exceptions import UserFunctionError
 
 
-class VerificationFunction(UserFunctionHandler):
-    """Handles verification functions for HTTP responses."""
+def call_verify_function(name: str, response: requests.Response, **kwargs: Any) -> bool:
+    """Call a verification function for HTTP response.
 
-    @classmethod
-    def call(cls, name: str, response: requests.Response) -> bool:
-        """Call a verification function by name.
+    Args:
+        name: Function name in format "module.path:function_name" or "function_name"
+        response: HTTP response object to verify
+        **kwargs: Optional keyword arguments for the function
 
-        Args:
-            name: Function name in format "module.path:function_name" or just "function_name"
-            response: HTTP response object to verify
+    Returns:
+        Whether verification was successful
 
-        Returns:
-            Wether verification was successful
-        """
-        return cls._call_function(name, response)
-
-    @classmethod
-    def call_with_kwargs(cls, name: str, response: requests.Response, kwargs: dict[str, Any]) -> bool:
-        """Call a verification function with keyword arguments.
-
-        Args:
-            name: Function name in format "module.path:function_name" or just "function_name"
-            response: HTTP response object to verify
-            kwargs: Keyword arguments to pass to the function
-
-        Returns:
-            Wether verification was successful
-        """
-        return cls._call_function(name, response, **kwargs)
+    Raises:
+        UserFunctionError: If function returns invalid type
+    """
+    result = UserFunctionHandler.call_function(name, response, **kwargs)
+    if not isinstance(result, bool):
+        raise UserFunctionError(f"Verify function '{name}' must return bool, got {type(result).__name__}") from None
+    return result

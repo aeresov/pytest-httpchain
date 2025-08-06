@@ -40,9 +40,9 @@ from pytest_httpchain_models.types import (
     check_json_schema,
 )
 from pytest_httpchain_templates.exceptions import TemplatesError
-from pytest_httpchain_userfunc.auth import AuthFunction
-from pytest_httpchain_userfunc.save import SaveFunction
-from pytest_httpchain_userfunc.verify import VerificationFunction
+from pytest_httpchain_userfunc.auth import call_auth_function
+from pytest_httpchain_userfunc.save import call_save_function
+from pytest_httpchain_userfunc.verify import call_verify_function
 from simpleeval import EvalWithCompoundTypes
 
 from pytest_httpchain.constants import ConfigOptions
@@ -109,9 +109,9 @@ class JsonModule(python.Module):
 
                     match resolved_auth:
                         case UserFunctionName():
-                            auth_instance = AuthFunction.call(resolved_auth)
+                            auth_instance = call_auth_function(resolved_auth)
                         case UserFunctionKwargs():
-                            auth_instance = AuthFunction.call_with_kwargs(resolved_auth.function, resolved_auth.kwargs)
+                            auth_instance = call_auth_function(resolved_auth.function, **resolved_auth.kwargs)
 
                     cls._session.auth = auth_instance
 
@@ -175,9 +175,9 @@ class JsonModule(python.Module):
                         try:
                             match request_model.auth:
                                 case UserFunctionKwargs():
-                                    request_params["auth"] = AuthFunction.call_with_kwargs(request_model.auth.function.root, request_model.auth.kwargs)
+                                    request_params["auth"] = call_auth_function(request_model.auth.function.root, **request_model.auth.kwargs)
                                 case UserFunctionName():
-                                    request_params["auth"] = AuthFunction.call(request_model.auth.root)
+                                    request_params["auth"] = call_auth_function(request_model.auth.root)
                         except Exception as e:
                             raise RequestError("Failed to configure stage authentication") from e
 
@@ -250,9 +250,9 @@ class JsonModule(python.Module):
                                     try:
                                         match func_item:
                                             case UserFunctionKwargs():
-                                                func_result = SaveFunction.call_with_kwargs(func_item.function.root, response, func_item.kwargs)
+                                                func_result = call_save_function(func_item.function.root, response, **func_item.kwargs)
                                             case UserFunctionName():
-                                                func_result = SaveFunction.call(func_item.root, response)
+                                                func_result = call_save_function(func_item.root, response)
                                         result.update(func_result)
                                     except Exception as e:
                                         raise ResponseError(f"Error calling user function {func_item}") from e
@@ -292,9 +292,9 @@ class JsonModule(python.Module):
                                     try:
                                         match func_item:
                                             case UserFunctionKwargs():
-                                                result = VerificationFunction.call_with_kwargs(func_item.function.root, response, func_item.kwargs)
+                                                result = call_verify_function(func_item.function.root, response, **func_item.kwargs)
                                             case UserFunctionName():
-                                                result = VerificationFunction.call(func_item.root, response)
+                                                result = call_verify_function(func_item.root, response)
 
                                         if not result:
                                             raise VerificationError(f"Function '{func_item}' verification failed")
