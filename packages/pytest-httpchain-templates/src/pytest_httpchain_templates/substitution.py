@@ -51,7 +51,7 @@ def _eval_with_context(expr: str, context: dict[str, Any]) -> Any:
         The evaluated result
 
     Raises:
-        SubstitutionError: If variable is not found or expression is invalid
+        TemplatesError: If variable is not found or expression is invalid
     """
     evaluator.names = context
 
@@ -76,16 +76,15 @@ def _eval_with_context(expr: str, context: dict[str, Any]) -> Any:
 
 def _sub_string(line: str, context: dict[str, Any]) -> Any:
     def _repl(match: re.Match[str]) -> Any:
-        expr: str = match.group("expr").strip()
+        expr = match.group("expr").strip()
         return _eval_with_context(expr, context)
 
-    single_expr_match: re.Match[str] | None = re.fullmatch(TEMPLATE_PATTERN, line)
-    if single_expr_match:
-        # whole string is a substitution, use eval result directly
-        return _repl(single_expr_match)
-    else:
-        # replace bits in string
-        return re.sub(TEMPLATE_PATTERN, lambda m: str(_repl(m)), line)
+    # Check if entire string is a single template expression
+    if match := re.fullmatch(TEMPLATE_PATTERN, line):
+        return _repl(match)
+    
+    # Otherwise, replace template expressions in the string
+    return re.sub(TEMPLATE_PATTERN, lambda m: str(_repl(m)), line)
 
 
 def _contains_template(obj: Any) -> bool:
@@ -98,8 +97,7 @@ def _contains_template(obj: Any) -> bool:
         case list():
             return any(_contains_template(item) for item in obj)
         case BaseModel():
-            obj_dict = obj.model_dump(mode="python")
-            return _contains_template(obj_dict)
+            return _contains_template(obj.model_dump(mode="python"))
         case _:
             return False
 

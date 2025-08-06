@@ -7,7 +7,7 @@ from typing import Annotated, Any
 import jmespath
 import jsonschema
 from pydantic import AfterValidator, PlainSerializer
-from pytest_httpchain_templates.expressions import TEMPLATE_REGEX, is_complete_template
+from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN, is_complete_template
 from pytest_httpchain_userfunc.base import UserFunctionHandler
 from pytest_httpchain_userfunc.exceptions import UserFunctionError
 
@@ -89,7 +89,7 @@ def validate_template_expression(v: str) -> str:
 
 
 def validate_partial_template_str(v: str) -> str:
-    matches = list(TEMPLATE_REGEX.finditer(v))
+    matches = list(re.finditer(TEMPLATE_PATTERN, v))
     if not matches:
         raise ValueError(f"Must contain at least one template expression like '{{{{ expr }}}}', got: {v!r}")
 
