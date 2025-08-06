@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 import pytest_httpchain_engine.loader
-import pytest_httpchain_engine.models.entities
 from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
 from pydantic import ValidationError
@@ -117,11 +116,7 @@ class JsonModule(python.Module):
     def _create_marker_from_string(self, mark_str: str):
         """Create a pytest marker from a string using SimpleEval for safety."""
         try:
-            # Use EvalWithCompoundTypes for safe evaluation with list/tuple/dict support
-            evaluator = EvalWithCompoundTypes()
-            evaluator.names = {"pytest": pytest}
-
-            # Evaluate the marker expression safely
+            evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
             return evaluator.eval(f"pytest.mark.{mark_str}")
 
         except Exception as e:
@@ -181,10 +176,11 @@ def pytest_configure(config: config.Config) -> None:
 
 def pytest_collect_file(file_path: Path, parent: nodes.Collector) -> nodes.Collector | None:
     """Collect JSON test files matching the configured pattern."""
-    pattern, group_name = _get_test_name_pattern(parent.config)
-    match: re.Match[str] | None = pattern.match(file_path.name)
-    if match:
-        return JsonModule.from_parent(parent, path=file_path, name=match.group(group_name))
+    suffix: str = parent.config.getini(SUFFIX)
+    pattern = re.compile(rf"^test_(?P<name>.+)\.{re.escape(suffix)}\.json$")
+    file_match = pattern.match(file_path.name)
+    if file_match:
+        return JsonModule.from_parent(parent, path=file_path, name=file_match.group("name"))
     return None
 
 
@@ -195,10 +191,3 @@ def pytest_runtest_makereport(item: nodes.Item, call: runner.CallInfo):
     report: reports.TestReport = outcome.get_result()
     if call.when == "call":
         report.sections.append(("call_title", "call_value"))
-
-
-def _get_test_name_pattern(config: config.Config) -> tuple[re.Pattern[str], str]:
-    """Get the regex pattern for matching test file names."""
-    suffix: str = config.getini(SUFFIX)
-    group_name: str = "name"
-    return re.compile(rf"^test_(?P<{group_name}>.+)\.{re.escape(suffix)}\.json$"), group_name
