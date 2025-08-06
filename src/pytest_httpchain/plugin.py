@@ -31,7 +31,6 @@ from pytest_httpchain_models.entities import (
     Scenario,
     Stage,
     UserFunctionKwargs,
-    UserFunctionName,
     Verify,
     VerifyStep,
     XmlBody,
@@ -107,11 +106,10 @@ class JsonModule(python.Module):
                 if cls._scenario.auth:
                     resolved_auth = pytest_httpchain_templates.substitution.walk(cls._scenario.auth, cls._data_context)
 
-                    match resolved_auth:
-                        case UserFunctionName():
-                            auth_instance = call_auth_function(resolved_auth)
-                        case UserFunctionKwargs():
-                            auth_instance = call_auth_function(resolved_auth.function, **resolved_auth.kwargs)
+                    if isinstance(resolved_auth, UserFunctionKwargs):
+                        auth_instance = call_auth_function(resolved_auth.function.root, **resolved_auth.kwargs)
+                    else:  # UserFunctionName
+                        auth_instance = call_auth_function(resolved_auth.root)
 
                     cls._session.auth = auth_instance
 
@@ -123,12 +121,6 @@ class JsonModule(python.Module):
                     cls._session = None
                 cls._data_context.clear()
                 cls._aborted = False
-
-            def setup_method(self) -> None:
-                pass
-
-            def teardown_method(self) -> None:
-                pass
 
             @classmethod
             def execute_stage(cls, stage_template: Stage, fixture_kwargs: dict[str, Any]) -> None:
@@ -157,27 +149,20 @@ class JsonModule(python.Module):
                     request_params: dict[str, Any] = {
                         "timeout": request_model.timeout,
                         "allow_redirects": request_model.allow_redirects,
+                        "params": request_model.params,
+                        "headers": request_model.headers,
+                        # SSL configuration
+                        "verify": request_model.ssl.verify,
+                        **({"cert": request_model.ssl.cert} if request_model.ssl.cert else {}),
                     }
-
-                    if request_model.params:
-                        request_params["params"] = request_model.params
-                    if request_model.headers:
-                        request_params["headers"] = request_model.headers
-
-                    if request_model.ssl:
-                        if request_model.ssl.verify is not None:
-                            request_params["verify"] = request_model.ssl.verify
-                        if request_model.ssl.cert is not None:
-                            request_params["cert"] = request_model.ssl.cert
 
                     # Configure auth if present
                     if request_model.auth:
                         try:
-                            match request_model.auth:
-                                case UserFunctionKwargs():
-                                    request_params["auth"] = call_auth_function(request_model.auth.function.root, **request_model.auth.kwargs)
-                                case UserFunctionName():
-                                    request_params["auth"] = call_auth_function(request_model.auth.root)
+                            if isinstance(request_model.auth, UserFunctionKwargs):
+                                request_params["auth"] = call_auth_function(request_model.auth.function.root, **request_model.auth.kwargs)
+                            else:  # UserFunctionName
+                                request_params["auth"] = call_auth_function(request_model.auth.root)
                         except Exception as e:
                             raise RequestError("Failed to configure stage authentication") from e
 
@@ -220,24 +205,20 @@ class JsonModule(python.Module):
                     response_dict = pytest_httpchain_templates.substitution.walk(stage.response, data_context)
                     response_model = Response.model_validate(response_dict)
 
+                    # Extract JSON once for reuse
+                    try:
+                        response_json = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+                    except requests.JSONDecodeError:
+                        response_json = {}
+
                     for step in response_model:
                         match step:
                             case SaveStep():
                                 save_dict = pytest_httpchain_templates.substitution.walk(step.save, data_context)
                                 save_model = Save.model_validate(save_dict)
-
-                                # Save data directly
                                 result: dict[str, Any] = {}
 
-                                # Save variables from response
                                 if len(save_model.vars) > 0:
-                                    # Get JSON from response
-                                    try:
-                                        response_json = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
-                                    except requests.JSONDecodeError as e:
-                                        raise ResponseError("Error getting JSON from response") from e
-
-                                    # Save variables using JMESPath
                                     for var_name, jmespath_expr in save_model.vars.items():
                                         try:
                                             saved_value = jmespath.search(jmespath_expr, response_json)
@@ -245,14 +226,12 @@ class JsonModule(python.Module):
                                         except jmespath.exceptions.JMESPathError as e:
                                             raise ResponseError(f"Error saving variable {var_name}") from e
 
-                                # Execute save functions
                                 for func_item in save_model.functions:
                                     try:
-                                        match func_item:
-                                            case UserFunctionKwargs():
-                                                func_result = call_save_function(func_item.function.root, response, **func_item.kwargs)
-                                            case UserFunctionName():
-                                                func_result = call_save_function(func_item.root, response)
+                                        if isinstance(func_item, UserFunctionKwargs):
+                                            func_result = call_save_function(func_item.function.root, response, **func_item.kwargs)
+                                        else:  # UserFunctionName
+                                            func_result = call_save_function(func_item.root, response)
                                         result.update(func_result)
                                     except Exception as e:
                                         raise ResponseError(f"Error calling user function {func_item}") from e
@@ -264,37 +243,25 @@ class JsonModule(python.Module):
                                 verify_dict = pytest_httpchain_templates.substitution.walk(step.verify, data_context)
                                 verify_model = Verify.model_validate(verify_dict)
 
-                                # Verify response directly
-                                # Verify status
-                                if verify_model.status:
-                                    actual_status = response.status_code
-                                    expected_status = verify_model.status.value
-                                    if actual_status != expected_status:
-                                        raise VerificationError(f"Status code doesn't match: expected {expected_status}, got {actual_status}")
+                                if verify_model.status and response.status_code != verify_model.status.value:
+                                    raise VerificationError(f"Status code doesn't match: expected {verify_model.status.value}, got {response.status_code}")
 
-                                # Verify headers
                                 for header_name, expected_value in verify_model.headers.items():
-                                    actual_value = response.headers.get(header_name)
-                                    if actual_value != expected_value:
-                                        raise VerificationError(f"Header '{header_name}' doesn't match: expected {expected_value}, got {actual_value}")
+                                    if response.headers.get(header_name) != expected_value:
+                                        raise VerificationError(f"Header '{header_name}' doesn't match: expected {expected_value}, got {response.headers.get(header_name)}")
 
-                                # Verify variables
                                 for var_name, expected_value in verify_model.vars.items():
                                     if var_name not in data_context:
                                         raise VerificationError(f"Var '{var_name}' not found in data context")
+                                    if data_context[var_name] != expected_value:
+                                        raise VerificationError(f"Var '{var_name}' verification failed: expected {expected_value}, got {data_context[var_name]}")
 
-                                    actual_value = data_context[var_name]
-                                    if actual_value != expected_value:
-                                        raise VerificationError(f"Var '{var_name}' verification failed: expected {expected_value}, got {actual_value}")
-
-                                # Execute verification functions
                                 for func_item in verify_model.functions:
                                     try:
-                                        match func_item:
-                                            case UserFunctionKwargs():
-                                                result = call_verify_function(func_item.function.root, response, **func_item.kwargs)
-                                            case UserFunctionName():
-                                                result = call_verify_function(func_item.root, response)
+                                        if isinstance(func_item, UserFunctionKwargs):
+                                            result = call_verify_function(func_item.function.root, response, **func_item.kwargs)
+                                        else:  # UserFunctionName
+                                            result = call_verify_function(func_item.root, response)
 
                                         if not result:
                                             raise VerificationError(f"Function '{func_item}' verification failed")
@@ -302,40 +269,17 @@ class JsonModule(python.Module):
                                     except Exception as e:
                                         raise VerificationError(f"Error calling user function '{func_item}'") from e
 
-                                # Verify body
                                 if verify_model.body.schema:
-                                    # Get JSON from response
-                                    try:
-                                        response_json = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
-                                    except requests.JSONDecodeError as e:
-                                        raise ResponseError("Error getting JSON from response") from e
-
                                     schema = verify_model.body.schema
-                                    match schema:
-                                        case str() | Path():
-                                            schema_path = Path(schema)
-                                            try:
-                                                with schema_path.open() as f:
-                                                    schema_dict = json.load(f)
-                                            except (
-                                                FileNotFoundError,
-                                                OSError,
-                                                PermissionError,
-                                                UnicodeDecodeError,
-                                                json.JSONDecodeError,
-                                            ) as e:
-                                                raise VerificationError(f"Error reading body schema file '{schema_path}'") from e
-
-                                            try:
-                                                check_json_schema(schema_dict)
-                                            except jsonschema.SchemaError as e:
-                                                raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e.message}") from e
-
-                                            schema = schema_dict
-
-                                        case dict():
-                                            # Use inline schema (already validated by Pydantic)
-                                            pass
+                                    if isinstance(schema, str | Path):
+                                        schema_path = Path(schema)
+                                        try:
+                                            schema = json.loads(schema_path.read_text())
+                                            check_json_schema(schema)
+                                        except (OSError, json.JSONDecodeError) as e:
+                                            raise VerificationError(f"Error reading body schema file '{schema_path}'") from e
+                                        except jsonschema.SchemaError as e:
+                                            raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e.message}") from e
 
                                     try:
                                         jsonschema.validate(instance=response_json, schema=schema)
@@ -344,7 +288,6 @@ class JsonModule(python.Module):
                                     except jsonschema.SchemaError as e:
                                         raise VerificationError("Invalid body validation schema") from e
 
-                                # Verify substring patterns
                                 for substring in verify_model.body.contains:
                                     if substring not in response.text:
                                         raise VerificationError(f"Body doesn't contain '{substring}'")
@@ -353,7 +296,6 @@ class JsonModule(python.Module):
                                     if substring in response.text:
                                         raise VerificationError(f"Body contains '{substring}' while it shouldn't")
 
-                                # Verify regex patterns
                                 for pattern in verify_model.body.matches:
                                     if not re.search(pattern, response.text):
                                         raise VerificationError(f"Body doesn't match '{pattern}'")
@@ -364,40 +306,32 @@ class JsonModule(python.Module):
 
                     cls._data_context.update(context_update)
 
-                except (
-                    TemplatesError,
-                    RequestError,
-                    ResponseError,
-                    VerificationError,
-                    ValidationError,
-                    Exception,
-                ) as e:
+                except (TemplatesError, RequestError, ResponseError, VerificationError, ValidationError) as e:
                     logger.exception(str(e))
                     cls._aborted = True
                     pytest.fail(reason=str(e), pytrace=False)
 
         # Add stage methods to the carrier class
-        for i, stage_canvas in enumerate(scenario.stages):
+        for i, stage in enumerate(scenario.stages):
             # Create stage method - using default argument to capture stage_canvas
-            def stage_method(self, *, _stage=stage_canvas, **fixture_kwargs: Any):
+            def stage_method(self, *, _stage=stage, **fixture_kwargs: Any):
                 Carrier.execute_stage(_stage, fixture_kwargs)
 
             # Set up method signature with fixtures
-            all_fixtures = ["self"] + stage_canvas.fixtures + scenario.fixtures
+            all_fixtures = ["self"] + stage.fixtures + scenario.fixtures
             stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])
 
             # Apply markers
-            markers = stage_canvas.marks + [f"order({i})"]
-            for mark_str in markers:
+            evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
+            for mark_str in stage.marks + [f"order({i})"]:
                 try:
-                    evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
                     marker = evaluator.eval(f"pytest.mark.{mark_str}")
                     if marker:
                         stage_method = marker(stage_method)
                 except Exception as e:
                     logger.warning(f"Failed to create marker '{mark_str}': {e}")
 
-            setattr(Carrier, f"test_{i}_{stage_canvas.name}", stage_method)
+            setattr(Carrier, f"test_{i}_{stage.name}", stage_method)
 
         # Create pytest Class node for the carrier
         dummy_module = types.ModuleType("dummy")
@@ -412,9 +346,9 @@ class JsonModule(python.Module):
         )
 
         # Apply scenario-level markers
+        evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
         for mark_str in scenario.marks:
             try:
-                evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
                 marker = evaluator.eval(f"pytest.mark.{mark_str}")
                 if marker:
                     json_class.add_marker(marker)
