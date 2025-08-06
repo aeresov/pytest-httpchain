@@ -1,0 +1,18 @@
+[project]
+name = "pytest-httpchain-models"
+version = "0.1.0"
+description = "Pydantic models for pytest-httpchain"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [{ name = "Alexander Eresov", email = "aeresov@gmail.com" }]
+dependencies = [
+    "pydantic>=2.0.0",
+    "jmespath>=1.0.0",
+    "jsonschema>=4.0.0",
+    "pytest-httpchain-templates",
+    "pytest-httpchain-userfunc",
+]
+
+[build-system]
+requires = ["uv_build>=0.7.21,<0.8.0"]
+build-backend = "uv_build"

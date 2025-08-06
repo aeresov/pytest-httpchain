@@ -1,0 +1,124 @@
+import re
+from typing import Any
+
+from pydantic import BaseModel
+from simpleeval import (
+    AttributeDoesNotExist,
+    EvalWithCompoundTypes,
+    FunctionNotDefined,
+    InvalidExpression,
+    IterableTooLong,
+    NameNotDefined,
+    NumberTooHigh,
+    OperatorNotDefined,
+)
+
+from pytest_httpchain_templates.exceptions import TemplatesError
+from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN
+
+SAFE_FUNCTIONS = {
+    "str": str,
+    "int": int,
+    "float": float,
+    "bool": bool,
+    "len": len,
+    "min": min,
+    "max": max,
+    "sum": sum,
+    "abs": abs,
+    "round": round,
+    "sorted": sorted,
+    "enumerate": enumerate,
+    "zip": zip,
+    "range": range,
+    "dict": dict,
+    "list": list,
+    "tuple": tuple,
+    "set": set,
+}
+
+evaluator = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS)
+
+
+def _eval_with_context(expr: str, context: dict[str, Any]) -> Any:
+    """Evaluate an expression safely using simpleeval with compound types support.
+
+    Args:
+        expr: The expression to evaluate
+        context: Dictionary of variables available in the expression
+
+    Returns:
+        The evaluated result
+
+    Raises:
+        SubstitutionError: If variable is not found or expression is invalid
+    """
+    evaluator.names = context
+
+    try:
+        return evaluator.eval(expr)
+    except NameNotDefined as e:
+        raise TemplatesError(f"Undefined variable in expression '{{ {expr} }}'") from e
+    except FunctionNotDefined as e:
+        raise TemplatesError(f"Unknown function in expression '{{ {expr} }}'") from e
+    except AttributeDoesNotExist as e:
+        raise TemplatesError(f"Attribute error in expression '{{ {expr} }}'") from e
+    except OperatorNotDefined as e:
+        raise TemplatesError(f"Operator not allowed in expression '{{ {expr} }}'") from e
+    except (InvalidExpression, SyntaxError) as e:
+        raise TemplatesError(f"Invalid expression '{{ {expr} }}'") from e
+    except (NumberTooHigh, IterableTooLong) as e:
+        raise TemplatesError(f"Expression too complex '{{ {expr} }}'") from e
+    except (ValueError, TypeError, KeyError, IndexError, ZeroDivisionError) as e:
+        error_type = type(e).__name__
+        raise TemplatesError(f"{error_type} in expression '{{ {expr} }}'") from e
+
+
+def _sub_string(line: str, context: dict[str, Any]) -> Any:
+    def _repl(match: re.Match[str]) -> Any:
+        expr: str = match.group("expr").strip()
+        return _eval_with_context(expr, context)
+
+    single_expr_match: re.Match[str] | None = re.fullmatch(TEMPLATE_PATTERN, line)
+    if single_expr_match:
+        # whole string is a substitution, use eval result directly
+        return _repl(single_expr_match)
+    else:
+        # replace bits in string
+        return re.sub(TEMPLATE_PATTERN, lambda m: str(_repl(m)), line)
+
+
+def _contains_template(obj: Any) -> bool:
+    """Check if an object contains any template strings."""
+    match obj:
+        case str():
+            return bool(re.search(TEMPLATE_PATTERN, obj))
+        case dict():
+            return any(_contains_template(value) for value in obj.values())
+        case list():
+            return any(_contains_template(item) for item in obj)
+        case BaseModel():
+            obj_dict = obj.model_dump(mode="python")
+            return _contains_template(obj_dict)
+        case _:
+            return False
+
+
+def walk(obj: Any, context: dict[str, Any]) -> Any:
+    """Recursively substitute values in string attributes of an arbitrary object."""
+    match obj:
+        case str():
+            return _sub_string(obj, context)
+        case dict():
+            return {key: walk(value, context) for key, value in obj.items()}
+        case list():
+            return [walk(item, context) for item in obj]
+        case BaseModel():
+            if not _contains_template(obj):
+                return obj
+
+            obj_dict = obj.model_dump(mode="python")
+            processed_dict = walk(obj_dict, context)
+            return obj.__class__.model_validate(processed_dict)
+        case _:
+            return obj

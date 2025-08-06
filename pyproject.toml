@@ -6,7 +6,8 @@ readme = "README.md"
 requires-python = ">=3.13,<4.0"
 authors = [{ name = "Alexander Eresov", email = "aeresov@gmail.com" }]
 dependencies = [
-    "pytest-httpchain-engine",
+    "pytest-httpchain-jsonref",
+    "pytest-httpchain-models",
     "pytest-order>=1.3.0",
     "rich>=13.7.0",
 ]
@@ -47,8 +48,11 @@ default-groups = ["docs"]
 members = ["packages/*"]
 
 [tool.uv.sources]
-pytest-httpchain-engine = { workspace = true }
+pytest-httpchain-jsonref = { workspace = true }
+pytest-httpchain-templates = { workspace = true }
 pytest-httpchain-mcp = { workspace = true }
+pytest-httpchain-models = { workspace = true }
+pytest-httpchain-userfunc = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.7.21,<0.8.0"]
@@ -83,10 +87,19 @@ known-first-party = ["tests", "utils"]
 [tool.pytest.ini_options]
 log_cli = true
 log_cli_level = "INFO"
-testpaths = ["tests"]
+# testpaths = ["tests"]
 norecursedirs = ["examples"]
 pytester_example_dir = "tests/integration/examples"
-addopts = "--log-disable=werkzeug"
+addopts = ["--log-disable=werkzeug", "--import-mode=importlib"]
+pythonpath = [
+    ".",
+    "packages/pytest-httpchain-jsonref/src",
+    "packages/pytest-httpchain-templates/src",
+    "packages/pytest-httpchain-mcp/src",
+    "packages/pytest-httpchain-models/src",
+    "packages/pytest-httpchain-userfunc/src",
+]
+testpaths = ["tests", "packages/*/tests"]
 
 [tool.pyright]
 exclude = [".tox/"]

@@ -12,25 +12,37 @@ from typing import Any
 import jmespath
 import jsonschema
 import pytest
-import pytest_httpchain_engine.loader
-import pytest_httpchain_engine.models.entities
-import pytest_httpchain_engine.substitution
+import pytest_httpchain_jsonref.loader
+import pytest_httpchain_templates.substitution
 import requests
 from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
 from pydantic import ValidationError
-from pytest_httpchain_engine.exceptions import HTTPChainError
-from pytest_httpchain_engine.functions import AuthFunction, VerificationFunction
-from pytest_httpchain_engine.models.entities import (
+from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
+from pytest_httpchain_models.entities import (
+    FilesBody,
+    FormBody,
+    JsonBody,
+    RawBody,
     Request,
+    Response,
     Save,
+    SaveStep,
     Scenario,
     Stage,
     UserFunctionKwargs,
     UserFunctionName,
     Verify,
+    VerifyStep,
+    XmlBody,
 )
-from pytest_httpchain_engine.models.types import check_json_schema
+from pytest_httpchain_models.types import (
+    check_json_schema,
+)
+from pytest_httpchain_templates.exceptions import TemplatesError
+from pytest_httpchain_userfunc.auth import AuthFunction
+from pytest_httpchain_userfunc.save import SaveFunction
+from pytest_httpchain_userfunc.verify import VerificationFunction
 from simpleeval import EvalWithCompoundTypes
 
 from pytest_httpchain.constants import ConfigOptions
@@ -38,17 +50,16 @@ from pytest_httpchain.constants import ConfigOptions
 logger = logging.getLogger(__name__)
 
 
-# Exception classes
-class RequestError(HTTPChainError):
-    """An error making HTTP request."""
+class RequestError(Exception):
+    pass
 
 
-class ResponseError(HTTPChainError):
-    """An error processing HTTP response."""
+class ResponseError(Exception):
+    pass
 
 
-class VerificationError(HTTPChainError):
-    """An error during response verification."""
+class VerificationError(Exception):
+    pass
 
 
 class JsonModule(python.Module):
@@ -60,11 +71,11 @@ class JsonModule(python.Module):
         ref_parent_traversal_depth = int(self.config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH))
 
         try:
-            test_data = pytest_httpchain_engine.loader.load_json(
+            test_data = pytest_httpchain_jsonref.loader.load_json(
                 self.path,
                 max_parent_traversal_depth=ref_parent_traversal_depth,
             )
-        except pytest_httpchain_engine.loader.LoaderError as e:
+        except ReferenceResolverError as e:
             raise nodes.Collector.CollectError("Cannot load JSON file") from e
 
         try:
@@ -94,10 +105,10 @@ class JsonModule(python.Module):
 
                 # Configure authentication
                 if cls._scenario.auth:
-                    resolved_auth = pytest_httpchain_engine.substitution.walk(cls._scenario.auth, cls._data_context)
+                    resolved_auth = pytest_httpchain_templates.substitution.walk(cls._scenario.auth, cls._data_context)
 
                     match resolved_auth:
-                        case str():
+                        case UserFunctionName():
                             auth_instance = AuthFunction.call(resolved_auth)
                         case UserFunctionKwargs():
                             auth_instance = AuthFunction.call_with_kwargs(resolved_auth.function, resolved_auth.kwargs)
@@ -121,16 +132,15 @@ class JsonModule(python.Module):
 
             @classmethod
             def execute_stage(cls, stage_template: Stage, fixture_kwargs: dict[str, Any]) -> None:
-                """Execute a single test stage."""
                 try:
                     # Prepare data context
                     data_context = deepcopy(cls._data_context)
                     data_context.update(fixture_kwargs)
-                    data_context.update(pytest_httpchain_engine.substitution.walk(cls._scenario.vars, data_context))
-                    data_context.update(pytest_httpchain_engine.substitution.walk(stage_template.vars, data_context))
+                    data_context.update(pytest_httpchain_templates.substitution.walk(cls._scenario.vars, data_context))
+                    data_context.update(pytest_httpchain_templates.substitution.walk(stage_template.vars, data_context))
 
                     # Prepare and validate Stage
-                    stage = pytest_httpchain_engine.substitution.walk(stage_template, data_context)
+                    stage = pytest_httpchain_templates.substitution.walk(stage_template, data_context)
 
                     # Skip if the flow is aborted
                     if cls._aborted and not stage.always_run:
@@ -140,7 +150,7 @@ class JsonModule(python.Module):
                     if cls._session is None:
                         raise RuntimeError("Session not initialized")
 
-                    request_dict = pytest_httpchain_engine.substitution.walk(stage.request, data_context)
+                    request_dict = pytest_httpchain_templates.substitution.walk(stage.request, data_context)
                     request_model = Request.model_validate(request_dict)
 
                     # Prepare request parameters directly
@@ -175,15 +185,15 @@ class JsonModule(python.Module):
                     match request_model.body:
                         case None:
                             pass
-                        case pytest_httpchain_engine.models.entities.JsonBody(json=data):
+                        case JsonBody(json=data):
                             request_params["json"] = data
-                        case pytest_httpchain_engine.models.entities.FormBody(form=data):
+                        case FormBody(form=data):
                             request_params["data"] = data
-                        case pytest_httpchain_engine.models.entities.XmlBody(xml=data):
+                        case XmlBody(xml=data):
                             request_params["data"] = data
-                        case pytest_httpchain_engine.models.entities.RawBody(raw=data):
+                        case RawBody(raw=data):
                             request_params["data"] = data
-                        case pytest_httpchain_engine.models.entities.FilesBody(files=data):
+                        case FilesBody(files=data):
                             request_params["files"] = data
 
                     # Execute request
@@ -207,13 +217,13 @@ class JsonModule(python.Module):
 
                     # Process response and update context
                     context_update: dict[str, Any] = {}
-                    response_dict = pytest_httpchain_engine.substitution.walk(stage.response, data_context)
-                    response_model = pytest_httpchain_engine.models.entities.Response.model_validate(response_dict)
+                    response_dict = pytest_httpchain_templates.substitution.walk(stage.response, data_context)
+                    response_model = Response.model_validate(response_dict)
 
                     for step in response_model:
                         match step:
-                            case pytest_httpchain_engine.models.entities.SaveStep():
-                                save_dict = pytest_httpchain_engine.substitution.walk(step.save, data_context)
+                            case SaveStep():
+                                save_dict = pytest_httpchain_templates.substitution.walk(step.save, data_context)
                                 save_model = Save.model_validate(save_dict)
 
                                 # Save data directly
@@ -240,9 +250,9 @@ class JsonModule(python.Module):
                                     try:
                                         match func_item:
                                             case UserFunctionKwargs():
-                                                func_result = VerificationFunction.call_with_kwargs(func_item.function.root, response, func_item.kwargs)
+                                                func_result = SaveFunction.call_with_kwargs(func_item.function.root, response, func_item.kwargs)
                                             case UserFunctionName():
-                                                func_result = VerificationFunction.call(func_item.root, response)
+                                                func_result = SaveFunction.call(func_item.root, response)
                                         result.update(func_result)
                                     except Exception as e:
                                         raise ResponseError(f"Error calling user function {func_item}") from e
@@ -250,8 +260,8 @@ class JsonModule(python.Module):
                                 data_context.update(result)
                                 context_update.update(result)
 
-                            case pytest_httpchain_engine.models.entities.VerifyStep():
-                                verify_dict = pytest_httpchain_engine.substitution.walk(step.verify, data_context)
+                            case VerifyStep():
+                                verify_dict = pytest_httpchain_templates.substitution.walk(step.verify, data_context)
                                 verify_model = Verify.model_validate(verify_dict)
 
                                 # Verify response directly
@@ -355,7 +365,10 @@ class JsonModule(python.Module):
                     cls._data_context.update(context_update)
 
                 except (
-                    pytest_httpchain_engine.substitution.SubstitutionError,
+                    TemplatesError,
+                    RequestError,
+                    ResponseError,
+                    VerificationError,
                     ValidationError,
                     Exception,
                 ) as e:

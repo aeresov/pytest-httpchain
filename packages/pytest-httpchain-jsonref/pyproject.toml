@@ -1,15 +1,15 @@
 [project]
-name = "pytest-httpchain-mcp"
+name = "pytest-httpchain-jsonref"
 version = "0.1.0"
-description = "MCP server for pytest-httpchain"
+description = "JSON reference ($ref) support for pytest-httpchain"
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [{ name = "Alexander Eresov", email = "aeresov@gmail.com" }]
-dependencies = ["mcp[cli]>=1.11.0", "pydantic>=2.11.7"]
-
-[project.scripts]
-pytest-httpchain-mcp = "pytest_httpchain_mcp.cli:serve"
+dependencies = ["deepmerge>=2.0"]
 
 [build-system]
 requires = ["uv_build>=0.7.21,<0.8.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["pytest-datadir>=1.7.2"]

@@ -1,14 +1,11 @@
 [project]
-name = "pytest-httpchain-mcp"
+name = "pytest-httpchain-userfunc"
 version = "0.1.0"
-description = "MCP server for pytest-httpchain"
+description = "User functions support for pytest-httpchain"
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [{ name = "Alexander Eresov", email = "aeresov@gmail.com" }]
-dependencies = ["mcp[cli]>=1.11.0", "pydantic>=2.11.7"]
-
-[project.scripts]
-pytest-httpchain-mcp = "pytest_httpchain_mcp.cli:serve"
+dependencies = ["requests>=2.32.4"]
 
 [build-system]
 requires = ["uv_build>=0.7.21,<0.8.0"]
