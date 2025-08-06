@@ -12,7 +12,6 @@ from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
 from pytest_httpchain_jsonref.plumbing.circular import CircularDependencyTracker
 from pytest_httpchain_jsonref.plumbing.path import PathValidator
 
-# Regex pattern for parsing $ref values
 REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 
 
@@ -70,16 +69,6 @@ class ReferenceResolver:
         current_path: Path,
         root_data: Any,
     ) -> Any:
-        """Recursively resolve $ref statements.
-
-        Args:
-            data: Current data being processed
-            current_path: Current base path for relative references
-            root_data: Root document data for internal references
-
-        Returns:
-            Data with references resolved
-        """
         match data:
             case dict() if "$ref" in data:
                 return self._resolve_single_ref(data, current_path, root_data)
@@ -96,16 +85,6 @@ class ReferenceResolver:
         current_path: Path,
         root_data: Any,
     ) -> Any:
-        """Resolve a single $ref statement.
-
-        Args:
-            data: Dictionary containing $ref
-            current_path: Current base path
-            root_data: Root document data
-
-        Returns:
-            Resolved data with sibling properties merged
-        """
         ref_value = data["$ref"]
         match = REF_PATTERN.match(ref_value)
 
@@ -129,17 +108,6 @@ class ReferenceResolver:
         current_path: Path,
         root_data: Any,
     ) -> Any:
-        """Resolve an external file reference.
-
-        Args:
-            file_path: Path to the external file
-            pointer: JSON pointer within the file
-            current_path: Current base path
-            root_data: Root document data
-
-        Returns:
-            Resolved data from the external file
-        """
         resolved_path = self.path_validator.validate_ref_path(file_path, current_path, self.root_path or current_path, self.max_parent_traversal_depth)
 
         self.tracker.check_external_ref(resolved_path, pointer)
@@ -170,15 +138,6 @@ class ReferenceResolver:
         pointer: str,
         root_data: Any,
     ) -> Any:
-        """Resolve an internal reference.
-
-        Args:
-            pointer: JSON pointer to resolve
-            root_data: Root document data
-
-        Returns:
-            Resolved data from the pointer
-        """
         self.tracker.check_internal_ref(pointer)
 
         try:
@@ -188,18 +147,6 @@ class ReferenceResolver:
             self.tracker.clear_internal_ref(pointer)
 
     def _navigate_pointer(self, data: Any, pointer: str) -> Any:
-        """Navigate to a JSON pointer location.
-
-        Args:
-            data: Data to navigate in
-            pointer: JSON pointer path
-
-        Returns:
-            Data at the pointer location
-
-        Raises:
-            ReferenceResolverError: If pointer is invalid
-        """
         if not pointer:
             return data
 
@@ -217,17 +164,6 @@ class ReferenceResolver:
         current_path: Path,
         root_data: Any,
     ) -> Any:
-        """Merge referenced data with sibling properties.
-
-        Args:
-            ref_dict: Dictionary containing $ref and siblings
-            referenced_data: The resolved reference data
-            current_path: Current base path for resolving references
-            root_data: Root document data
-
-        Returns:
-            Merged data
-        """
         siblings = {k: v for k, v in ref_dict.items() if k != "$ref"}
 
         if not siblings:
@@ -240,10 +176,8 @@ class ReferenceResolver:
 
         resolved_siblings = self._resolve_refs(siblings, current_path, root_data)
 
-        # Detect merge conflicts
         self._detect_merge_conflicts(referenced_data, resolved_siblings)
 
-        # Merge using deepmerge
         return always_merger.merge(referenced_data, resolved_siblings)
 
     def _detect_merge_conflicts(
@@ -252,16 +186,6 @@ class ReferenceResolver:
         overlay: Any,
         path: str = "",
     ) -> None:
-        """Detect conflicts during merge.
-
-        Args:
-            base: The base value to merge into
-            overlay: The overlay value to merge from
-            path: Current path for error messages
-
-        Raises:
-            ReferenceResolverError: If a merge conflict is detected
-        """
         if base is None or overlay is None:
             return
 
@@ -273,10 +197,8 @@ class ReferenceResolver:
             return
 
         if isinstance(base, list) and isinstance(overlay, list):
-            # Allow list merging
             return
 
-        # Allow merging of identical values
         if base == overlay:
             return
 

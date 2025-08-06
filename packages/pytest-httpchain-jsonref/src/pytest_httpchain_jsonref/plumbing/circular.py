@@ -1,6 +1,7 @@
 """Circular dependency tracking for reference resolution."""
 
 from pathlib import Path
+from typing import Self
 
 
 class CircularDependencyTracker:
@@ -56,7 +57,7 @@ class CircularDependencyTracker:
         """
         self.internal_refs.discard(pointer)
 
-    def create_child_tracker(self) -> "CircularDependencyTracker":
+    def create_child_tracker(self) -> Self:
         """Create a child tracker that inherits current state.
 
         Returns:
