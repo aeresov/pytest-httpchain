@@ -43,3 +43,89 @@ class TestWalk:
     def test_invalid_expression(self):
         with pytest.raises(SubstitutionError, match="Invalid expression"):
             walk("{{ invalid + }}", {})
+
+    # New tests for compound types support
+    def test_list_creation(self):
+        result = walk("{{ [1, 2, 3, 4] }}", {})
+        assert result == [1, 2, 3, 4]
+
+    def test_dict_creation(self):
+        # Using dict() constructor which is supported by simpleeval
+        result = walk("{{ dict(key='value', number=42) }}", {})
+        assert result == {"key": "value", "number": 42}
+
+    def test_list_comprehension(self):
+        result = walk("{{ [x * 2 for x in items] }}", {"items": [1, 2, 3]})
+        assert result == [2, 4, 6]
+
+    def test_dict_comprehension(self):
+        # Dictionary comprehensions need to be tested differently
+        # simpleeval may not support dict comprehensions directly
+        result = walk("{{ dict([(k, v * 2) for k, v in data.items()]) }}", {"data": {"a": 1, "b": 2}})
+        assert result == {"a": 2, "b": 4}
+
+    def test_nested_structures(self):
+        context = {"users": [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}], "index": 0}
+        result = walk("{{ users[index]['name'] }}", context)
+        assert result == "Alice"
+
+    def test_builtin_functions(self):
+        # Test various built-in functions
+        assert walk("{{ str(123) }}", {}) == "123"
+        assert walk("{{ int('42') }}", {}) == 42
+        assert walk("{{ len([1, 2, 3]) }}", {}) == 3
+        assert walk("{{ max([1, 5, 3]) }}", {}) == 5
+        assert walk("{{ sum([1, 2, 3]) }}", {}) == 6
+        assert walk("{{ sorted([3, 1, 2]) }}", {}) == [1, 2, 3]
+
+    def test_combined_operations(self):
+        context = {"numbers": [1, 2, 3, 4, 5], "multiplier": 2}
+        result = walk("{{ sum([x * multiplier for x in numbers]) }}", context)
+        assert result == 30
+
+    def test_undefined_variable(self):
+        with pytest.raises(SubstitutionError, match="Undefined variable"):
+            walk("{{ undefined_var }}", {})
+
+    def test_no_dangerous_operations(self):
+        # Verify that dangerous operations are blocked
+        with pytest.raises(SubstitutionError):
+            walk("{{ __import__('os').system('ls') }}", {})
+
+        with pytest.raises(SubstitutionError):
+            walk("{{ open('/etc/passwd', 'r').read() }}", {})
+
+    def test_specific_error_messages(self):
+        # Test that specific error types produce appropriate messages
+        
+        # Undefined variable
+        with pytest.raises(SubstitutionError, match="Undefined variable"):
+            walk("{{ missing_var }}", {})
+        
+        # Unknown function
+        with pytest.raises(SubstitutionError, match="Unknown function"):
+            walk("{{ unknown_func() }}", {})
+        
+        # Attribute error
+        with pytest.raises(SubstitutionError, match="Attribute error"):
+            walk("{{ x.nonexistent }}", {"x": {"existing": 1}})
+        
+        # Syntax error
+        with pytest.raises(SubstitutionError, match="Invalid expression"):
+            walk("{{ 1 + }}", {})
+        
+        # Division by zero
+        with pytest.raises(SubstitutionError, match="ZeroDivisionError"):
+            walk("{{ 1 / 0 }}", {})
+        
+        # Type error
+        with pytest.raises(SubstitutionError, match="TypeError"):
+            walk("{{ 'text' + 5 }}", {})
+        
+        # Index error
+        with pytest.raises(SubstitutionError, match="IndexError"):
+            walk("{{ [1, 2][10] }}", {})
+        
+        # Key error - using dict() function since literal syntax doesn't work
+        with pytest.raises(SubstitutionError, match="KeyError"):
+            walk("{{ dict(a=1)['b'] }}", {})

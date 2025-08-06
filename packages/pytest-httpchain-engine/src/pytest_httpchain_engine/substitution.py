@@ -1,51 +1,111 @@
+"""Template substitution functionality."""
+
 import re
 from typing import Any
 
 from pydantic import BaseModel
+from simpleeval import (
+    AttributeDoesNotExist,
+    EvalWithCompoundTypes,
+    FunctionNotDefined,
+    InvalidExpression,
+    IterableTooLong,
+    NameNotDefined,
+    NumberTooHigh,
+    OperatorNotDefined,
+)
 
 from pytest_httpchain_engine.exceptions import SubstitutionError
-from pytest_httpchain_engine.template_pattern import TEMPLATE_PATTERN
 
-# Safe built-ins for eval context - following established security patterns
-# Based on simpleeval and RestrictedPython safe builtins
-_SAFE_BUILTINS = {
-    # Type conversion functions
+# Pattern for matching template expressions with named groups
+# This pattern is used both for validation and substitution
+TEMPLATE_PATTERN = r"(?P<open>\{\{)(?P<expr>[^}]+?)(?P<close>\}\})"
+TEMPLATE_REGEX = re.compile(TEMPLATE_PATTERN)
+
+# Pattern for matching a complete template expression (for validation)
+# This ensures the entire string is a template, not just contains one
+COMPLETE_TEMPLATE_PATTERN = rf"^\s*{TEMPLATE_PATTERN}\s*$"
+COMPLETE_TEMPLATE_REGEX = re.compile(COMPLETE_TEMPLATE_PATTERN)
+
+# Safe functions to make available in expressions
+_SAFE_FUNCTIONS = {
     "str": str,
     "int": int,
     "float": float,
     "bool": bool,
-    # Collection functions
     "len": len,
-    "list": list,
-    "dict": dict,
-    "tuple": tuple,
-    "set": set,
-    # Math functions
     "min": min,
     "max": max,
     "sum": sum,
     "abs": abs,
     "round": round,
-    # Iteration functions
     "sorted": sorted,
-    "reversed": reversed,
     "enumerate": enumerate,
     "zip": zip,
     "range": range,
+    "dict": dict,
+    "list": list,
+    "tuple": tuple,
+    "set": set,
 }
+
+# Create a single shared evaluator instance with safe functions
+# WARNING: This is NOT thread-safe if multiple threads evaluate concurrently.
+# However, for pytest-httpchain's typical use (sequential test execution),
+# this is acceptable and avoids the overhead of creating evaluators per call.
+_EVALUATOR = EvalWithCompoundTypes(functions=_SAFE_FUNCTIONS)
+
+
+def is_complete_template(value: str) -> bool:
+    """Check if a string is a complete template expression."""
+    return COMPLETE_TEMPLATE_REGEX.match(value) is not None
+
+
+def extract_template_expression(value: str) -> str | None:
+    """Extract the expression part from a complete template string."""
+    match = COMPLETE_TEMPLATE_REGEX.match(value)
+    if match:
+        return match.group("expr").strip()
+    return None
 
 
 def _eval_with_context(expr: str, context: dict[str, Any]) -> Any:
+    """Evaluate an expression safely using simpleeval with compound types support.
+
+    Args:
+        expr: The expression to evaluate
+        context: Dictionary of variables available in the expression
+
+    Returns:
+        The evaluated result
+
+    Raises:
+        SubstitutionError: If variable is not found or expression is invalid
+    """
+    # Update context and evaluate
+    # Note: This approach has a race condition if multiple threads call this
+    # concurrently. For thread-safety, consider creating evaluator per call
+    # or using thread-local storage. Current approach optimizes for the common
+    # case of sequential execution.
+    _EVALUATOR.names = context
+
     try:
-        return eval(
-            expr,
-            globals={"__builtins__": _SAFE_BUILTINS},
-            locals=context,
-        )
-    except NameError as e:
-        raise SubstitutionError(f"Unsubstituted variable in '{{ {expr} }}'") from e
-    except Exception as e:
-        raise SubstitutionError("Invalid expression") from e
+        return _EVALUATOR.eval(expr)
+    except NameNotDefined as e:
+        raise SubstitutionError(f"Undefined variable in expression '{{ {expr} }}'") from e
+    except FunctionNotDefined as e:
+        raise SubstitutionError(f"Unknown function in expression '{{ {expr} }}'") from e
+    except AttributeDoesNotExist as e:
+        raise SubstitutionError(f"Attribute error in expression '{{ {expr} }}'") from e
+    except OperatorNotDefined as e:
+        raise SubstitutionError(f"Operator not allowed in expression '{{ {expr} }}'") from e
+    except (InvalidExpression, SyntaxError) as e:
+        raise SubstitutionError(f"Invalid expression '{{ {expr} }}'") from e
+    except (NumberTooHigh, IterableTooLong) as e:
+        raise SubstitutionError(f"Expression too complex '{{ {expr} }}'") from e
+    except (ValueError, TypeError, KeyError, IndexError, ZeroDivisionError) as e:
+        error_type = type(e).__name__
+        raise SubstitutionError(f"{error_type} in expression '{{ {expr} }}'") from e
 
 
 def _sub_string(line: str, context: dict[str, Any]) -> Any:
@@ -88,7 +148,6 @@ def walk(obj: Any, context: dict[str, Any]) -> Any:
         case list():
             return [walk(item, context) for item in obj]
         case BaseModel():
-            # Check if this object or any nested object contains template strings
             if not _contains_template(obj):
                 return obj
 
