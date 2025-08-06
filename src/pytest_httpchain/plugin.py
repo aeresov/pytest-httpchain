@@ -13,6 +13,7 @@ from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
 from pydantic import ValidationError
 from pytest_httpchain_engine.models.entities import Scenario, Stage
+from simpleeval import EvalWithCompoundTypes
 
 from pytest_httpchain.core.executor import StageExecutor
 from pytest_httpchain.core.session import HTTPSessionManager
@@ -114,9 +115,15 @@ class JsonModule(python.Module):
         return method
 
     def _create_marker_from_string(self, mark_str: str):
-        """Create a pytest marker from a string using eval."""
+        """Create a pytest marker from a string using SimpleEval for safety."""
         try:
-            return eval(f"pytest.mark.{mark_str}")
+            # Use EvalWithCompoundTypes for safe evaluation with list/tuple/dict support
+            evaluator = EvalWithCompoundTypes()
+            evaluator.names = {"pytest": pytest}
+
+            # Evaluate the marker expression safely
+            return evaluator.eval(f"pytest.mark.{mark_str}")
+
         except Exception as e:
             logger.warning(f"Failed to create marker '{mark_str}': {e}")
             return None

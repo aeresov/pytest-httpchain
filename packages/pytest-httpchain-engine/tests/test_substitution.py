@@ -97,35 +97,35 @@ class TestWalk:
 
     def test_specific_error_messages(self):
         # Test that specific error types produce appropriate messages
-        
+
         # Undefined variable
         with pytest.raises(SubstitutionError, match="Undefined variable"):
             walk("{{ missing_var }}", {})
-        
+
         # Unknown function
         with pytest.raises(SubstitutionError, match="Unknown function"):
             walk("{{ unknown_func() }}", {})
-        
+
         # Attribute error
         with pytest.raises(SubstitutionError, match="Attribute error"):
             walk("{{ x.nonexistent }}", {"x": {"existing": 1}})
-        
+
         # Syntax error
         with pytest.raises(SubstitutionError, match="Invalid expression"):
             walk("{{ 1 + }}", {})
-        
+
         # Division by zero
         with pytest.raises(SubstitutionError, match="ZeroDivisionError"):
             walk("{{ 1 / 0 }}", {})
-        
+
         # Type error
         with pytest.raises(SubstitutionError, match="TypeError"):
             walk("{{ 'text' + 5 }}", {})
-        
+
         # Index error
         with pytest.raises(SubstitutionError, match="IndexError"):
             walk("{{ [1, 2][10] }}", {})
-        
+
         # Key error - using dict() function since literal syntax doesn't work
         with pytest.raises(SubstitutionError, match="KeyError"):
             walk("{{ dict(a=1)['b'] }}", {})
