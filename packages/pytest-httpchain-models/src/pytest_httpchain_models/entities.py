@@ -1,7 +1,7 @@
 from http import HTTPMethod, HTTPStatus
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, Discriminator, Field, JsonValue, PositiveFloat, RootModel, Tag, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, PositiveFloat, RootModel, model_validator
 from pydantic.networks import HttpUrl
 
 from pytest_httpchain_models.types import (
@@ -63,69 +63,54 @@ class Functions(RootModel):
         return self.root[item]
 
 
-def get_body_discriminator(v: Any) -> str:
-    """Discriminator function that determines body type from the data structure."""
-    if hasattr(v, "body_type"):
-        return v.body_type
+class RequestBodyBase(BaseModel):
+    """Base class for request body types."""
 
-    if isinstance(v, dict):
-        if "body_type" in v:
-            return v["body_type"]
-
-        body_fields = {"json", "xml", "form", "raw", "files"}
-        found_fields = body_fields & set(v.keys())
-
-        if len(found_fields) > 1:
-            raise ValueError(f"Multiple body type fields found: {', '.join(sorted(found_fields))}. Only one is allowed.")
-        elif len(found_fields) == 1:
-            return found_fields.pop()
-
-    raise ValueError("Unable to determine body type from fields. Must have one of: json, xml, form, raw, files")
+    model_config = ConfigDict(extra="forbid")
 
 
-class JsonBody(BaseModel):
+class JsonBody(RequestBodyBase):
     """JSON request body."""
 
-    body_type: Literal["json"] = Field(default="json", description="Discriminator field for body type.")
+    body_type: Literal["json"] = "json"
     json: JsonValue = Field(description="JSON data to send.")
 
 
-class XmlBody(BaseModel):
+class XmlBody(RequestBodyBase):
     """XML request body."""
 
-    body_type: Literal["xml"] = Field(default="xml", description="Discriminator field for body type.")
+    body_type: Literal["xml"] = "xml"
     xml: XMLSting | PartialTemplateStr = Field(description="XML content as string.")
 
 
-class FormBody(BaseModel):
+class FormBody(RequestBodyBase):
     """Form-encoded request body."""
 
-    body_type: Literal["form"] = Field(default="form", description="Discriminator field for body type.")
+    body_type: Literal["form"] = "form"
     form: dict[str, Any] = Field(description="Form data to be URL-encoded.")
 
 
-class RawBody(BaseModel):
+class RawBody(RequestBodyBase):
     """Raw text request body."""
 
-    body_type: Literal["raw"] = Field(default="raw", description="Discriminator field for body type.")
+    body_type: Literal["raw"] = "raw"
     raw: str = Field(description="Raw text content.")
 
 
-class FilesBody(BaseModel):
+class FilesBody(RequestBodyBase):
     """Multipart file upload request body."""
 
-    body_type: Literal["files"] = Field(default="files", description="Discriminator field for body type.")
+    body_type: Literal["files"] = "files"
     files: dict[str, SerializablePath | PartialTemplateStr] = Field(description="Files to upload from file paths.")
 
 
-# Discriminated union for all possible body types
-RequestBody = Annotated[
-    Annotated[JsonBody, Tag("json")] | Annotated[XmlBody, Tag("xml")] | Annotated[FormBody, Tag("form")] | Annotated[RawBody, Tag("raw")] | Annotated[FilesBody, Tag("files")],
-    Discriminator(get_body_discriminator),
-]
+# Simplified discriminated union using Pydantic's built-in discrimination
+RequestBody = Annotated[JsonBody | XmlBody | FormBody | RawBody | FilesBody, Field(discriminator="body_type")]
 
 
 class CallSecurity(BaseModel):
+    """Security configuration for HTTP calls."""
+
     ssl: SSLConfig = Field(
         default_factory=SSLConfig,
         description="SSL/TLS configuration.",
@@ -137,6 +122,8 @@ class CallSecurity(BaseModel):
 
 
 class Request(CallSecurity):
+    """HTTP request configuration."""
+
     url: HttpUrl | PartialTemplateStr = Field()
     method: HTTPMethod | TemplateExpression = Field(default=HTTPMethod.GET)
     params: dict[str, Any] = Field(default_factory=dict)
@@ -147,82 +134,70 @@ class Request(CallSecurity):
 
 
 class Save(BaseModel):
-    vars: dict[str, JMESPathExpression | PartialTemplateStr] = Field(default_factory=dict, description="Dictionary of JMESPath expressions to extract the value from the response.")
-    functions: Functions = Field(default_factory=Functions, description="List of functions to be called to save data from HTTP response.")
+    """Configuration for saving data from HTTP response."""
+
+    vars: dict[str, JMESPathExpression | PartialTemplateStr] = Field(default_factory=dict, description="JMESPath expressions to extract values.")
+    functions: Functions = Field(default_factory=Functions, description="Functions to process response data.")
 
 
 class ResponseBody(BaseModel):
-    schema: JSONSchemaInline | SerializablePath | PartialTemplateStr | None = Field(default=None, description="JSON schema or path to schema file to validate the whole body with.")
-    contains: list[str] = Field(default_factory=list, description="Substrings that must be present in the response body.")
-    not_contains: list[str] = Field(default_factory=list, description="Substrings that must NOT be present in the response body.")
-    matches: list[RegexPattern] = Field(default_factory=list, description="Regular expressions the response body must match.")
-    not_matches: list[RegexPattern] = Field(default_factory=list, description="Regular expressions the response body must NOT match.")
+    """Response body validation configuration."""
+
+    schema: JSONSchemaInline | SerializablePath | PartialTemplateStr | None = Field(default=None, description="JSON schema for validation.")
+    contains: list[str] = Field(default_factory=list)
+    not_contains: list[str] = Field(default_factory=list)
+    matches: list[RegexPattern] = Field(default_factory=list)
+    not_matches: list[RegexPattern] = Field(default_factory=list)
 
 
 class Verify(BaseModel):
-    status: HTTPStatus | None | TemplateExpression = Field(default=None, description="Expected HTTP status code.")
-    headers: dict[str, str] = Field(default_factory=dict, description="Expected response headers (case-insensitive).")
-    vars: dict[str, Any] = Field(default_factory=dict, description="Expected values for variables from data context.")
-    functions: Functions = Field(default_factory=Functions, description="List of functions to be called to verify the response and data context.")
-    body: ResponseBody = Field(default_factory=ResponseBody, description="Direct response body validation.")
+    """Response verification configuration."""
+
+    status: HTTPStatus | None | TemplateExpression = Field(default=None)
+    headers: dict[str, str] = Field(default_factory=dict)
+    vars: dict[str, Any] = Field(default_factory=dict)
+    functions: Functions = Field(default_factory=Functions)
+    body: ResponseBody = Field(default_factory=ResponseBody)
 
 
 class Decorated(BaseModel):
-    marks: list[str] = Field(default_factory=list, description="List of pytest markers to be applied.", examples=["xfail", "skip"])
-    fixtures: list[str] = Field(default_factory=list, description="List of pytest fixture names to be requested.")
-    vars: dict[str, Any] = Field(default_factory=dict, description="Variables to inject into data context. Useful for common references.")
+    """Pytest test decoration configuration."""
+
+    marks: list[str] = Field(default_factory=list, examples=["xfail", "skip"])
+    fixtures: list[str] = Field(default_factory=list)
+    vars: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_variable_naming_conflicts(self) -> Self:
-        """Validate that fixtures don't conflict with vars."""
-        conflicting_vars = set(set(self.fixtures) & self.vars.keys())
-        if len(conflicting_vars) > 0:
-            var_names = ",".join(conflicting_vars)
-            raise ValueError(f"Conflicting fixtures and vars: {var_names}")
-
+    def validate_no_conflicts(self) -> Self:
+        """Ensure fixtures and vars don't conflict."""
+        conflicts = set(self.fixtures) & self.vars.keys()
+        if conflicts:
+            raise ValueError(f"Conflicting fixtures and vars: {', '.join(conflicts)}")
         return self
 
 
-def get_response_step_discriminator(v: Any) -> str:
-    """Discriminator function that determines response step type from the data structure."""
-    if hasattr(v, "step_type"):
-        return v.step_type
+class ResponseStepBase(BaseModel):
+    """Base class for response step types."""
 
-    if isinstance(v, dict):
-        if "step_type" in v:
-            return v["step_type"]
-
-        # Infer from field names
-        step_fields = {"save", "verify"}
-        found_fields = step_fields & set(v.keys())
-
-        if len(found_fields) > 1:
-            raise ValueError(f"Multiple step type fields found: {', '.join(sorted(found_fields))}. Only one is allowed.")
-        elif len(found_fields) == 1:
-            return found_fields.pop()
-
-    raise ValueError("Unable to determine response step type from fields. Must have one of: save, verify")
+    model_config = ConfigDict(extra="forbid")
 
 
-class SaveStep(BaseModel):
+class SaveStep(ResponseStepBase):
     """Save data from HTTP response."""
 
-    step_type: Literal["save"] = Field(default="save", description="Discriminator field for step type.")
+    step_type: Literal["save"] = "save"
     save: Save = Field(description="Save configuration.")
 
 
-class VerifyStep(BaseModel):
+class VerifyStep(ResponseStepBase):
     """Verify HTTP response and data context."""
 
-    step_type: Literal["verify"] = Field(default="verify", description="Discriminator field for step type.")
+    step_type: Literal["verify"] = "verify"
     verify: Verify = Field(description="Verify configuration.")
 
 
-# Discriminated union for response steps
-ResponseStep = Annotated[
-    Annotated[SaveStep, Tag("save")] | Annotated[VerifyStep, Tag("verify")],
-    Discriminator(get_response_step_discriminator),
-]
+# Simplified discriminated union for response steps
+ResponseStep = Annotated[SaveStep | VerifyStep, Field(discriminator="step_type")]
 
 
 class Response(RootModel):
@@ -252,34 +227,26 @@ class Response(RootModel):
 
 
 class Stage(Decorated):
-    name: str = Field(description="Stage name. Human readable, no need to be unique.")
-    always_run: Literal[True, False] | TemplateExpression = Field(
-        default=False,
-        description="Run this stage even if previous stages failed. Must be a boolean or a complete template expression that evaluates to a boolean.",
-        examples=[
-            True,
-            False,
-            "{{ should_run }}",
-            "{{ env == 'production' }}",
-            "{{ not skip_stage }}",
-        ],
-    )
+    """HTTP test stage configuration."""
+
+    name: str = Field(description="Stage name (human-readable).")
+    always_run: Literal[True, False] | TemplateExpression = Field(default=False, examples=[True, "{{ should_run }}", "{{ env == 'production' }}"])
     request: Any = Field(description="HTTP request details.")
-    response: Response = Field(default_factory=Response, description="Sequential response processing configuration.")
+    response: Response = Field(default_factory=Response)
 
 
 class Scenario(Decorated, CallSecurity):
-    stages: list[Stage] = Field(default_factory=list, description="Stages collection.")
+    """HTTP test scenario with multiple stages."""
+
+    stages: list[Stage] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_saved_vars_not_conflicting_with_fixtures(self) -> Self:
-        """Validate that stage saved variables don't conflict with scenario fixtures."""
+    def validate_no_var_conflicts(self) -> Self:
+        """Ensure stage variables don't conflict with fixtures."""
         for stage in self.stages:
             for step in stage.response:
                 if isinstance(step, SaveStep) and step.save.vars:
-                    conflicting_vars = set(set(step.save.vars.keys()) & set(self.fixtures))
-                    if len(conflicting_vars) > 0:
-                        var_names = ",".join(conflicting_vars)
-                        raise ValueError(f"Stage '{stage.name}' conflicting saved vars and scenario fixtures: {var_names}")
-
+                    conflicts = set(step.save.vars.keys()) & set(self.fixtures)
+                    if conflicts:
+                        raise ValueError(f"Stage '{stage.name}' has conflicting vars and fixtures: {', '.join(conflicts)}")
         return self

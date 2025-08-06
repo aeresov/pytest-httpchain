@@ -12,7 +12,21 @@ from pytest_httpchain_userfunc.base import UserFunctionHandler
 from pytest_httpchain_userfunc.exceptions import UserFunctionError
 
 
+def create_string_validator(validation_func, error_message: str):
+    """Factory for creating string validators."""
+
+    def validator(v: str) -> str:
+        try:
+            validation_func(v)
+        except Exception as e:
+            raise ValueError(error_message) from e
+        return v
+
+    return validator
+
+
 def validate_python_identifier(v: str) -> str:
+    """Validate Python identifier and check for reserved keywords."""
     if not v.isidentifier():
         raise ValueError(f"Invalid Python variable name: '{v}'")
 
@@ -22,32 +36,33 @@ def validate_python_identifier(v: str) -> str:
     return v
 
 
-def validate_jmespath_expression(v: str) -> str:
-    try:
-        jmespath.compile(v)
-    except Exception as e:
-        raise ValueError("Invalid JMESPath expression") from e
-    return v
+# Map schema versions to validators
+SCHEMA_VALIDATORS = {
+    "draft-03": jsonschema.Draft3Validator,
+    "draft-3": jsonschema.Draft3Validator,
+    "draft-04": jsonschema.Draft4Validator,
+    "draft-4": jsonschema.Draft4Validator,
+    "draft-06": jsonschema.Draft6Validator,
+    "draft-6": jsonschema.Draft6Validator,
+    "draft-07": jsonschema.Draft7Validator,
+    "draft-7": jsonschema.Draft7Validator,
+    "2019-09": jsonschema.Draft201909Validator,
+    "2020-12": jsonschema.Draft202012Validator,
+}
 
 
 def check_json_schema(schema: dict[str, Any]) -> None:
-    # Default to Draft 7 for unknown versions
+    """Check JSON schema validity using appropriate validator version."""
     schema_uri = schema.get("$schema", "http://json-schema.org/draft-07/schema#")
 
-    if "draft-03" in schema_uri or "draft-3" in schema_uri:
-        jsonschema.Draft3Validator.check_schema(schema)
-    elif "draft-04" in schema_uri or "draft-4" in schema_uri:
-        jsonschema.Draft4Validator.check_schema(schema)
-    elif "draft-06" in schema_uri or "draft-6" in schema_uri:
-        jsonschema.Draft6Validator.check_schema(schema)
-    elif "draft-07" in schema_uri or "draft-7" in schema_uri:
-        jsonschema.Draft7Validator.check_schema(schema)
-    elif "2019-09" in schema_uri:
-        jsonschema.Draft201909Validator.check_schema(schema)
-    elif "2020-12" in schema_uri:
-        jsonschema.Draft202012Validator.check_schema(schema)
-    else:
-        jsonschema.Draft7Validator.check_schema(schema)
+    # Find matching validator
+    validator_class = jsonschema.Draft7Validator  # Default
+    for version_key, validator in SCHEMA_VALIDATORS.items():
+        if version_key in schema_uri:
+            validator_class = validator
+            break
+
+    validator_class.check_schema(schema)
 
 
 def validate_json_schema_inline(v: dict[str, Any]) -> dict[str, Any]:
@@ -65,21 +80,12 @@ def validate_json_schema_inline(v: dict[str, Any]) -> dict[str, Any]:
     return v
 
 
-def validate_regex_pattern(v: str) -> str:
-    """Validate that a string is a valid regular expression."""
-    try:
-        re.compile(v)
-    except re.PatternError as e:
-        raise ValueError("Invalid regular expression") from e
-    return v
+# Use the validator factory for simple validation cases
+validate_jmespath_expression = create_string_validator(jmespath.compile, "Invalid JMESPath expression")
 
+validate_regex_pattern = create_string_validator(re.compile, "Invalid regular expression")
 
-def validate_xml(v: str) -> str:
-    try:
-        xml.etree.ElementTree.fromstring(v)
-    except xml.etree.ElementTree.ParseError as e:
-        raise ValueError("Invalid XML") from e
-    return v
+validate_xml = create_string_validator(xml.etree.ElementTree.fromstring, "Invalid XML")
 
 
 def validate_template_expression(v: str) -> str:
@@ -108,6 +114,7 @@ def validate_function_import_name(v: str) -> str:
     return v
 
 
+# Type aliases with validators
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
 FunctionImportName = Annotated[str, AfterValidator(validate_function_import_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
