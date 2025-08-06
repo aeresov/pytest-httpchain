@@ -107,9 +107,10 @@ def validate_partial_template_str(v: str) -> str:
 
 def validate_function_import_name(v: str) -> str:
     try:
-        module_name, function_name = UserFunctionHandler.parse_function_name(v)
-        UserFunctionHandler.import_function(module_name, function_name)
-    except UserFunctionError as e:
+        # Just validate the name format using the regex pattern
+        if not UserFunctionHandler.NAME_PATTERN.match(v):
+            raise ValueError(f"Invalid function name format: {v}")
+    except (AttributeError, UserFunctionError) as e:
         raise ValueError("Invalid user function") from e
     return v
 

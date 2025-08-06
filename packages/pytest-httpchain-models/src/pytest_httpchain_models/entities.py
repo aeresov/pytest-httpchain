@@ -1,7 +1,7 @@
 from http import HTTPMethod, HTTPStatus
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, PositiveFloat, RootModel, model_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, JsonValue, PositiveFloat, RootModel, Tag, model_validator
 from pydantic.networks import HttpUrl
 
 from pytest_httpchain_models.types import (
@@ -63,49 +63,65 @@ class Functions(RootModel):
         return self.root[item]
 
 
-class RequestBodyBase(BaseModel):
-    """Base class for request body types."""
+def get_request_body_discriminator(v: Any) -> str:
+    """Discriminator function for request body types."""
+    # For dict inputs, check which field is present
+    if isinstance(v, dict):
+        body_fields = {"json", "xml", "form", "raw", "files"}
+        found = body_fields & v.keys()
+        if found:
+            return found.pop()
 
+    # For object inputs, map class name to discriminator
+    if hasattr(v, "__class__"):
+        class_to_tag = {"JsonBody": "json", "XmlBody": "xml", "FormBody": "form", "RawBody": "raw", "FilesBody": "files"}
+        tag = class_to_tag.get(v.__class__.__name__)
+        if tag:
+            return tag
+
+    raise ValueError("Unable to determine body type")
+
+
+class JsonBody(BaseModel):
+    """JSON request body."""
+
+    json: JsonValue = Field(description="JSON data to send.")
     model_config = ConfigDict(extra="forbid")
 
 
-class JsonBody(RequestBodyBase):
-    """JSON request body."""
-
-    body_type: Literal["json"] = "json"
-    json: JsonValue = Field(description="JSON data to send.")
-
-
-class XmlBody(RequestBodyBase):
+class XmlBody(BaseModel):
     """XML request body."""
 
-    body_type: Literal["xml"] = "xml"
     xml: XMLSting | PartialTemplateStr = Field(description="XML content as string.")
+    model_config = ConfigDict(extra="forbid")
 
 
-class FormBody(RequestBodyBase):
+class FormBody(BaseModel):
     """Form-encoded request body."""
 
-    body_type: Literal["form"] = "form"
     form: dict[str, Any] = Field(description="Form data to be URL-encoded.")
+    model_config = ConfigDict(extra="forbid")
 
 
-class RawBody(RequestBodyBase):
+class RawBody(BaseModel):
     """Raw text request body."""
 
-    body_type: Literal["raw"] = "raw"
     raw: str = Field(description="Raw text content.")
+    model_config = ConfigDict(extra="forbid")
 
 
-class FilesBody(RequestBodyBase):
+class FilesBody(BaseModel):
     """Multipart file upload request body."""
 
-    body_type: Literal["files"] = "files"
     files: dict[str, SerializablePath | PartialTemplateStr] = Field(description="Files to upload from file paths.")
+    model_config = ConfigDict(extra="forbid")
 
 
-# Simplified discriminated union using Pydantic's built-in discrimination
-RequestBody = Annotated[JsonBody | XmlBody | FormBody | RawBody | FilesBody, Field(discriminator="body_type")]
+# Discriminated union with callable discriminator
+RequestBody = Annotated[
+    Annotated[JsonBody, Tag("json")] | Annotated[XmlBody, Tag("xml")] | Annotated[FormBody, Tag("form")] | Annotated[RawBody, Tag("raw")] | Annotated[FilesBody, Tag("files")],
+    Discriminator(get_request_body_discriminator),
+]
 
 
 class CallSecurity(BaseModel):
@@ -176,28 +192,41 @@ class Decorated(BaseModel):
         return self
 
 
-class ResponseStepBase(BaseModel):
-    """Base class for response step types."""
+def get_response_step_discriminator(v: Any) -> str:
+    """Discriminator function for response steps."""
+    # For dict inputs, check which field is present
+    if isinstance(v, dict):
+        step_fields = {"save", "verify"}
+        found = step_fields & v.keys()
+        if found:
+            return found.pop()
 
+    # For object inputs, map class name to discriminator
+    if hasattr(v, "__class__"):
+        class_to_tag = {"SaveStep": "save", "VerifyStep": "verify"}
+        tag = class_to_tag.get(v.__class__.__name__)
+        if tag:
+            return tag
+
+    raise ValueError("Unable to determine step type")
+
+
+class SaveStep(BaseModel):
+    """Save data from HTTP response."""
+
+    save: Save = Field(description="Save configuration.")
     model_config = ConfigDict(extra="forbid")
 
 
-class SaveStep(ResponseStepBase):
-    """Save data from HTTP response."""
-
-    step_type: Literal["save"] = "save"
-    save: Save = Field(description="Save configuration.")
-
-
-class VerifyStep(ResponseStepBase):
+class VerifyStep(BaseModel):
     """Verify HTTP response and data context."""
 
-    step_type: Literal["verify"] = "verify"
     verify: Verify = Field(description="Verify configuration.")
+    model_config = ConfigDict(extra="forbid")
 
 
-# Simplified discriminated union for response steps
-ResponseStep = Annotated[SaveStep | VerifyStep, Field(discriminator="step_type")]
+# Discriminated union with callable discriminator
+ResponseStep = Annotated[Annotated[SaveStep, Tag("save")] | Annotated[VerifyStep, Tag("verify")], Discriminator(get_response_step_discriminator)]
 
 
 class Response(RootModel):
@@ -231,7 +260,7 @@ class Stage(Decorated):
 
     name: str = Field(description="Stage name (human-readable).")
     always_run: Literal[True, False] | TemplateExpression = Field(default=False, examples=[True, "{{ should_run }}", "{{ env == 'production' }}"])
-    request: Any = Field(description="HTTP request details.")
+    request: Request = Field(description="HTTP request details.")
     response: Response = Field(default_factory=Response)
 
 
