@@ -695,6 +695,7 @@ name = "pytest-httpchain"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "pydantic" },
     { name = "pytest-httpchain-jsonref" },
     { name = "pytest-httpchain-models" },
     { name = "pytest-order" },
@@ -723,6 +724,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "pydantic", specifier = ">=2.11.7" },
     { name = "pytest-httpchain-jsonref", editable = "packages/pytest-httpchain-jsonref" },
     { name = "pytest-httpchain-mcp", marker = "extra == 'mcp'", editable = "packages/pytest-httpchain-mcp" },
     { name = "pytest-httpchain-models", editable = "packages/pytest-httpchain-models" },

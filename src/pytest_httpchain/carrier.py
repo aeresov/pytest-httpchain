@@ -10,7 +10,7 @@ The actual HTTP execution and data processing is delegated to stage_executor.
 """
 
 import logging
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 import pytest_httpchain_templates.substitution
@@ -26,16 +26,37 @@ logger = logging.getLogger(__name__)
 
 
 class Carrier:
-    """Test carrier class that integrates HTTP chain test execution."""
+    """Test carrier class that integrates HTTP chain test execution.
 
-    _scenario: Scenario
-    _session: requests.Session | None = None
-    _data_context: dict[str, Any] = {}  # Global context shared across all stages
-    _aborted: bool = False
+    This base class is subclassed dynamically by carrier_factory to create
+    test classes with scenario-specific test methods. It manages the shared
+    state and execution flow for all stages in a test scenario.
+
+    Attributes:
+        _scenario: The test scenario configuration
+        _session: Shared HTTP session for all stages
+        _data_context: Global context shared across all stages
+        _aborted: Flag indicating if test flow should be aborted
+    """
+
+    _scenario: ClassVar[Scenario]
+    _session: ClassVar[requests.Session | None] = None
+    _data_context: ClassVar[dict[str, Any]] = {}  # Global context shared across all stages
+    _aborted: ClassVar[bool] = False
 
     @classmethod
     def setup_class(cls) -> None:
-        """Initialize the HTTP session and data context."""
+        """Initialize the HTTP session and data context.
+
+        Called once before any test methods in the class are executed.
+        Sets up:
+        - Empty data context for variable storage
+        - HTTP session with SSL and authentication configuration
+
+        Note:
+            Authentication can be configured at scenario level and will
+            be applied to all requests unless overridden at stage level.
+        """
         cls._data_context = {}
         cls._session = requests.Session()
 
@@ -57,7 +78,11 @@ class Carrier:
 
     @classmethod
     def teardown_class(cls) -> None:
-        """Clean up the HTTP session and reset state."""
+        """Clean up the HTTP session and reset state.
+
+        Called once after all test methods in the class have been executed.
+        Ensures proper cleanup of resources and state reset for next test class.
+        """
         if cls._session:
             cls._session.close()
             cls._session = None
@@ -66,7 +91,26 @@ class Carrier:
 
     @classmethod
     def execute_stage(cls, stage_template: Stage, fixture_kwargs: dict[str, Any]) -> None:
-        """Execute a test stage with abort handling and error management."""
+        """Execute a test stage with abort handling and error management.
+
+        This method is called for each stage in the scenario. It handles:
+        - Checking abort status and skipping if needed
+        - Executing the stage via stage_executor
+        - Updating global context with saved variables
+        - Setting abort flag on errors
+
+        Args:
+            stage_template: The stage configuration containing request/response definitions
+            fixture_kwargs: Dictionary of pytest fixture values injected for this stage
+
+        Raises:
+            pytest.skip: If flow is aborted and stage doesn't have always_run=True
+            pytest.fail: If stage execution fails with an error
+
+        Note:
+            Sets cls._aborted to True on failure, causing subsequent stages
+            to be skipped unless they have always_run=True.
+        """
         try:
             # Check abort status
             if cls._aborted and not stage_template.always_run:

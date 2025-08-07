@@ -2,9 +2,11 @@ import importlib
 import inspect
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypeVar
 
 from pytest_httpchain_userfunc.exceptions import UserFunctionError
+
+T = TypeVar("T")
 
 
 class UserFunctionHandler:
@@ -97,3 +99,25 @@ class UserFunctionHandler:
                     return func
             frame = frame.f_back
         return None
+
+    @classmethod
+    def get_function(cls, name: str, protocol: type[T] | None = None) -> T | Callable[..., Any]:
+        """Import a function and optionally validate against a protocol.
+
+        Args:
+            name: Function name in format "module.path:function_name" or "function_name"
+            protocol: Optional Protocol class to validate against
+
+        Returns:
+            The imported function, optionally type-checked against protocol
+
+        Raises:
+            UserFunctionError: If function cannot be imported or doesn't match protocol
+        """
+        module_name, function_name = cls._parse_name(name)
+        func = cls._import(module_name, function_name)
+
+        if protocol and not isinstance(func, protocol):
+            raise UserFunctionError(f"Function '{name}' does not match expected protocol {protocol.__name__}") from None
+
+        return func

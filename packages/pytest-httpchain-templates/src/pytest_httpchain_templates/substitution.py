@@ -1,4 +1,5 @@
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel
@@ -40,7 +41,7 @@ SAFE_FUNCTIONS = {
 evaluator = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS)
 
 
-def _eval_with_context(expr: str, context: dict[str, Any]) -> Any:
+def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
     """Evaluate an expression safely using simpleeval with compound types support.
 
     Args:
@@ -74,7 +75,7 @@ def _eval_with_context(expr: str, context: dict[str, Any]) -> Any:
         raise TemplatesError(f"{error_type} in expression '{{ {expr} }}'") from e
 
 
-def _sub_string(line: str, context: dict[str, Any]) -> Any:
+def _sub_string(line: str, context: Mapping[str, Any]) -> Any:
     def _repl(match: re.Match[str]) -> Any:
         expr = match.group("expr").strip()
         return _eval_with_context(expr, context)
@@ -102,8 +103,16 @@ def _contains_template(obj: Any) -> bool:
             return False
 
 
-def walk(obj: Any, context: dict[str, Any]) -> Any:
-    """Recursively substitute values in string attributes of an arbitrary object."""
+def walk(obj: Any, context: Mapping[str, Any]) -> Any:
+    """Recursively substitute values in string attributes of an arbitrary object.
+
+    Args:
+        obj: The object to walk through (can be dict, list, str, BaseModel, etc.)
+        context: Mapping of variables for substitution (dict, ChainMap, etc.)
+
+    Returns:
+        The object with all template expressions substituted
+    """
     match obj:
         case str():
             return _sub_string(obj, context)

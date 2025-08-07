@@ -1,4 +1,9 @@
-"""Factory for creating dynamic test classes."""
+"""Factory for creating dynamic test classes.
+
+This module provides functionality to dynamically generate pytest test classes
+from JSON scenario definitions. Each scenario becomes a test class with one
+test method per stage.
+"""
 
 import inspect
 import logging
@@ -6,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pytest_httpchain_models.entities import Scenario
+from pytest_httpchain_models.entities import Scenario, Stage
 from simpleeval import EvalWithCompoundTypes
 
 from .carrier import Carrier
@@ -14,22 +19,33 @@ from .carrier import Carrier
 logger = logging.getLogger(__name__)
 
 
-def create_test_class(scenario: Scenario, module_path: Path, class_name: str) -> type:
-    """
-    Create a dynamic test class for the given scenario.
+def create_test_class(scenario: Scenario, module_path: Path, class_name: str) -> type[Carrier]:
+    """Create a dynamic test class for the given scenario.
 
-    This handles:
-    - Creating a Carrier subclass with the scenario
-    - Adding test methods for each stage
-    - Applying markers to methods
+    This factory function generates a pytest test class with:
+    - One test method per stage in the scenario
+    - Automatic fixture injection based on stage requirements
+    - Marker application (order, skip, xfail, etc.)
+    - Shared session and context management
+
+    The generated class structure:
+    - Inherits from Carrier base class
+    - Has test_0_<stage_name>, test_1_<stage_name>, etc. methods
+    - Each method requests fixtures defined in stage and scenario
+    - Methods are ordered using pytest-order plugin
 
     Args:
-        scenario: The test scenario to execute
-        module_path: Path to the module (for reference)
-        class_name: Name for the test class
+        scenario: Validated scenario configuration containing stages
+        module_path: Path to the JSON test file (for error reporting)
+        class_name: Name for the generated test class
 
     Returns:
-        A dynamically created test class
+        A Carrier subclass with test methods for each stage
+
+    Example:
+        >>> scenario = Scenario.model_validate(test_data)
+        >>> TestClass = create_test_class(scenario, Path("test.json"), "TestAPI")
+        >>> # TestClass will have methods: test_0_stage1, test_1_stage2, etc.
     """
     # Create custom Carrier class with scenario bound
     CustomCarrier = type(
@@ -46,15 +62,22 @@ def create_test_class(scenario: Scenario, module_path: Path, class_name: str) ->
     # Add stage methods dynamically
     for i, stage in enumerate(scenario.stages):
         # Create stage method - using default argument to capture stage
-        def stage_method(self, *, _stage=stage, **fixture_kwargs: Any):
+        def stage_method(self, *, _stage: Stage = stage, **fixture_kwargs: dict[str, Any]) -> None:
+            """Execute a single stage of the test scenario.
+
+            Auto-generated method that executes one stage of the HTTP chain test.
+
+            Args:
+                **fixture_kwargs: Pytest fixtures requested by this stage
+            """
             CustomCarrier.execute_stage(_stage, fixture_kwargs)
 
         # Set up method signature with fixtures
-        all_fixtures = ["self"] + stage.fixtures + scenario.fixtures
+        all_fixtures: list[str] = ["self"] + stage.fixtures + scenario.fixtures
         stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])
 
         # Apply markers
-        all_marks = [f"order({i})"] + stage.marks
+        all_marks: list[str] = [f"order({i})"] + stage.marks
         evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
         for mark_str in all_marks:
             try:
@@ -64,6 +87,8 @@ def create_test_class(scenario: Scenario, module_path: Path, class_name: str) ->
             except Exception as e:
                 logger.warning(f"Failed to create marker '{mark_str}': {e}")
 
-        setattr(CustomCarrier, f"test_{i}_{stage.name}", stage_method)
+        # Add method to class with descriptive name
+        method_name = f"test_{i}_{stage.name}"
+        setattr(CustomCarrier, method_name, stage_method)
 
     return CustomCarrier

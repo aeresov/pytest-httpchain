@@ -30,15 +30,16 @@ Exceptions:
 import json
 import logging
 import re
+from collections import ChainMap
 from contextlib import ExitStack
-from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import jmespath
 import jsonschema
 import pytest_httpchain_templates.substitution
 import requests
+from pydantic import JsonValue
 from pytest_httpchain_models.entities import (
     FilesBody,
     FormBody,
@@ -64,19 +65,44 @@ logger = logging.getLogger(__name__)
 
 
 class StageExecutionError(Exception):
-    """Base exception for all stage execution errors."""
+    """Base exception for all stage execution errors.
+
+    This is the base class for all exceptions that can occur during
+    stage execution. Catching this will catch all stage-related errors.
+    """
 
 
 class RequestError(StageExecutionError):
-    """Error during HTTP request preparation or execution."""
+    """Error during HTTP request preparation or execution.
+
+    Raised when:
+    - Request preparation fails (auth, file opening, etc.)
+    - HTTP request times out
+    - Connection errors occur
+    - Other request-related issues
+    """
 
 
 class ResponseError(StageExecutionError):
-    """Error during response processing (save operations)."""
+    """Error during response processing (save operations).
+
+    Raised when:
+    - JMESPath expression fails
+    - User save function fails
+    - Variable extraction fails
+    """
 
 
 class VerificationError(StageExecutionError):
-    """Error during response verification."""
+    """Error during response verification.
+
+    Raised when:
+    - Status code doesn't match expected
+    - Headers don't match expected
+    - Response body validation fails
+    - User verify function returns False
+    - JSON schema validation fails
+    """
 
 
 def prepare_data_context(
@@ -84,37 +110,84 @@ def prepare_data_context(
     stage_template: Stage,
     global_context: dict[str, Any],
     fixture_kwargs: dict[str, Any],
-) -> dict[str, Any]:
+) -> ChainMap[str, Any]:
     """Prepare the complete data context for stage execution.
 
-    Merges contexts in order of precedence:
-    1. Global context (shared across all stages)
+    Uses ChainMap for efficient layered context management with lazy evaluation.
+    No copying occurs - all layers share references to original data.
+
+    Merges contexts in order of precedence (later overrides earlier):
+    1. Global context (shared across all stages) - base layer
     2. Fixture values (from pytest fixtures)
     3. Scenario variables (from scenario.vars)
-    4. Stage variables (from stage.vars)
+    4. Stage variables (from stage.vars) - top layer
+
+    Each level can reference variables from previous levels in templates.
+
+    Args:
+        scenario: The scenario configuration
+        stage_template: The stage being executed
+        global_context: Shared context from previous stages
+        fixture_kwargs: Pytest fixture values for this stage
 
     Returns:
-        dict: Complete context for stage execution (local context)
+        ChainMap with layered context for efficient lookups
+
+    Note:
+        Returns a ChainMap for full performance benefits:
+        - No data copying
+        - Lazy evaluation (only accesses what's needed)
+        - Memory efficient (shares references)
+        - O(1) for most lookups
     """
-    # Start with a copy of the global context (shared state)
-    local_context = deepcopy(global_context)
+    # Build layers incrementally - each layer can reference previous ones
+    # Template substitution now works directly with ChainMap
 
-    # Add fixture values
-    local_context.update(fixture_kwargs)
+    # Layer 1: Base context (global + fixtures)
+    base_context = ChainMap(fixture_kwargs, global_context)
 
-    # Apply scenario-level variables (can reference fixtures and global context)
-    scenario_vars = pytest_httpchain_templates.substitution.walk(scenario.vars, local_context)
-    local_context.update(scenario_vars)
+    # Layer 2: Scenario variables (can reference base)
+    scenario_vars = {}
+    if scenario.vars:
+        scenario_vars = pytest_httpchain_templates.substitution.walk(
+            scenario.vars,
+            base_context,  # Pass ChainMap directly
+        )
 
-    # Apply stage-level variables (can reference all above)
-    stage_vars = pytest_httpchain_templates.substitution.walk(stage_template.vars, local_context)
-    local_context.update(stage_vars)
+    # Layer 3: Stage variables (can reference base + scenario)
+    # Process stage vars incrementally so they can reference each other
+    stage_vars = {}
+    if stage_template.vars:
+        context_with_scenario = ChainMap({}, scenario_vars, fixture_kwargs, global_context)
+        for key, value in stage_template.vars.items():
+            resolved_value = pytest_httpchain_templates.substitution.walk(value, context_with_scenario)
+            stage_vars[key] = resolved_value
+            # Add resolved var to context so next vars can reference it
+            context_with_scenario.maps[0][key] = resolved_value
 
-    return local_context
+    # Create final context with proper precedence order
+    # Stage vars override scenario vars, which override fixtures, which override global
+    # Returns ChainMap for full performance benefits
+    return ChainMap(stage_vars, scenario_vars, fixture_kwargs, global_context)
 
 
-def prepare_request(request_dict: dict[str, Any], local_context: dict[str, Any]) -> tuple[Request, dict[str, Any]]:
-    """Prepare HTTP request parameters from request model."""
+def prepare_request(request_dict: dict[str, Any], local_context: ChainMap[str, Any]) -> tuple[Request, dict[str, Any]]:
+    """Prepare HTTP request parameters from request model.
+
+    Converts the request configuration into parameters suitable for
+    the requests library. Handles different body types, authentication,
+    SSL configuration, and other request options.
+
+    Args:
+        request_dict: Raw request configuration (after template substitution)
+        local_context: Local execution context (for auth functions)
+
+    Returns:
+        Tuple of (validated Request model, request parameters dict)
+
+    Raises:
+        RequestError: If authentication configuration fails
+    """
     request_model = Request.model_validate(request_dict)
 
     # Prepare request parameters directly
@@ -157,11 +230,29 @@ def prepare_request(request_dict: dict[str, Any], local_context: dict[str, Any])
 
 
 def execute_request(session: requests.Session, request_model: Request, request_params: dict[str, Any]) -> requests.Response:
-    """Execute the HTTP request."""
+    """Execute the HTTP request.
+
+    Performs the actual HTTP request using the session and prepared parameters.
+    Handles file uploads with proper resource management.
+
+    Args:
+        session: HTTP session to use for the request
+        request_model: Validated request model with URL and method
+        request_params: Parameters for requests.request()
+
+    Returns:
+        HTTP response object
+
+    Raises:
+        RequestError: For various HTTP and file-related errors
+    """
     with ExitStack() as stack:
         try:
             if "files" in request_params:
-                request_params["files"] = {field_name: stack.enter_context(open(file_path, "rb")) for field_name, file_path in request_params["files"]}
+                files_dict: dict[str, BinaryIO] = {}
+                for field_name, file_path in request_params["files"].items():
+                    files_dict[field_name] = stack.enter_context(open(file_path, "rb"))
+                request_params["files"] = files_dict
 
             response = session.request(request_model.method.value, request_model.url, **request_params)
 
@@ -181,11 +272,28 @@ def execute_request(session: requests.Session, request_model: Request, request_p
 
 def process_save_step(
     save_dict: dict[str, Any],
-    local_context: dict[str, Any],
+    local_context: ChainMap[str, Any],
     response: requests.Response,
-    response_json: dict[str, Any],
+    response_json: JsonValue | None,
 ) -> dict[str, Any]:
-    """Process a save step and return variables to be saved to global context."""
+    """Process a save step and return variables to be saved to global context.
+
+    Extracts data from the response using:
+    - JMESPath expressions for JSON responses
+    - User-defined save functions for custom extraction
+
+    Args:
+        save_dict: Save step configuration
+        local_context: Current execution context
+        response: HTTP response object
+        response_json: Parsed JSON response (empty dict if not JSON)
+
+    Returns:
+        Dictionary of variables to add to global context
+
+    Raises:
+        ResponseError: If variable extraction fails
+    """
     save_model = Save.model_validate(save_dict)
     result: dict[str, Any] = {}
 
@@ -212,11 +320,29 @@ def process_save_step(
 
 def process_verify_step(
     verify_dict: dict[str, Any],
-    local_context: dict[str, Any],
+    local_context: ChainMap[str, Any],
     response: requests.Response,
-    response_json: dict[str, Any],
+    response_json: JsonValue | None,
 ) -> None:
-    """Process a verify step and raise errors if verification fails."""
+    """Process a verify step and raise errors if verification fails.
+
+    Performs various verifications on the response:
+    - Status code matching
+    - Header value matching
+    - Variable value matching
+    - JSON schema validation
+    - Body content checks (contains/not_contains/matches/not_matches)
+    - User-defined verify functions
+
+    Args:
+        verify_dict: Verify step configuration
+        local_context: Current execution context
+        response: HTTP response object
+        response_json: Parsed JSON response (empty dict if not JSON)
+
+    Raises:
+        VerificationError: If any verification fails
+    """
     verify_model = Verify.model_validate(verify_dict)
 
     if verify_model.status and response.status_code != verify_model.status.value:
@@ -288,8 +414,14 @@ def execute_stage(
     global_context: dict[str, Any],
     fixture_kwargs: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    Execute a single stage and return context updates.
+    """Execute a single stage and return context updates.
+
+    This is the main entry point for stage execution. It orchestrates:
+    1. Context preparation (merge global + fixtures + variables)
+    2. Template substitution for all stage elements
+    3. HTTP request preparation and execution
+    4. Response processing (save and verify steps)
+    5. Return updates for global context
 
     Args:
         stage_template: The stage definition (with templates)
@@ -298,19 +430,19 @@ def execute_stage(
         global_context: Shared context from previous stages (read-only)
         fixture_kwargs: Values from pytest fixtures
 
-    This function handles:
-    - Data context preparation (merging global + local)
-    - Template substitution
-    - Request execution
-    - Response processing (save & verify)
-
     Returns:
-        dict: Context updates to be merged into global context
+        Context updates to be merged into global context.
+        Only includes variables from SaveStep operations.
+
     Raises:
         StageExecutionError: Base exception for any stage execution failure
             - RequestError: HTTP request preparation/execution failed
             - ResponseError: Response processing (save) failed
             - VerificationError: Response verification failed
+
+    Note:
+        The function maintains a clear separation between global and local
+        context. Only SaveStep results are returned for global updates.
     """
     # Build local context for this stage (global + fixtures + vars)
     local_context = prepare_data_context(scenario=scenario, stage_template=stage_template, global_context=global_context, fixture_kwargs=fixture_kwargs)
@@ -333,8 +465,12 @@ def execute_stage(
     global_context_updates: dict[str, Any] = {}
 
     # Extract JSON once for reuse
+    response_json: JsonValue | None
     try:
-        response_json = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+        if response.headers.get("content-type", "").startswith("application/json"):
+            response_json = response.json()
+        else:
+            response_json = {}
     except requests.JSONDecodeError:
         response_json = {}
 
@@ -343,7 +479,8 @@ def execute_stage(
             case SaveStep():
                 save_dict = pytest_httpchain_templates.substitution.walk(step.save, local_context)
                 saved_vars = process_save_step(save_dict, local_context, response, response_json)
-                local_context.update(saved_vars)
+                # Add saved vars as a new layer in ChainMap for subsequent steps
+                local_context = local_context.new_child(saved_vars)
                 global_context_updates.update(saved_vars)
 
             case VerifyStep():
