@@ -68,10 +68,7 @@ def prepare_and_execute(
     if request_model.auth:
         try:
             if isinstance(request_model.auth, UserFunctionKwargs):
-                kwargs["auth"] = call_auth_function(
-                    request_model.auth.function.root,
-                    **request_model.auth.kwargs
-                )
+                kwargs["auth"] = call_auth_function(request_model.auth.function.root, **request_model.auth.kwargs)
             else:  # UserFunctionName
                 kwargs["auth"] = call_auth_function(request_model.auth.root)
         except Exception as e:
