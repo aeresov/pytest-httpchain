@@ -13,12 +13,13 @@ from typing import Any
 import jmespath
 import jsonschema
 import requests
-from pytest_httpchain_models.entities import Save, UserFunctionKwargs, Verify
+from pytest_httpchain_models.entities import Save, Verify
 from pytest_httpchain_models.types import check_json_schema
 from pytest_httpchain_userfunc.save import call_save_function
 from pytest_httpchain_userfunc.verify import call_verify_function
 
 from .exceptions import ResponseError, VerificationError
+from .helpers import call_user_function
 
 
 def process_save_step(
@@ -65,10 +66,7 @@ def process_save_step(
 
     for func_item in save_model.functions:
         try:
-            if isinstance(func_item, UserFunctionKwargs):
-                func_result = call_save_function(func_item.function.root, response, **func_item.kwargs)
-            else:  # UserFunctionName
-                func_result = call_save_function(func_item.root, response)
+            func_result = call_user_function(func_item, call_save_function, response)
             result.update(func_result)
         except Exception as e:
             raise ResponseError(f"Error calling user function {func_item}") from e
@@ -119,10 +117,7 @@ def process_verify_step(
 
     for func_item in verify_model.functions:
         try:
-            if isinstance(func_item, UserFunctionKwargs):
-                result = call_verify_function(func_item.function.root, response, **func_item.kwargs)
-            else:  # UserFunctionName
-                result = call_verify_function(func_item.root, response)
+            result = call_user_function(func_item, call_verify_function, response)
 
             if not result:
                 raise VerificationError(f"Function '{func_item}' verification failed")

@@ -15,7 +15,6 @@ from pytest_httpchain_models.entities import (
     FormBody,
     JsonBody,
     RawBody,
-    UserFunctionKwargs,
     XmlBody,
 )
 from pytest_httpchain_models.entities import (
@@ -24,6 +23,7 @@ from pytest_httpchain_models.entities import (
 from pytest_httpchain_userfunc.auth import call_auth_function
 
 from .exceptions import RequestError
+from .helpers import call_user_function
 
 
 def prepare_and_execute(
@@ -67,10 +67,7 @@ def prepare_and_execute(
     # Configure auth if present
     if request_model.auth:
         try:
-            if isinstance(request_model.auth, UserFunctionKwargs):
-                kwargs["auth"] = call_auth_function(request_model.auth.function.root, **request_model.auth.kwargs)
-            else:  # UserFunctionName
-                kwargs["auth"] = call_auth_function(request_model.auth.root)
+            kwargs["auth"] = call_user_function(request_model.auth, call_auth_function)
         except Exception as e:
             raise RequestError("Failed to configure authentication") from e
 

@@ -16,12 +16,13 @@ import pytest
 import pytest_httpchain_templates.substitution
 import requests
 from pydantic import ValidationError
-from pytest_httpchain_models.entities import Scenario, Stage, UserFunctionKwargs
+from pytest_httpchain_models.entities import Scenario, Stage
 from pytest_httpchain_templates.exceptions import TemplatesError
 from pytest_httpchain_userfunc.auth import call_auth_function
 
 from . import stage_executor
 from .exceptions import StageExecutionError
+from .helpers import call_user_function
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +70,7 @@ class Carrier:
         # Configure authentication
         if cls._scenario.auth:
             resolved_auth = pytest_httpchain_templates.substitution.walk(cls._scenario.auth, cls._data_context)
-
-            if isinstance(resolved_auth, UserFunctionKwargs):
-                auth_instance = call_auth_function(resolved_auth.function.root, **resolved_auth.kwargs)
-            else:  # UserFunctionName
-                auth_instance = call_auth_function(resolved_auth.root)
-
+            auth_instance = call_user_function(resolved_auth, call_auth_function)
             cls._session.auth = auth_instance
 
     @classmethod
