@@ -21,6 +21,7 @@ from pytest_httpchain_templates.exceptions import TemplatesError
 from pytest_httpchain_userfunc.auth import call_auth_function
 
 from . import stage_executor
+from .exceptions import StageExecutionError
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,7 @@ class Carrier:
 
         except (
             TemplatesError,
-            stage_executor.StageExecutionError,  # Catches all derived exceptions
+            StageExecutionError,  # Catches all derived exceptions
             ValidationError,
         ) as e:
             logger.exception(str(e))
