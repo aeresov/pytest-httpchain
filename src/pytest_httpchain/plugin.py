@@ -67,7 +67,7 @@ class JsonModule(python.Module):
             raise nodes.Collector.CollectError("Cannot parse test scenario") from e
 
         # Create test class using factory
-        CarrierClass = create_test_class(scenario, self.path, self.name)
+        CarrierClass = create_test_class(scenario, self.name)
 
         # Create pytest Class node
         dummy_module = types.ModuleType("generated")

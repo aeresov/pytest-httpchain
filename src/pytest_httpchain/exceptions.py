@@ -24,7 +24,7 @@ class RequestError(StageExecutionError):
     """
 
 
-class ResponseError(StageExecutionError):
+class SaveError(StageExecutionError):
     """Error during response processing (save operations).
 
     Raised when:

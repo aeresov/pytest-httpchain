@@ -7,7 +7,6 @@ test method per stage.
 
 import inspect
 import logging
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,7 +18,7 @@ from .carrier import Carrier
 logger = logging.getLogger(__name__)
 
 
-def create_test_class(scenario: Scenario, module_path: Path, class_name: str) -> type[Carrier]:
+def create_test_class(scenario: Scenario, class_name: str) -> type[Carrier]:
     """Create a dynamic test class for the given scenario.
 
     This factory function generates a pytest test class with:
@@ -36,7 +35,6 @@ def create_test_class(scenario: Scenario, module_path: Path, class_name: str) ->
 
     Args:
         scenario: Validated scenario configuration containing stages
-        module_path: Path to the JSON test file (for error reporting)
         class_name: Name for the generated test class
 
     Returns:

@@ -83,7 +83,7 @@ def execute_stage(
     # Prepare and execute request
     request_dict = pytest_httpchain_templates.substitution.walk(stage.request, local_context)
     request_model = Request.model_validate(request_dict)
-    response = prepare_and_execute(session, request_model, local_context)
+    response = prepare_and_execute(session, request_model)
 
     # Process response
     response_dict = pytest_httpchain_templates.substitution.walk(stage.response, local_context)
@@ -97,7 +97,7 @@ def execute_stage(
             case SaveStep():
                 save_dict = pytest_httpchain_templates.substitution.walk(step.save, local_context)
                 save_model = Save.model_validate(save_dict)
-                saved_vars = process_save_step(save_model, local_context, response)
+                saved_vars = process_save_step(save_model, response)
                 # Add saved vars as a new layer in ChainMap for subsequent steps
                 local_context = local_context.new_child(saved_vars)
                 global_context_updates.update(saved_vars)

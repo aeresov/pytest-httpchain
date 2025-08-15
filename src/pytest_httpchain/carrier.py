@@ -43,7 +43,7 @@ class Carrier:
 
     _scenario: ClassVar[Scenario]
     _session: ClassVar[requests.Session | None] = None
-    _data_context: ClassVar[dict[str, Any]] = {}  # Global context shared across all stages
+    _data_context: ClassVar[dict[str, Any]] = {}
     _aborted: ClassVar[bool] = False
 
     @classmethod
@@ -131,7 +131,7 @@ class Carrier:
 
         except (
             TemplatesError,
-            StageExecutionError,  # Catches all derived exceptions
+            StageExecutionError,
             ValidationError,
         ) as e:
             logger.exception(str(e))

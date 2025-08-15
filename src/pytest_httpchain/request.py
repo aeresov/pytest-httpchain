@@ -4,7 +4,6 @@ This module handles the preparation of HTTP requests from test configurations
 and their execution using the requests library.
 """
 
-from collections import ChainMap
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
@@ -29,7 +28,6 @@ from .helpers import call_user_function
 def prepare_and_execute(
     session: requests.Session,
     request_model: RequestModel,
-    local_context: ChainMap[str, Any],
 ) -> requests.Response:
     """Prepare and execute an HTTP request.
 
@@ -40,7 +38,6 @@ def prepare_and_execute(
     Args:
         session: HTTP session to use for the request
         request_model: Validated request model
-        local_context: Local execution context (for auth functions)
 
     Returns:
         HTTP response object
@@ -93,7 +90,6 @@ def prepare_and_execute(
                 except FileNotFoundError as e:
                     raise RequestError("File not found for upload") from e
 
-    # Execute request (non-file case)
     try:
         return session.request(**kwargs)
     except requests.Timeout as e:

@@ -18,13 +18,12 @@ from pytest_httpchain_models.types import check_json_schema
 from pytest_httpchain_userfunc.save import call_save_function
 from pytest_httpchain_userfunc.verify import call_verify_function
 
-from .exceptions import ResponseError, VerificationError
+from .exceptions import SaveError, VerificationError
 from .helpers import call_user_function
 
 
 def process_save_step(
     save_model: Save,
-    local_context: ChainMap[str, Any],
     response: requests.Response,
 ) -> dict[str, Any]:
     """Process a save step and return variables to be saved to global context.
@@ -35,7 +34,6 @@ def process_save_step(
 
     Args:
         save_model: Validated Save model
-        local_context: Current execution context
         response: HTTP response object
 
     Returns:
@@ -55,21 +53,21 @@ def process_save_step(
         try:
             response_json = response.json()
         except (requests.JSONDecodeError, UnicodeDecodeError) as e:
-            raise ResponseError("Cannot extract variables: response is not valid JSON") from e
+            raise SaveError("Cannot extract variables: response is not valid JSON") from e
 
         for var_name, jmespath_expr in save_model.vars.items():
             try:
                 saved_value = jmespath.search(jmespath_expr, response_json)
                 result[var_name] = saved_value
             except jmespath.exceptions.JMESPathError as e:
-                raise ResponseError(f"Error saving variable {var_name}") from e
+                raise SaveError(f"Error saving variable {var_name}") from e
 
     for func_item in save_model.functions:
         try:
             func_result = call_user_function(func_item, call_save_function, response)
             result.update(func_result)
         except Exception as e:
-            raise ResponseError(f"Error calling user function {func_item}") from e
+            raise SaveError(f"Error calling user function {func_item}") from e
 
     return result
 
