@@ -1,0 +1,46 @@
+{
+    "vars": {
+        "user_id": 1
+    },
+    "stages": [
+        {
+            "name": "get_user",
+            "request": {
+                "url": "https://api.example.com/users/{{ user_id }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "vars": {
+                            "user_name": "user.name"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "update_user",
+            "request": {
+                "url": "https://api.example.com/users/{{ user_id }}",
+                "method": "PUT",
+                "body": {
+                    "json": {
+                        "name": "{{ user_name }}_updated"
+                    }
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

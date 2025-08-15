@@ -214,4 +214,7 @@ The MCP server provides:
 ## Thanks
 
 `pytest-httpchain` was heavily inspired by [Tavern](https://github.com/taverntesting/tavern) and [pytest-play](https://github.com/davidemoro/pytest-play).  
-Crucial parts rely on [requests](https://requests.readthedocs.io), [pytest-order](https://github.com/pytest-dev/pytest-order) and [Pydantic](https://docs.pydantic.dev).
+[requests](https://requests.readthedocs.io) does the comms.  
+[Pydantic](https://docs.pydantic.dev) keeps the structure.  
+[pytest-order](https://github.com/pytest-dev/pytest-order) powers the chaining.  
+[pytest-datadir](https://github.com/gabrielcnr/pytest-datadir) saved me a lot of elbow grease.  

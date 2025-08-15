@@ -1,0 +1,16 @@
+{
+    "stages": [
+        {
+            "name": "test",
+            "request": {
+                "url": "https://api.example.com/1"
+            }
+        },
+        {
+            "name": "test",
+            "request": {
+                "url": "https://api.example.com/2"
+            }
+        }
+    ]
+}

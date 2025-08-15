@@ -1,0 +1,10 @@
+{
+    "stages": [
+        {
+            "name": "test",
+            "request": {
+                "url": "https://api.example.com/users/{{ undefined_var }}"
+            }
+        }
+    ]
+}

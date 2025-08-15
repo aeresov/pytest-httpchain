@@ -1,0 +1,14 @@
+{
+    "fixtures": ["my_data"],
+    "vars": {
+        "my_data": "value"
+    },
+    "stages": [
+        {
+            "name": "test",
+            "request": {
+                "url": "https://api.example.com/"
+            }
+        }
+    ]
+}
