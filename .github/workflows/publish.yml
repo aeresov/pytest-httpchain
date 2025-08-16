@@ -26,9 +26,11 @@ jobs:
                   enable-cache: true
                   cache-dependency-glob: "uv.lock"
 
-            - name: Build package
+            - name: Build all packages
               run: |
-                  uv build
+                  uv build --all-packages
+                  echo "Built packages:"
+                  ls -la dist/
 
             - name: Publish distribution to PyPI
               uses: pypa/gh-action-pypi-publish@release/v1

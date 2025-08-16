@@ -8,7 +8,7 @@ A pytest plugin for testing HTTP endpoints.
 
 ## Overview
 
-`pytest-httpchain` is an integration testing framework for HTTP APIs based on battle-hardened [requests](https://requests.readthedocs.io) lib.\
+`pytest-httpchain` is an integration testing framework for HTTP APIs based on battle-hardened [requests](https://requests.readthedocs.io) lib.  
 It aims at helping with common HTTP API testing scenarios, where user needs to make several calls in specific order using data obtained along the way, like auth tokens or resource ids.
 
 ## Installation
@@ -35,26 +35,26 @@ The following optional dependencies are available:
 
 ### Pytest integration
 
-Most of pytest magic can be used: markers, fixtures, other plugins.\
+Most of pytest magic can be used: markers, fixtures, other plugins.  
 
 > NOTE: parametrization is not yet implemented, therefore `parametrize` marker won't have any effect.
 
 ### Declarative format
 
-Test scenarios are written declaratively in JSON files.\
-`pytest-httpchain` supports JSONRef, so use can reuse arbitrary parts of your scenarios with `$ref` directive.\
+Test scenarios are written declaratively in JSON files.  
+`pytest-httpchain` supports JSONRef, so use can reuse arbitrary parts of your scenarios with `$ref` directive.  
 Properties are merged in a greedy way with type checking.
 
 ### Multi-stage tests
 
-Each test scenario contains 1+ stages; each stage is a single HTTP call.\
+Each test scenario contains 1+ stages; each stage is a single HTTP call.  
 `pytest-httpchain` executes stages in the order they are listed in scenario file; one stage failure stops the execution chain.
 
 ### Common data context and variable substitution
 
-`pytest-httpchain` maintains key-value data storage throughout the execution.\
-This storage ("common data context") is populated with declared variables, fixtures and data saved by stages. The data remains there throughout the scenario execution.\
-Writing scenarios, you can use Jinja-style expressions like `"{{ var }}"` for JSON values. `pytest-httpchain` does variable substitution dynamically right before executing a stage, and uses common data context keys as variables in these expressions.\
+`pytest-httpchain` maintains key-value data storage throughout the execution.  
+This storage ("common data context") is populated with declared variables, fixtures and data saved by stages. The data remains there throughout the scenario execution.  
+Writing scenarios, you can use Jinja-style expressions like `"{{ var }}"` for JSON values. `pytest-httpchain` does variable substitution dynamically right before executing a stage, and uses common data context keys as variables in these expressions.  
 Values from common data context also might be verified during verified/asserted.
 
 ### User functions
@@ -151,28 +151,28 @@ def now_utc():
 Scenario we created:
 
 -   common data context is seeded with the first variable `user_id`
--   **get_user**\
-    url is assembled using `user_id` variable from common data context\
-    HTTP GET call is made\
-    we verify the call returned code 200\
+-   **get_user**  
+    url is assembled using `user_id` variable from common data context  
+    HTTP GET call is made  
+    we verify the call returned code 200  
     assuming JSON body is returned, we extract a value by JMESPath expression `user.name` and save it to common data context under `user_name` key
--   **update_user**\
-    `now_utc` fixture value is injected into common data context\
-    url is assembled using `user_id` variable from common data context\
-    we create JSON body in place using values from common data context, note that `now_utc` is converted to string in place\
-    HTTP PUT call with body is made\
-    we verify the call returned code 200\
--   **cleanup**\
-    finalizing call meant for graceful exit\
+-   **update_user**  
+    `now_utc` fixture value is injected into common data context  
+    url is assembled using `user_id` variable from common data context  
+    we create JSON body in place using values from common data context, note that `now_utc` is converted to string in place  
+    HTTP PUT call with body is made  
+    we verify the call returned code 200  
+-   **cleanup**  
+    finalizing call meant for graceful exit  
     `always_run` parameter means this stage will be executed regardless of errors in previous stages
 
 For detailed examples see [USAGE.md](USAGE.md).
 
 ## Configuration
 
--   Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`.\
+-   Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`.  
     The `suffix` is configurable as pytest ini option, default value is **http**.
--   `$ref` instructions can point to other files; absolute and relative paths are supported.\
+-   `$ref` instructions can point to other files; absolute and relative paths are supported.  
     You can limit the depth of relative path traversal using `ref_parent_traversal_depth` ini option, default value is **3**.
 
 ## MCP Server
@@ -181,7 +181,7 @@ For detailed examples see [USAGE.md](USAGE.md).
 
 ### Installation
 
-The optional dependency `mcp` installs MCP server's package and `pytest-httpchain-mcp` script.\
+The optional dependency `mcp` installs MCP server's package and `pytest-httpchain-mcp` script.  
 Use this script as call target for your MCP configuration.
 
 Claude Code `.mcp.json` example:
