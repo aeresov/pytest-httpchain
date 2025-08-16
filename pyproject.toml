@@ -1,6 +1,6 @@
 [project]
 name = "pytest-httpchain"
-version = "0.1.1"
+version = "0.1.2"
 description = "pytest plugin for HTTP testing using JSON files"
 readme = "README.md"
 requires-python = ">=3.13,<4.0"
@@ -13,7 +13,7 @@ dependencies = [
     "rich>=13.7.0",
 ]
 keywords = ["testing", "pytest", "requests"]
-license-files = ["LICENSE"]
+license = "MIT"
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Framework :: Pytest",
