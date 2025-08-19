@@ -24,7 +24,6 @@ class ReferenceResolver:
         self.tracker = CircularDependencyTracker()
         self.base_path: Path | None = None
         self.root_path: Path | None = None
-        self._cache: dict[tuple[Path, str], Any] = {}
 
     def resolve_document(self, data: dict[str, Any], base_path: Path) -> dict[str, Any]:
         """Resolve all references in a document.
@@ -110,10 +109,6 @@ class ReferenceResolver:
     ) -> Any:
         resolved_path = self.path_validator.validate_ref_path(file_path, current_path, self.root_path or current_path, self.max_parent_traversal_depth)
 
-        cache_key = (resolved_path, pointer)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-
         self.tracker.check_external_ref(resolved_path, pointer)
 
         try:
@@ -122,7 +117,6 @@ class ReferenceResolver:
 
             child_resolver = self._create_child_resolver()
             result = child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data)
-            self._cache[cache_key] = result
             return result
 
         except (OSError, json.JSONDecodeError) as e:
@@ -178,7 +172,7 @@ class ReferenceResolver:
         return always_merger.merge(referenced_data, resolved_siblings)
 
     def _load_json_file(self, path: Path) -> dict[str, Any]:
-        """Load and cache JSON file content."""
+        """Load JSON file content."""
         with open(path, encoding="utf-8") as f:
             return json.load(f)
 
@@ -187,7 +181,6 @@ class ReferenceResolver:
         child_resolver = type(self)(self.max_parent_traversal_depth)
         child_resolver.tracker = self.tracker.create_child_tracker()
         child_resolver.root_path = self.root_path
-        child_resolver._cache = self._cache.copy()
         return child_resolver
 
     def _detect_merge_conflicts(

@@ -59,11 +59,13 @@ class JsonModule(python.Module):
                 max_parent_traversal_depth=ref_parent_traversal_depth,
             )
         except ReferenceResolverError as e:
+            logger.exception(str(e))
             raise nodes.Collector.CollectError("Cannot load JSON file") from e
 
         try:
             scenario = Scenario.model_validate(test_data)
         except ValidationError as e:
+            logger.exception(str(e))
             raise nodes.Collector.CollectError("Cannot parse test scenario") from e
 
         # Create test class using factory
