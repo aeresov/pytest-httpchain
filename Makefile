@@ -5,4 +5,4 @@ tidyup:
 
 .PHONY: sync
 sync:
-	uv sync --dev --all-extras --all-packages
+	uv sync --all-extras --all-packages

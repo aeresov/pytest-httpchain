@@ -44,7 +44,7 @@ docs = [
 ]
 
 [tool.uv]
-default-groups = ["docs"]
+default-groups = ["dev", "docs"]
 
 [tool.uv.workspace]
 members = ["packages/*"]
