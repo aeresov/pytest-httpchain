@@ -43,7 +43,7 @@ def create_test_class(scenario: Scenario, class_name: str) -> type[Carrier]:
     Example:
         >>> scenario = Scenario.model_validate(test_data)
         >>> TestClass = create_test_class(scenario, Path("test.json"), "TestAPI")
-        >>> # TestClass will have methods: test_0_stage1, test_1_stage2, etc.
+        >>> # TestClass will have methods: test_00_stage1, test_01_stage2, etc. (with zero-padding)
     """
     # Create custom Carrier class with scenario bound
     CustomCarrier = type(
@@ -58,6 +58,11 @@ def create_test_class(scenario: Scenario, class_name: str) -> type[Carrier]:
     )
 
     # Add stage methods dynamically
+    # Calculate padding width based on total number of stages
+    total_stages = len(scenario.stages)
+    # Width is based on the highest index (total_stages - 1)
+    padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
+    
     for i, stage in enumerate(scenario.stages):
         # Create stage method - using default argument to capture stage
         def stage_method(self, *, _stage: Stage = stage, **fixture_kwargs: dict[str, Any]) -> None:
@@ -85,8 +90,8 @@ def create_test_class(scenario: Scenario, class_name: str) -> type[Carrier]:
             except Exception as e:
                 logger.warning(f"Failed to create marker '{mark_str}': {e}")
 
-        # Add method to class with descriptive name
-        method_name = f"test_{i}_{stage.name}"
+        # Add method to class with descriptive name (with zero-padded index)
+        method_name = f"test_{str(i).zfill(padding_width)}_{stage.name}"
         setattr(CustomCarrier, method_name, stage_method)
 
     return CustomCarrier
