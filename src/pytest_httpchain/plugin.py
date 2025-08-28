@@ -22,7 +22,9 @@ from simpleeval import EvalWithCompoundTypes
 
 from pytest_httpchain.constants import ConfigOptions
 
+from .carrier import Carrier
 from .carrier_factory import create_test_class
+from .report_formatter import format_request, format_response
 
 logger = logging.getLogger(__name__)
 
@@ -190,5 +192,18 @@ def pytest_runtest_makereport(item: nodes.Item, call: runner.CallInfo[Any]) -> A
     """
     outcome = yield
     report: reports.TestReport = outcome.get_result()
+
     if call.when == "call":
-        report.sections.append(("call_title", "call_value"))
+        # Check if this is an HTTP chain test
+        if hasattr(item, "instance") and isinstance(item.instance, Carrier):
+            carrier = item.instance
+
+            # Add request and response sections if available
+            if carrier._last_response:
+                # Format request as curl command
+                curl_command = format_request(carrier._last_response.request)
+                report.sections.append(("HTTP Request", curl_command))
+
+                # Format response details
+                response_text = format_response(carrier._last_response)
+                report.sections.append(("HTTP Response", response_text))

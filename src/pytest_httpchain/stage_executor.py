@@ -16,12 +16,13 @@ The main responsibility of this module is to coordinate the flow:
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import pytest_httpchain_templates.substitution
 import requests
 from pytest_httpchain_models.entities import (
-    Request,
+    Request,  # Still needed for Request.model_validate()
     Response,
     Save,
     SaveStep,
@@ -38,14 +39,27 @@ from .response import process_save_step, process_verify_step
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class StageExecutionResult:
+    """Result of executing a test stage.
+
+    Attributes:
+        context_updates: Variables to be saved to the global context
+        response: The HTTP response object (contains the request in response.request)
+    """
+
+    context_updates: dict[str, Any]
+    response: requests.Response
+
+
 def execute_stage(
     stage_template: Stage,
     scenario: Scenario,
     session: requests.Session,
     global_context: dict[str, Any],
     fixture_kwargs: dict[str, Any],
-) -> dict[str, Any]:
-    """Execute a single stage and return context updates.
+) -> StageExecutionResult:
+    """Execute a single stage and return execution result.
 
     This is the main entry point for stage execution. It orchestrates:
     1. Context preparation (merge global + fixtures + variables)
@@ -62,8 +76,8 @@ def execute_stage(
         fixture_kwargs: Values from pytest fixtures
 
     Returns:
-        Context updates to be merged into global context.
-        Only includes variables from SaveStep operations.
+        StageExecutionResult containing context updates, request, and response.
+        Context updates only include variables from SaveStep operations.
 
     Raises:
         RequestError: HTTP request preparation/execution failed
@@ -107,5 +121,8 @@ def execute_stage(
                 verify_model = Verify.model_validate(verify_dict)
                 process_verify_step(verify_model, local_context, response)
 
-    # Return only the updates that should persist globally
-    return global_context_updates
+    # Return structured result with execution data
+    return StageExecutionResult(
+        context_updates=global_context_updates,
+        response=response,
+    )

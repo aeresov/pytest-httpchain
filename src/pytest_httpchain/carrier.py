@@ -45,6 +45,7 @@ class Carrier:
     _session: ClassVar[requests.Session | None] = None
     _data_context: ClassVar[dict[str, Any]] = {}
     _aborted: ClassVar[bool] = False
+    _last_response: ClassVar[requests.Response | None] = None
 
     @classmethod
     def setup_class(cls) -> None:
@@ -85,6 +86,7 @@ class Carrier:
             cls._session = None
         cls._data_context.clear()
         cls._aborted = False
+        cls._last_response = None
 
     @classmethod
     def execute_stage(cls, stage_template: Stage, fixture_kwargs: dict[str, Any]) -> None:
@@ -117,8 +119,8 @@ class Carrier:
             if cls._session is None:
                 raise RuntimeError("Session not initialized - setup_class was not called")
 
-            # Execute stage and get variables to save globally
-            context_updates = stage_executor.execute_stage(
+            # Execute stage and get structured result
+            result = stage_executor.execute_stage(
                 stage_template=stage_template,
                 scenario=cls._scenario,
                 session=cls._session,
@@ -126,8 +128,11 @@ class Carrier:
                 fixture_kwargs=fixture_kwargs,
             )
 
+            # Store response for reporting (it contains the request)
+            cls._last_response = result.response
+
             # Merge returned updates into global context for next stages
-            cls._data_context.update(context_updates)
+            cls._data_context.update(result.context_updates)
 
         except (
             TemplatesError,

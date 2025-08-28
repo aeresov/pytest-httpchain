@@ -62,7 +62,7 @@ def create_test_class(scenario: Scenario, class_name: str) -> type[Carrier]:
     total_stages = len(scenario.stages)
     # Width is based on the highest index (total_stages - 1)
     padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
-    
+
     for i, stage in enumerate(scenario.stages):
         # Create stage method - using default argument to capture stage
         def stage_method(self, *, _stage: Stage = stage, **fixture_kwargs: dict[str, Any]) -> None:
