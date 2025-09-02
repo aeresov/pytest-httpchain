@@ -96,7 +96,7 @@ class Carrier:
         - Checking abort status and skipping if needed
         - Executing the stage via stage_executor
         - Updating global context with saved variables
-        - Setting abort flag on errors
+        - Setting abort flag on errors (unless stage is marked with xfail)
 
         Args:
             stage_template: The stage configuration containing request/response definitions
@@ -108,7 +108,9 @@ class Carrier:
 
         Note:
             Sets cls._aborted to True on failure, causing subsequent stages
-            to be skipped unless they have always_run=True.
+            to be skipped unless they have always_run=True. However, if the stage
+            is marked with xfail, the abort flag is not set, allowing execution
+            to continue normally.
         """
         try:
             # Check abort status
@@ -140,5 +142,8 @@ class Carrier:
             ValidationError,
         ) as e:
             logger.exception(str(e))
-            cls._aborted = True
+            # Check if stage is marked with xfail - if so, don't abort the flow
+            is_xfail = any("xfail" in mark for mark in stage_template.marks)
+            if not is_xfail:
+                cls._aborted = True
             pytest.fail(reason=str(e), pytrace=False)

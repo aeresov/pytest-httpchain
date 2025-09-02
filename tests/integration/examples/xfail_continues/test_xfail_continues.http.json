@@ -1,0 +1,61 @@
+{
+    "stages": [
+        {
+            "name": "first_normal_stage",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/status/200"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "vars": {
+                            "first_result": "status"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "xfail_stage_that_fails",
+            "marks": ["xfail(reason='Expected to fail but execution should continue')"],
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/status/500"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "third_stage_should_run",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/status/201"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 201
+                    }
+                },
+                {
+                    "verify": {
+                        "vars": {
+                            "first_result": 200
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}
