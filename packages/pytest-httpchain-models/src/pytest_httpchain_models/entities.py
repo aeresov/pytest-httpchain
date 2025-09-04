@@ -122,7 +122,7 @@ class GraphQL(BaseModel):
     """GraphQL query with variables."""
 
     query: GraphQLQuery | PartialTemplateStr = Field(description="GraphQL query string.")
-    variables: dict[str, JsonValue] = Field(default_factory=dict, description="GraphQL query variables.")
+    variables: dict[str, JsonValue] | PartialTemplateStr = Field(default_factory=dict, description="GraphQL query variables.")
     model_config = ConfigDict(extra="forbid")
 
 
