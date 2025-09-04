@@ -6,6 +6,7 @@ from pydantic.networks import HttpUrl
 
 from pytest_httpchain_models.types import (
     FunctionImportName,
+    GraphQLQuery,
     JMESPathExpression,
     JSONSchemaInline,
     PartialTemplateStr,
@@ -13,7 +14,7 @@ from pytest_httpchain_models.types import (
     SerializablePath,
     TemplateExpression,
     VariableName,
-    XMLSting,
+    XMLString,
 )
 
 
@@ -67,14 +68,14 @@ def get_request_body_discriminator(v: Any) -> str:
     """Discriminator function for request body types."""
     # For dict inputs, check which field is present
     if isinstance(v, dict):
-        body_fields = {"json", "xml", "form", "raw", "files"}
+        body_fields = {"json", "xml", "form", "raw", "files", "graphql"}
         found = body_fields & v.keys()
         if found:
             return found.pop()
 
     # For object inputs, map class name to discriminator
     if hasattr(v, "__class__"):
-        class_to_tag = {"JsonBody": "json", "XmlBody": "xml", "FormBody": "form", "RawBody": "raw", "FilesBody": "files"}
+        class_to_tag = {"JsonBody": "json", "XmlBody": "xml", "FormBody": "form", "RawBody": "raw", "FilesBody": "files", "GraphQLBody": "graphql"}
         tag = class_to_tag.get(v.__class__.__name__)
         if tag:
             return tag
@@ -92,7 +93,7 @@ class JsonBody(BaseModel):
 class XmlBody(BaseModel):
     """XML request body."""
 
-    xml: XMLSting | PartialTemplateStr = Field(description="XML content as string.")
+    xml: XMLString | PartialTemplateStr = Field(description="XML content as string.")
     model_config = ConfigDict(extra="forbid")
 
 
@@ -117,9 +118,29 @@ class FilesBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class GraphQL(BaseModel):
+    """GraphQL query with variables."""
+
+    query: GraphQLQuery | PartialTemplateStr = Field(description="GraphQL query string.")
+    variables: dict[str, JsonValue] = Field(default_factory=dict, description="GraphQL query variables.")
+    model_config = ConfigDict(extra="forbid")
+
+
+class GraphQLBody(BaseModel):
+    """GraphQL request body."""
+
+    graphql: GraphQL = Field(description="GraphQL query configuration.")
+    model_config = ConfigDict(extra="forbid")
+
+
 # Discriminated union with callable discriminator
 RequestBody = Annotated[
-    Annotated[JsonBody, Tag("json")] | Annotated[XmlBody, Tag("xml")] | Annotated[FormBody, Tag("form")] | Annotated[RawBody, Tag("raw")] | Annotated[FilesBody, Tag("files")],
+    Annotated[JsonBody, Tag("json")]
+    | Annotated[XmlBody, Tag("xml")]
+    | Annotated[FormBody, Tag("form")]
+    | Annotated[RawBody, Tag("raw")]
+    | Annotated[FilesBody, Tag("files")]
+    | Annotated[GraphQLBody, Tag("graphql")],
     Discriminator(get_request_body_discriminator),
 ]
 

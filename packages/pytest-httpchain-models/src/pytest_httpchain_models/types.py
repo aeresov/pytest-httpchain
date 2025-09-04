@@ -4,6 +4,7 @@ import xml.etree.ElementTree
 from pathlib import Path
 from typing import Annotated, Any
 
+import graphql
 import jmespath
 import jsonschema
 from pydantic import AfterValidator, PlainSerializer
@@ -87,6 +88,8 @@ validate_regex_pattern = create_string_validator(re.compile, "Invalid regular ex
 
 validate_xml = create_string_validator(xml.etree.ElementTree.fromstring, "Invalid XML")
 
+validate_graphql_query = create_string_validator(graphql.parse, "Invalid GraphQL query")
+
 
 def validate_template_expression(v: str) -> str:
     if not is_complete_template(v):
@@ -122,6 +125,7 @@ JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)
 JSONSchemaInline = Annotated[dict[str, Any], AfterValidator(validate_json_schema_inline)]
 SerializablePath = Annotated[Path, PlainSerializer(lambda x: str(x), return_type=str)]
 RegexPattern = Annotated[str, AfterValidator(validate_regex_pattern)]
-XMLSting = Annotated[str, AfterValidator(validate_xml)]
+XMLString = Annotated[str, AfterValidator(validate_xml)]
+GraphQLQuery = Annotated[str, AfterValidator(validate_graphql_query)]
 TemplateExpression = Annotated[str, AfterValidator(validate_template_expression)]
 PartialTemplateStr = Annotated[str, AfterValidator(validate_partial_template_str)]
