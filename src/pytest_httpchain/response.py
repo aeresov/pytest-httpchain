@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import jmespath
+import jmespath.exceptions
 import jsonschema
 import requests
 from pytest_httpchain_models.entities import Save, Verify

@@ -23,7 +23,6 @@ from simpleeval import EvalWithCompoundTypes
 from pytest_httpchain.constants import ConfigOptions
 
 from .carrier import Carrier
-from .carrier_factory import create_test_class
 from .report_formatter import format_request, format_response
 
 logger = logging.getLogger(__name__)
@@ -61,11 +60,9 @@ class JsonModule(python.Module):
                 max_parent_traversal_depth=ref_parent_traversal_depth,
             )
         except ReferenceResolverError as e:
-            error_msg = f"Cannot load JSON file {self.path}: {str(e)}"
-            raise nodes.Collector.CollectError(error_msg) from e
+            raise nodes.Collector.CollectError(f"Cannot load JSON file {self.path}: {str(e)}") from None
         except Exception as e:
-            error_msg = f"Failed to parse JSON file {self.path}: {str(e)}"
-            raise nodes.Collector.CollectError(error_msg) from e
+            raise nodes.Collector.CollectError(f"Failed to parse JSON file {self.path}: {str(e)}") from None
 
         try:
             scenario = Scenario.model_validate(test_data)
@@ -78,10 +75,10 @@ class JsonModule(python.Module):
                 error_details.append(f"  - {loc}: {msg}")
 
             full_error_msg = f"Cannot parse test scenario in {self.path}:\n" + "\n".join(error_details)
-            raise nodes.Collector.CollectError(full_error_msg) from e
+            raise nodes.Collector.CollectError(full_error_msg) from None
 
         # Create test class using factory
-        CarrierClass = create_test_class(scenario, self.name)
+        CarrierClass = Carrier.create_test_class(scenario, self.name)
 
         # Create pytest Class node
         dummy_module = types.ModuleType("generated")

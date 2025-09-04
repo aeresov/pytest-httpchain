@@ -95,10 +95,10 @@ def prepare_and_execute(
     try:
         return session.request(method=request_model.method.value, url=str(request_model.url), **kwargs)
     except requests.Timeout as e:
-        raise RequestError("HTTP request timed out") from e
+        raise RequestError(f"HTTP request timed out: {str(e)}") from e
     except requests.ConnectionError as e:
-        raise RequestError("HTTP connection error") from e
+        raise RequestError(f"HTTP connection error: {str(e)}") from e
     except requests.RequestException as e:
-        raise RequestError("HTTP request failed") from e
+        raise RequestError(f"HTTP request failed: {str(e)}") from e
     except Exception as e:
-        raise RequestError("Unexpected error") from e
+        raise RequestError(f"Unexpected error: {str(e)}") from e
