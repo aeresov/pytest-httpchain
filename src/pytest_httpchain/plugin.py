@@ -61,14 +61,24 @@ class JsonModule(python.Module):
                 max_parent_traversal_depth=ref_parent_traversal_depth,
             )
         except ReferenceResolverError as e:
-            logger.exception(str(e))
-            raise nodes.Collector.CollectError("Cannot load JSON file") from e
+            error_msg = f"Cannot load JSON file {self.path}: {str(e)}"
+            raise nodes.Collector.CollectError(error_msg) from e
+        except Exception as e:
+            error_msg = f"Failed to parse JSON file {self.path}: {str(e)}"
+            raise nodes.Collector.CollectError(error_msg) from e
 
         try:
             scenario = Scenario.model_validate(test_data)
         except ValidationError as e:
-            logger.exception(str(e))
-            raise nodes.Collector.CollectError("Cannot parse test scenario") from e
+            # Create a detailed error message with validation errors
+            error_details = []
+            for error in e.errors():
+                loc = " -> ".join(str(x) for x in error["loc"])
+                msg = error["msg"]
+                error_details.append(f"  - {loc}: {msg}")
+
+            full_error_msg = f"Cannot parse test scenario in {self.path}:\n" + "\n".join(error_details)
+            raise nodes.Collector.CollectError(full_error_msg) from e
 
         # Create test class using factory
         CarrierClass = create_test_class(scenario, self.name)
