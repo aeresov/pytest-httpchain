@@ -54,21 +54,21 @@ def process_save_step(
         try:
             response_json = response.json()
         except (requests.JSONDecodeError, UnicodeDecodeError) as e:
-            raise SaveError("Cannot extract variables: response is not valid JSON") from e
+            raise SaveError(f"Cannot extract variables, response is not valid JSON: {str(e)}") from None
 
         for var_name, jmespath_expr in save_model.vars.items():
             try:
                 saved_value = jmespath.search(jmespath_expr, response_json)
                 result[var_name] = saved_value
             except jmespath.exceptions.JMESPathError as e:
-                raise SaveError(f"Error saving variable {var_name}") from e
+                raise SaveError(f"Error saving variable {var_name}: {str(e)}") from None
 
     for func_item in save_model.functions:
         try:
             func_result = call_user_function(func_item, call_save_function, response)
             result.update(func_result)
         except Exception as e:
-            raise SaveError(f"Error calling user function {func_item}") from e
+            raise SaveError(f"Error calling user function '{func_item}': {str(e)}") from None
 
     return result
 
@@ -122,7 +122,7 @@ def process_verify_step(
                 raise VerificationError(f"Function '{func_item}' verification failed")
 
         except Exception as e:
-            raise VerificationError(f"Error calling user function '{func_item}'") from e
+            raise VerificationError(f"Error calling user function '{func_item}': {str(e)}") from None
 
     if verify_model.body.schema:
         schema = verify_model.body.schema
@@ -132,22 +132,22 @@ def process_verify_step(
                 schema = json.loads(schema_path.read_text())
                 check_json_schema(schema)
             except (OSError, json.JSONDecodeError) as e:
-                raise VerificationError(f"Error reading body schema file '{schema_path}'") from e
+                raise VerificationError(f"Error reading body schema file '{schema_path}': {str(e)}") from None
             except jsonschema.SchemaError as e:
-                raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e.message}") from e
+                raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e.message}") from None
 
         # Extract JSON for schema validation
         try:
             response_json = response.json()
         except (requests.JSONDecodeError, UnicodeDecodeError) as e:
-            raise VerificationError("Cannot validate schema: response is not valid JSON") from e
+            raise VerificationError(f"Cannot validate schema, response is not valid JSON: {str(e)}") from None
 
         try:
             jsonschema.validate(instance=response_json, schema=schema)
         except jsonschema.ValidationError as e:
-            raise VerificationError("Body schema validation failed") from e
+            raise VerificationError(f"Body schema validation failed: {str(e.message)}") from None
         except jsonschema.SchemaError as e:
-            raise VerificationError("Invalid body validation schema") from e
+            raise VerificationError(f"Invalid body validation schema: {str(e.message)}") from None
 
     for substring in verify_model.body.contains:
         if substring not in response.text:
