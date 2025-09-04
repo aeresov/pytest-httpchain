@@ -90,15 +90,15 @@ def prepare_and_execute(
 
                     return session.request(method=request_model.method.value, url=str(request_model.url), **kwargs)
                 except FileNotFoundError as e:
-                    raise RequestError(f"File not found for upload: {str(e.strerror)}") from None
+                    raise RequestError(f"File not found for upload: {str(e)}") from None
 
     try:
         return session.request(method=request_model.method.value, url=str(request_model.url), **kwargs)
     except requests.Timeout as e:
-        raise RequestError(f"HTTP request timed out: {str(e.strerror)}") from None
+        raise RequestError(f"HTTP request timed out: {str(e)}") from None
     except requests.ConnectionError as e:
-        raise RequestError(f"HTTP connection error: {str(e.strerror)}") from None
+        raise RequestError(f"HTTP connection error: {str(e)}") from None
     except requests.RequestException as e:
-        raise RequestError(f"HTTP request failed: {str(e.strerror)}") from None
+        raise RequestError(f"HTTP request failed: {str(e)}") from None
     except Exception as e:
         raise RequestError(f"Unexpected error: {str(e)}") from None

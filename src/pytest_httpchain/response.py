@@ -134,7 +134,7 @@ def process_verify_step(
             except (OSError, json.JSONDecodeError) as e:
                 raise VerificationError(f"Error reading body schema file '{schema_path}': {str(e)}") from None
             except jsonschema.SchemaError as e:
-                raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e.message}") from None
+                raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e}") from None
 
         # Extract JSON for schema validation
         try:
@@ -145,9 +145,9 @@ def process_verify_step(
         try:
             jsonschema.validate(instance=response_json, schema=schema)
         except jsonschema.ValidationError as e:
-            raise VerificationError(f"Body schema validation failed: {str(e.message)}") from None
+            raise VerificationError(f"Body schema validation failed: {str(e)}") from None
         except jsonschema.SchemaError as e:
-            raise VerificationError(f"Invalid body validation schema: {str(e.message)}") from None
+            raise VerificationError(f"Invalid body validation schema: {str(e)}") from None
 
     for substring in verify_model.body.contains:
         if substring not in response.text:
