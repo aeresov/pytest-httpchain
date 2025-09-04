@@ -12,6 +12,7 @@ import requests
 from pytest_httpchain_models.entities import (
     FilesBody,
     FormBody,
+    GraphQLBody,
     JsonBody,
     RawBody,
     XmlBody,
@@ -48,8 +49,6 @@ def prepare_and_execute(
 
     # Base request kwargs
     kwargs: dict[str, Any] = {
-        "method": request_model.method.value,
-        "url": str(request_model.url),
         "headers": request_model.headers,
         "params": request_model.params,
         "timeout": request_model.timeout,
@@ -74,6 +73,9 @@ def prepare_and_execute(
             pass
         case JsonBody(json=data):
             kwargs["json"] = data
+        case GraphQLBody(graphql=gql):
+            # GraphQL requests are sent as JSON with query and variables fields
+            kwargs["json"] = {"query": gql.query, "variables": gql.variables}
         case FormBody(form=data) | XmlBody(xml=data) | RawBody(raw=data):
             kwargs["data"] = data
         case FilesBody(files=file_paths):
@@ -86,12 +88,12 @@ def prepare_and_execute(
                         files_dict[field_name] = (Path(file_path).name, file_handle)
                     kwargs["files"] = files_dict
 
-                    return session.request(**kwargs)
+                    return session.request(method=request_model.method.value, url=str(request_model.url), **kwargs)
                 except FileNotFoundError as e:
                     raise RequestError("File not found for upload") from e
 
     try:
-        return session.request(**kwargs)
+        return session.request(method=request_model.method.value, url=str(request_model.url), **kwargs)
     except requests.Timeout as e:
         raise RequestError("HTTP request timed out") from e
     except requests.ConnectionError as e:
