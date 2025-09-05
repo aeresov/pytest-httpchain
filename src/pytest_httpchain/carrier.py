@@ -34,7 +34,7 @@ from simpleeval import EvalWithCompoundTypes
 from .context import prepare_data_context
 from .exceptions import StageExecutionError
 from .helpers import call_user_function
-from .request import prepare_and_execute
+from .request import execute_request, prepare_request
 from .response import process_save_step, process_verify_step
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,7 @@ class Carrier:
     _session: ClassVar[requests.Session | None] = None
     _data_context: ClassVar[dict[str, Any]] = {}
     _aborted: ClassVar[bool] = False
+    _last_request: ClassVar[requests.PreparedRequest | None] = None
     _last_response: ClassVar[requests.Response | None] = None
 
     @classmethod
@@ -99,6 +100,7 @@ class Carrier:
             cls._session = None
         cls._data_context.clear()
         cls._aborted = False
+        cls._last_request = None
         cls._last_response = None
 
     @classmethod
@@ -127,15 +129,12 @@ class Carrier:
             to continue normally.
         """
         try:
-            # Check abort status
             if cls._aborted and not stage_template.always_run:
                 pytest.skip(reason="Flow aborted")
 
-            # Verify session is initialized
             if cls._session is None:
                 raise RuntimeError("Session not initialized - setup_class was not called")
 
-            # Build local context for this stage (global + fixtures + vars)
             local_context = prepare_data_context(
                 scenario=cls._scenario,
                 stage_template=stage_template,
@@ -143,22 +142,19 @@ class Carrier:
                 fixture_kwargs=fixture_kwargs,
             )
 
-            # Resolve stage template with complete local context
             stage = pytest_httpchain_templates.substitution.walk(stage_template, local_context)
-
-            # Prepare and execute request
             request_dict = pytest_httpchain_templates.substitution.walk(stage.request, local_context)
             request_model = Request.model_validate(request_dict)
-            response = prepare_and_execute(cls._session, request_model)
 
-            # Store response for reporting (it contains the request)
+            prepared = prepare_request(cls._session, request_model)
+            cls._last_request = prepared.request
+
+            response = execute_request(cls._session, prepared)
             cls._last_response = response
 
-            # Process response
             response_dict = pytest_httpchain_templates.substitution.walk(stage.response, local_context)
             response_model = Response.model_validate(response_dict)
 
-            # Track what needs to be saved to global context
             global_context_updates: dict[str, Any] = {}
 
             for step in response_model:
@@ -167,7 +163,6 @@ class Carrier:
                         save_dict = pytest_httpchain_templates.substitution.walk(step.save, local_context)
                         save_model = Save.model_validate(save_dict)
                         saved_vars = process_save_step(save_model, response)
-                        # Add saved vars as a new layer in ChainMap for subsequent steps
                         local_context = local_context.new_child(saved_vars)
                         global_context_updates.update(saved_vars)
 
@@ -176,7 +171,6 @@ class Carrier:
                         verify_model = Verify.model_validate(verify_dict)
                         process_verify_step(verify_model, local_context, response)
 
-            # Merge returned updates into global context for next stages
             cls._data_context.update(global_context_updates)
 
         except (
@@ -184,7 +178,6 @@ class Carrier:
             StageExecutionError,
             ValidationError,
         ) as e:
-            # Check if stage is marked with xfail - if so, don't abort the flow
             is_xfail = any("xfail" in mark for mark in stage_template.marks)
             if not is_xfail:
                 logger.error(str(e))
@@ -228,33 +221,22 @@ class Carrier:
                 "_session": None,
                 "_data_context": {},
                 "_aborted": False,
+                "_last_request": None,
+                "_last_response": None,
             },
         )
 
-        # Add stage methods dynamically
-        # Calculate padding width based on total number of stages
         total_stages = len(scenario.stages)
-        # Width is based on the highest index (total_stages - 1)
         padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
 
         for i, stage in enumerate(scenario.stages):
             # Create stage method - using default argument to capture stage
             def stage_method(self, *, _stage: Stage = stage, **fixture_kwargs: dict[str, Any]) -> None:
-                """Execute a single stage of the test scenario.
-
-                Auto-generated method that executes one stage of the HTTP chain test.
-
-                Args:
-                    **fixture_kwargs: Pytest fixtures requested by this stage
-                """
-                # Call execute_stage on the instance's class
                 type(self).execute_stage(_stage, fixture_kwargs)
 
-            # Set up method signature with fixtures
             all_fixtures: list[str] = ["self"] + stage.fixtures + scenario.fixtures
             stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # type: ignore
 
-            # Apply markers
             all_marks: list[str] = [f"order({i})"] + stage.marks
             evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
             for mark_str in all_marks:
@@ -265,7 +247,6 @@ class Carrier:
                 except Exception as e:
                     logger.warning(f"Failed to create marker '{mark_str}': {e}")
 
-            # Add method to class with descriptive name (with zero-padded index)
             method_name = f"test_{str(i).zfill(padding_width)}_{stage.name}"
             setattr(CustomCarrier, method_name, stage_method)
 

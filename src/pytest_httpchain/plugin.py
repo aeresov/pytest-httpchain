@@ -201,16 +201,10 @@ def pytest_runtest_makereport(item: nodes.Item, call: runner.CallInfo[Any]) -> A
     report: reports.TestReport = outcome.get_result()
 
     if call.when == "call":
-        # Check if this is an HTTP chain test
         if hasattr(item, "instance") and isinstance(item.instance, Carrier):
             carrier = item.instance
 
-            # Add request and response sections if available
+            if carrier._last_request:
+                report.sections.append(("HTTP Request", format_request(carrier._last_request)))
             if carrier._last_response:
-                # Format request as curl command
-                curl_command = format_request(carrier._last_response.request)
-                report.sections.append(("HTTP Request", curl_command))
-
-                # Format response details
-                response_text = format_response(carrier._last_response)
-                report.sections.append(("HTTP Response", response_text))
+                report.sections.append(("HTTP Response", format_response(carrier._last_response)))

@@ -5,6 +5,7 @@ and their execution using the requests library.
 """
 
 from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,74 +27,104 @@ from .exceptions import RequestError
 from .helpers import call_user_function
 
 
-def prepare_and_execute(
+@dataclass
+class PrepareRequestResult:
+    request: requests.PreparedRequest
+    send_kwargs: dict[str, Any]
+
+
+def prepare_request(
     session: requests.Session,
     request_model: RequestModel,
-) -> requests.Response:
-    """Prepare and execute an HTTP request.
-
-    This function combines preparation and execution to avoid unnecessary
-    complexity. It handles authentication, different body types, and file
-    uploads with proper resource management.
+) -> PrepareRequestResult:
+    """Prepare an HTTP request for execution.
 
     Args:
-        session: HTTP session to use for the request
+        session: HTTP session to use for preparing the request
         request_model: Validated request model
 
     Returns:
-        HTTP response object
+        PreparedRequest dataclass containing the prepared request and send kwargs
 
     Raises:
-        RequestError: If request preparation or execution fails
+        RequestError: If request preparation fails or files not found
     """
 
-    # Base request kwargs
-    kwargs: dict[str, Any] = {
+    request_kwargs: dict[str, Any] = {
+        "method": request_model.method.value,
+        "url": str(request_model.url),
         "headers": request_model.headers,
         "params": request_model.params,
+    }
+
+    if request_model.auth:
+        try:
+            request_kwargs["auth"] = call_user_function(request_model.auth, call_auth_function)
+        except Exception as e:
+            raise RequestError(f"Failed to configure authentication: {str(e)}") from None
+
+    with ExitStack() as stack:
+        match request_model.body:
+            case None:
+                pass
+
+            case JsonBody(json=data):
+                request_kwargs["json"] = data
+
+            case GraphQLBody(graphql=gql):
+                # GraphQL is sent as JSON with query and variables
+                request_kwargs["json"] = {"query": gql.query, "variables": gql.variables}
+
+            case FormBody(form=data) | XmlBody(xml=data) | RawBody(raw=data):
+                request_kwargs["data"] = data
+
+            case FilesBody(files=file_paths):
+                # File uploads - open files and keep them open for preparation
+                files_dict = {}
+                for field_name, file_path in file_paths.items():
+                    try:
+                        file_handle = stack.enter_context(open(file_path, "rb"))
+                        files_dict[field_name] = (Path(file_path).name, file_handle)
+                    except FileNotFoundError:
+                        raise RequestError(f"File not found for upload: {file_path}") from None
+                request_kwargs["files"] = files_dict
+
+        try:
+            req = requests.Request(**request_kwargs)
+            prepared = session.prepare_request(req)
+        except Exception as e:
+            raise RequestError(f"Failed to prepare request: {str(e)}") from None
+
+    send_kwargs = {
         "timeout": request_model.timeout,
         "allow_redirects": request_model.allow_redirects,
         "verify": request_model.ssl.verify,
     }
-
-    # Add SSL cert if present
     if request_model.ssl.cert:
-        kwargs["cert"] = request_model.ssl.cert
+        send_kwargs["cert"] = request_model.ssl.cert
 
-    # Configure auth if present
-    if request_model.auth:
-        try:
-            kwargs["auth"] = call_user_function(request_model.auth, call_auth_function)
-        except Exception as e:
-            raise RequestError(f"Failed to configure authentication: {str(e)}") from None
+    return PrepareRequestResult(request=prepared, send_kwargs=send_kwargs)
 
-    # Handle different body types
-    match request_model.body:
-        case None:
-            pass
-        case JsonBody(json=data):
-            kwargs["json"] = data
-        case GraphQLBody(graphql=gql):
-            # GraphQL requests are sent as JSON with query and variables fields
-            kwargs["json"] = {"query": gql.query, "variables": gql.variables}
-        case FormBody(form=data) | XmlBody(xml=data) | RawBody(raw=data):
-            kwargs["data"] = data
-        case FilesBody(files=file_paths):
-            # Handle file uploads with context manager
-            with ExitStack() as stack:
-                try:
-                    files_dict = {}
-                    for field_name, file_path in file_paths.items():
-                        file_handle = stack.enter_context(open(file_path, "rb"))
-                        files_dict[field_name] = (Path(file_path).name, file_handle)
-                    kwargs["files"] = files_dict
 
-                    return session.request(method=request_model.method.value, url=str(request_model.url), **kwargs)
-                except FileNotFoundError as e:
-                    raise RequestError(f"File not found for upload: {str(e)}") from None
+def execute_request(
+    session: requests.Session,
+    prepared: PrepareRequestResult,
+) -> requests.Response:
+    """Execute a prepared HTTP request.
 
+    Args:
+        session: HTTP session to use for sending the request
+        prepared: PreparedRequest dataclass with request and send kwargs
+
+    Returns:
+        HTTP response
+
+    Raises:
+        RequestError: If request execution fails
+    """
     try:
-        return session.request(method=request_model.method.value, url=str(request_model.url), **kwargs)
+        response = session.send(prepared.request, **prepared.send_kwargs)
+        return response
     except requests.Timeout as e:
         raise RequestError(f"HTTP request timed out: {str(e)}") from None
     except requests.ConnectionError as e:
