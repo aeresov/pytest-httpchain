@@ -19,7 +19,6 @@ import requests
 from pydantic import ValidationError
 from pytest_httpchain_models.entities import (
     Request,
-    Response,
     Save,
     SaveStep,
     Scenario,
@@ -142,8 +141,7 @@ class Carrier:
                 fixture_kwargs=fixture_kwargs,
             )
 
-            stage = pytest_httpchain_templates.substitution.walk(stage_template, local_context)
-            request_dict = pytest_httpchain_templates.substitution.walk(stage.request, local_context)
+            request_dict = pytest_httpchain_templates.substitution.walk(stage_template.request, local_context)
             request_model = Request.model_validate(request_dict)
 
             prepared = prepare_request(cls._session, request_model)
@@ -152,12 +150,9 @@ class Carrier:
             response = execute_request(cls._session, prepared)
             cls._last_response = response
 
-            response_dict = pytest_httpchain_templates.substitution.walk(stage.response, local_context)
-            response_model = Response.model_validate(response_dict)
-
             global_context_updates: dict[str, Any] = {}
 
-            for step in response_model:
+            for step in stage_template.response:
                 match step:
                     case SaveStep():
                         save_dict = pytest_httpchain_templates.substitution.walk(step.save, local_context)
