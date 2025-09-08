@@ -9,7 +9,7 @@ import re
 from collections import ChainMap
 from pathlib import Path
 from typing import Any
-
+import logging
 import jmespath
 import jmespath.exceptions
 import jsonschema
@@ -21,6 +21,8 @@ from pytest_httpchain_userfunc.verify import call_verify_function
 
 from .exceptions import SaveError, VerificationError
 from .helpers import call_user_function
+
+logger = logging.getLogger(__name__)
 
 
 def process_save_step(
@@ -60,6 +62,7 @@ def process_save_step(
             try:
                 saved_value = jmespath.search(jmespath_expr, response_json)
                 result[var_name] = saved_value
+                logger.info(f"Saved {var_name} = {saved_value}")
             except jmespath.exceptions.JMESPathError as e:
                 raise SaveError(f"Error saving variable {var_name}: {str(e)}") from None
 
@@ -67,6 +70,8 @@ def process_save_step(
         try:
             func_result = call_user_function(func_item, call_save_function, response)
             result.update(func_result)
+            for var_name, saved_value in func_result.items():
+                logger.info(f"Saved {var_name} = {saved_value}")
         except Exception as e:
             raise SaveError(f"Error calling user function '{func_item}': {str(e)}") from None
 
