@@ -60,6 +60,7 @@ def process_save_step(
             raise SaveError(f"Cannot extract variables, response is not valid JSON: {str(e)}") from None
 
         for var_name, jmespath_expr in save_model.vars.items():
+            logger.info(f"JMESPath processing: {jmespath_expr}")
             try:
                 saved_value = jmespath.search(jmespath_expr, response_json)
                 result[var_name] = saved_value
