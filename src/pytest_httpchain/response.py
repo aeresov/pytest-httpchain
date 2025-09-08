@@ -5,11 +5,12 @@ This module handles the processing of HTTP responses including data extraction
 """
 
 import json
+import logging
 import re
 from collections import ChainMap
 from pathlib import Path
 from typing import Any
-import logging
+
 import jmespath
 import jmespath.exceptions
 import jsonschema
