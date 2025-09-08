@@ -1,6 +1,7 @@
 import re
 from collections.abc import Mapping
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel
 from simpleeval import (
@@ -34,6 +35,7 @@ SAFE_FUNCTIONS = {
     "list": list,
     "tuple": tuple,
     "set": set,
+    "uuid4": lambda: uuid4().hex,
 }
 
 evaluator = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS | DEFAULT_FUNCTIONS)
