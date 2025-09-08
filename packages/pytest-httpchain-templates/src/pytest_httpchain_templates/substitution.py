@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel
 from simpleeval import (
+    DEFAULT_FUNCTIONS,
     AttributeDoesNotExist,
     EvalWithCompoundTypes,
     FunctionNotDefined,
@@ -18,9 +19,6 @@ from pytest_httpchain_templates.exceptions import TemplatesError
 from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN
 
 SAFE_FUNCTIONS = {
-    "str": str,
-    "int": int,
-    "float": float,
     "bool": bool,
     "len": len,
     "min": min,
@@ -38,7 +36,7 @@ SAFE_FUNCTIONS = {
     "set": set,
 }
 
-evaluator = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS)
+evaluator = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS | DEFAULT_FUNCTIONS)
 
 
 def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
