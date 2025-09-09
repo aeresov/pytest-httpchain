@@ -54,10 +54,19 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
     Raises:
         TemplatesError: If variable is not found or expression is invalid
     """
-    evaluator.names = context
+    callables = {}
+    names = {}
+
+    for key, value in context.items():
+        if callable(value):
+            callables[key] = value
+        else:
+            names[key] = value
+
+    eval_instance = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS | DEFAULT_FUNCTIONS | callables, names=names)
 
     try:
-        return evaluator.eval(expr)
+        return eval_instance.eval(expr)
     except NameNotDefined as e:
         raise TemplatesError(f"Undefined variable in expression '{{ {expr} }}'") from e
     except FunctionNotDefined as e:

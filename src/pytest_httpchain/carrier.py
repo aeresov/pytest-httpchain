@@ -32,6 +32,7 @@ from simpleeval import EvalWithCompoundTypes
 
 from .context import prepare_data_context
 from .exceptions import StageExecutionError
+from .fixture_manager import FixtureManager
 from .helpers import call_user_function
 from .request import execute_request, prepare_request
 from .response import process_save_step, process_verify_step
@@ -59,6 +60,7 @@ class Carrier:
     _aborted: ClassVar[bool] = False
     _last_request: ClassVar[requests.PreparedRequest | None] = None
     _last_response: ClassVar[requests.Response | None] = None
+    _fixture_manager: ClassVar[FixtureManager | None] = None
 
     @classmethod
     def setup_class(cls) -> None:
@@ -68,6 +70,7 @@ class Carrier:
         Sets up:
         - Empty data context for variable storage
         - HTTP session with SSL and authentication configuration
+        - Factory fixture manager for handling callable fixtures
 
         Note:
             Authentication can be configured at scenario level and will
@@ -75,6 +78,7 @@ class Carrier:
         """
         cls._data_context = {}
         cls._session = requests.Session()
+        cls._fixture_manager = FixtureManager()
 
         # Configure SSL settings
         cls._session.verify = cls._scenario.ssl.verify
@@ -94,6 +98,9 @@ class Carrier:
         Called once after all test methods in the class have been executed.
         Ensures proper cleanup of resources and state reset for next test class.
         """
+        if cls._fixture_manager:
+            cls._fixture_manager.cleanup()
+            cls._fixture_manager = None
         if cls._session:
             cls._session.close()
             cls._session = None
@@ -134,11 +141,16 @@ class Carrier:
             if cls._session is None:
                 raise RuntimeError("Session not initialized - setup_class was not called")
 
+            if cls._fixture_manager is None:
+                raise RuntimeError("Fixture manager not initialized - setup_class was not called")
+
+            processed_fixtures = cls._fixture_manager.process_fixtures(fixture_kwargs)
+
             local_context = prepare_data_context(
                 scenario=cls._scenario,
                 stage_template=stage_template,
                 global_context=cls._data_context,
-                fixture_kwargs=fixture_kwargs,
+                fixture_kwargs=processed_fixtures,
             )
 
             request_dict = pytest_httpchain_templates.substitution.walk(stage_template.request, local_context)
@@ -218,6 +230,7 @@ class Carrier:
                 "_aborted": False,
                 "_last_request": None,
                 "_last_response": None,
+                "_fixture_manager": None,
             },
         )
 
