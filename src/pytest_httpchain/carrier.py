@@ -30,9 +30,8 @@ from pytest_httpchain_templates.exceptions import TemplatesError
 from pytest_httpchain_userfunc.auth import call_auth_function
 from simpleeval import EvalWithCompoundTypes
 
-from .context import prepare_data_context
+from .context_manager import ContextManager
 from .exceptions import StageExecutionError
-from .fixture_manager import FixtureManager
 from .helpers import call_user_function
 from .request import execute_request, prepare_request
 from .response import process_save_step, process_verify_step
@@ -56,11 +55,10 @@ class Carrier:
 
     _scenario: ClassVar[Scenario]
     _session: ClassVar[requests.Session | None] = None
-    _data_context: ClassVar[dict[str, Any]] = {}
+    _context_manager: ClassVar[ContextManager | None] = None
     _aborted: ClassVar[bool] = False
     _last_request: ClassVar[requests.PreparedRequest | None] = None
     _last_response: ClassVar[requests.Response | None] = None
-    _fixture_manager: ClassVar[FixtureManager | None] = None
 
     @classmethod
     def setup_class(cls) -> None:
@@ -76,9 +74,8 @@ class Carrier:
             Authentication can be configured at scenario level and will
             be applied to all requests unless overridden at stage level.
         """
-        cls._data_context = {}
+        cls._context_manager = ContextManager()
         cls._session = requests.Session()
-        cls._fixture_manager = FixtureManager()
 
         # Configure SSL settings
         cls._session.verify = cls._scenario.ssl.verify
@@ -98,13 +95,12 @@ class Carrier:
         Called once after all test methods in the class have been executed.
         Ensures proper cleanup of resources and state reset for next test class.
         """
-        if cls._fixture_manager:
-            cls._fixture_manager.cleanup()
-            cls._fixture_manager = None
+        if cls._context_manager:
+            cls._context_manager.cleanup()
+            cls._context_manager = None
         if cls._session:
             cls._session.close()
             cls._session = None
-        cls._data_context.clear()
         cls._aborted = False
         cls._last_request = None
         cls._last_response = None
@@ -141,16 +137,14 @@ class Carrier:
             if cls._session is None:
                 raise RuntimeError("Session not initialized - setup_class was not called")
 
-            if cls._fixture_manager is None:
-                raise RuntimeError("Fixture manager not initialized - setup_class was not called")
+            if cls._context_manager is None:
+                raise RuntimeError("Context manager not initialized - setup_class was not called")
 
-            processed_fixtures = cls._fixture_manager.process_fixtures(fixture_kwargs)
-
-            local_context = prepare_data_context(
+            # Prepare the context for this stage
+            local_context = cls._context_manager.prepare_stage_context(
                 scenario=cls._scenario,
-                stage_template=stage_template,
-                global_context=cls._data_context,
-                fixture_kwargs=processed_fixtures,
+                stage=stage_template,
+                fixture_kwargs=fixture_kwargs,
             )
 
             request_dict = pytest_httpchain_templates.substitution.walk(stage_template.request, local_context)
@@ -178,7 +172,7 @@ class Carrier:
                         verify_model = Verify.model_validate(verify_dict)
                         process_verify_step(verify_model, local_context, response)
 
-            cls._data_context.update(global_context_updates)
+            cls._context_manager.update_global_context(global_context_updates)
 
         except (
             TemplatesError,
