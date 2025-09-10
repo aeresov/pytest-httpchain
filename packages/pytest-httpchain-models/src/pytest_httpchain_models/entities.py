@@ -121,7 +121,9 @@ class FilesBody(BaseModel):
 class GraphQL(BaseModel):
     """GraphQL query with variables."""
 
-    query: GraphQLQuery | PartialTemplateStr = Field(description="GraphQL query string.")
+    query: GraphQLQuery | SerializablePath | PartialTemplateStr = Field(
+        description="GraphQL query string or path to file containing GraphQL query.", examples=["query { user { id name } }", "/path/to/query.graphql", "{{ graphql_query }}"]
+    )
     variables: dict[str, JsonValue] | PartialTemplateStr = Field(default_factory=dict, description="GraphQL query variables.")
     model_config = ConfigDict(extra="forbid")
 
