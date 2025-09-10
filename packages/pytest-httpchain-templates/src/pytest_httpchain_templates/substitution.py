@@ -35,7 +35,7 @@ SAFE_FUNCTIONS = {
     "list": list,
     "tuple": tuple,
     "set": set,
-    "uuid4": lambda: uuid4().hex,
+    "uuid4": lambda: str(uuid4()),
 }
 
 evaluator = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS | DEFAULT_FUNCTIONS)
