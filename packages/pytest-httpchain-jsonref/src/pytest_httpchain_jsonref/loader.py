@@ -6,12 +6,13 @@ from typing import Any
 from pytest_httpchain_jsonref.plumbing.reference import ReferenceResolver
 
 
-def load_json(path: Path, max_parent_traversal_depth: int = 3) -> dict[str, Any]:
+def load_json(path: Path, max_parent_traversal_depth: int = 3, root_path: Path | None = None) -> dict[str, Any]:
     """Load JSON from file and resolve all $ref statements with circular reference protection.
 
     Args:
         path: Path to the JSON file to load
         max_parent_traversal_depth: Maximum number of parent directory traversals allowed in $ref paths
+        root_path: Optional root directory for resolving references (e.g., pytest's rootdir)
 
     Returns:
         Dictionary with all $ref statements resolved
@@ -19,5 +20,5 @@ def load_json(path: Path, max_parent_traversal_depth: int = 3) -> dict[str, Any]
     Raises:
         ReferenceResolverError: If the file cannot be loaded or parsed, if merge conflicts occur, or if circular references are detected
     """
-    resolver = ReferenceResolver(max_parent_traversal_depth)
+    resolver = ReferenceResolver(max_parent_traversal_depth, root_path)
     return resolver.resolve_file(path)

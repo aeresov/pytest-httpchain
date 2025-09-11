@@ -18,12 +18,12 @@ REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 class ReferenceResolver:
     """Resolves JSON references ($ref) in documents."""
 
-    def __init__(self, max_parent_traversal_depth: int = 3):
+    def __init__(self, max_parent_traversal_depth: int = 3, root_path: Path | None = None):
         self.max_parent_traversal_depth = max_parent_traversal_depth
         self.path_validator = PathValidator()
         self.tracker = CircularDependencyTracker()
         self.base_path: Path | None = None
-        self.root_path: Path | None = None
+        self.root_path = root_path
 
     def resolve_document(self, data: dict[str, Any], base_path: Path) -> dict[str, Any]:
         """Resolve all references in a document.
@@ -57,7 +57,16 @@ class ReferenceResolver:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
 
-            self.root_path = path.parent
+            # If root_path wasn't provided, find a suitable one by going up the directory tree
+            # up to max_parent_traversal_depth levels
+            if not self.root_path:
+                self.root_path = path.parent
+                for _ in range(self.max_parent_traversal_depth):
+                    parent = self.root_path.parent
+                    if parent == self.root_path:
+                        break  # Reached filesystem root
+                    self.root_path = parent
+
             return self.resolve_document(data, path.parent)
 
         except (OSError, json.JSONDecodeError) as e:
@@ -178,9 +187,8 @@ class ReferenceResolver:
 
     def _create_child_resolver(self) -> Self:
         """Create a child resolver with inherited state."""
-        child_resolver = type(self)(self.max_parent_traversal_depth)
+        child_resolver = type(self)(self.max_parent_traversal_depth, self.root_path)
         child_resolver.tracker = self.tracker.create_child_tracker()
-        child_resolver.root_path = self.root_path
         return child_resolver
 
     def _detect_merge_conflicts(

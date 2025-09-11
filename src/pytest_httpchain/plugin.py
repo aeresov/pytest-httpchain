@@ -53,11 +53,13 @@ class JsonModule(python.Module):
         """
         # Load and validate the test scenario from JSON
         ref_parent_traversal_depth = int(self.config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH))
+        root_path = Path(self.config.rootpath)
 
         try:
             test_data = pytest_httpchain_jsonref.loader.load_json(
                 self.path,
                 max_parent_traversal_depth=ref_parent_traversal_depth,
+                root_path=root_path,
             )
         except ReferenceResolverError as e:
             raise nodes.Collector.CollectError(f"Cannot load JSON file {self.path}: {str(e)}") from None
