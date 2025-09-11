@@ -10,6 +10,7 @@ from pytest_httpchain_models.types import (
     JMESPathExpression,
     JSONSchemaInline,
     NamespaceFromDict,
+    NamespaceOrDict,
     PartialTemplateStr,
     RegexPattern,
     SerializablePath,
@@ -125,7 +126,7 @@ class GraphQL(BaseModel):
     query: GraphQLQuery | SerializablePath | PartialTemplateStr = Field(
         description="GraphQL query string or path to file containing GraphQL query.", examples=["query { user { id name } }", "/path/to/query.graphql", "{{ graphql_query }}"]
     )
-    variables: dict[str, JsonValue] | PartialTemplateStr = Field(default_factory=dict, description="GraphQL query variables.")
+    variables: NamespaceOrDict | PartialTemplateStr = Field(default_factory=dict, description="GraphQL query variables.")
     model_config = ConfigDict(extra="forbid")
 
 

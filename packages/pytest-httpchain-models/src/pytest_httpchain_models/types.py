@@ -8,7 +8,7 @@ from typing import Annotated, Any
 import graphql
 import jmespath
 import jsonschema
-from pydantic import AfterValidator, PlainSerializer
+from pydantic import AfterValidator, BeforeValidator, JsonValue, PlainSerializer
 from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN, is_complete_template
 from pytest_httpchain_userfunc.base import UserFunctionHandler
 from pytest_httpchain_userfunc.exceptions import UserFunctionError
@@ -131,6 +131,20 @@ def convert_dict_to_namespace(v: Any) -> Any:
         return v
 
 
+def convert_namespace_to_dict(v: Any) -> Any:
+    if isinstance(v, types.SimpleNamespace):
+        result = {}
+        for key, value in vars(v).items():
+            result[key] = convert_namespace_to_dict(value)
+        return result
+    elif isinstance(v, list):
+        return [convert_namespace_to_dict(item) for item in v]
+    elif isinstance(v, dict):
+        return {key: convert_namespace_to_dict(value) for key, value in v.items()}
+    else:
+        return v
+
+
 # Type aliases with validators
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
 FunctionImportName = Annotated[str, AfterValidator(validate_function_import_name)]
@@ -143,3 +157,4 @@ GraphQLQuery = Annotated[str, AfterValidator(validate_graphql_query)]
 TemplateExpression = Annotated[str, AfterValidator(validate_template_expression)]
 PartialTemplateStr = Annotated[str, AfterValidator(validate_partial_template_str)]
 NamespaceFromDict = Annotated[Any, AfterValidator(convert_dict_to_namespace)]
+NamespaceOrDict = Annotated[dict[str, JsonValue], BeforeValidator(convert_namespace_to_dict)]
