@@ -1,5 +1,6 @@
 import re
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -108,6 +109,8 @@ def _contains_template(obj: Any) -> bool:
             return any(_contains_template(item) for item in obj)
         case BaseModel():
             return _contains_template(obj.model_dump(mode="python"))
+        case SimpleNamespace():
+            return any(_contains_template(value) for value in vars(obj).values())
         case _:
             return False
 
@@ -116,7 +119,7 @@ def walk(obj: Any, context: Mapping[str, Any]) -> Any:
     """Recursively substitute values in string attributes of an arbitrary object.
 
     Args:
-        obj: The object to walk through (can be dict, list, str, BaseModel, etc.)
+        obj: The object to walk through (can be dict, list, str, BaseModel, SimpleNamespace, etc.)
         context: Mapping of variables for substitution (dict, ChainMap, etc.)
 
     Returns:
@@ -136,5 +139,12 @@ def walk(obj: Any, context: Mapping[str, Any]) -> Any:
             obj_dict = obj.model_dump(mode="python")
             processed_dict = walk(obj_dict, context)
             return obj.__class__.model_validate(processed_dict)
+        case SimpleNamespace():
+            if not _contains_template(obj):
+                return obj
+
+            namespace_dict = vars(obj)
+            processed_dict = walk(namespace_dict, context)
+            return SimpleNamespace(**processed_dict)
         case _:
             return obj

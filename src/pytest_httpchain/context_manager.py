@@ -84,12 +84,10 @@ class ContextManager:
             # Build context with scenario vars included
             stage_context = ChainMap({}, scenario_vars, stage_fixtures, self.global_context)
 
-            # Process stage vars incrementally so they can reference each other
+            # Process stage vars (each references only the base context)
             for key, value in stage.vars.items():
                 resolved_value = pytest_httpchain_templates.substitution.walk(value, stage_context)
                 stage_vars[key] = resolved_value
-                # Add to context for next vars to reference
-                stage_context.maps[0][key] = resolved_value
                 logger.info(f"Seeded {key} = {resolved_value}")
 
         # Return final layered context
