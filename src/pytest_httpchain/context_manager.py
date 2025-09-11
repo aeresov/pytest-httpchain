@@ -4,6 +4,7 @@ This module provides a ContextManager class that handles all context-related
 operations including variable caching, fixture processing, and data context preparation.
 """
 
+import logging
 from collections import ChainMap
 from typing import Any
 
@@ -11,6 +12,8 @@ import pytest_httpchain_templates.substitution
 from pytest_httpchain_models.entities import Scenario, Stage
 
 from .fixture_manager import FixtureManager
+
+logger = logging.getLogger(__name__)
 
 
 class ContextManager:
@@ -70,6 +73,8 @@ class ContextManager:
                 scenario.vars,
                 scenario_context,
             )
+            for scenario_var_name in scenario.vars.keys():
+                logger.info(f"Seeded {scenario_var_name} = {self.scenario_vars_cache[scenario_var_name]}")
 
         scenario_vars = self.scenario_vars_cache or {}
 
@@ -85,6 +90,7 @@ class ContextManager:
                 stage_vars[key] = resolved_value
                 # Add to context for next vars to reference
                 stage_context.maps[0][key] = resolved_value
+                logger.info(f"Seeded {key} = {resolved_value}")
 
         # Return final layered context
         # Precedence: stage_vars > scenario_vars > fixtures > global
