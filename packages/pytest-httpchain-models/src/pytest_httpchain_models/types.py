@@ -1,5 +1,6 @@
 import keyword
 import re
+import types
 import xml.etree.ElementTree
 from pathlib import Path
 from typing import Annotated, Any
@@ -118,6 +119,18 @@ def validate_function_import_name(v: str) -> str:
     return v
 
 
+def convert_dict_to_namespace(v: Any) -> Any:
+    if isinstance(v, dict):
+        converted = {}
+        for key, value in v.items():
+            converted[key] = convert_dict_to_namespace(value)
+        return types.SimpleNamespace(**converted)
+    elif isinstance(v, list):
+        return [convert_dict_to_namespace(item) for item in v]
+    else:
+        return v
+
+
 # Type aliases with validators
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
 FunctionImportName = Annotated[str, AfterValidator(validate_function_import_name)]
@@ -129,3 +142,4 @@ XMLString = Annotated[str, AfterValidator(validate_xml)]
 GraphQLQuery = Annotated[str, AfterValidator(validate_graphql_query)]
 TemplateExpression = Annotated[str, AfterValidator(validate_template_expression)]
 PartialTemplateStr = Annotated[str, AfterValidator(validate_partial_template_str)]
+NamespaceFromDict = Annotated[Any, AfterValidator(convert_dict_to_namespace)]

@@ -9,6 +9,7 @@ from pytest_httpchain_models.types import (
     GraphQLQuery,
     JMESPathExpression,
     JSONSchemaInline,
+    NamespaceFromDict,
     PartialTemplateStr,
     RegexPattern,
     SerializablePath,
@@ -204,7 +205,7 @@ class Decorated(BaseModel):
 
     marks: list[str] = Field(default_factory=list, examples=["xfail", "skip"])
     fixtures: list[str] = Field(default_factory=list)
-    vars: dict[str, Any] = Field(default_factory=dict)
+    vars: dict[str, NamespaceFromDict] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_no_conflicts(self) -> Self:
