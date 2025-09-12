@@ -284,6 +284,7 @@ class Stage(Decorated):
     """HTTP test stage configuration."""
 
     name: str = Field(description="Stage name (human-readable).")
+    description: str | None = Field(default=None, description="Extended description for the test stage.")
     always_run: Literal[True, False] | TemplateExpression = Field(default=False, examples=[True, "{{ should_run }}", "{{ env == 'production' }}"])
     request: Request = Field(description="HTTP request details.")
     response: Response = Field(default_factory=Response)

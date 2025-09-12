@@ -236,6 +236,9 @@ class Carrier:
             def stage_method(self, *, _stage: Stage = stage, **fixture_kwargs: dict[str, Any]) -> None:
                 type(self).execute_stage(_stage, fixture_kwargs)
 
+            if stage.description:
+                stage_method.__doc__ = stage.description
+
             all_fixtures: list[str] = ["self"] + stage.fixtures + scenario.fixtures
             stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # type: ignore
 
