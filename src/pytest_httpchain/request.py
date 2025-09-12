@@ -73,18 +73,7 @@ def prepare_request(
 
             case GraphQLBody(graphql=gql):
                 # GraphQL is sent as JSON with query and variables
-                query = gql.query
-
-                if isinstance(query, Path):
-                    if not query.exists():
-                        raise RequestError(f"GraphQL file not found: {query}")
-                    try:
-                        with open(query, encoding="utf-8") as f:
-                            query = f.read()
-                    except Exception as e:
-                        raise RequestError(f"Failed to read GraphQL file {query}: {str(e)}") from None
-
-                request_kwargs["json"] = {"query": query, "variables": gql.variables}
+                request_kwargs["json"] = {"query": gql.query, "variables": gql.variables}
 
             case FormBody(form=data) | XmlBody(xml=data) | RawBody(raw=data):
                 request_kwargs["data"] = data
