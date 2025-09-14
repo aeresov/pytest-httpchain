@@ -249,7 +249,10 @@ class VerifyStep(BaseModel):
 
 
 # Discriminated union with callable discriminator
-ResponseStep = Annotated[Annotated[SaveStep, Tag("save")] | Annotated[VerifyStep, Tag("verify")], Discriminator(get_response_step_discriminator)]
+ResponseStep = Annotated[
+    Annotated[SaveStep, Tag("save")] | Annotated[VerifyStep, Tag("verify")],
+    Discriminator(get_response_step_discriminator),
+]
 
 
 class Response(RootModel):
@@ -278,12 +281,103 @@ class Response(RootModel):
         return self.root[item]
 
 
+class IndividualStep(BaseModel):
+    """Individual parameter step that creates cartesian product."""
+
+    individual: dict[str, Annotated[list[Any], Field(min_length=1)]] = Field(
+        max_length=1, description="Parameter name mapped to list of values (single parameter per step, non-empty values)"
+    )
+    ids: list[str] | None = Field(default=None, description="Optional IDs for each value")
+
+    @model_validator(mode="after")
+    def validate_ids_match_values(self) -> Self:
+        if self.ids and self.individual:
+            values = next(iter(self.individual.values()))
+            if len(self.ids) != len(values):
+                raise ValueError(f"Number of ids ({len(self.ids)}) must match number of values ({len(values)})")
+        return self
+
+
+class CombinationsStep(BaseModel):
+    """Explicit parameter combinations step."""
+
+    combinations: list[Annotated[dict[str, Any], Field(min_length=1)]] = Field(description="List of parameter combinations (each dict must have at least one parameter)")
+    ids: list[str] | None = Field(default=None, description="Optional IDs for each combination")
+
+    @model_validator(mode="after")
+    def validate_combinations(self) -> Self:
+        # Ensure all combinations have the same keys (if there are multiple)
+        if len(self.combinations) > 1:
+            first_keys = set(self.combinations[0].keys())
+            for i, combo in enumerate(self.combinations[1:], 1):
+                combo_keys = set(combo.keys())
+                if combo_keys != first_keys:
+                    raise ValueError(f"Combination {i} has different parameters than combination 0")
+
+        # Validate ids match combinations count
+        if self.ids and self.combinations:
+            if len(self.ids) != len(self.combinations):
+                raise ValueError(f"Number of ids ({len(self.ids)}) must match number of combinations ({len(self.combinations)})")
+        return self
+
+
+def get_parameter_step_discriminator(v: Any) -> str:
+    """Discriminator function for parameter step types."""
+    # For dict inputs, check which field is present
+    if isinstance(v, dict):
+        if "individual" in v:
+            return "individual"
+        elif "combinations" in v:
+            return "combinations"
+
+    # For object inputs, map class name to discriminator
+    if hasattr(v, "__class__"):
+        class_to_tag = {"IndividualStep": "individual", "CombinationsStep": "combinations"}
+        tag = class_to_tag.get(v.__class__.__name__)
+        if tag:
+            return tag
+
+    raise ValueError("Unable to determine parameter step type")
+
+
+ParameterStep = Annotated[
+    Annotated[IndividualStep, Tag("individual")] | Annotated[CombinationsStep, Tag("combinations")],
+    Discriminator(get_parameter_step_discriminator),
+]
+
+
+class Parameters(RootModel):
+    """List of parameter steps to be applied sequentially (creates cartesian product)."""
+
+    root: list[ParameterStep] = Field(
+        default_factory=list,
+        description="Sequential parameter steps. Multiple steps create cartesian product.",
+        examples=[
+            [
+                {"individual": {"method": ["GET", "POST"]}},
+                {"individual": {"status": [200, 201]}},
+            ],
+            [{"combinations": [{"user": "alice", "role": "admin"}, {"user": "bob", "role": "user"}]}],
+        ],
+    )
+
+    def __iter__(self):
+        return iter(self.root)
+
+    def __getitem__(self, item):
+        return self.root[item]
+
+    def __len__(self):
+        return len(self.root)
+
+
 class Stage(Decorated):
     """HTTP test stage configuration."""
 
     name: str = Field(description="Stage name (human-readable).")
     description: str | None = Field(default=None, description="Extended description for the test stage.")
     always_run: Literal[True, False] | TemplateExpression = Field(default=False, examples=[True, "{{ should_run }}", "{{ env == 'production' }}"])
+    parameters: Parameters | None = Field(default=None, description="Stage parametrization steps")
     request: Request = Field(description="HTTP request details.")
     response: Response = Field(default_factory=Response)
 

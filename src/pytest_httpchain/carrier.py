@@ -18,6 +18,8 @@ import pytest_httpchain_templates.substitution
 import requests
 from pydantic import ValidationError
 from pytest_httpchain_models.entities import (
+    CombinationsStep,
+    IndividualStep,
     Request,
     Save,
     SaveStep,
@@ -232,17 +234,54 @@ class Carrier:
         padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
 
         for i, stage in enumerate(scenario.stages):
-            # Create stage method - using default argument to capture stage
-            def stage_method(self, *, _stage: Stage = stage, **fixture_kwargs: dict[str, Any]) -> None:
-                type(self).execute_stage(_stage, fixture_kwargs)
+            # Create test method - capture stage in closure
+            def make_stage_method(stage_template):
+                def stage_method_impl(self, **kwargs):
+                    type(self).execute_stage(stage_template, kwargs)
+
+                return stage_method_impl
+
+            stage_method = make_stage_method(stage)
 
             if stage.description:
                 stage_method.__doc__ = stage.description
 
-            all_fixtures: list[str] = ["self"] + stage.fixtures + scenario.fixtures
-            stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # type: ignore
+            # Collect all parameter names for signature
+            all_param_names = []
 
-            all_marks: list[str] = [f"order({i})"] + stage.marks
+            # Apply parametrize marks if present (creates cartesian product)
+            if stage.parameters:
+                for step in stage.parameters:
+                    if isinstance(step, IndividualStep):
+                        # Single parameter step
+                        if step.individual:  # Skip if empty
+                            param_name = next(iter(step.individual.keys()))
+                            param_values = step.individual[param_name]
+                            param_ids = step.ids if step.ids else None
+
+                            all_param_names.append(param_name)
+                            parametrize_marker = pytest.mark.parametrize(param_name, param_values, ids=param_ids)
+                            stage_method = parametrize_marker(stage_method)
+
+                    elif isinstance(step, CombinationsStep):
+                        # Multiple parameters in combination
+                        combinations = step.combinations
+                        if combinations:
+                            first_item = combinations[0]
+                            param_names = list(first_item.keys())
+                            param_values = [tuple(combo[name] for name in param_names) for combo in combinations]
+                            param_ids = step.ids if step.ids else None
+
+                            all_param_names.extend(param_names)
+                            parametrize_marker = pytest.mark.parametrize(",".join(param_names), param_values, ids=param_ids)
+                            stage_method = parametrize_marker(stage_method)
+
+            # Set fixtures - parameters will be added to kwargs by pytest
+            all_fixtures = ["self"] + all_param_names + stage.fixtures + scenario.fixtures
+            stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])
+
+            # Apply other markers
+            all_marks = [f"order({i})"] + stage.marks
             evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
             for mark_str in all_marks:
                 try:
