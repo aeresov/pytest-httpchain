@@ -11,6 +11,7 @@ The Carrier class manages the test lifecycle and infrastructure:
 
 import inspect
 import logging
+from types import SimpleNamespace
 from typing import Any, ClassVar, Self
 
 import pytest
@@ -233,6 +234,11 @@ class Carrier:
         total_stages = len(scenario.stages)
         padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
 
+        # Build context for parameter substitution (scenario vars only)
+        # We can only use scenario.vars here since fixtures aren't available yet
+        # Scenario vars are literal values - no substitution needed
+        param_context = scenario.vars if scenario.vars else {}
+
         for i, stage in enumerate(scenario.stages):
             # Create test method - capture stage in closure
             def make_stage_method(stage_template):
@@ -257,19 +263,23 @@ class Carrier:
                         if step.individual:  # Skip if empty
                             param_name = next(iter(step.individual.keys()))
                             param_values = step.individual[param_name]
+                            resolved_values = pytest_httpchain_templates.substitution.walk(param_values, param_context)
+
                             param_ids = step.ids if step.ids else None
 
                             all_param_names.append(param_name)
-                            parametrize_marker = pytest.mark.parametrize(param_name, param_values, ids=param_ids)
+                            parametrize_marker = pytest.mark.parametrize(param_name, resolved_values, ids=param_ids)
                             stage_method = parametrize_marker(stage_method)
 
                     elif isinstance(step, CombinationsStep):
                         # Multiple parameters in combination
-                        combinations = step.combinations
-                        if combinations:
-                            first_item = combinations[0]
+                        if step.combinations:
+                            resolved_combinations = pytest_httpchain_templates.substitution.walk(step.combinations, param_context)
+                            resolved_combinations = [vars(item) if isinstance(item, SimpleNamespace) else item for item in resolved_combinations]
+
+                            first_item = resolved_combinations[0]
                             param_names = list(first_item.keys())
-                            param_values = [tuple(combo[name] for name in param_names) for combo in combinations]
+                            param_values = [tuple(combo[name] for name in param_names) for combo in resolved_combinations]
                             param_ids = step.ids if step.ids else None
 
                             all_param_names.extend(param_names)

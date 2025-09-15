@@ -284,8 +284,8 @@ class Response(RootModel):
 class IndividualStep(BaseModel):
     """Individual parameter step that creates cartesian product."""
 
-    individual: dict[str, Annotated[list[Any], Field(min_length=1)]] = Field(
-        max_length=1, description="Parameter name mapped to list of values (single parameter per step, non-empty values)"
+    individual: dict[str, Annotated[list[Any], Field(min_length=1)] | PartialTemplateStr] = Field(
+        max_length=1, description="Parameter name mapped to list of values (single parameter per step, non-empty values) or template expression"
     )
     ids: list[str] | None = Field(default=None, description="Optional IDs for each value")
 
@@ -293,6 +293,9 @@ class IndividualStep(BaseModel):
     def validate_ids_match_values(self) -> Self:
         if self.ids and self.individual:
             values = next(iter(self.individual.values()))
+            # Skip validation if values is a template string
+            if isinstance(values, str):
+                return self
             if len(self.ids) != len(values):
                 raise ValueError(f"Number of ids ({len(self.ids)}) must match number of values ({len(values)})")
         return self
@@ -301,11 +304,16 @@ class IndividualStep(BaseModel):
 class CombinationsStep(BaseModel):
     """Explicit parameter combinations step."""
 
-    combinations: list[Annotated[dict[str, Any], Field(min_length=1)]] = Field(description="List of parameter combinations (each dict must have at least one parameter)")
+    combinations: list[Annotated[dict[str, Any], Field(min_length=1)]] | PartialTemplateStr = Field(
+        description="List of parameter combinations (each dict must have at least one parameter) or template expression"
+    )
     ids: list[str] | None = Field(default=None, description="Optional IDs for each combination")
 
     @model_validator(mode="after")
     def validate_combinations(self) -> Self:
+        # Skip validation if combinations is a template string
+        if isinstance(self.combinations, str):
+            return self
         # Ensure all combinations have the same keys (if there are multiple)
         if len(self.combinations) > 1:
             first_keys = set(self.combinations[0].keys())
