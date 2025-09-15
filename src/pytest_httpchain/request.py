@@ -21,7 +21,7 @@ from pytest_httpchain_models.entities import (
 from pytest_httpchain_models.entities import (
     Request as RequestModel,
 )
-from pytest_httpchain_userfunc.auth import call_auth_function
+from pytest_httpchain_userfunc import call_auth_function
 
 from .exceptions import RequestError
 from .helpers import call_user_function

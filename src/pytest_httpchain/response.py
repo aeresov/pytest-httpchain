@@ -17,8 +17,7 @@ import jsonschema
 import requests
 from pytest_httpchain_models.entities import Save, Verify
 from pytest_httpchain_models.types import check_json_schema
-from pytest_httpchain_userfunc.save import call_save_function
-from pytest_httpchain_userfunc.verify import call_verify_function
+from pytest_httpchain_userfunc import call_save_function, call_verify_function
 
 from .exceptions import SaveError, VerificationError
 from .helpers import call_user_function

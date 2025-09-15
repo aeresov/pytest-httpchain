@@ -93,7 +93,7 @@ def validate_scenario(path: Path) -> ValidateResult:
         scenario_info["stage_names"] = [stage.name for stage in scenario.stages]
         scenario_info["has_fixtures"] = bool(scenario.fixtures)
         scenario_info["has_marks"] = bool(scenario.marks)
-        scenario_info["has_vars"] = bool(scenario.vars)
+        scenario_info["has_vars"] = bool(scenario.substitutions.vars)
 
         # Analyze stages
         always_run_stages = []
@@ -130,7 +130,7 @@ def validate_scenario(path: Path) -> ValidateResult:
         # Step 4: Check for common issues
 
         # Check for undefined variables
-        initial_vars = set(scenario.vars.keys()) if scenario.vars else set()
+        initial_vars = set(scenario.substitutions.vars.keys()) if scenario.substitutions.vars else set()
         undefined_vars = referenced_vars - initial_vars - saved_vars - used_fixtures
         if undefined_vars:
             warnings.append(f"Potentially undefined variables: {', '.join(undefined_vars)}")
@@ -157,8 +157,8 @@ def validate_scenario(path: Path) -> ValidateResult:
                 warnings.append(f"Stage '{stage.name}' has no response validation")
 
         # Check for fixture/variable conflicts
-        if scenario.fixtures and scenario.vars:
-            conflicts = set(scenario.fixtures) & set(scenario.vars.keys())
+        if scenario.fixtures and scenario.substitutions.vars:
+            conflicts = set(scenario.fixtures) & set(scenario.substitutions.vars.keys())
             if conflicts:
                 errors.append(f"Conflicting fixture and variable names: {', '.join(conflicts)}")
 

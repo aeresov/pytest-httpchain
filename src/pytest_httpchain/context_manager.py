@@ -32,6 +32,7 @@ class ContextManager:
         self.scenario_vars_cache: dict[str, Any] | None = None
         self.scenario_fixtures_cache: dict[str, Any] | None = None
         self.fixture_manager = FixtureManager()
+        self.wrapped_functions: dict[str, Any] = {}
 
     def prepare_stage_context(
         self,
@@ -66,23 +67,25 @@ class ContextManager:
         ChainMap(stage_fixtures, self.global_context)
 
         # Process scenario variables (cached after first evaluation)
-        if self.scenario_vars_cache is None and scenario.vars:
-            # Use cached fixtures for scenario vars to ensure consistency
-            scenario_context = ChainMap(self.scenario_fixtures_cache, self.global_context)
-            self.scenario_vars_cache = pytest_httpchain_templates.substitution.walk(
-                scenario.vars,
-                scenario_context,
-            )
-            for scenario_var_name in scenario.vars.keys():
-                logger.info(f"Seeded {scenario_var_name} = {self.scenario_vars_cache[scenario_var_name]}")
+        if self.scenario_vars_cache is None and scenario.substitutions.vars:
+            # Functions are available for scenario vars evaluation
+            # Vars should NOT reference each other - only functions and fixtures
+            scenario_context = ChainMap(self.wrapped_functions, self.scenario_fixtures_cache, self.global_context)
+
+            # Process all vars at once against the same context
+            self.scenario_vars_cache = pytest_httpchain_templates.substitution.walk(scenario.substitutions.vars, scenario_context)
+
+            for var_name, resolved_value in self.scenario_vars_cache.items():
+                logger.info(f"Seeded {var_name} = {resolved_value}")
 
         scenario_vars = self.scenario_vars_cache or {}
 
         # Process stage variables (fresh for each stage)
         stage_vars = {}
         if stage.vars:
-            # Build context with scenario vars included
-            stage_context = ChainMap({}, scenario_vars, stage_fixtures, self.global_context)
+            # Build context for stage vars with functions and scenario vars having top priority
+            # Context: functions > scenario_vars > fixtures > global
+            stage_context = ChainMap(self.wrapped_functions, scenario_vars, stage_fixtures, self.global_context)
 
             # Process stage vars (each references only the base context)
             for key, value in stage.vars.items():
@@ -91,8 +94,9 @@ class ContextManager:
                 logger.info(f"Seeded {key} = {resolved_value}")
 
         # Return final layered context
-        # Precedence: stage_vars > scenario_vars > fixtures > global
-        return ChainMap(stage_vars, scenario_vars, stage_fixtures, self.global_context)
+        # Precedence: stage_vars > functions > scenario_vars > fixtures > global
+        # Functions and scenario_vars have top priority after stage_vars
+        return ChainMap(stage_vars, self.wrapped_functions, scenario_vars, stage_fixtures, self.global_context)
 
     def update_global_context(self, updates: dict[str, Any]):
         """Update the global context with new values.

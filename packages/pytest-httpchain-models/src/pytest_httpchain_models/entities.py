@@ -55,15 +55,11 @@ class UserFunctionKwargs(BaseModel):
 
 UserFunctionCall = UserFunctionName | UserFunctionKwargs
 
+# Annotated type for list of functions (used in response save/verify)
+FunctionsList = Annotated[list[UserFunctionCall], Field(default_factory=list, description="Functions to process response data.")]
 
-class Functions(RootModel):
-    root: list[UserFunctionCall] = Field(default_factory=list)
-
-    def __iter__(self):
-        return iter(self.root)
-
-    def __getitem__(self, item):
-        return self.root[item]
+# Annotated type for dict of functions (used in substitutions)
+FunctionsDict = Annotated[dict[str, UserFunctionCall], Field(default_factory=dict, description="User-defined functions for processing.")]
 
 
 def get_request_body_discriminator(v: Any) -> str:
@@ -176,7 +172,7 @@ class Save(BaseModel):
     """Configuration for saving data from HTTP response."""
 
     vars: dict[str, JMESPathExpression | PartialTemplateStr] = Field(default_factory=dict, description="JMESPath expressions to extract values.")
-    functions: Functions = Field(default_factory=Functions, description="Functions to process response data.")
+    functions: FunctionsList
 
 
 class ResponseBody(BaseModel):
@@ -195,7 +191,7 @@ class Verify(BaseModel):
     status: HTTPStatus | None | TemplateExpression = Field(default=None)
     headers: dict[str, str] = Field(default_factory=dict)
     vars: dict[str, Any] = Field(default_factory=dict)
-    functions: Functions = Field(default_factory=Functions)
+    functions: FunctionsList
     body: ResponseBody = Field(default_factory=ResponseBody)
 
 
@@ -204,15 +200,6 @@ class Decorated(BaseModel):
 
     marks: list[str] = Field(default_factory=list, examples=["xfail", "skip"])
     fixtures: list[str] = Field(default_factory=list)
-    vars: dict[str, NamespaceFromDict] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_no_conflicts(self) -> Self:
-        """Ensure fixtures and vars don't conflict."""
-        conflicts = set(self.fixtures) & self.vars.keys()
-        if conflicts:
-            raise ValueError(f"Conflicting fixtures and vars: {', '.join(conflicts)}")
-        return self
 
 
 def get_response_step_discriminator(v: Any) -> str:
@@ -384,24 +371,22 @@ class Stage(Decorated):
 
     name: str = Field(description="Stage name (human-readable).")
     description: str | None = Field(default=None, description="Extended description for the test stage.")
+    vars: dict[str, NamespaceFromDict] = Field(default_factory=dict)
     always_run: Literal[True, False] | TemplateExpression = Field(default=False, examples=[True, "{{ should_run }}", "{{ env == 'production' }}"])
     parameters: Parameters | None = Field(default=None, description="Stage parametrization steps")
     request: Request = Field(description="HTTP request details.")
     response: Response = Field(default_factory=Response)
 
 
+class Substitutions(BaseModel):
+    """Variable substitution configuration for scenarios."""
+
+    vars: dict[str, NamespaceFromDict] = Field(default_factory=dict, description="Variables for substitution.")
+    functions: FunctionsDict
+
+
 class Scenario(Decorated, CallSecurity):
     """HTTP test scenario with multiple stages."""
 
     stages: list[Stage] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_no_var_conflicts(self) -> Self:
-        """Ensure stage variables don't conflict with fixtures."""
-        for stage in self.stages:
-            for step in stage.response:
-                if isinstance(step, SaveStep) and step.save.vars:
-                    conflicts = set(step.save.vars.keys()) & set(self.fixtures)
-                    if conflicts:
-                        raise ValueError(f"Stage '{stage.name}' has conflicting vars and fixtures: {', '.join(conflicts)}")
-        return self
+    substitutions: Substitutions = Field(default_factory=Substitutions, description="Variable substitution configuration.")

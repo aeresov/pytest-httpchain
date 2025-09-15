@@ -11,6 +11,7 @@ The Carrier class manages the test lifecycle and infrastructure:
 
 import inspect
 import logging
+from collections import ChainMap
 from types import SimpleNamespace
 from typing import Any, ClassVar, Self
 
@@ -30,7 +31,7 @@ from pytest_httpchain_models.entities import (
     VerifyStep,
 )
 from pytest_httpchain_templates.exceptions import TemplatesError
-from pytest_httpchain_userfunc.auth import call_auth_function
+from pytest_httpchain_userfunc import call_auth_function, wrap_functions_dict
 from simpleeval import EvalWithCompoundTypes
 
 from .context_manager import ContextManager
@@ -52,7 +53,6 @@ class Carrier:
     Attributes:
         _scenario: The test scenario configuration
         _session: Shared HTTP session for all stages
-        _data_context: Global context shared across all stages
         _aborted: Flag indicating if test flow should be aborted
     """
 
@@ -71,14 +71,22 @@ class Carrier:
         Sets up:
         - Empty data context for variable storage
         - HTTP session with SSL and authentication configuration
-        - Factory fixture manager for handling callable fixtures
+        - Context manager with pre-loaded functions and vars
 
         Note:
-            Authentication can be configured at scenario level and will
-            be applied to all requests unless overridden at stage level.
+            Functions and scenario vars were already processed at collection time
+            and are available in cls._wrapped_functions and cls._processed_vars.
         """
         cls._context_manager = ContextManager()
         cls._session = requests.Session()
+
+        # Transfer pre-loaded functions and vars to context manager
+        if hasattr(cls, "_wrapped_functions"):
+            cls._context_manager.wrapped_functions = cls._wrapped_functions
+            logger.info(f"Initialized context with {len(cls._wrapped_functions)} functions")
+        if hasattr(cls, "_processed_vars"):
+            cls._context_manager.scenario_vars_cache = cls._processed_vars
+            logger.info(f"Initialized context with {len(cls._processed_vars)} scenario vars")
 
         # Configure SSL settings
         cls._session.verify = cls._scenario.ssl.verify
@@ -87,9 +95,19 @@ class Carrier:
 
         # Configure authentication
         if cls._scenario.auth:
-            resolved_auth = pytest_httpchain_templates.substitution.walk(cls._scenario.auth, cls._data_context)
+            # Build context for auth substitution using wrapped functions and processed vars
+            auth_context = {}
+            if hasattr(cls, "_wrapped_functions"):
+                auth_context.update(cls._wrapped_functions)
+            if hasattr(cls, "_processed_vars"):
+                auth_context.update(cls._processed_vars)
+
+            resolved_auth = pytest_httpchain_templates.substitution.walk(cls._scenario.auth, auth_context)
             auth_instance = call_user_function(resolved_auth, call_auth_function)
             cls._session.auth = auth_instance
+
+    # Note: _load_substitution_functions has been removed
+    # Functions are now loaded at collection time in _load_functions_for_collection
 
     @classmethod
     def teardown_class(cls) -> None:
@@ -149,6 +167,10 @@ class Carrier:
                 stage=stage_template,
                 fixture_kwargs=fixture_kwargs,
             )
+
+            # Debug: check if functions are in context
+            if cls._context_manager.wrapped_functions:
+                logger.debug(f"Functions available in context: {list(cls._context_manager.wrapped_functions.keys())}")
 
             request_dict = pytest_httpchain_templates.substitution.walk(stage_template.request, local_context)
             request_model = Request.model_validate(request_dict)
@@ -216,6 +238,30 @@ class Carrier:
             >>> TestClass = Carrier.create_test_class(scenario, "TestAPI")
             >>> # TestClass will have methods: test_00_stage1, test_01_stage2, etc. (with zero-padding)
         """
+        total_stages = len(scenario.stages)
+        padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
+
+        # Step 1: Load and wrap functions at collection time
+        wrapped_functions = {}
+        if scenario.substitutions.functions:
+            wrapped_functions = wrap_functions_dict(scenario.substitutions.functions)
+            logger.debug(f"Loaded {len(wrapped_functions)} functions for collection")
+
+        # Step 2: Process scenario vars with functions available
+        processed_vars = {}
+        if scenario.substitutions.vars:
+            # Build context with only functions - vars should NOT reference each other
+            processed_vars = pytest_httpchain_templates.substitution.walk(
+                scenario.substitutions.vars,
+                wrapped_functions,  # Only functions in context, no vars
+            )
+            for var_name, resolved_value in processed_vars.items():
+                logger.debug(f"Processed scenario var at collection: {var_name} = {resolved_value}")
+
+        # Step 3: Build context for parameter substitution
+        # This context now contains functions and processed scenario vars
+        param_context = ChainMap(processed_vars, wrapped_functions)
+
         # Create custom Carrier class with scenario bound
         CustomCarrier = type(
             class_name,
@@ -223,21 +269,14 @@ class Carrier:
             {
                 "_scenario": scenario,
                 "_session": None,
-                "_data_context": {},
                 "_aborted": False,
                 "_last_request": None,
                 "_last_response": None,
                 "_fixture_manager": None,
+                "_wrapped_functions": wrapped_functions,  # Store for use in setup_class
+                "_processed_vars": processed_vars,  # Store for use in setup_class
             },
         )
-
-        total_stages = len(scenario.stages)
-        padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
-
-        # Build context for parameter substitution (scenario vars only)
-        # We can only use scenario.vars here since fixtures aren't available yet
-        # Scenario vars are literal values - no substitution needed
-        param_context = scenario.vars if scenario.vars else {}
 
         for i, stage in enumerate(scenario.stages):
             # Create test method - capture stage in closure
