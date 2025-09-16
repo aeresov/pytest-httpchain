@@ -1,0 +1,164 @@
+"""Simplified user function handling for pytest-httpchain.
+
+This module handles importing and wrapping user-defined functions from:
+- Explicit module paths (module.submodule:func)
+- conftest.py files
+- Current execution scope
+"""
+
+import importlib
+import inspect
+import re
+from collections.abc import Callable
+from typing import Any
+
+from .exceptions import UserFunctionError
+
+NAME_PATTERN = re.compile(r"^(?:(?P<module>[a-zA-Z_][a-zA-Z0-9_.]*):)?(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$")
+
+
+def import_function(name: str) -> Callable[..., Any]:
+    """Import a function by name.
+
+    Args:
+        name: Function name in "module.path:function_name" or "function_name" format
+
+    Returns:
+        The imported callable function
+
+    Raises:
+        UserFunctionError: If function cannot be found or imported
+    """
+    match = NAME_PATTERN.match(name)
+    if not match:
+        raise UserFunctionError(f"Invalid function name format: {name}")
+
+    module_path = match.group("module")
+    function_name = match.group("function")
+
+    # If module specified, import from there
+    if module_path:
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError as e:
+            raise UserFunctionError(f"Failed to import module '{module_path}'") from e
+
+        if not hasattr(module, function_name):
+            raise UserFunctionError(f"Function '{function_name}' not found in module '{module_path}'")
+
+        func = getattr(module, function_name)
+        if not callable(func):
+            raise UserFunctionError(f"'{module_path}:{function_name}' is not callable")
+
+        return func
+
+    # Try conftest
+    try:
+        conftest = importlib.import_module("conftest")
+        if hasattr(conftest, function_name):
+            func = getattr(conftest, function_name)
+            if callable(func):
+                return func
+    except ImportError:
+        pass
+
+    # Try current scope by walking up frames
+    frame = inspect.currentframe()
+    while frame:
+        if function_name in frame.f_globals:
+            func = frame.f_globals[function_name]
+            if callable(func):
+                return func
+        frame = frame.f_back
+
+    raise UserFunctionError(f"Function '{function_name}' not found in conftest or current scope")
+
+
+def call_function(name: str, *args, **kwargs) -> Any:
+    """Import and call a user function.
+
+    Args:
+        name: Function name in "module.path:function_name" or "function_name" format
+        *args: Positional arguments for the function
+        **kwargs: Keyword arguments for the function
+
+    Returns:
+        Result of the function call
+
+    Raises:
+        UserFunctionError: If function cannot be imported or called
+    """
+    func = import_function(name)
+
+    try:
+        return func(*args, **kwargs)
+    except Exception as e:
+        raise UserFunctionError(f"Error calling function '{name}'") from e
+
+
+def wrap_function(name: str, default_kwargs: dict[str, Any] | None = None) -> Callable[..., Any]:
+    """Create a wrapped callable for a user function.
+
+    The wrapped function can be called directly in template expressions.
+    Default kwargs are merged with call-time kwargs (call-time wins).
+
+    Args:
+        name: Function name in "module.path:function_name" or "function_name" format
+        default_kwargs: Optional default keyword arguments
+
+    Returns:
+        A callable that loads and executes the user function
+    """
+    default_kwargs = default_kwargs or {}
+
+    def wrapped(*args, **kwargs):
+        try:
+            # Merge default kwargs with call-time kwargs (call-time wins)
+            merged_kwargs = {**default_kwargs, **kwargs}
+            return call_function(name, *args, **merged_kwargs)
+        except UserFunctionError:
+            raise
+        except Exception as e:
+            raise UserFunctionError(f"Error calling function '{name}': {str(e)}") from e
+
+    # Set a meaningful name for debugging
+    wrapped.__name__ = f"wrapped_{name.replace(':', '_').replace('.', '_')}"
+    return wrapped
+
+
+def wrap_functions_dict(functions: dict[str, Any]) -> dict[str, Callable[..., Any]]:
+    """Wrap a dictionary of function definitions.
+
+    Supports multiple input formats:
+    - String: function name
+    - Dict with 'function' and 'kwargs': function with default kwargs
+    - Model with 'root' attribute: for UserFunctionName
+    - Model with 'function' and 'kwargs' attributes: for UserFunctionKwargs
+
+    Args:
+        functions: Dictionary mapping names to function definitions
+
+    Returns:
+        Dictionary mapping names to wrapped callables
+    """
+    result = {}
+    for alias, func_def in functions.items():
+        if isinstance(func_def, str):
+            # Plain function name string
+            result[alias] = wrap_function(func_def)
+        elif isinstance(func_def, dict):
+            # Dict with 'function' and optional 'kwargs'
+            func_name = func_def.get("function")
+            if not func_name:
+                raise UserFunctionError(f"Function definition for '{alias}' must have 'function' key")
+            kwargs = func_def.get("kwargs", {})
+            result[alias] = wrap_function(func_name, kwargs)
+        elif hasattr(func_def, "root"):
+            # Model with .root attribute
+            result[alias] = wrap_function(func_def.root)
+        elif hasattr(func_def, "function") and hasattr(func_def, "kwargs"):
+            # Model with .function.root and .kwargs
+            result[alias] = wrap_function(func_def.function.root, func_def.kwargs)
+        else:
+            raise UserFunctionError(f"Invalid function definition for '{alias}': expected string, dict, or model object")
+    return result

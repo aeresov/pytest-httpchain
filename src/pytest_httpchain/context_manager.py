@@ -67,16 +67,34 @@ class ContextManager:
         ChainMap(stage_fixtures, self.global_context)
 
         # Process scenario variables (cached after first evaluation)
-        if self.scenario_vars_cache is None and scenario.substitutions.vars:
-            # Functions are available for scenario vars evaluation
-            # Vars should NOT reference each other - only functions and fixtures
-            scenario_context = ChainMap(self.wrapped_functions, self.scenario_fixtures_cache, self.global_context)
+        if self.scenario_vars_cache is None and len(scenario.substitutions) > 0:
+            self.scenario_vars_cache = {}
+            # Start with functions, fixtures, and global context
+            accumulated_vars = {}
+            base_context = ChainMap(self.wrapped_functions, self.scenario_fixtures_cache, self.global_context)
 
-            # Process all vars at once against the same context
-            self.scenario_vars_cache = pytest_httpchain_templates.substitution.walk(scenario.substitutions.vars, scenario_context)
+            # Process substitution steps sequentially
+            for step in scenario.substitutions:
+                # Note: Functions for each step are already wrapped and available in self.wrapped_functions
+                # They were processed at collection time in carrier._load_functions_for_collection
 
-            for var_name, resolved_value in self.scenario_vars_cache.items():
-                logger.info(f"Seeded {var_name} = {resolved_value}")
+                if step.vars:
+                    # Build context for this step: previous vars + functions + fixtures + global
+                    step_context = ChainMap(accumulated_vars, base_context)
+
+                    # Process each var sequentially within the step
+                    # This allows later vars to reference earlier ones within the same step
+                    for var_name, var_value in step.vars.items():
+                        resolved_value = pytest_httpchain_templates.substitution.walk(var_value, step_context)
+                        logger.info(f"Seeded {var_name} = {resolved_value}")
+
+                        # Add to accumulated vars immediately so next var can use it
+                        accumulated_vars[var_name] = resolved_value
+                        # Update step context for next var in this step
+                        step_context = ChainMap(accumulated_vars, base_context)
+
+            # Store final accumulated vars as scenario vars cache
+            self.scenario_vars_cache = accumulated_vars
 
         scenario_vars = self.scenario_vars_cache or {}
 

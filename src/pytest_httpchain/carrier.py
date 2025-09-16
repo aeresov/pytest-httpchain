@@ -31,12 +31,11 @@ from pytest_httpchain_models.entities import (
     VerifyStep,
 )
 from pytest_httpchain_templates.exceptions import TemplatesError
-from pytest_httpchain_userfunc import call_auth_function, wrap_functions_dict
+from pytest_httpchain_userfunc import wrap_functions_dict
 from simpleeval import EvalWithCompoundTypes
 
 from .context_manager import ContextManager
 from .exceptions import StageExecutionError
-from .helpers import call_user_function
 from .request import execute_request, prepare_request
 from .response import process_save_step, process_verify_step
 
@@ -103,8 +102,27 @@ class Carrier:
                 auth_context.update(cls._processed_vars)
 
             resolved_auth = pytest_httpchain_templates.substitution.walk(cls._scenario.auth, auth_context)
-            auth_instance = call_user_function(resolved_auth, call_auth_function)
-            cls._session.auth = auth_instance
+            # Import and call the auth function directly based on the model type
+            from pytest_httpchain_userfunc import call_function
+
+            if isinstance(resolved_auth, str):
+                auth_result = call_function(resolved_auth)
+            elif isinstance(resolved_auth, dict):
+                func_name = resolved_auth.get("function")
+                if not func_name:
+                    raise StageExecutionError("Auth function definition must have 'function' key")
+                kwargs = resolved_auth.get("kwargs", {})
+                auth_result = call_function(func_name, **kwargs)
+            elif hasattr(resolved_auth, "kwargs"):
+                # Model with .function.root and .kwargs
+                auth_result = call_function(resolved_auth.function.root, **resolved_auth.kwargs)
+            elif hasattr(resolved_auth, "root"):
+                # Model with .root
+                auth_result = call_function(resolved_auth.root)
+            else:
+                raise StageExecutionError(f"Invalid auth function definition: {resolved_auth}")
+
+            cls._session.auth = auth_result
 
     # Note: _load_substitution_functions has been removed
     # Functions are now loaded at collection time in _load_functions_for_collection
@@ -241,22 +259,34 @@ class Carrier:
         total_stages = len(scenario.stages)
         padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
 
-        # Step 1: Load and wrap functions at collection time
+        # Process substitution steps sequentially
         wrapped_functions = {}
-        if scenario.substitutions.functions:
-            wrapped_functions = wrap_functions_dict(scenario.substitutions.functions)
-            logger.debug(f"Loaded {len(wrapped_functions)} functions for collection")
-
-        # Step 2: Process scenario vars with functions available
         processed_vars = {}
-        if scenario.substitutions.vars:
-            # Build context with only functions - vars should NOT reference each other
-            processed_vars = pytest_httpchain_templates.substitution.walk(
-                scenario.substitutions.vars,
-                wrapped_functions,  # Only functions in context, no vars
-            )
-            for var_name, resolved_value in processed_vars.items():
-                logger.debug(f"Processed scenario var at collection: {var_name} = {resolved_value}")
+
+        for step in scenario.substitutions:
+            # Step 1: Load and wrap functions for this step
+            if step.functions:
+                step_functions = wrap_functions_dict(step.functions)
+                wrapped_functions.update(step_functions)
+                logger.debug(f"Loaded {len(step_functions)} functions in substitution step")
+
+            # Step 2: Process vars for this step with accumulated context
+            if step.vars:
+                # Build context with functions and previously processed vars
+                step_context = ChainMap(processed_vars, wrapped_functions)
+
+                # Process each var sequentially within the step
+                # This allows later vars to reference earlier ones within the same step
+                for var_name, var_value in step.vars.items():
+                    resolved_value = pytest_httpchain_templates.substitution.walk(
+                        var_value,
+                        step_context,
+                    )
+                    logger.debug(f"Processed scenario var at collection: {var_name} = {resolved_value}")
+                    # Add to processed vars immediately so next var can use it
+                    processed_vars[var_name] = resolved_value
+                    # Update step context for next var in this step
+                    step_context = ChainMap(processed_vars, wrapped_functions)
 
         # Step 3: Build context for parameter substitution
         # This context now contains functions and processed scenario vars

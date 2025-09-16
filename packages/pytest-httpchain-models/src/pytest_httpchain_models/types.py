@@ -10,8 +10,6 @@ import jmespath
 import jsonschema
 from pydantic import AfterValidator, BeforeValidator, JsonValue, PlainSerializer
 from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN, is_complete_template
-from pytest_httpchain_userfunc.base import UserFunctionHandler
-from pytest_httpchain_userfunc.exceptions import UserFunctionError
 
 
 def create_string_validator(validation_func, error_message: str):
@@ -110,12 +108,15 @@ def validate_partial_template_str(v: str) -> str:
 
 
 def validate_function_import_name(v: str) -> str:
-    try:
-        # Just validate the name format using the regex pattern
-        if not UserFunctionHandler.NAME_PATTERN.match(v):
-            raise ValueError(f"Invalid function name format: {v}")
-    except (AttributeError, UserFunctionError) as e:
-        raise ValueError("Invalid user function") from e
+    """Validate function import name format.
+
+    Format: [module.path:]function_name
+    """
+    import re
+
+    NAME_PATTERN = re.compile(r"^(?:(?P<module>[a-zA-Z_][a-zA-Z0-9_.]*):)?(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$")
+    if not NAME_PATTERN.match(v):
+        raise ValueError(f"Invalid function name format: {v}")
     return v
 
 

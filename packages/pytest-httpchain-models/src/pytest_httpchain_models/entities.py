@@ -378,11 +378,27 @@ class Stage(Decorated):
     response: Response = Field(default_factory=Response)
 
 
-class Substitutions(BaseModel):
-    """Variable substitution configuration for scenarios."""
+class Substitution(BaseModel):
+    """Single variable substitution step."""
 
     vars: dict[str, NamespaceFromDict] = Field(default_factory=dict, description="Variables for substitution.")
     functions: FunctionsDict
+
+
+# Type alias for list of substitution steps
+Substitutions = Annotated[
+    list[Substitution],
+    Field(
+        default_factory=list,
+        description="Sequential substitution steps to apply.",
+        examples=[
+            [
+                {"vars": {"base_url": "https://api.example.com"}},
+                {"vars": {"endpoint": "/users"}, "functions": {"auth_token": "auth:get_token"}},
+            ],
+        ],
+    ),
+]
 
 
 class Scenario(Decorated, CallSecurity):

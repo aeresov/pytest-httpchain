@@ -93,7 +93,9 @@ def validate_scenario(path: Path) -> ValidateResult:
         scenario_info["stage_names"] = [stage.name for stage in scenario.stages]
         scenario_info["has_fixtures"] = bool(scenario.fixtures)
         scenario_info["has_marks"] = bool(scenario.marks)
-        scenario_info["has_vars"] = bool(scenario.substitutions.vars)
+        # Check if any substitution step has vars
+        has_vars = any(step.vars for step in scenario.substitutions)
+        scenario_info["has_vars"] = has_vars
 
         # Analyze stages
         always_run_stages = []
@@ -130,7 +132,11 @@ def validate_scenario(path: Path) -> ValidateResult:
         # Step 4: Check for common issues
 
         # Check for undefined variables
-        initial_vars = set(scenario.substitutions.vars.keys()) if scenario.substitutions.vars else set()
+        # Collect all vars from all substitution steps
+        initial_vars = set()
+        for step in scenario.substitutions:
+            if step.vars:
+                initial_vars.update(step.vars.keys())
         undefined_vars = referenced_vars - initial_vars - saved_vars - used_fixtures
         if undefined_vars:
             warnings.append(f"Potentially undefined variables: {', '.join(undefined_vars)}")
@@ -157,8 +163,12 @@ def validate_scenario(path: Path) -> ValidateResult:
                 warnings.append(f"Stage '{stage.name}' has no response validation")
 
         # Check for fixture/variable conflicts
-        if scenario.fixtures and scenario.substitutions.vars:
-            conflicts = set(scenario.fixtures) & set(scenario.substitutions.vars.keys())
+        if scenario.fixtures and len(scenario.substitutions) > 0:
+            all_vars = set()
+            for step in scenario.substitutions:
+                if step.vars:
+                    all_vars.update(step.vars.keys())
+            conflicts = set(scenario.fixtures) & all_vars
             if conflicts:
                 errors.append(f"Conflicting fixture and variable names: {', '.join(conflicts)}")
 
