@@ -63,59 +63,6 @@ class Carrier:
     _last_response: ClassVar[requests.Response | None] = None
 
     @classmethod
-    def setup_class(cls) -> None:
-        """Initialize the HTTP session and data context.
-
-        Called once before any test methods in the class are executed.
-        Sets up:
-        - Context manager with seed functions and vars from scenario substitutions
-        - HTTP session with SSL and authentication configuration
-
-        Note:
-            Functions and scenario vars were already processed at collection time
-            and are passed as seed data to the ContextManager.
-        """
-        # Get seed context if available (processed at collection time)
-        seed_context = getattr(cls, "_seed_context", {})
-
-        # Initialize context manager with seed context
-        cls._context_manager = ContextManager(seed_context=seed_context)
-        cls._session = requests.Session()
-
-        if seed_context:
-            logger.info(f"Initialized context with {len(seed_context)} seed items")
-
-        # Configure SSL settings
-        cls._session.verify = cls._scenario.ssl.verify
-        if cls._scenario.ssl.cert is not None:
-            cls._session.cert = cls._scenario.ssl.cert
-
-        # Configure authentication
-        if cls._scenario.auth:
-            # Use seed context for auth substitution
-            resolved_auth = pytest_httpchain_templates.substitution.walk(cls._scenario.auth, seed_context)
-            # Call the auth function using the helper
-            auth_result = call_user_function(resolved_auth)
-            cls._session.auth = auth_result
-
-    @classmethod
-    def teardown_class(cls) -> None:
-        """Clean up the HTTP session and reset state.
-
-        Called once after all test methods in the class have been executed.
-        Ensures proper cleanup of resources and state reset for next test class.
-        """
-        if cls._context_manager:
-            cls._context_manager.cleanup()
-            cls._context_manager = None
-        if cls._session:
-            cls._session.close()
-            cls._session = None
-        cls._aborted = False
-        cls._last_request = None
-        cls._last_response = None
-
-    @classmethod
     def execute_stage(cls, stage_template: Stage, fixture_kwargs: dict[str, Any]) -> None:
         """Execute a test stage with abort handling and error management.
 
@@ -145,10 +92,10 @@ class Carrier:
                 pytest.skip(reason="Flow aborted")
 
             if cls._session is None:
-                raise RuntimeError("Session not initialized - setup_class was not called")
+                raise RuntimeError("Session not initialized")
 
             if cls._context_manager is None:
-                raise RuntimeError("Context manager not initialized - setup_class was not called")
+                raise RuntimeError("Context manager not initialized")
 
             # Prepare the context for this stage
             local_context = cls._context_manager.prepare_stage_context(
@@ -217,6 +164,7 @@ class Carrier:
         - Has test_0_<stage_name>, test_1_<stage_name>, etc. methods
         - Each method requests fixtures defined in stage and scenario
         - Methods are ordered using pytest-order plugin
+        - Session and context manager are initialized at class creation time
 
         Args:
             scenario: Validated scenario configuration containing stages
@@ -260,17 +208,37 @@ class Carrier:
         # Use seed context for parameter substitution
         param_context = seed_context
 
-        # Create custom Carrier class with scenario and seed context
+        # Initialize session and context manager
+        session = requests.Session()
+        context_manager = ContextManager(seed_context=seed_context)
+
+        if seed_context:
+            logger.info(f"Initialized context with {len(seed_context)} seed items")
+
+        # Configure SSL settings
+        session.verify = scenario.ssl.verify
+        if scenario.ssl.cert is not None:
+            session.cert = scenario.ssl.cert
+
+        # Configure authentication
+        if scenario.auth:
+            # Use seed context for auth substitution
+            resolved_auth = pytest_httpchain_templates.substitution.walk(scenario.auth, seed_context)
+            # Call the auth function using the helper
+            auth_result = call_user_function(resolved_auth)
+            session.auth = auth_result
+
+        # Create custom Carrier class with scenario, initialized session and context
         CustomCarrier = type(
             class_name,
             (cls,),  # Use cls instead of Carrier for better inheritance support
             {
                 "_scenario": scenario,
-                "_session": None,
+                "_session": session,
+                "_context_manager": context_manager,
                 "_aborted": False,
                 "_last_request": None,
                 "_last_response": None,
-                "_seed_context": seed_context,  # Seed context for ContextManager
             },
         )
 
