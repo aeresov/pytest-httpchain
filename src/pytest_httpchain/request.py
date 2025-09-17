@@ -23,6 +23,7 @@ from pytest_httpchain_models.entities import (
 )
 
 from .exceptions import RequestError
+from .utils import call_user_function
 
 
 @dataclass
@@ -57,26 +58,7 @@ def prepare_request(
 
     if request_model.auth:
         try:
-            # Import and call the auth function directly based on the model type
-            from pytest_httpchain_userfunc import call_function
-
-            if isinstance(request_model.auth, str):
-                auth_result = call_function(request_model.auth)
-            elif isinstance(request_model.auth, dict):
-                func_name = request_model.auth.get("function")
-                if not func_name:
-                    raise RequestError("Auth function definition must have 'function' key")
-                kwargs = request_model.auth.get("kwargs", {})
-                auth_result = call_function(func_name, **kwargs)
-            elif hasattr(request_model.auth, "kwargs"):
-                # Model with .function.root and .kwargs
-                auth_result = call_function(request_model.auth.function.root, **request_model.auth.kwargs)
-            elif hasattr(request_model.auth, "root"):
-                # Model with .root
-                auth_result = call_function(request_model.auth.root)
-            else:
-                raise RequestError(f"Invalid auth function definition: {request_model.auth}")
-
+            auth_result = call_user_function(request_model.auth)
             request_kwargs["auth"] = auth_result
         except Exception as e:
             raise RequestError(f"Failed to configure authentication: {str(e)}") from None

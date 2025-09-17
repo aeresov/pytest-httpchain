@@ -37,6 +37,7 @@ from .context_manager import ContextManager
 from .exceptions import StageExecutionError
 from .request import execute_request, prepare_request
 from .response import process_save_step, process_verify_step
+from .utils import call_user_function
 
 logger = logging.getLogger(__name__)
 
@@ -93,26 +94,8 @@ class Carrier:
         if cls._scenario.auth:
             # Use seed context for auth substitution
             resolved_auth = pytest_httpchain_templates.substitution.walk(cls._scenario.auth, seed_context)
-            # Import and call the auth function directly based on the model type
-            from pytest_httpchain_userfunc import call_function
-
-            if isinstance(resolved_auth, str):
-                auth_result = call_function(resolved_auth)
-            elif isinstance(resolved_auth, dict):
-                func_name = resolved_auth.get("function")
-                if not func_name:
-                    raise StageExecutionError("Auth function definition must have 'function' key")
-                kwargs = resolved_auth.get("kwargs", {})
-                auth_result = call_function(func_name, **kwargs)
-            elif hasattr(resolved_auth, "kwargs"):
-                # Model with .function.root and .kwargs
-                auth_result = call_function(resolved_auth.function.root, **resolved_auth.kwargs)
-            elif hasattr(resolved_auth, "root"):
-                # Model with .root
-                auth_result = call_function(resolved_auth.root)
-            else:
-                raise StageExecutionError(f"Invalid auth function definition: {resolved_auth}")
-
+            # Call the auth function using the helper
+            auth_result = call_user_function(resolved_auth)
             cls._session.auth = auth_result
 
     @classmethod

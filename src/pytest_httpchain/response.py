@@ -19,6 +19,7 @@ from pytest_httpchain_models.entities import Save, Verify
 from pytest_httpchain_models.types import check_json_schema
 
 from .exceptions import SaveError, VerificationError
+from .utils import call_user_function
 
 logger = logging.getLogger(__name__)
 
@@ -67,25 +68,7 @@ def process_save_step(
 
     for func_item in save_model.functions:
         try:
-            # Import and call the function directly based on the model type
-            from pytest_httpchain_userfunc import call_function
-
-            if isinstance(func_item, str):
-                func_result = call_function(func_item, response)
-            elif isinstance(func_item, dict):
-                func_name = func_item.get("function")
-                if not func_name:
-                    raise SaveError("Function definition must have 'function' key")
-                kwargs = func_item.get("kwargs", {})
-                func_result = call_function(func_name, response, **kwargs)
-            elif hasattr(func_item, "kwargs"):
-                # Model with .function.root and .kwargs
-                func_result = call_function(func_item.function.root, response, **func_item.kwargs)
-            elif hasattr(func_item, "root"):
-                # Model with .root
-                func_result = call_function(func_item.root, response)
-            else:
-                raise SaveError(f"Invalid function definition: {func_item}")
+            func_result = call_user_function(func_item, response=response)
 
             if not isinstance(func_result, dict):
                 raise SaveError(f"Save function must return dict, got {type(func_result).__name__}")
@@ -142,25 +125,9 @@ def process_verify_step(
 
     for func_item in verify_model.functions:
         try:
-            # Import and call the function directly based on the model type
-            from pytest_httpchain_userfunc import call_function
+            from .utils import call_user_function
 
-            if isinstance(func_item, str):
-                result = call_function(func_item, response)
-            elif isinstance(func_item, dict):
-                func_name = func_item.get("function")
-                if not func_name:
-                    raise VerificationError("Function definition must have 'function' key")
-                kwargs = func_item.get("kwargs", {})
-                result = call_function(func_name, response, **kwargs)
-            elif hasattr(func_item, "kwargs"):
-                # Model with .function.root and .kwargs
-                result = call_function(func_item.function.root, response, **func_item.kwargs)
-            elif hasattr(func_item, "root"):
-                # Model with .root
-                result = call_function(func_item.root, response)
-            else:
-                raise VerificationError(f"Invalid function definition: {func_item}")
+            result = call_user_function(func_item, response=response)
 
             if not isinstance(result, bool):
                 raise VerificationError(f"Verify function must return bool, got {type(result).__name__}")
