@@ -26,11 +26,13 @@ from pytest_httpchain_models.entities import (
     SaveStep,
     Scenario,
     Stage,
+    UserFunctionKwargs,
+    UserFunctionName,
     Verify,
     VerifyStep,
 )
 from pytest_httpchain_templates.exceptions import TemplatesError
-from pytest_httpchain_userfunc import wrap_functions_dict
+from pytest_httpchain_userfunc import wrap_function
 from simpleeval import EvalWithCompoundTypes
 
 from .context_manager import ContextManager
@@ -188,9 +190,18 @@ class Carrier:
         for step in scenario.substitutions:
             # Load and wrap functions for this step
             if step.functions:
-                step_functions = wrap_functions_dict(step.functions)
-                seed_context.update(step_functions)
-                logger.debug(f"Loaded {len(step_functions)} functions in substitution step")
+                for alias, func_def in step.functions.items():
+                    match func_def:
+                        case UserFunctionName():
+                            # Model with just function name
+                            seed_context[alias] = wrap_function(func_def.root)
+                        case UserFunctionKwargs():
+                            # Model with name and kwargs
+                            seed_context[alias] = wrap_function(func_def.name.root, func_def.kwargs)
+                        case _:
+                            raise StageExecutionError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
+
+                logger.debug(f"Loaded {len(step.functions)} functions in substitution step")
 
             # Process vars for this step with accumulated context
             if step.vars:

@@ -126,39 +126,3 @@ def wrap_function(name: str, default_kwargs: dict[str, Any] | None = None) -> Ca
     return wrapped
 
 
-def wrap_functions_dict(functions: dict[str, Any]) -> dict[str, Callable[..., Any]]:
-    """Wrap a dictionary of function definitions.
-
-    Supports multiple input formats:
-    - String: function name
-    - Dict with 'function' and 'kwargs': function with default kwargs
-    - Model with 'root' attribute: for UserFunctionName
-    - Model with 'function' and 'kwargs' attributes: for UserFunctionKwargs
-
-    Args:
-        functions: Dictionary mapping names to function definitions
-
-    Returns:
-        Dictionary mapping names to wrapped callables
-    """
-    result = {}
-    for alias, func_def in functions.items():
-        if isinstance(func_def, str):
-            # Plain function name string
-            result[alias] = wrap_function(func_def)
-        elif isinstance(func_def, dict):
-            # Dict with 'function' and optional 'kwargs'
-            func_name = func_def.get("function")
-            if not func_name:
-                raise UserFunctionError(f"Function definition for '{alias}' must have 'function' key")
-            kwargs = func_def.get("kwargs", {})
-            result[alias] = wrap_function(func_name, kwargs)
-        elif hasattr(func_def, "root"):
-            # Model with .root attribute
-            result[alias] = wrap_function(func_def.root)
-        elif hasattr(func_def, "function") and hasattr(func_def, "kwargs"):
-            # Model with .function.root and .kwargs
-            result[alias] = wrap_function(func_def.function.root, func_def.kwargs)
-        else:
-            raise UserFunctionError(f"Invalid function definition for '{alias}': expected string, dict, or model object")
-    return result

@@ -49,7 +49,7 @@ class UserFunctionName(RootModel):
 
 
 class UserFunctionKwargs(BaseModel):
-    function: UserFunctionName
+    name: UserFunctionName
     kwargs: dict[VariableName, Any] = Field(default_factory=dict, description="Function arguments.")
 
 
