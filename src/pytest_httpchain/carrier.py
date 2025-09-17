@@ -68,24 +68,22 @@ class Carrier:
 
         Called once before any test methods in the class are executed.
         Sets up:
-        - Empty data context for variable storage
+        - Context manager with seed functions and vars from scenario substitutions
         - HTTP session with SSL and authentication configuration
-        - Context manager with pre-loaded functions and vars
 
         Note:
             Functions and scenario vars were already processed at collection time
-            and are available in cls._wrapped_functions and cls._processed_vars.
+            and are passed as seed data to the ContextManager.
         """
-        cls._context_manager = ContextManager()
+        # Get seed context if available (processed at collection time)
+        seed_context = getattr(cls, "_seed_context", {})
+
+        # Initialize context manager with seed context
+        cls._context_manager = ContextManager(seed_context=seed_context)
         cls._session = requests.Session()
 
-        # Transfer pre-loaded functions and vars to context manager
-        if hasattr(cls, "_wrapped_functions"):
-            cls._context_manager.wrapped_functions = cls._wrapped_functions
-            logger.info(f"Initialized context with {len(cls._wrapped_functions)} functions")
-        if hasattr(cls, "_processed_vars"):
-            cls._context_manager.scenario_vars_cache = cls._processed_vars
-            logger.info(f"Initialized context with {len(cls._processed_vars)} scenario vars")
+        if seed_context:
+            logger.info(f"Initialized context with {len(seed_context)} seed items")
 
         # Configure SSL settings
         cls._session.verify = cls._scenario.ssl.verify
@@ -94,14 +92,8 @@ class Carrier:
 
         # Configure authentication
         if cls._scenario.auth:
-            # Build context for auth substitution using wrapped functions and processed vars
-            auth_context = {}
-            if hasattr(cls, "_wrapped_functions"):
-                auth_context.update(cls._wrapped_functions)
-            if hasattr(cls, "_processed_vars"):
-                auth_context.update(cls._processed_vars)
-
-            resolved_auth = pytest_httpchain_templates.substitution.walk(cls._scenario.auth, auth_context)
+            # Use seed context for auth substitution
+            resolved_auth = pytest_httpchain_templates.substitution.walk(cls._scenario.auth, seed_context)
             # Import and call the auth function directly based on the model type
             from pytest_httpchain_userfunc import call_function
 
@@ -123,9 +115,6 @@ class Carrier:
                 raise StageExecutionError(f"Invalid auth function definition: {resolved_auth}")
 
             cls._session.auth = auth_result
-
-    # Note: _load_substitution_functions has been removed
-    # Functions are now loaded at collection time in _load_functions_for_collection
 
     @classmethod
     def teardown_class(cls) -> None:
@@ -186,9 +175,12 @@ class Carrier:
                 fixture_kwargs=fixture_kwargs,
             )
 
-            # Debug: check if functions are in context
-            if cls._context_manager.wrapped_functions:
-                logger.debug(f"Functions available in context: {list(cls._context_manager.wrapped_functions.keys())}")
+            # Debug: check seed context
+            if cls._context_manager.seed_context:
+                # Filter to show only functions (callables) in the seed context
+                functions = [k for k, v in cls._context_manager.seed_context.items() if callable(v)]
+                if functions:
+                    logger.debug(f"Functions available in context: {functions}")
 
             request_dict = pytest_httpchain_templates.substitution.walk(stage_template.request, local_context)
             request_model = Request.model_validate(request_dict)
@@ -259,40 +251,34 @@ class Carrier:
         total_stages = len(scenario.stages)
         padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
 
-        # Process substitution steps sequentially
-        wrapped_functions = {}
-        processed_vars = {}
+        # Process substitution steps to create seed context for ContextManager
+        # This context will be passed to ContextManager at runtime initialization
+        seed_context = {}
 
         for step in scenario.substitutions:
-            # Step 1: Load and wrap functions for this step
+            # Load and wrap functions for this step
             if step.functions:
                 step_functions = wrap_functions_dict(step.functions)
-                wrapped_functions.update(step_functions)
+                seed_context.update(step_functions)
                 logger.debug(f"Loaded {len(step_functions)} functions in substitution step")
 
-            # Step 2: Process vars for this step with accumulated context
+            # Process vars for this step with accumulated context
             if step.vars:
-                # Build context with functions and previously processed vars
-                step_context = ChainMap(processed_vars, wrapped_functions)
-
                 # Process each var sequentially within the step
                 # This allows later vars to reference earlier ones within the same step
                 for var_name, var_value in step.vars.items():
                     resolved_value = pytest_httpchain_templates.substitution.walk(
                         var_value,
-                        step_context,
+                        seed_context,
                     )
                     logger.debug(f"Processed scenario var at collection: {var_name} = {resolved_value}")
-                    # Add to processed vars immediately so next var can use it
-                    processed_vars[var_name] = resolved_value
-                    # Update step context for next var in this step
-                    step_context = ChainMap(processed_vars, wrapped_functions)
+                    # Add to seed context immediately so next var can use it
+                    seed_context[var_name] = resolved_value
 
-        # Step 3: Build context for parameter substitution
-        # This context now contains functions and processed scenario vars
-        param_context = ChainMap(processed_vars, wrapped_functions)
+        # Use seed context for parameter substitution
+        param_context = seed_context
 
-        # Create custom Carrier class with scenario bound
+        # Create custom Carrier class with scenario and seed context
         CustomCarrier = type(
             class_name,
             (cls,),  # Use cls instead of Carrier for better inheritance support
@@ -302,9 +288,7 @@ class Carrier:
                 "_aborted": False,
                 "_last_request": None,
                 "_last_response": None,
-                "_fixture_manager": None,
-                "_wrapped_functions": wrapped_functions,  # Store for use in setup_class
-                "_processed_vars": processed_vars,  # Store for use in setup_class
+                "_seed_context": seed_context,  # Seed context for ContextManager
             },
         )
 
