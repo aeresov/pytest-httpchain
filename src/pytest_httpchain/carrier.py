@@ -11,7 +11,6 @@ The Carrier class manages the test lifecycle and infrastructure:
 
 import inspect
 import logging
-from collections import ChainMap
 from types import SimpleNamespace
 from typing import Any, ClassVar, Self
 
