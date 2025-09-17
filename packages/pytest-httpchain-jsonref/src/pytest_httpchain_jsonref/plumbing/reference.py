@@ -125,6 +125,7 @@ class ReferenceResolver:
             external_data = self._navigate_pointer(full_external_data, pointer) if pointer else full_external_data
 
             child_resolver = self._create_child_resolver()
+            child_resolver.base_path = resolved_path.parent
             result = child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data)
             return result
 
