@@ -197,7 +197,7 @@ class Carrier:
                             seed_context[alias] = wrap_function(func_def.root)
                         case UserFunctionKwargs():
                             # Model with name and kwargs
-                            seed_context[alias] = wrap_function(func_def.name.root, func_def.kwargs)
+                            seed_context[alias] = wrap_function(func_def.name.root, default_kwargs=func_def.kwargs)
                         case _:
                             raise StageExecutionError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
 

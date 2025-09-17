@@ -74,11 +74,11 @@ def import_function(name: str) -> Callable[..., Any]:
     raise UserFunctionError(f"Function '{function_name}' not found in conftest or current scope")
 
 
-def call_function(name: str, *args, **kwargs) -> Any:
+def call_function(name: str, /, *args, **kwargs) -> Any:
     """Import and call a user function.
 
     Args:
-        name: Function name in "module.path:function_name" or "function_name" format
+        name: Function name in "module.path:function_name" or "function_name" format (positional-only)
         *args: Positional arguments for the function
         **kwargs: Keyword arguments for the function
 
@@ -96,26 +96,33 @@ def call_function(name: str, *args, **kwargs) -> Any:
         raise UserFunctionError(f"Error calling function '{name}'") from e
 
 
-def wrap_function(name: str, default_kwargs: dict[str, Any] | None = None) -> Callable[..., Any]:
+def wrap_function(name: str, /, default_args: list[Any] | None = None, default_kwargs: dict[str, Any] | None = None) -> Callable[..., Any]:
     """Create a wrapped callable for a user function.
 
     The wrapped function can be called directly in template expressions.
+    Default args are prepended to call-time args.
     Default kwargs are merged with call-time kwargs (call-time wins).
 
     Args:
-        name: Function name in "module.path:function_name" or "function_name" format
+        func_name: Function name in "module.path:function_name" or "function_name" format (positional-only)
+        default_args: Optional default positional arguments
         default_kwargs: Optional default keyword arguments
 
     Returns:
         A callable that loads and executes the user function
     """
-    default_kwargs = default_kwargs or {}
+    # Normalize to non-None values for type checker
+    default_args_list: list[Any] = default_args if default_args is not None else []
+    default_kwargs_dict: dict[str, Any] = default_kwargs if default_kwargs is not None else {}
 
     def wrapped(*args, **kwargs):
         try:
+            func = import_function(name)
+            # Prepend default args to call-time args
+            merged_args = default_args_list + list(args)
             # Merge default kwargs with call-time kwargs (call-time wins)
-            merged_kwargs = {**default_kwargs, **kwargs}
-            return call_function(name, *args, **merged_kwargs)
+            merged_kwargs = {**default_kwargs_dict, **kwargs}
+            return func(*merged_args, **merged_kwargs)
         except UserFunctionError:
             raise
         except Exception as e:
@@ -124,5 +131,3 @@ def wrap_function(name: str, default_kwargs: dict[str, Any] | None = None) -> Ca
     # Set a meaningful name for debugging
     wrapped.__name__ = f"wrapped_{name.replace(':', '_').replace('.', '_')}"
     return wrapped
-
-
