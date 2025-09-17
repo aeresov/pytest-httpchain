@@ -64,7 +64,26 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
         else:
             names[key] = value
 
-    eval_instance = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS | DEFAULT_FUNCTIONS | callables, names=names)
+    # Add helper functions with access to the context
+    context_dict = dict(context)
+
+    # Helper function to check if a variable exists
+    def exists(var_name):
+        """Check if a variable exists in the context."""
+        return var_name in context_dict
+
+    # Helper function to safely get a value with optional default
+    def get(var_name, default_value=None):
+        """Get a variable from context with optional default."""
+        return context_dict.get(var_name, default_value)
+
+    eval_instance = EvalWithCompoundTypes(
+        functions=SAFE_FUNCTIONS | DEFAULT_FUNCTIONS | callables | {
+            'exists': exists,
+            'get': get,
+        },
+        names=names
+    )
 
     try:
         return eval_instance.eval(expr)

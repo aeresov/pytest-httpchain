@@ -130,3 +130,73 @@ class TestWalk:
         # Key error - using dict() function since literal syntax doesn't work
         with pytest.raises(TemplatesError, match="KeyError"):
             walk("{{ dict(a=1)['b'] }}", {})
+
+
+    def test_get_function(self):
+        """Test the get() function for dict-like access with defaults."""
+        # Variable doesn't exist - use default
+        result = walk("{{ get('missing_var', 'default_value') }}", {})
+        assert result == "default_value"
+
+        # Variable exists - use actual value
+        result = walk("{{ get('existing_var', 'default_value') }}", {"existing_var": "actual"})
+        assert result == "actual"
+
+        # No default provided - returns None
+        result = walk("{{ get('missing_var') }}", {})
+        assert result is None
+
+    def test_exists_function(self):
+        """Test the exists() function for checking variable existence."""
+        # Variable exists
+        result = walk("{{ exists('my_var') }}", {"my_var": "value"})
+        assert result is True
+
+        # Variable doesn't exist
+        result = walk("{{ exists('missing_var') }}", {})
+        assert result is False
+
+        # Can be used in conditionals
+        result = walk("{{ 'found' if exists('var') else 'not found' }}", {"var": 1})
+        assert result == "found"
+
+        result = walk("{{ 'found' if exists('var') else 'not found' }}", {})
+        assert result == "not found"
+
+    def test_get_with_complex_expressions(self):
+        """Test get() with complex expressions."""
+
+        # Using get() for safe dict access
+        context = {"config": {"key1": "value1"}}
+        result = walk("{{ get('missing_key', 'default') }}", context)
+        assert result == "default"
+
+        # Using get with nested dict access
+        # Note: {} is not a valid literal in simpleeval, use dict() instead
+        result = walk("{{ get('config', dict()).get('missing', 'not found') }}", {})
+        assert result == "not found"
+
+        # Using exists() to safely check before accessing
+        context = {"items": [1, 2, 3]}
+        result = walk("{{ items[2] if exists('items') else 'no items' }}", context)
+        assert result == 3
+
+        result = walk("{{ items[0] if exists('items') else 'no items' }}", {})
+        assert result == "no items"
+
+    def test_combining_get_with_other_operations(self):
+        """Test combining get with other operations."""
+        # Chain with string operations
+        result = walk("{{ get('name', 'Guest').upper() }}", {})
+        assert result == "GUEST"
+
+        result = walk("{{ get('name', 'Guest').upper() }}", {"name": "alice"})
+        assert result == "ALICE"
+
+        # Use in list comprehension
+        context = {"items": ["a", "b", "c"]}
+        result = walk("{{ [x.upper() for x in get('items', [])] }}", context)
+        assert result == ["A", "B", "C"]
+
+        result = walk("{{ [x.upper() for x in get('items', [])] }}", {})
+        assert result == []
