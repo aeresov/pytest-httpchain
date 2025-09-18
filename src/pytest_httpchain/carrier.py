@@ -196,9 +196,6 @@ class Carrier:
         session = requests.Session()
         context_manager = ContextManager(seed_context=seed_context)
 
-        if seed_context:
-            logger.info(f"Initialized context with {len(seed_context)} seed items")
-
         session.verify = scenario.ssl.verify
         if scenario.ssl.cert is not None:
             session.cert = scenario.ssl.cert
