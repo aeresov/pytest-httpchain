@@ -131,7 +131,6 @@ class TestWalk:
         with pytest.raises(TemplatesError, match="KeyError"):
             walk("{{ dict(a=1)['b'] }}", {})
 
-
     def test_get_function(self):
         """Test the get() function for dict-like access with defaults."""
         # Variable doesn't exist - use default

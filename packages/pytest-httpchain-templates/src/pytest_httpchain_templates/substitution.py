@@ -78,11 +78,14 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
         return context_dict.get(var_name, default_value)
 
     eval_instance = EvalWithCompoundTypes(
-        functions=SAFE_FUNCTIONS | DEFAULT_FUNCTIONS | callables | {
-            'exists': exists,
-            'get': get,
+        functions=SAFE_FUNCTIONS
+        | DEFAULT_FUNCTIONS
+        | callables
+        | {
+            "exists": exists,
+            "get": get,
         },
-        names=names
+        names=names,
     )
 
     try:

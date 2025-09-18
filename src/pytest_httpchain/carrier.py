@@ -50,11 +50,6 @@ class Carrier:
     This base class is subclassed dynamically by carrier_factory to create
     test classes with scenario-specific test methods. It manages the shared
     state and execution flow for all stages in a test scenario.
-
-    Attributes:
-        _scenario: The test scenario configuration
-        _session: Shared HTTP session for all stages
-        _aborted: Flag indicating if test flow should be aborted
     """
 
     _scenario: ClassVar[Scenario]
@@ -99,19 +94,11 @@ class Carrier:
             if cls._context_manager is None:
                 raise RuntimeError("Context manager not initialized")
 
-            # Prepare the context for this stage
             local_context = cls._context_manager.prepare_stage_context(
                 scenario=cls._scenario,
                 stage=stage_template,
                 fixture_kwargs=fixture_kwargs,
             )
-
-            # Debug: check seed context
-            if cls._context_manager.seed_context:
-                # Filter to show only functions (callables) in the seed context
-                functions = [k for k, v in cls._context_manager.seed_context.items() if callable(v)]
-                if functions:
-                    logger.debug(f"Functions available in context: {functions}")
 
             request_dict = pytest_httpchain_templates.substitution.walk(stage_template.request, local_context)
             request_model = Request.model_validate(request_dict)
@@ -183,66 +170,47 @@ class Carrier:
         total_stages = len(scenario.stages)
         padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
 
-        # Process substitution steps to create seed context for ContextManager
-        # This context will be passed to ContextManager at runtime initialization
         seed_context = {}
-
         for step in scenario.substitutions:
-            # Load and wrap functions for this step
             if step.functions:
                 for alias, func_def in step.functions.items():
                     match func_def:
                         case UserFunctionName():
-                            # Model with just function name
                             seed_context[alias] = wrap_function(func_def.root)
                         case UserFunctionKwargs():
-                            # Model with name and kwargs
                             seed_context[alias] = wrap_function(func_def.name.root, default_kwargs=func_def.kwargs)
                         case _:
                             raise StageExecutionError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
+                    logger.info(f"Seeded {alias} = {seed_context[alias]}")
 
-                logger.debug(f"Loaded {len(step.functions)} functions in substitution step")
-
-            # Process vars for this step with accumulated context
             if step.vars:
-                # Process each var sequentially within the step
-                # This allows later vars to reference earlier ones within the same step
                 for var_name, var_value in step.vars.items():
                     resolved_value = pytest_httpchain_templates.substitution.walk(
                         var_value,
                         seed_context,
                     )
-                    logger.debug(f"Processed scenario var at collection: {var_name} = {resolved_value}")
-                    # Add to seed context immediately so next var can use it
                     seed_context[var_name] = resolved_value
+                    logger.info(f"Seeded {var_name} = {resolved_value}")
 
-        # Use seed context for parameter substitution
         param_context = seed_context
-
-        # Initialize session and context manager
         session = requests.Session()
         context_manager = ContextManager(seed_context=seed_context)
 
         if seed_context:
             logger.info(f"Initialized context with {len(seed_context)} seed items")
 
-        # Configure SSL settings
         session.verify = scenario.ssl.verify
         if scenario.ssl.cert is not None:
             session.cert = scenario.ssl.cert
 
-        # Configure authentication
         if scenario.auth:
-            # Use seed context for auth substitution
             resolved_auth = pytest_httpchain_templates.substitution.walk(scenario.auth, seed_context)
-            # Call the auth function using the helper
             auth_result = call_user_function(resolved_auth)
             session.auth = auth_result
 
-        # Create custom Carrier class with scenario, initialized session and context
         CustomCarrier = type(
             class_name,
-            (cls,),  # Use cls instead of Carrier for better inheritance support
+            (cls,),
             {
                 "_scenario": scenario,
                 "_session": session,
@@ -254,7 +222,7 @@ class Carrier:
         )
 
         for i, stage in enumerate(scenario.stages):
-            # Create test method - capture stage in closure
+
             def make_stage_method(stage_template):
                 def stage_method_impl(self, **kwargs):
                     type(self).execute_stage(stage_template, kwargs)
@@ -266,15 +234,12 @@ class Carrier:
             if stage.description:
                 stage_method.__doc__ = stage.description
 
-            # Collect all parameter names for signature
             all_param_names = []
 
-            # Apply parametrize marks if present (creates cartesian product)
             if stage.parameters:
                 for step in stage.parameters:
                     if isinstance(step, IndividualStep):
-                        # Single parameter step
-                        if step.individual:  # Skip if empty
+                        if step.individual:
                             param_name = next(iter(step.individual.keys()))
                             param_values = step.individual[param_name]
                             resolved_values = pytest_httpchain_templates.substitution.walk(param_values, param_context)
@@ -286,7 +251,6 @@ class Carrier:
                             stage_method = parametrize_marker(stage_method)
 
                     elif isinstance(step, CombinationsStep):
-                        # Multiple parameters in combination
                         if step.combinations:
                             resolved_combinations = pytest_httpchain_templates.substitution.walk(step.combinations, param_context)
                             resolved_combinations = [vars(item) if isinstance(item, SimpleNamespace) else item for item in resolved_combinations]
@@ -300,11 +264,9 @@ class Carrier:
                             parametrize_marker = pytest.mark.parametrize(",".join(param_names), param_values, ids=param_ids)
                             stage_method = parametrize_marker(stage_method)
 
-            # Set fixtures - parameters will be added to kwargs by pytest
             all_fixtures = ["self"] + all_param_names + stage.fixtures + scenario.fixtures
             stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])
 
-            # Apply other markers
             all_marks = [f"order({i})"] + stage.marks
             evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
             for mark_str in all_marks:
