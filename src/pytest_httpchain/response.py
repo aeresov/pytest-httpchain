@@ -129,6 +129,27 @@ def process_verify_step(
         if local_context[var_name] != expected_value:
             raise VerificationError(f"Var '{var_name}' verification failed: expected {expected_value}, got {local_context[var_name]}")
 
+    for i, expression in enumerate(verify_model.expressions):
+        # Expression may already be evaluated by substitution.walk in carrier.py
+        # or it might still be a template string (shouldn't happen in normal flow)
+        if isinstance(expression, str) and expression.startswith("{{") and expression.endswith("}}"):
+            # This shouldn't happen in normal flow but handle it just in case
+            import pytest_httpchain_templates.substitution
+
+            try:
+                result = pytest_httpchain_templates.substitution._sub_string(expression, local_context)
+                logger.info(f"Checking expression {i}: '{expression}' evaluated to {result} (type: {type(result).__name__})")
+            except Exception as e:
+                raise VerificationError(f"Error evaluating expression {i} '{expression}': {str(e)}") from None
+        else:
+            # Already evaluated
+            result = expression
+            logger.info(f"Checking expression {i}: result = {result} (type: {type(result).__name__})")
+
+        # Check if the expression is truthy
+        if not result:
+            raise VerificationError(f"Expression {i} failed: evaluated to {result}")
+
     for func_item in verify_model.user_functions:
         try:
             from .utils import call_user_function

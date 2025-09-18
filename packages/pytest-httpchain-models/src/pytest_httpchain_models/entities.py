@@ -192,6 +192,11 @@ class Verify(BaseModel):
     status: HTTPStatus | None | TemplateExpression = Field(default=None)
     headers: dict[str, str] = Field(default_factory=dict)
     vars: dict[str, Any] = Field(default_factory=dict)
+    expressions: list[Any | TemplateExpression] = Field(
+        default_factory=list,
+        description="Template expressions to evaluate as boolean conditions. Each must be a full template expression that evaluates to a truthy/falsy value.",
+        examples=[["{{ user_age >= 18 }}", "{{ status_code == 200 }}", "{{ 'error' not in response_text }}"]],
+    )
     user_functions: FunctionsList
     body: ResponseBody = Field(default_factory=ResponseBody)
 
