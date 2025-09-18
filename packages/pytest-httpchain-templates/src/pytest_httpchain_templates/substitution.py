@@ -37,6 +37,9 @@ SAFE_FUNCTIONS = {
     "tuple": tuple,
     "set": set,
     "uuid4": lambda: str(uuid4()),
+    "true": True,
+    "false": False,
+    "null": None,
 }
 
 evaluator = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS | DEFAULT_FUNCTIONS)

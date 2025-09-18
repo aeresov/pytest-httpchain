@@ -73,3 +73,25 @@ def test_dict_constructor_still_works():
     expected = [{"kekeke": "device1"}, {"kekeke": "device2"}, {"kekeke": "device3"}]
     assert result == expected
     assert isinstance(result, list)
+
+
+def test_lowercase_boolean_literals():
+    """Test that lowercase boolean literals (true, false, null) work."""
+    context = {"ids": ["a", "b"]}
+
+    # Test false
+    assert walk("{{ false }}", context) is False
+
+    # Test true
+    assert walk("{{ true }}", context) is True
+
+    # Test null
+    assert walk("{{ null }}", context) is None
+
+    # Test in dict literal
+    result = walk("{{ {'enabled': false, 'value': null, 'active': true} }}", context)
+    assert result == {"enabled": False, "value": None, "active": True}
+
+    # Test in list comprehension with dict literal
+    result = walk("{{ [{'id': id, 'active': false} for id in ids] }}", context)
+    assert result == [{"id": "a", "active": False}, {"id": "b", "active": False}]
