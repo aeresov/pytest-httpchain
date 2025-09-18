@@ -171,8 +171,9 @@ class Request(CallSecurity):
 class Save(BaseModel):
     """Configuration for saving data from HTTP response."""
 
-    vars: dict[str, JMESPathExpression | PartialTemplateStr] = Field(default_factory=dict, description="JMESPath expressions to extract values.")
-    functions: FunctionsList
+    jmespath: dict[str, JMESPathExpression | PartialTemplateStr] = Field(default_factory=dict, description="JMESPath expressions to extract values from response.")
+    substitutions: dict[str, NamespaceFromDict] = Field(default_factory=dict, description="Variables for substitution (similar to Scenario.substitutions.vars).")
+    user_functions: FunctionsList
 
 
 class ResponseBody(BaseModel):
@@ -191,7 +192,7 @@ class Verify(BaseModel):
     status: HTTPStatus | None | TemplateExpression = Field(default=None)
     headers: dict[str, str] = Field(default_factory=dict)
     vars: dict[str, Any] = Field(default_factory=dict)
-    functions: FunctionsList
+    user_functions: FunctionsList
     body: ResponseBody = Field(default_factory=ResponseBody)
 
 

@@ -14,7 +14,7 @@
                 },
                 {
                     "save": {
-                        "vars": {
+                        "jmespath": {
                             "first_result": "status"
                         }
                     }

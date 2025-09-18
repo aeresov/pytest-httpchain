@@ -16,7 +16,7 @@
                 },
                 {
                     "save": {
-                        "vars": {
+                        "jmespath": {
                             "user_name": "user.name"
                         }
                     }

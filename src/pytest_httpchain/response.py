@@ -33,6 +33,7 @@ def process_save_step(
     Extracts data from the response using:
     - JMESPath expressions for JSON responses
     - User-defined save functions for custom extraction
+    - Substitutions for variable processing
 
     Args:
         save_model: Validated Save model
@@ -51,13 +52,13 @@ def process_save_step(
     result: dict[str, Any] = {}
 
     # Extract JSON only if we need it for JMESPath expressions
-    if len(save_model.vars) > 0:
+    if len(save_model.jmespath) > 0:
         try:
             response_json = response.json()
         except (requests.JSONDecodeError, UnicodeDecodeError) as e:
             raise SaveError(f"Cannot extract variables, response is not valid JSON: {str(e)}") from None
 
-        for var_name, jmespath_expr in save_model.vars.items():
+        for var_name, jmespath_expr in save_model.jmespath.items():
             logger.info(f"JMESPath processing: {jmespath_expr}")
             try:
                 saved_value = jmespath.search(jmespath_expr, response_json)
@@ -66,7 +67,12 @@ def process_save_step(
             except jmespath.exceptions.JMESPathError as e:
                 raise SaveError(f"Error saving variable {var_name}: {str(e)}") from None
 
-    for func_item in save_model.functions:
+    # Process substitutions (these are evaluated variables, not JMESPath)
+    for var_name, var_value in save_model.substitutions.items():
+        result[var_name] = var_value
+        logger.info(f"Saved {var_name} = {var_value} (from substitution)")
+
+    for func_item in save_model.user_functions:
         try:
             func_result = call_user_function(func_item, response=response)
 
@@ -123,7 +129,7 @@ def process_verify_step(
         if local_context[var_name] != expected_value:
             raise VerificationError(f"Var '{var_name}' verification failed: expected {expected_value}, got {local_context[var_name]}")
 
-    for func_item in verify_model.functions:
+    for func_item in verify_model.user_functions:
         try:
             from .utils import call_user_function
 
