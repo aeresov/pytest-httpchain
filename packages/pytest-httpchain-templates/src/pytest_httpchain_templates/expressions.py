@@ -1,6 +1,11 @@
 import re
 
-TEMPLATE_PATTERN = r"\{\{(?P<expr>[^}]+?)\}\}"
+# Pattern that handles nested braces in expressions
+# Uses negative lookahead (?:(?!\}\}).)+ to match any character
+# that is not followed by }}, allowing single } in dict literals
+# Note: If a dict literal ends with }}, add a space before the closing }}
+# Example: {{ {'key': value} }} instead of {{ {'key': value}}}
+TEMPLATE_PATTERN = r"\{\{(?P<expr>(?:(?!\}\}).)+)\}\}"
 
 
 def is_complete_template(value: str) -> bool:
