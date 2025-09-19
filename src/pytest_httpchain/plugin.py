@@ -27,6 +27,9 @@ from .report_formatter import format_request, format_response
 
 logger = logging.getLogger(__name__)
 
+# Global counter for module ordering
+_module_order_counter: int = 0
+
 
 class JsonModule(python.Module):
     """JSON test module that collects and executes HTTP chain tests.
@@ -37,6 +40,7 @@ class JsonModule(python.Module):
     """
 
     def collect(self) -> Iterable[nodes.Item | nodes.Collector]:
+        global _module_order_counter
         ref_parent_traversal_depth = int(self.config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH))
         root_path = Path(self.config.rootpath)
 
@@ -75,7 +79,17 @@ class JsonModule(python.Module):
             obj=CarrierClass,
         )
 
+        # Apply module-level order marker based on collection sequence
+        try:
+            order_marker = pytest.mark.order(_module_order_counter)
+            self.add_marker(order_marker)  # Add marker to the module itself
+            _module_order_counter += 1
+        except Exception as e:
+            logger.warning(f"Failed to create order marker for module: {e}")
+
         evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
+
+        # Apply class-level marks from scenario
         for mark_str in scenario.marks:
             try:
                 marker = evaluator.eval(f"pytest.mark.{mark_str}")
@@ -103,6 +117,9 @@ def pytest_addoption(parser: argparsing.Parser) -> None:
 
 
 def pytest_configure(config: config.Config) -> None:
+    global _module_order_counter
+    _module_order_counter = 0  # Reset counter at start of session
+
     suffix = str(config.getini(ConfigOptions.SUFFIX))
     if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", suffix):
         raise ValueError("suffix must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
@@ -110,9 +127,6 @@ def pytest_configure(config: config.Config) -> None:
     ref_parent_traversal_depth = int(config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH))
     if ref_parent_traversal_depth < 0:
         raise ValueError("Maximum number of parent directory traversals must be non-negative")
-
-    if config.pluginmanager.has_plugin("pytest-order"):
-        config.option.order_scope = "class"
 
 
 def pytest_collect_file(file_path: Path, parent: nodes.Collector) -> nodes.Collector | None:
