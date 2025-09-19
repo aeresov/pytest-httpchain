@@ -116,7 +116,7 @@ class Carrier:
                     case SaveStep():
                         save_dict = pytest_httpchain_templates.substitution.walk(step.save, local_context)
                         save_model = Save.model_validate(save_dict)
-                        saved_vars = process_save_step(save_model, response)
+                        saved_vars = process_save_step(save_model, local_context, response)
                         local_context = local_context.new_child(saved_vars)
                         global_context_updates.update(saved_vars)
 

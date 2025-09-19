@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 def process_save_step(
     save_model: Save,
+    local_context: ChainMap[str, Any],
     response: requests.Response,
 ) -> dict[str, Any]:
     """Process a save step and return variables to be saved to global context.
@@ -37,6 +38,7 @@ def process_save_step(
 
     Args:
         save_model: Validated Save model
+        local_context: Current execution context for template substitution
         response: HTTP response object
 
     Returns:
@@ -68,11 +70,21 @@ def process_save_step(
                 raise SaveError(f"Error saving variable {var_name}: {str(e)}") from None
 
     # Process substitutions (sequential substitution steps like in Scenario)
+    # Build context for substitutions including already saved values
+    import pytest_httpchain_templates.substitution
+
+    # Create context with current results added
+    substitution_context = local_context.new_child(result)
+
     for step in save_model.substitutions:
         if step.vars:
             for var_name, var_value in step.vars.items():
-                result[var_name] = var_value
-                logger.info(f"Saved {var_name} = {var_value} (from substitution)")
+                # Evaluate the value with the current context
+                resolved_value = pytest_httpchain_templates.substitution.walk(var_value, substitution_context)
+                result[var_name] = resolved_value
+                # Update context for next iterations
+                substitution_context = substitution_context.new_child({var_name: resolved_value})
+                logger.info(f"Saved {var_name} = {resolved_value} (from substitution)")
 
         if step.functions:
             for alias, func_def in step.functions.items():

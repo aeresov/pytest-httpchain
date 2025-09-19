@@ -9,7 +9,8 @@ from collections import ChainMap
 from typing import Any
 
 import pytest_httpchain_templates.substitution
-from pytest_httpchain_models.entities import Scenario, Stage
+from pytest_httpchain_models.entities import Scenario, Stage, UserFunctionKwargs, UserFunctionName
+from pytest_httpchain_userfunc.userfunc import wrap_function
 
 from .fixture_manager import FixtureManager
 
@@ -67,18 +68,29 @@ class ContextManager:
         # Process fixtures fresh for stage vars
         stage_fixtures = self.fixture_manager.process_fixtures(fixture_kwargs)
 
-        # Process stage variables (fresh for each stage)
+        # Process stage substitutions (fresh for each stage)
         stage_vars = {}
-        if stage.vars:
-            # Build context for stage vars with seed context having priority over fixtures and global
-            # Context: seed_context > fixtures > global
-            stage_context = ChainMap(self.seed_context, stage_fixtures, self.global_context)
+        for step in stage.substitutions:
+            # Build context for this substitution step with seed context having priority over fixtures and global
+            # Context: stage_vars > seed_context > fixtures > global
+            stage_context = ChainMap(stage_vars, self.seed_context, stage_fixtures, self.global_context)
 
-            # Process stage vars (each references only the base context)
-            for key, value in stage.vars.items():
-                resolved_value = pytest_httpchain_templates.substitution.walk(value, stage_context)
-                stage_vars[key] = resolved_value
-                logger.info(f"Seeded {key} = {resolved_value}")
+            if step.functions:
+                for alias, func_def in step.functions.items():
+                    match func_def:
+                        case UserFunctionName():
+                            stage_vars[alias] = wrap_function(func_def.root)
+                        case UserFunctionKwargs():
+                            stage_vars[alias] = wrap_function(func_def.name.root, default_kwargs=func_def.kwargs)
+                        case _:
+                            raise RuntimeError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
+                    logger.info(f"Seeded {alias} = {stage_vars[alias]} (function)")
+
+            if step.vars:
+                for key, value in step.vars.items():
+                    resolved_value = pytest_httpchain_templates.substitution.walk(value, stage_context)
+                    stage_vars[key] = resolved_value
+                    logger.info(f"Seeded {key} = {resolved_value}")
 
         # Return final layered context
         # Precedence: stage_vars > seed_context > fixtures > global

@@ -121,8 +121,14 @@ def validate_scenario(path: Path) -> ValidateResult:
 
             # Find saved variables
             for step in stage.response:
-                if hasattr(step, "save") and step.save and step.save.vars:
-                    saved_vars.update(step.save.vars.keys())
+                if hasattr(step, "save") and step.save:
+                    # Collect vars from save.jmespath
+                    if step.save.jmespath:
+                        saved_vars.update(step.save.jmespath.keys())
+                    # Collect vars from save.substitutions
+                    for sub_step in step.save.substitutions:
+                        if sub_step.vars:
+                            saved_vars.update(sub_step.vars.keys())
 
         scenario_info["always_run_stages"] = always_run_stages
         scenario_info["fixtures_used"] = list(used_fixtures.union(set(scenario.fixtures)))
