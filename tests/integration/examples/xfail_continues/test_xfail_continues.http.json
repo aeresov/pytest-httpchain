@@ -50,9 +50,9 @@
                 },
                 {
                     "verify": {
-                        "vars": {
-                            "first_result": 200
-                        }
+                        "expressions": [
+                            "{{ first_result == 200 }}"
+                        ]
                     }
                 }
             ]

@@ -36,16 +36,20 @@
                 },
                 {
                     "save": {
-                        "substitutions": {
-                            "result_one": "{{ string_value }}"
-                        }
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "result_one": "{{ string_value }}"
+                                }
+                            }
+                        ]
                     }
                 },
                 {
                     "verify": {
-                        "vars": {
-                            "result_one": "{{ number_value }}"
-                        }
+                        "expressions": [
+                            "{{ result_one == number_value }}"
+                        ]
                     }
                 }
             ]
@@ -61,9 +65,9 @@
             "response": [
                 {
                     "verify": {
-                        "vars": {
-                            "result_one": "{{ number_value }}"
-                        }
+                        "expressions": [
+                            "{{ result_one == number_value }}"
+                        ]
                     }
                 }
             ]

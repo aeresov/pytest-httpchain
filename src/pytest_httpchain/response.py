@@ -67,10 +67,28 @@ def process_save_step(
             except jmespath.exceptions.JMESPathError as e:
                 raise SaveError(f"Error saving variable {var_name}: {str(e)}") from None
 
-    # Process substitutions (these are evaluated variables, not JMESPath)
-    for var_name, var_value in save_model.substitutions.items():
-        result[var_name] = var_value
-        logger.info(f"Saved {var_name} = {var_value} (from substitution)")
+    # Process substitutions (sequential substitution steps like in Scenario)
+    for step in save_model.substitutions:
+        if step.vars:
+            for var_name, var_value in step.vars.items():
+                result[var_name] = var_value
+                logger.info(f"Saved {var_name} = {var_value} (from substitution)")
+
+        if step.functions:
+            for alias, func_def in step.functions.items():
+                # These are function definitions that should be saved as callable wrappers
+                # This follows the same pattern as Scenario.substitutions
+                from pytest_httpchain_models.entities import UserFunctionKwargs, UserFunctionName
+                from pytest_httpchain_userfunc.userfunc import wrap_function
+
+                match func_def:
+                    case UserFunctionName():
+                        result[alias] = wrap_function(func_def.root)
+                    case UserFunctionKwargs():
+                        result[alias] = wrap_function(func_def.name.root, default_kwargs=func_def.kwargs)
+                    case _:
+                        raise SaveError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
+                logger.info(f"Saved {alias} = {result[alias]} (function from substitution)")
 
     for func_item in save_model.user_functions:
         try:
@@ -98,7 +116,7 @@ def process_verify_step(
     Performs various verifications on the response:
     - Status code matching
     - Header value matching
-    - Variable value matching
+    - Expression evaluation
     - JSON schema validation
     - Body content checks (contains/not_contains/matches/not_matches)
     - User-defined verify functions
@@ -122,12 +140,6 @@ def process_verify_step(
     for header_name, expected_value in verify_model.headers.items():
         if response.headers.get(header_name) != expected_value:
             raise VerificationError(f"Header '{header_name}' doesn't match: expected {expected_value}, got {response.headers.get(header_name)}")
-
-    for var_name, expected_value in verify_model.vars.items():
-        if var_name not in local_context:
-            raise VerificationError(f"Var '{var_name}' not found in data context")
-        if local_context[var_name] != expected_value:
-            raise VerificationError(f"Var '{var_name}' verification failed: expected {expected_value}, got {local_context[var_name]}")
 
     for i, expression in enumerate(verify_model.expressions):
         # Expression may already be evaluated by substitution.walk in carrier.py

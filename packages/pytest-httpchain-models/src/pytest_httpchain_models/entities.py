@@ -168,11 +168,34 @@ class Request(CallSecurity):
     allow_redirects: Literal[True, False] | TemplateExpression = Field(default=True, description="Whether to follow redirects.")
 
 
+class Substitution(BaseModel):
+    """Single variable substitution step."""
+
+    vars: dict[str, NamespaceFromDict] = Field(default_factory=dict, description="Variables for substitution.")
+    functions: FunctionsDict
+
+
+# Type alias for list of substitution steps
+Substitutions = Annotated[
+    list[Substitution],
+    Field(
+        default_factory=list,
+        description="Sequential substitution steps to apply.",
+        examples=[
+            [
+                {"vars": {"base_url": "https://api.example.com"}},
+                {"vars": {"endpoint": "/users"}, "functions": {"auth_token": "auth:get_token"}},
+            ],
+        ],
+    ),
+]
+
+
 class Save(BaseModel):
     """Configuration for saving data from HTTP response."""
 
     jmespath: dict[str, JMESPathExpression | PartialTemplateStr] = Field(default_factory=dict, description="JMESPath expressions to extract values from response.")
-    substitutions: dict[str, NamespaceFromDict] = Field(default_factory=dict, description="Variables for substitution (similar to Scenario.substitutions.vars).")
+    substitutions: Substitutions = Field(default_factory=Substitutions, description="Variable substitution configuration.")
     user_functions: FunctionsList
 
 
@@ -191,7 +214,6 @@ class Verify(BaseModel):
 
     status: HTTPStatus | None | TemplateExpression = Field(default=None)
     headers: dict[str, str] = Field(default_factory=dict)
-    vars: dict[str, Any] = Field(default_factory=dict)
     expressions: list[Any | TemplateExpression] = Field(
         default_factory=list,
         description="Template expressions to evaluate as boolean conditions. Each must be a full template expression that evaluates to a truthy/falsy value.",
@@ -382,29 +404,6 @@ class Stage(Decorated):
     parameters: Parameters | None = Field(default=None, description="Stage parametrization steps")
     request: Request = Field(description="HTTP request details.")
     response: Response = Field(default_factory=Response)
-
-
-class Substitution(BaseModel):
-    """Single variable substitution step."""
-
-    vars: dict[str, NamespaceFromDict] = Field(default_factory=dict, description="Variables for substitution.")
-    functions: FunctionsDict
-
-
-# Type alias for list of substitution steps
-Substitutions = Annotated[
-    list[Substitution],
-    Field(
-        default_factory=list,
-        description="Sequential substitution steps to apply.",
-        examples=[
-            [
-                {"vars": {"base_url": "https://api.example.com"}},
-                {"vars": {"endpoint": "/users"}, "functions": {"auth_token": "auth:get_token"}},
-            ],
-        ],
-    ),
-]
 
 
 class Scenario(Decorated, CallSecurity):
