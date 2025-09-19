@@ -409,5 +409,6 @@ class Stage(Decorated):
 class Scenario(Decorated, CallSecurity):
     """HTTP test scenario with multiple stages."""
 
+    description: str | None = Field(default=None, description="Extended description for the test scenario.")
     stages: list[Stage] = Field(default_factory=list)
     substitutions: Substitutions = Field(default_factory=Substitutions, description="Variable substitution configuration.")

@@ -205,17 +205,22 @@ class Carrier:
             auth_result = call_user_function(resolved_auth)
             session.auth = auth_result
 
+        class_dict = {
+            "_scenario": scenario,
+            "_session": session,
+            "_context_manager": context_manager,
+            "_aborted": False,
+            "_last_request": None,
+            "_last_response": None,
+        }
+
+        if scenario.description:
+            class_dict["__doc__"] = scenario.description
+
         CustomCarrier = type(
             class_name,
             (cls,),
-            {
-                "_scenario": scenario,
-                "_session": session,
-                "_context_manager": context_manager,
-                "_aborted": False,
-                "_last_request": None,
-                "_last_response": None,
-            },
+            class_dict,
         )
 
         for i, stage in enumerate(scenario.stages):

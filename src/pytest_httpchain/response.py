@@ -84,7 +84,7 @@ def process_save_step(
                 result[var_name] = resolved_value
                 # Update context for next iterations
                 substitution_context = substitution_context.new_child({var_name: resolved_value})
-                logger.info(f"Saved {var_name} = {resolved_value} (from substitution)")
+                logger.info(f"Saved {var_name} = {resolved_value}")
 
         if step.functions:
             for alias, func_def in step.functions.items():
@@ -100,7 +100,7 @@ def process_save_step(
                         result[alias] = wrap_function(func_def.name.root, default_kwargs=func_def.kwargs)
                     case _:
                         raise SaveError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
-                logger.info(f"Saved {alias} = {result[alias]} (function from substitution)")
+                logger.info(f"Saved {alias} = {result[alias]} (function)")
 
     for func_item in save_model.user_functions:
         try:
@@ -111,7 +111,7 @@ def process_save_step(
 
             result.update(func_result)
             for var_name, saved_value in func_result.items():
-                logger.info(f"Saved {var_name} = {saved_value}")
+                logger.info(f"Saved {var_name} = {saved_value} (user_function)")
         except Exception as e:
             raise SaveError(f"Error calling user function '{func_item}': {str(e)}") from None
 
