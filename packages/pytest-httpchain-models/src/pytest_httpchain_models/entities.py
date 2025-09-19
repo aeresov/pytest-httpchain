@@ -399,7 +399,7 @@ class Stage(Decorated):
 
     name: str = Field(description="Stage name (human-readable).")
     description: str | None = Field(default=None, description="Extended description for the test stage.")
-    vars: dict[str, NamespaceFromDict] = Field(default_factory=dict)
+    substitutions: Substitutions = Field(default_factory=Substitutions, description="Variable substitution configuration.")
     always_run: Literal[True, False] | TemplateExpression = Field(default=False, examples=[True, "{{ should_run }}", "{{ env == 'production' }}"])
     parameters: Parameters | None = Field(default=None, description="Stage parametrization steps")
     request: Request = Field(description="HTTP request details.")
