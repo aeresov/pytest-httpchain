@@ -1,11 +1,3 @@
-"""Unified fixture management for HTTP chain tests.
-
-This module provides a manager for handling all types of pytest fixtures:
-- Plain values (strings, numbers, objects)
-- Factory functions that return values
-- Factory functions that return context managers
-"""
-
 import contextlib
 import inspect
 from collections.abc import Callable
@@ -27,14 +19,6 @@ class FixtureManager:
         self.wrapped_fixtures: dict[str, Any] = {}
 
     def process_fixtures(self, fixture_kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Process all fixtures and prepare them for use in templates.
-
-        Args:
-            fixture_kwargs: Raw fixture values from pytest
-
-        Returns:
-            Dictionary of processed fixtures ready for template context
-        """
         processed = {}
 
         for name, value in fixture_kwargs.items():
@@ -47,16 +31,6 @@ class FixtureManager:
         return processed
 
     def _wrap_factory(self, name: str, factory: Callable) -> Callable:
-        """Wrap a factory function to handle context managers automatically.
-
-        Args:
-            name: Name of the fixture
-            factory: The factory function
-
-        Returns:
-            A wrapped factory that handles context managers
-        """
-
         def wrapped(*args, **kwargs):
             result = factory(*args, **kwargs)
 
@@ -71,7 +45,6 @@ class FixtureManager:
         return wrapped
 
     def cleanup(self):
-        """Clean up all active context managers."""
         while self.active_contexts:
             ctx = self.active_contexts.pop()
             try:

@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -114,8 +115,6 @@ def validate_scenario(path: Path) -> ValidateResult:
             stage_str = str(stage_dict)
 
             # Find variable references ({{ var_name }})
-            import re
-
             var_refs = re.findall(r"{{\s*(\w+)(?:\.\w+)*.*?}}", stage_str)
             referenced_vars.update(var_refs)
 

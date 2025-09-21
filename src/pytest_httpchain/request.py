@@ -1,9 +1,3 @@
-"""HTTP request preparation and execution for chain tests.
-
-This module handles the preparation of HTTP requests from test configurations
-and their execution using the requests library.
-"""
-
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,19 +30,6 @@ def prepare_request(
     session: requests.Session,
     request_model: RequestModel,
 ) -> PrepareRequestResult:
-    """Prepare an HTTP request for execution.
-
-    Args:
-        session: HTTP session to use for preparing the request
-        request_model: Validated request model
-
-    Returns:
-        PreparedRequest dataclass containing the prepared request and send kwargs
-
-    Raises:
-        RequestError: If request preparation fails or files not found
-    """
-
     request_kwargs: dict[str, Any] = {
         "method": request_model.method.value,
         "url": str(request_model.url),
@@ -110,18 +91,6 @@ def execute_request(
     session: requests.Session,
     prepared: PrepareRequestResult,
 ) -> requests.Response:
-    """Execute a prepared HTTP request.
-
-    Args:
-        session: HTTP session to use for sending the request
-        prepared: PreparedRequest dataclass with request and send kwargs
-
-    Returns:
-        HTTP response
-
-    Raises:
-        RequestError: If request execution fails
-    """
     try:
         response = session.send(prepared.request, **prepared.send_kwargs)
         return response

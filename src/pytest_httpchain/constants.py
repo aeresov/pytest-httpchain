@@ -1,5 +1,3 @@
-"""Constants for pytest-httpchain plugin."""
-
 from enum import StrEnum
 
 

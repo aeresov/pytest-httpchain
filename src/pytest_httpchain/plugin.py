@@ -1,9 +1,3 @@
-"""Pytest plugin for HTTP chain testing.
-
-This module provides the pytest plugin hooks and collection logic for
-discovering and executing HTTP chain tests from JSON files.
-"""
-
 import logging
 import re
 import types

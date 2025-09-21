@@ -1,9 +1,3 @@
-"""Response processing and verification for HTTP chain tests.
-
-This module handles the processing of HTTP responses including data extraction
-(save operations) and verification of response content.
-"""
-
 import json
 import logging
 import re
@@ -19,7 +13,7 @@ from pytest_httpchain_models.entities import Save, Verify
 from pytest_httpchain_models.types import check_json_schema
 
 from .exceptions import SaveError, VerificationError
-from .utils import call_user_function
+from .utils import call_user_function, process_substitutions
 
 logger = logging.getLogger(__name__)
 
@@ -29,31 +23,10 @@ def process_save_step(
     local_context: ChainMap[str, Any],
     response: requests.Response,
 ) -> dict[str, Any]:
-    """Process a save step and return variables to be saved to global context.
-
-    Extracts data from the response using:
-    - JMESPath expressions for JSON responses
-    - User-defined save functions for custom extraction
-    - Substitutions for variable processing
-
-    Args:
-        save_model: Validated Save model
-        local_context: Current execution context for template substitution
-        response: HTTP response object
-
-    Returns:
-        Dictionary of variables to add to global context
-
-    Raises:
-        ResponseError: If variable extraction fails
-
-    Note:
-        Save functions must conform to the SaveFunction protocol,
-        accepting a response and returning a dict[str, Any].
-    """
     result: dict[str, Any] = {}
+    step_context = local_context.new_child(result)
 
-    # Extract JSON only if we need it for JMESPath expressions
+    # first jmespath
     if len(save_model.jmespath) > 0:
         try:
             response_json = response.json()
@@ -69,39 +42,14 @@ def process_save_step(
             except jmespath.exceptions.JMESPathError as e:
                 raise SaveError(f"Error saving variable {var_name}: {str(e)}") from None
 
-    # Process substitutions (sequential substitution steps like in Scenario)
-    # Build context for substitutions including already saved values
-    import pytest_httpchain_templates.substitution
+    # then substitutions
+    try:
+        substitution_result = process_substitutions(save_model.substitutions, step_context)
+        result.update(substitution_result)
+    except Exception as e:
+        raise SaveError(f"Error processing substitutions: {str(e)}") from None
 
-    # Create context with current results added
-    substitution_context = local_context.new_child(result)
-
-    for step in save_model.substitutions:
-        if step.vars:
-            for var_name, var_value in step.vars.items():
-                # Evaluate the value with the current context
-                resolved_value = pytest_httpchain_templates.substitution.walk(var_value, substitution_context)
-                result[var_name] = resolved_value
-                # Update context for next iterations
-                substitution_context = substitution_context.new_child({var_name: resolved_value})
-                logger.info(f"Saved {var_name} = {resolved_value}")
-
-        if step.functions:
-            for alias, func_def in step.functions.items():
-                # These are function definitions that should be saved as callable wrappers
-                # This follows the same pattern as Scenario.substitutions
-                from pytest_httpchain_models.entities import UserFunctionKwargs, UserFunctionName
-                from pytest_httpchain_userfunc.userfunc import wrap_function
-
-                match func_def:
-                    case UserFunctionName():
-                        result[alias] = wrap_function(func_def.root)
-                    case UserFunctionKwargs():
-                        result[alias] = wrap_function(func_def.name.root, default_kwargs=func_def.kwargs)
-                    case _:
-                        raise SaveError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
-                logger.info(f"Saved {alias} = {result[alias]} (function)")
-
+    # last user_functions
     for func_item in save_model.user_functions:
         try:
             func_result = call_user_function(func_item, response=response)
@@ -115,6 +63,7 @@ def process_save_step(
         except Exception as e:
             raise SaveError(f"Error calling user function '{func_item}': {str(e)}") from None
 
+    # return only step-generated data
     return result
 
 
@@ -123,29 +72,6 @@ def process_verify_step(
     local_context: ChainMap[str, Any],
     response: requests.Response,
 ) -> None:
-    """Process a verify step and raise errors if verification fails.
-
-    Performs various verifications on the response:
-    - Status code matching
-    - Header value matching
-    - Expression evaluation
-    - JSON schema validation
-    - Body content checks (contains/not_contains/matches/not_matches)
-    - User-defined verify functions
-
-    Args:
-        verify_model: Validated Verify model
-        local_context: Current execution context
-        response: HTTP response object
-
-    Raises:
-        VerificationError: If any verification fails
-
-    Note:
-        Verify functions must conform to the VerifyFunction protocol,
-        accepting a response and returning a bool.
-    """
-
     if verify_model.status and response.status_code != verify_model.status.value:
         raise VerificationError(f"Status code doesn't match: expected {verify_model.status.value}, got {response.status_code}")
 
@@ -154,30 +80,11 @@ def process_verify_step(
             raise VerificationError(f"Header '{header_name}' doesn't match: expected {expected_value}, got {response.headers.get(header_name)}")
 
     for i, expression in enumerate(verify_model.expressions):
-        # Expression may already be evaluated by substitution.walk in carrier.py
-        # or it might still be a template string (shouldn't happen in normal flow)
-        if isinstance(expression, str) and expression.startswith("{{") and expression.endswith("}}"):
-            # This shouldn't happen in normal flow but handle it just in case
-            import pytest_httpchain_templates.substitution
-
-            try:
-                result = pytest_httpchain_templates.substitution._sub_string(expression, local_context)
-                logger.info(f"Checking expression {i}: '{expression}' evaluated to {result} (type: {type(result).__name__})")
-            except Exception as e:
-                raise VerificationError(f"Error evaluating expression {i} '{expression}': {str(e)}") from None
-        else:
-            # Already evaluated
-            result = expression
-            logger.info(f"Checking expression {i}: result = {result} (type: {type(result).__name__})")
-
-        # Check if the expression is truthy
-        if not result:
-            raise VerificationError(f"Expression {i} failed: evaluated to {result}")
+        if not expression:
+            raise VerificationError(f"Expression {i} failed: evaluated to {expression}")
 
     for func_item in verify_model.user_functions:
         try:
-            from .utils import call_user_function
-
             result = call_user_function(func_item, response=response)
 
             if not isinstance(result, bool):
@@ -201,7 +108,6 @@ def process_verify_step(
             except jsonschema.SchemaError as e:
                 raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e}") from None
 
-        # Extract JSON for schema validation
         try:
             response_json = response.json()
         except (requests.JSONDecodeError, UnicodeDecodeError) as e:

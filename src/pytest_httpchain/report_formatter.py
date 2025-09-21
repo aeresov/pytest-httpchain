@@ -1,9 +1,3 @@
-"""Formatting utilities for test report generation.
-
-This module provides functions to format HTTP requests and responses
-for display in pytest test reports.
-"""
-
 import json
 
 import curlify

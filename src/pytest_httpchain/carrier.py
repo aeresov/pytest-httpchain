@@ -1,14 +1,3 @@
-"""Test carrier class for HTTP chain test execution.
-
-The Carrier class manages the test lifecycle and infrastructure:
-- HTTP session initialization and cleanup
-- Global context state management
-- Test flow control (abort handling)
-- Integration with pytest (skip, fail)
-- Stage execution orchestration
-- Dynamic test class generation from scenarios
-"""
-
 import inspect
 import logging
 from types import SimpleNamespace
@@ -26,20 +15,17 @@ from pytest_httpchain_models.entities import (
     SaveStep,
     Scenario,
     Stage,
-    UserFunctionKwargs,
-    UserFunctionName,
     Verify,
     VerifyStep,
 )
 from pytest_httpchain_templates.exceptions import TemplatesError
-from pytest_httpchain_userfunc import wrap_function
 from simpleeval import EvalWithCompoundTypes
 
 from .context_manager import ContextManager
 from .exceptions import StageExecutionError
 from .request import execute_request, prepare_request
 from .response import process_save_step, process_verify_step
-from .utils import call_user_function
+from .utils import call_user_function, process_substitutions
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +125,15 @@ class Carrier:
             pytest.fail(reason=str(e), pytrace=False)
 
     @classmethod
+    def teardown_class(cls) -> None:
+        if cls._context_manager is not None:
+            cls._context_manager.cleanup()
+            cls._context_manager = None
+        if cls._session is not None:
+            cls._session.close()
+            cls._session = None
+
+    @classmethod
     def create_test_class(cls, scenario: Scenario, class_name: str) -> type[Self]:
         """Create a dynamic test class for the given scenario.
 
@@ -170,38 +165,18 @@ class Carrier:
         total_stages = len(scenario.stages)
         padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
 
-        seed_context = {}
-        for step in scenario.substitutions:
-            if step.functions:
-                for alias, func_def in step.functions.items():
-                    match func_def:
-                        case UserFunctionName():
-                            seed_context[alias] = wrap_function(func_def.root)
-                        case UserFunctionKwargs():
-                            seed_context[alias] = wrap_function(func_def.name.root, default_kwargs=func_def.kwargs)
-                        case _:
-                            raise StageExecutionError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
-                    logger.info(f"Seeded {alias} = {seed_context[alias]}")
+        # Process scenario-level substitutions to build initial context
+        scenario_context = process_substitutions(scenario.substitutions, {})
 
-            if step.vars:
-                for var_name, var_value in step.vars.items():
-                    resolved_value = pytest_httpchain_templates.substitution.walk(
-                        var_value,
-                        seed_context,
-                    )
-                    seed_context[var_name] = resolved_value
-                    logger.info(f"Seeded {var_name} = {resolved_value}")
-
-        param_context = seed_context
         session = requests.Session()
-        context_manager = ContextManager(seed_context=seed_context)
+        context_manager = ContextManager(seed_context=scenario_context)
 
         session.verify = scenario.ssl.verify
         if scenario.ssl.cert is not None:
             session.cert = scenario.ssl.cert
 
         if scenario.auth:
-            resolved_auth = pytest_httpchain_templates.substitution.walk(scenario.auth, seed_context)
+            resolved_auth = pytest_httpchain_templates.substitution.walk(scenario.auth, scenario_context)
             auth_result = call_user_function(resolved_auth)
             session.auth = auth_result
 
@@ -244,7 +219,7 @@ class Carrier:
                         if step.individual:
                             param_name = next(iter(step.individual.keys()))
                             param_values = step.individual[param_name]
-                            resolved_values = pytest_httpchain_templates.substitution.walk(param_values, param_context)
+                            resolved_values = pytest_httpchain_templates.substitution.walk(param_values, scenario_context)
 
                             param_ids = step.ids if step.ids else None
 
@@ -254,7 +229,7 @@ class Carrier:
 
                     elif isinstance(step, CombinationsStep):
                         if step.combinations:
-                            resolved_combinations = pytest_httpchain_templates.substitution.walk(step.combinations, param_context)
+                            resolved_combinations = pytest_httpchain_templates.substitution.walk(step.combinations, scenario_context)
                             resolved_combinations = [vars(item) if isinstance(item, SimpleNamespace) else item for item in resolved_combinations]
 
                             first_item = resolved_combinations[0]

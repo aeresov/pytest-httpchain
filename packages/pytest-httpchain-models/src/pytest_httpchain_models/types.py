@@ -112,8 +112,6 @@ def validate_function_import_name(v: str) -> str:
 
     Format: [module.path:]function_name
     """
-    import re
-
     NAME_PATTERN = re.compile(r"^(?:(?P<module>[a-zA-Z_][a-zA-Z0-9_.]*):)?(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$")
     if not NAME_PATTERN.match(v):
         raise ValueError(f"Invalid function name format: {v}")
