@@ -35,9 +35,7 @@ The following optional dependencies are available:
 
 ### Pytest integration
 
-Most of pytest magic can be used: markers, fixtures, other plugins.  
-
-> NOTE: parametrization is not yet implemented, therefore `parametrize` marker won't have any effect.
+Most of pytest magic can be used: markers, fixtures, other plugins.
 
 ### Declarative format
 
@@ -64,6 +62,7 @@ Values from common data context also might be verified during verified/asserted.
 -   to extract data from HTTP response
 -   to verify HTTP response and values in common data context
 -   to provide [custom authentication for requests](https://requests.readthedocs.io/en/latest/user/advanced/#custom-authentication)
+-   to call in substitution expressions
 
 ### JMESPath support
 
@@ -89,9 +88,13 @@ def now_utc():
 
 ```json
 {
-    "vars": {
-        "user_id": 1
-    },
+    "substitutions": [
+        {
+            "vars": {
+                "user_id": 1
+            }
+        }
+    ],
     "stages": [
         {
             "name": "get_user",
@@ -106,7 +109,7 @@ def now_utc():
                 },
                 {
                     "save": {
-                        "vars": {
+                        "jmespath": {
                             "user_name": "user.name"
                         }
                     }
@@ -161,7 +164,7 @@ Scenario we created:
     url is assembled using `user_id` variable from common data context  
     we create JSON body in place using values from common data context, note that `now_utc` is converted to string in place  
     HTTP PUT call with body is made  
-    we verify the call returned code 200  
+    we verify the call returned code 200
 -   **cleanup**  
     finalizing call meant for graceful exit  
     `always_run` parameter means this stage will be executed regardless of errors in previous stages
@@ -213,8 +216,9 @@ The MCP server provides:
 
 ## Thanks
 
-`pytest-httpchain` was heavily inspired by [Tavern](https://github.com/taverntesting/tavern) and [pytest-play](https://github.com/davidemoro/pytest-play).  
+`pytest-httpchain` was inspired by [Tavern](https://github.com/taverntesting/tavern) and [pytest-play](https://github.com/davidemoro/pytest-play).  
 [requests](https://requests.readthedocs.io) does the comms.  
 [Pydantic](https://docs.pydantic.dev) keeps the structure.  
-[pytest-order](https://github.com/pytest-dev/pytest-order) powers the chaining.  
-[pytest-datadir](https://github.com/gabrielcnr/pytest-datadir) saved me a lot of elbow grease.  
+[simpleeval](https://github.com/danthedeckie/simpleeval) powers templates.  
+[pytest-order](https://github.com/pytest-dev/pytest-order) sorts the chain.  
+[pytest-datadir](https://github.com/gabrielcnr/pytest-datadir) saved me a lot of elbow grease while testing.

@@ -10,10 +10,10 @@ pip install pytest-httpchain
 
 ## Pytest features
 
-For pytest, scenario acts like a test module with one test class; stages act like test methods of that class.\
-Scenario-level pytest markers act like they are applied to python test class.\
-Stage-level pytest markers act like they are applied to python test function.\
-Scenario-level pytest fixtures act like they are applied to each test method.\
+For pytest, scenario acts like a test module with one test class; stages act like test methods of that class.  
+Scenario-level pytest markers act like they are applied to python test class.  
+Stage-level pytest markers act like they are applied to python test function.  
+Scenario-level pytest fixtures act like they are applied to each test method.  
 Stage-level pytest fixtures act like they are applied to python test method.
 
 In this example:
@@ -63,6 +63,7 @@ def int_value():
 Example of using `$ref` and greedy props merge.
 
 `requests.json`
+
 ```json
 {
     "login": {
@@ -74,6 +75,7 @@ Example of using `$ref` and greedy props merge.
 ```
 
 `stages.json`
+
 ```json
 {
     "auth": {
@@ -88,6 +90,7 @@ Example of using `$ref` and greedy props merge.
 ```
 
 `test_scenario.http.json`
+
 ```json
 {
     "stages": [
@@ -154,9 +157,13 @@ Down the stages chain, common data context can be used in jinja-style variable s
 
 ```json
 {
-    "vars": {
-        "id": 42
-    },
+    "substitutions": [
+        {
+            "vars": {
+                "id": 42
+            }
+        }
+    ],
     "stages": [
         {
             "name": "use resource",
@@ -210,14 +217,12 @@ def extract_xml(response: requests.Response) -> dict[str, Any]
             "response": [
                 {
                     "save": {
-                        "functions": ["utilities.save:extract_xml"]
+                        "user_functions": ["utilities.save:extract_xml"]
                     }
                 },
                 {
                     "verify": {
-                        "vars": {
-                            "author": "Jack London"
-                        }
+                        "expressions": ["{{ author = \"Jack London\" }}"]
                     }
                 }
             ]
@@ -248,9 +253,13 @@ def check_xml(response: requests.Response, desired_author: str) -> bool
 
 ```json
 {
-    "vars": {
-        "author": "Jack London"
-    },
+    "substitutions": [
+        {
+            "vars": {
+                "author": "Jack London"
+            }
+        }
+    ],
     "stages": [
         {
             "name": "get book data",
@@ -260,9 +269,9 @@ def check_xml(response: requests.Response, desired_author: str) -> bool
             "response": [
                 {
                     "verify": {
-                        "functions": [
+                        "user_functions": [
                             {
-                                "function": "utilities.verify:check_xml",
+                                "name": "utilities.verify:check_xml",
                                 "kwargs": {
                                     "desired_author": "{{ author }}"
                                 }
@@ -309,7 +318,7 @@ def aws_sigv4(service: str, region: str) -> requests.auth.AuthBase
                 "url": "https://some_service.some_region.amazonaws.com",
                 "method": "POST",
                 "auth": {
-                    "function": "utilities.auth:aws_sigv4",
+                    "name": "utilities.auth:aws_sigv4",
                     "kwargs": {
                         "service": "some_service",
                         "region": "some_region"
@@ -343,7 +352,7 @@ In this example, stage extracts value directly from response JSON body and saves
             "response": [
                 {
                     "save": {
-                        "vars": {
+                        "jmespath": {
                             "id": "$.collection[0].entity.id"
                         }
                     }
