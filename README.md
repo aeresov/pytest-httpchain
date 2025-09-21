@@ -217,8 +217,8 @@ The MCP server provides:
 ## Thanks
 
 `pytest-httpchain` was inspired by [Tavern](https://github.com/taverntesting/tavern) and [pytest-play](https://github.com/davidemoro/pytest-play).  
-[requests](https://requests.readthedocs.io) does the comms.  
-[Pydantic](https://docs.pydantic.dev) keeps the structure.  
+[requests](https://requests.readthedocs.io) does comms.  
+[Pydantic](https://docs.pydantic.dev) keeps structure.  
 [simpleeval](https://github.com/danthedeckie/simpleeval) powers templates.  
-[pytest-order](https://github.com/pytest-dev/pytest-order) sorts the chain.  
+[pytest-order](https://github.com/pytest-dev/pytest-order) sorts chain.  
 [pytest-datadir](https://github.com/gabrielcnr/pytest-datadir) saved me a lot of elbow grease while testing.
