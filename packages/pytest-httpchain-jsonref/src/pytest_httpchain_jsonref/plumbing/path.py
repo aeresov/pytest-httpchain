@@ -30,16 +30,42 @@ class PathValidator:
         if parent_traversals > max_parent_traversal_depth:
             raise ReferenceResolverError(f"Reference path '{ref_path}' exceeds maximum parent traversal depth of {max_parent_traversal_depth}")
 
-        # Resolve and validate path containment
-        resolved_path = (base_path / ref_path).resolve()
         root_path_resolved = root_path.resolve()
+        base_path_resolved = base_path.resolve()
 
-        try:
-            resolved_path.relative_to(root_path_resolved)
-        except ValueError:
-            raise ReferenceResolverError(f"Reference path '{ref_path}' points outside allowed directory tree") from None
+        def is_valid_and_exists(resolved: Path) -> bool:
+            """Check if path exists and is within allowed directory tree."""
+            if not resolved.exists():
+                return False
+            try:
+                resolved.relative_to(root_path_resolved)
+                return True
+            except ValueError:
+                return False
 
-        return resolved_path
+        # Try resolving from different base paths in order of preference
+        paths_to_try = [base_path]
+
+        # Add root_path if it's different from base_path
+        if root_path_resolved != base_path_resolved:
+            paths_to_try.append(root_path)
+
+        # Try each base path and find the first valid existing file
+        result_path = None
+        for base in paths_to_try:
+            resolved = (base / ref_path).resolve()
+            if is_valid_and_exists(resolved):
+                result_path = resolved
+                break
+
+        # If no existing file found, raise an error
+        if result_path is None:
+            # Provide helpful error message showing what paths were tried
+            tried_paths = [str((base / ref_path).resolve()) for base in paths_to_try]
+            paths_msg = "\n  - ".join(tried_paths)
+            raise ReferenceResolverError(f"Reference path '{ref_path}' not found. Tried:\n  - {paths_msg}")
+
+        return result_path
 
     @staticmethod
     def parse_json_pointer(pointer: str) -> list[str]:
