@@ -1,25 +1,30 @@
-import json
-import re
 from pathlib import Path
-from typing import Any
 
+import pytest_httpchain_jsonref.loader
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ValidationError
 from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
-from pytest_httpchain_jsonref.loader import load_json
 from pytest_httpchain_models.entities import Scenario
 
 mcp = FastMCP("pytest-httpchain")
+
+
+class ScenarioMetadata(BaseModel):
+    """Metadata about the scenario."""
+
+    name: str | None = None
+    description: str | None = None
+    num_stages: int = 0
 
 
 class ValidateResult(BaseModel):
     """Result of scenario validation."""
 
     valid: bool
-    errors: list[str]
-    warnings: list[str]
-    scenario_info: dict[str, Any]
+    errors: list[str] = []
+    warnings: list[str] = []
+    metadata: ScenarioMetadata | None = None
 
 
 @mcp.tool(
@@ -28,167 +33,115 @@ class ValidateResult(BaseModel):
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     structured_output=True,
 )
-def validate_scenario(path: Path) -> ValidateResult:
+def validate_scenario(
+    path: Path,
+    ref_parent_traversal_depth: int = 3,
+    root_path: Path | None = None,
+) -> ValidateResult:
     """Validate a pytest-httpchain test scenario file.
 
     This tool performs comprehensive validation including:
-    - JSON syntax validation
-    - JSONRef resolution validation
-    - Pydantic model validation against the scenario schema
-    - Detection of common issues and anti-patterns
-    - Variable usage analysis
-    - Fixture dependency checking
+    - File existence and accessibility
+    - JSON syntax and structure
+    - Schema validation against Scenario model
+    - JSONRef resolution
 
     Args:
         path: Path to the test scenario JSON file
+        ref_parent_traversal_depth: Maximum depth for $ref parent directory traversals (default: 3)
+        root_path: Root path for resolving references (default: tests directory or file parent)
 
     Returns:
         ValidateResult containing validation status, errors, warnings, and scenario metadata
     """
-    errors = []
-    warnings = []
-    scenario_info = {}
+    errors: list[str] = []
+    warnings: list[str] = []
+    metadata: ScenarioMetadata | None = None
 
-    # Check if file exists
+    # Check file exists
     if not path.exists():
-        return ValidateResult(valid=False, errors=[f"File not found: {path}"], warnings=[], scenario_info={})
+        return ValidateResult(
+            valid=False,
+            errors=[f"File does not exist: {path}"],
+            warnings=[],
+            metadata=None,
+        )
 
-    # Check file extension
-    if path.suffix != ".json":
-        warnings.append(f"File extension is '{path.suffix}', expected '.json'")
+    # Check file is readable
+    if not path.is_file():
+        return ValidateResult(
+            valid=False,
+            errors=[f"Path is not a file: {path}"],
+            warnings=[],
+            metadata=None,
+        )
 
-    # Step 1: Validate JSON syntax
+    # Determine root path
+    if root_path is None:
+        # Try to find a 'tests' directory, otherwise use file parent
+        potential_root = path.parent
+        while potential_root.parent != potential_root:
+            if potential_root.name == "tests":
+                root_path = potential_root
+                break
+            potential_root = potential_root.parent
+        else:
+            root_path = path.parent
+
+    # Try to load JSON with JSONRef resolution
     try:
-        with open(path) as f:
-            raw_json = json.load(f)
-        scenario_info["has_valid_json"] = True
-    except json.JSONDecodeError as e:
-        errors.append(f"Invalid JSON syntax: {e}")
-        return ValidateResult(valid=False, errors=errors, warnings=warnings, scenario_info=scenario_info)
-    except Exception as e:
-        errors.append(f"Error reading file: {e}")
-        return ValidateResult(valid=False, errors=errors, warnings=warnings, scenario_info=scenario_info)
-
-    # Step 2: Resolve JSONRefs
-    try:
-        resolved_data = load_json(path, max_parent_traversal_depth=3)
-        scenario_info["has_refs"] = "$ref" in str(raw_json)
-        scenario_info["refs_resolved"] = True
+        test_data = pytest_httpchain_jsonref.loader.load_json(
+            path,
+            max_parent_traversal_depth=ref_parent_traversal_depth,
+            root_path=root_path,
+        )
     except ReferenceResolverError as e:
-        errors.append(f"JSONRef resolution error: {e}")
-        # Try to continue with raw data for partial validation
-        resolved_data = raw_json
-        scenario_info["refs_resolved"] = False
+        return ValidateResult(
+            valid=False,
+            errors=[f"JSON reference resolution error: {str(e)}"],
+            warnings=[],
+            metadata=None,
+        )
     except Exception as e:
-        errors.append(f"Unexpected error resolving references: {e}")
-        resolved_data = raw_json
-        scenario_info["refs_resolved"] = False
+        return ValidateResult(
+            valid=False,
+            errors=[f"Failed to parse JSON file: {str(e)}"],
+            warnings=[],
+            metadata=None,
+        )
 
-    # Step 3: Validate against Pydantic model
+    # Validate against Scenario schema
     try:
-        scenario = Scenario.model_validate(resolved_data)
-        scenario_info["model_valid"] = True
-
-        # Extract scenario metadata
-        scenario_info["num_stages"] = len(scenario.stages)
-        scenario_info["stage_names"] = [stage.name for stage in scenario.stages]
-        scenario_info["has_fixtures"] = bool(scenario.fixtures)
-        scenario_info["has_marks"] = bool(scenario.marks)
-        # Check if any substitution step has vars
-        has_vars = any(step.vars for step in scenario.substitutions)
-        scenario_info["has_vars"] = has_vars
-
-        # Analyze stages
-        always_run_stages = []
-        used_fixtures = set()
-        saved_vars = set()
-        referenced_vars = set()
-
-        for stage in scenario.stages:
-            if stage.always_run:
-                always_run_stages.append(stage.name)
-
-            used_fixtures.update(stage.fixtures)
-
-            # Analyze variable usage in templates
-            stage_dict = stage.model_dump()
-            stage_str = str(stage_dict)
-
-            # Find variable references ({{ var_name }})
-            var_refs = re.findall(r"{{\s*(\w+)(?:\.\w+)*.*?}}", stage_str)
-            referenced_vars.update(var_refs)
-
-            # Find saved variables
-            for step in stage.response:
-                if hasattr(step, "save") and step.save:
-                    # Collect vars from save.jmespath
-                    if step.save.jmespath:
-                        saved_vars.update(step.save.jmespath.keys())
-                    # Collect vars from save.substitutions
-                    for sub_step in step.save.substitutions:
-                        if sub_step.vars:
-                            saved_vars.update(sub_step.vars.keys())
-
-        scenario_info["always_run_stages"] = always_run_stages
-        scenario_info["fixtures_used"] = list(used_fixtures.union(set(scenario.fixtures)))
-        scenario_info["vars_saved"] = list(saved_vars)
-        scenario_info["vars_referenced"] = list(referenced_vars)
-
-        # Step 4: Check for common issues
-
-        # Check for undefined variables
-        # Collect all vars from all substitution steps
-        initial_vars = set()
-        for step in scenario.substitutions:
-            if step.vars:
-                initial_vars.update(step.vars.keys())
-        undefined_vars = referenced_vars - initial_vars - saved_vars - used_fixtures
-        if undefined_vars:
-            warnings.append(f"Potentially undefined variables: {', '.join(undefined_vars)}")
-
-        # Check for unused saved variables
-        unused_vars = saved_vars - referenced_vars
-        if unused_vars:
-            warnings.append(f"Variables saved but never used: {', '.join(unused_vars)}")
-
-        # Check for duplicate stage names
-        stage_names = [stage.name for stage in scenario.stages]
-        if len(stage_names) != len(set(stage_names)):
-            duplicates = [name for name in stage_names if stage_names.count(name) > 1]
-            errors.append(f"Duplicate stage names found: {', '.join(set(duplicates))}")
-
-        # Check for stages with no request URL
-        for stage in scenario.stages:
-            if not stage.request.url:
-                errors.append(f"Stage '{stage.name}' has no request URL")
-
-        # Warn about stages with no response validation
-        for stage in scenario.stages:
-            if not stage.response.root and not stage.always_run:
-                warnings.append(f"Stage '{stage.name}' has no response validation")
-
-        # Check for fixture/variable conflicts
-        if scenario.fixtures and len(scenario.substitutions) > 0:
-            all_vars = set()
-            for step in scenario.substitutions:
-                if step.vars:
-                    all_vars.update(step.vars.keys())
-            conflicts = set(scenario.fixtures) & all_vars
-            if conflicts:
-                errors.append(f"Conflicting fixture and variable names: {', '.join(conflicts)}")
-
+        scenario = Scenario.model_validate(test_data)
     except ValidationError as e:
-        scenario_info["model_valid"] = False
-        # Parse validation errors
+        error_details = []
         for error in e.errors():
-            loc = " -> ".join(str(item) for item in error["loc"])
+            loc = " -> ".join(str(x) for x in error["loc"])
             msg = error["msg"]
-            errors.append(f"Validation error at {loc}: {msg}")
-    except Exception as e:
-        errors.append(f"Unexpected validation error: {e}")
-        scenario_info["model_valid"] = False
+            error_details.append(f"{loc}: {msg}")
+
+        return ValidateResult(
+            valid=False,
+            errors=["Schema validation failed:"] + error_details,
+            warnings=[],
+            metadata=None,
+        )
+
+    # Extract metadata
+    # Note: Scenario doesn't have a name field, name comes from the file
+    file_name = path.stem.replace(".http", "").replace("test_", "")
+    metadata = ScenarioMetadata(
+        name=file_name,
+        description=scenario.description,
+        num_stages=len(scenario.stages),
+    )
 
     # Determine overall validity
     valid = len(errors) == 0
 
-    return ValidateResult(valid=valid, errors=errors, warnings=warnings, scenario_info=scenario_info)
+    return ValidateResult(
+        valid=valid,
+        errors=errors,
+        warnings=warnings,
+        metadata=metadata,
+    )
