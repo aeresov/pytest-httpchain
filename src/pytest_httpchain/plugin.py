@@ -126,13 +126,20 @@ def pytest_runtest_makereport(item: nodes.Item, call: runner.CallInfo[Any]) -> A
         if hasattr(item, "instance") and isinstance(item.instance, Carrier):
             carrier = item.instance
 
+            logger.debug(f"pytest_runtest_makereport: _last_request={carrier._last_request is not None}, _last_response={carrier._last_response is not None}")
+
             if carrier._last_request:
                 try:
                     report.sections.append(("HTTP Request", format_request(carrier._last_request)))
                 except Exception as e:
                     report.sections.append(("HTTP Request", f"<Error formatting request: {e}>"))
+            else:
+                logger.debug("No _last_request to log")
+
             if carrier._last_response:
                 try:
                     report.sections.append(("HTTP Response", format_response(carrier._last_response)))
                 except Exception as e:
                     report.sections.append(("HTTP Response", f"<Error formatting response: {e}>"))
+            else:
+                logger.debug("No _last_response to log")
