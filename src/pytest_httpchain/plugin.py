@@ -146,12 +146,15 @@ def pytest_runtest_makereport(item: nodes.Item, call: runner.CallInfo[Any]) -> A
 
             if carrier._last_response:
                 try:
-                    report.sections.append(("HTTP Response", format_response(carrier._last_response)))
+                    formatted = format_response(carrier._last_response)
+                    report.sections.append(("HTTP Response", formatted))
                     logger.debug("Added HTTP Response section")
                 except Exception as e:
-                    report.sections.append(("HTTP Response", f"<Error formatting response: {e}>"))
+                    import traceback
+                    tb = traceback.format_exc()
+                    report.sections.append(("HTTP Response", f"<Error formatting response: {e}>\n\nTraceback:\n{tb}"))
                     logger.debug(f"Error formatting response: {e}")
             else:
-                logger.debug("No _last_response to log")
+                report.sections.append(("HTTP Response Debug", f"_last_response is None or False: {carrier._last_response}"))
         else:
             logger.debug(f"Not a Carrier instance: {type(item.instance) if hasattr(item, 'instance') else 'no instance'}")
