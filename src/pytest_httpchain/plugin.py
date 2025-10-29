@@ -122,39 +122,18 @@ def pytest_runtest_makereport(item: nodes.Item, call: runner.CallInfo[Any]) -> A
     outcome = yield
     report: reports.TestReport = outcome.get_result()
 
-    logger.debug(f"pytest_runtest_makereport: when={call.when}, has_instance={hasattr(item, 'instance')}")
-
     if call.when == "call":
-        logger.debug(f"call.when is 'call', checking instance type")
         if hasattr(item, "instance") and isinstance(item.instance, Carrier):
             carrier = item.instance
 
-            logger.debug(
-                f"pytest_runtest_makereport: _last_request={carrier._last_request is not None}, "
-                f"_last_response={carrier._last_response is not None}"
-            )
-
-            if carrier._last_request:
+            if carrier._last_request is not None:
                 try:
                     report.sections.append(("HTTP Request", format_request(carrier._last_request)))
-                    logger.debug("Added HTTP Request section")
                 except Exception as e:
                     report.sections.append(("HTTP Request", f"<Error formatting request: {e}>"))
-                    logger.debug(f"Error formatting request: {e}")
-            else:
-                logger.debug("No _last_request to log")
 
-            if carrier._last_response:
+            if carrier._last_response is not None:
                 try:
-                    formatted = format_response(carrier._last_response)
-                    report.sections.append(("HTTP Response", formatted))
-                    logger.debug("Added HTTP Response section")
+                    report.sections.append(("HTTP Response", format_response(carrier._last_response)))
                 except Exception as e:
-                    import traceback
-                    tb = traceback.format_exc()
-                    report.sections.append(("HTTP Response", f"<Error formatting response: {e}>\n\nTraceback:\n{tb}"))
-                    logger.debug(f"Error formatting response: {e}")
-            else:
-                report.sections.append(("HTTP Response Debug", f"_last_response is None or False: {carrier._last_response}"))
-        else:
-            logger.debug(f"Not a Carrier instance: {type(item.instance) if hasattr(item, 'instance') else 'no instance'}")
+                    report.sections.append(("HTTP Response", f"<Error formatting response: {e}>"))
