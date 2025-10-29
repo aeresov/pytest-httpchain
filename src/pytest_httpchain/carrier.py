@@ -95,7 +95,10 @@ class Carrier:
 
             response = execute_request(cls._session, prepared)
             cls._last_response = response
-            logger.debug(f"Set _last_response: {cls._last_response is not None}, status={response.status_code if response else None}")
+            logger.debug(
+                f"Set _last_response: response={response}, type={type(response)}, "
+                f"has status_code={hasattr(response, 'status_code')}, status={getattr(response, 'status_code', 'NO_ATTR')}"
+            )
 
             global_context_updates: dict[str, Any] = {}
 

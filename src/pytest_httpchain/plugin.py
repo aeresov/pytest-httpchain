@@ -122,24 +122,36 @@ def pytest_runtest_makereport(item: nodes.Item, call: runner.CallInfo[Any]) -> A
     outcome = yield
     report: reports.TestReport = outcome.get_result()
 
+    logger.debug(f"pytest_runtest_makereport: when={call.when}, has_instance={hasattr(item, 'instance')}")
+
     if call.when == "call":
+        logger.debug(f"call.when is 'call', checking instance type")
         if hasattr(item, "instance") and isinstance(item.instance, Carrier):
             carrier = item.instance
 
-            logger.debug(f"pytest_runtest_makereport: _last_request={carrier._last_request is not None}, _last_response={carrier._last_response is not None}")
+            logger.debug(
+                f"pytest_runtest_makereport: _last_request={carrier._last_request is not None}, "
+                f"_last_response={carrier._last_response is not None}"
+            )
 
             if carrier._last_request:
                 try:
                     report.sections.append(("HTTP Request", format_request(carrier._last_request)))
+                    logger.debug("Added HTTP Request section")
                 except Exception as e:
                     report.sections.append(("HTTP Request", f"<Error formatting request: {e}>"))
+                    logger.debug(f"Error formatting request: {e}")
             else:
                 logger.debug("No _last_request to log")
 
             if carrier._last_response:
                 try:
                     report.sections.append(("HTTP Response", format_response(carrier._last_response)))
+                    logger.debug("Added HTTP Response section")
                 except Exception as e:
                     report.sections.append(("HTTP Response", f"<Error formatting response: {e}>"))
+                    logger.debug(f"Error formatting response: {e}")
             else:
                 logger.debug("No _last_response to log")
+        else:
+            logger.debug(f"Not a Carrier instance: {type(item.instance) if hasattr(item, 'instance') else 'no instance'}")
