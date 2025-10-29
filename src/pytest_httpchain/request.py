@@ -1,3 +1,4 @@
+import base64
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -5,11 +6,13 @@ from typing import Any
 
 import requests
 from pytest_httpchain_models.entities import (
+    Base64Body,
+    BinaryBody,
     FilesBody,
     FormBody,
     GraphQLBody,
     JsonBody,
-    RawBody,
+    TextBody,
     XmlBody,
 )
 from pytest_httpchain_models.entities import (
@@ -56,8 +59,20 @@ def prepare_request(
                 # GraphQL is sent as JSON with query and variables
                 request_kwargs["json"] = {"query": gql.query, "variables": gql.variables}
 
-            case FormBody(form=data) | XmlBody(xml=data) | RawBody(raw=data):
+            case FormBody(form=data) | XmlBody(xml=data) | TextBody(text=data):
                 request_kwargs["data"] = data
+
+            case Base64Body(base64=encoded_data):
+                decoded_data = base64.b64decode(encoded_data)
+                request_kwargs["data"] = decoded_data
+
+            case BinaryBody(binary=file_path):
+                try:
+                    with open(file_path, "rb") as f:
+                        binary_data = f.read()
+                    request_kwargs["data"] = binary_data
+                except FileNotFoundError:
+                    raise RequestError(f"Binary file not found: {file_path}") from None
 
             case FilesBody(files=file_paths):
                 # File uploads - open files and keep them open for preparation

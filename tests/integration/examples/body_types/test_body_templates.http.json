@@ -1,0 +1,38 @@
+{
+  "stages": [
+    {
+      "name": "test_text_body_with_partial_template",
+      "request": {
+        "url": "https://httpbin.org/post",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "text/plain"
+        },
+        "body": {
+          "text": "Hello {{ 'World' }}!"
+        }
+      },
+      "response": [
+        {
+          "verify": {
+            "status": 200
+          }
+        },
+        {
+          "save": {
+            "jmespath": {
+              "received_text": "data"
+            }
+          }
+        },
+        {
+          "verify": {
+            "expressions": [
+              "{{ received_text == 'Hello World!' }}"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

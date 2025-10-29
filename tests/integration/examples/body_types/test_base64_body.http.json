@@ -1,0 +1,38 @@
+{
+  "stages": [
+    {
+      "name": "test_base64_body",
+      "request": {
+        "url": "https://httpbin.org/post",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/octet-stream"
+        },
+        "body": {
+          "base64": "SGVsbG8sIFdvcmxkIQ=="
+        }
+      },
+      "response": [
+        {
+          "verify": {
+            "status": 200
+          }
+        },
+        {
+          "save": {
+            "jmespath": {
+              "received_data": "data"
+            }
+          }
+        },
+        {
+          "verify": {
+            "expressions": [
+              "{{ received_data == 'Hello, World!' }}"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

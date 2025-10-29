@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Discriminator, Field, JsonValue, Pos
 from pydantic.networks import HttpUrl
 
 from pytest_httpchain_models.types import (
+    Base64String,
     FunctionImportName,
     GraphQLQuery,
     JMESPathExpression,
@@ -66,14 +67,23 @@ def get_request_body_discriminator(v: Any) -> str:
     """Discriminator function for request body types."""
     # For dict inputs, check which field is present
     if isinstance(v, dict):
-        body_fields = {"json", "xml", "form", "raw", "files", "graphql"}
+        body_fields = {"json", "xml", "form", "text", "base64", "binary", "files", "graphql"}
         found = body_fields & v.keys()
         if found:
             return found.pop()
 
     # For object inputs, map class name to discriminator
     if hasattr(v, "__class__"):
-        class_to_tag = {"JsonBody": "json", "XmlBody": "xml", "FormBody": "form", "RawBody": "raw", "FilesBody": "files", "GraphQLBody": "graphql"}
+        class_to_tag = {
+            "JsonBody": "json",
+            "XmlBody": "xml",
+            "FormBody": "form",
+            "TextBody": "text",
+            "Base64Body": "base64",
+            "BinaryBody": "binary",
+            "FilesBody": "files",
+            "GraphQLBody": "graphql",
+        }
         tag = class_to_tag.get(v.__class__.__name__)
         if tag:
             return tag
@@ -102,10 +112,24 @@ class FormBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class RawBody(BaseModel):
+class TextBody(BaseModel):
     """Raw text request body."""
 
-    raw: str = Field(description="Raw text content.")
+    text: str | PartialTemplateStr = Field(description="Raw text content.")
+    model_config = ConfigDict(extra="forbid")
+
+
+class Base64Body(BaseModel):
+    """Base64-encoded binary request body."""
+
+    base64: Base64String | PartialTemplateStr = Field(description="Base64-encoded binary data or template expression.")
+    model_config = ConfigDict(extra="forbid")
+
+
+class BinaryBody(BaseModel):
+    """Binary file request body."""
+
+    binary: SerializablePath | PartialTemplateStr = Field(description="Path to binary file.")
     model_config = ConfigDict(extra="forbid")
 
 
@@ -136,7 +160,9 @@ RequestBody = Annotated[
     Annotated[JsonBody, Tag("json")]
     | Annotated[XmlBody, Tag("xml")]
     | Annotated[FormBody, Tag("form")]
-    | Annotated[RawBody, Tag("raw")]
+    | Annotated[TextBody, Tag("text")]
+    | Annotated[Base64Body, Tag("base64")]
+    | Annotated[BinaryBody, Tag("binary")]
     | Annotated[FilesBody, Tag("files")]
     | Annotated[GraphQLBody, Tag("graphql")],
     Discriminator(get_request_body_discriminator),

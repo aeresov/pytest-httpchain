@@ -1,3 +1,4 @@
+import base64
 import keyword
 import re
 import types
@@ -89,6 +90,8 @@ validate_xml = create_string_validator(xml.etree.ElementTree.fromstring, "Invali
 
 validate_graphql_query = create_string_validator(graphql.parse, "Invalid GraphQL query")
 
+validate_base64 = create_string_validator(lambda v: base64.b64decode(v, validate=True), "Invalid base64 encoding")
+
 
 def validate_template_expression(v: str) -> str:
     if not is_complete_template(v):
@@ -155,5 +158,6 @@ XMLString = Annotated[str, AfterValidator(validate_xml)]
 GraphQLQuery = Annotated[str, AfterValidator(validate_graphql_query)]
 TemplateExpression = Annotated[str, AfterValidator(validate_template_expression)]
 PartialTemplateStr = Annotated[str, AfterValidator(validate_partial_template_str)]
+Base64String = Annotated[str, AfterValidator(validate_base64)]
 NamespaceFromDict = Annotated[Any, AfterValidator(convert_dict_to_namespace)]
 NamespaceOrDict = Annotated[dict[str, JsonValue], BeforeValidator(convert_namespace_to_dict)]
