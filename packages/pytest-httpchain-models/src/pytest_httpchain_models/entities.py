@@ -197,6 +197,7 @@ class Request(CallSecurity):
 class Substitution(BaseModel):
     """Single variable substitution step."""
 
+    description: str | None = Field(default=None, description="Extended description for the substitution step.")
     vars: dict[str, NamespaceFromDict] = Field(default_factory=dict, description="Variables for substitution.")
     functions: FunctionsDict
 
@@ -220,6 +221,7 @@ Substitutions = Annotated[
 class Save(BaseModel):
     """Configuration for saving data from HTTP response."""
 
+    description: str | None = Field(default=None, description="Extended description for the save step.")
     jmespath: dict[str, JMESPathExpression | PartialTemplateStr] = Field(default_factory=dict, description="JMESPath expressions to extract values from response.")
     substitutions: Substitutions = Field(default_factory=Substitutions, description="Variable substitution configuration.")
     user_functions: FunctionsList
@@ -238,6 +240,7 @@ class ResponseBody(BaseModel):
 class Verify(BaseModel):
     """Response verification configuration."""
 
+    description: str | None = Field(default=None, description="Extended description for the verify step.")
     status: HTTPStatus | None | TemplateExpression = Field(default=None)
     headers: dict[str, str] = Field(default_factory=dict)
     expressions: list[Any | TemplateExpression] = Field(
