@@ -101,10 +101,10 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
         raise TemplatesError(f"Attribute error in expression '{{ {expr} }}'") from e
     except OperatorNotDefined as e:
         raise TemplatesError(f"Operator not allowed in expression '{{ {expr} }}'") from e
-    except (InvalidExpression, SyntaxError) as e:
-        raise TemplatesError(f"Invalid expression '{{ {expr} }}'") from e
     except (NumberTooHigh, IterableTooLong) as e:
         raise TemplatesError(f"Expression too complex '{{ {expr} }}'") from e
+    except (InvalidExpression, SyntaxError) as e:
+        raise TemplatesError(f"Invalid expression '{{ {expr} }}'") from e
     except (ValueError, TypeError, KeyError, IndexError, ZeroDivisionError) as e:
         error_type = type(e).__name__
         raise TemplatesError(f"{error_type} in expression '{{ {expr} }}'") from e

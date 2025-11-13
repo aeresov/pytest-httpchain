@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 import pytest_httpchain_jsonref.loader
+import simpleeval
 from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
 from pydantic import ValidationError
@@ -96,6 +97,12 @@ def pytest_addoption(parser: argparsing.Parser) -> None:
         type="string",
         default="3",
     )
+    parser.addini(
+        name=ConfigOptions.MAX_COMPREHENSION_LENGTH,
+        help="Maximum length for list/dict comprehensions in template expressions.",
+        type="string",
+        default="50000",
+    )
 
 
 def pytest_configure(config: config.Config) -> None:
@@ -106,6 +113,13 @@ def pytest_configure(config: config.Config) -> None:
     ref_parent_traversal_depth = int(config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH))
     if ref_parent_traversal_depth < 0:
         raise ValueError("Maximum number of parent directory traversals must be non-negative")
+
+    max_comprehension_length = int(config.getini(ConfigOptions.MAX_COMPREHENSION_LENGTH))
+    if max_comprehension_length < 1:
+        raise ValueError("Maximum comprehension length must be a positive integer")
+    if max_comprehension_length > 1_000_000:
+        raise ValueError("Maximum comprehension length must not exceed 1,000,000")
+    simpleeval.MAX_COMPREHENSION_LENGTH = max_comprehension_length  # type: ignore[misc]
 
 
 def pytest_collect_file(file_path: Path, parent: nodes.Collector) -> nodes.Collector | None:
