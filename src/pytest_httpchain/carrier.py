@@ -241,7 +241,7 @@ class Carrier:
                             parametrize_marker = pytest.mark.parametrize(",".join(param_names), param_values, ids=param_ids)
                             stage_method = parametrize_marker(stage_method)
 
-            all_fixtures = ["self"] + all_param_names + stage.fixtures + scenario.fixtures
+            all_fixtures = ["self"] + all_param_names + stage.fixtures
             stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])
 
             all_marks = [f"order({i})"] + stage.marks

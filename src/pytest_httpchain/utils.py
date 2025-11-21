@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 import pytest_httpchain_templates.substitution
-from pytest_httpchain_models.entities import Substitution, UserFunctionKwargs, UserFunctionName
+from pytest_httpchain_models.entities import FunctionsSubstitution, Substitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain_userfunc import call_function, wrap_function
 
 from .exceptions import StageExecutionError
@@ -32,22 +32,24 @@ def process_substitutions(
         # Update context for this step's evaluation
         current_context = {**context, **result}
 
-        if step.functions:
-            for alias, func_def in step.functions.items():
-                match func_def:
-                    case UserFunctionName():
-                        result[alias] = wrap_function(func_def.root)
-                    case UserFunctionKwargs():
-                        result[alias] = wrap_function(func_def.name.root, default_kwargs=func_def.kwargs)
-                    case _:
-                        raise StageExecutionError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
-                logger.info(f"Seeded {alias} = {result[alias]}")
+        # Handle discriminated union types
+        match step:
+            case FunctionsSubstitution():
+                for alias, func_def in step.functions.items():
+                    match func_def:
+                        case UserFunctionName():
+                            result[alias] = wrap_function(func_def.root)
+                        case UserFunctionKwargs():
+                            result[alias] = wrap_function(func_def.name.root, default_kwargs=func_def.kwargs)
+                        case _:
+                            raise StageExecutionError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
+                    logger.info(f"Seeded {alias} = {result[alias]}")
 
-        if step.vars:
-            for key, value in step.vars.items():
-                resolved_value = pytest_httpchain_templates.substitution.walk(value, current_context)
-                result[key] = resolved_value
-                logger.info(f"Seeded {key} = {resolved_value}")
+            case VarsSubstitution():
+                for key, value in step.vars.items():
+                    resolved_value = pytest_httpchain_templates.substitution.walk(value, current_context)
+                    result[key] = resolved_value
+                    logger.info(f"Seeded {key} = {resolved_value}")
 
     return result
 

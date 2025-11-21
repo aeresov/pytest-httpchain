@@ -1,7 +1,7 @@
 from http import HTTPMethod, HTTPStatus
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, JsonValue, PositiveFloat, RootModel, Tag, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, JsonValue, PositiveFloat, RootModel, Tag, model_validator
 from pydantic.networks import HttpUrl
 
 from pytest_httpchain_models.types import (
@@ -19,6 +19,34 @@ from pytest_httpchain_models.types import (
     VariableName,
     XMLString,
 )
+
+
+def _normalize_list_input(v: Any) -> list[Any]:
+    if isinstance(v, list):
+        return v
+
+    if isinstance(v, dict):
+        result = []
+        for value in v.values():
+            if isinstance(value, list):
+                result.extend(value)
+            else:
+                result.append(value)
+        return result
+
+    return v
+
+
+class Descripted(BaseModel):
+    description: str | None = Field(default=None, description="Optional description for this component")
+
+
+class Marked(BaseModel):
+    marks: list[str] = Field(default_factory=list, examples=["xfail", "skip"], description="pytest markers")
+
+
+class Fixtured(BaseModel):
+    fixtures: list[str] = Field(default_factory=list, description="pytest fixtures")
 
 
 class SSLConfig(BaseModel):
@@ -56,23 +84,64 @@ class UserFunctionKwargs(BaseModel):
 
 UserFunctionCall = UserFunctionName | UserFunctionKwargs
 
-# Annotated type for list of functions (used in response save/verify)
 FunctionsList = Annotated[list[UserFunctionCall], Field(default_factory=list, description="Functions to process response data.")]
 
-# Annotated type for dict of functions (used in substitutions)
-FunctionsDict = Annotated[dict[str, UserFunctionCall], Field(default_factory=dict, description="User-defined functions for processing.")]
+FunctionsDict = Annotated[dict[str, UserFunctionCall], Field(default_factory=dict, description="User-defined functions.")]
+
+
+class JsonBody(BaseModel):
+    json: JsonValue = Field(description="JSON data to send.")
+    model_config = ConfigDict(extra="forbid")
+
+
+class XmlBody(BaseModel):
+    xml: XMLString | PartialTemplateStr = Field(description="XML content as string.")
+    model_config = ConfigDict(extra="forbid")
+
+
+class FormBody(BaseModel):
+    form: dict[str, Any] = Field(description="Form data to be URL-encoded.")
+    model_config = ConfigDict(extra="forbid")
+
+
+class TextBody(BaseModel):
+    text: str | PartialTemplateStr = Field(description="Raw text content.")
+    model_config = ConfigDict(extra="forbid")
+
+
+class Base64Body(BaseModel):
+    base64: Base64String | PartialTemplateStr = Field(description="Base64-encoded binary data or template expression.")
+    model_config = ConfigDict(extra="forbid")
+
+
+class BinaryBody(BaseModel):
+    binary: SerializablePath | PartialTemplateStr = Field(description="Path to binary file.")
+    model_config = ConfigDict(extra="forbid")
+
+
+class FilesBody(BaseModel):
+    files: dict[str, SerializablePath | PartialTemplateStr] = Field(description="Files to upload from file paths.")
+    model_config = ConfigDict(extra="forbid")
+
+
+class GraphQL(BaseModel):
+    query: GraphQLQuery | PartialTemplateStr = Field(description="GraphQL query string.", examples=["query { user { id name } }", "{{ graphql_query }}"])
+    variables: NamespaceOrDict | PartialTemplateStr = Field(default_factory=dict, description="GraphQL query variables.")
+    model_config = ConfigDict(extra="forbid")
+
+
+class GraphQLBody(BaseModel):
+    graphql: GraphQL = Field(description="GraphQL query configuration.")
+    model_config = ConfigDict(extra="forbid")
 
 
 def get_request_body_discriminator(v: Any) -> str:
-    """Discriminator function for request body types."""
-    # For dict inputs, check which field is present
     if isinstance(v, dict):
         body_fields = {"json", "xml", "form", "text", "base64", "binary", "files", "graphql"}
         found = body_fields & v.keys()
         if found:
             return found.pop()
 
-    # For object inputs, map class name to discriminator
     if hasattr(v, "__class__"):
         class_to_tag = {
             "JsonBody": "json",
@@ -91,71 +160,6 @@ def get_request_body_discriminator(v: Any) -> str:
     raise ValueError("Unable to determine body type")
 
 
-class JsonBody(BaseModel):
-    """JSON request body."""
-
-    json: JsonValue = Field(description="JSON data to send.")
-    model_config = ConfigDict(extra="forbid")
-
-
-class XmlBody(BaseModel):
-    """XML request body."""
-
-    xml: XMLString | PartialTemplateStr = Field(description="XML content as string.")
-    model_config = ConfigDict(extra="forbid")
-
-
-class FormBody(BaseModel):
-    """Form-encoded request body."""
-
-    form: dict[str, Any] = Field(description="Form data to be URL-encoded.")
-    model_config = ConfigDict(extra="forbid")
-
-
-class TextBody(BaseModel):
-    """Raw text request body."""
-
-    text: str | PartialTemplateStr = Field(description="Raw text content.")
-    model_config = ConfigDict(extra="forbid")
-
-
-class Base64Body(BaseModel):
-    """Base64-encoded binary request body."""
-
-    base64: Base64String | PartialTemplateStr = Field(description="Base64-encoded binary data or template expression.")
-    model_config = ConfigDict(extra="forbid")
-
-
-class BinaryBody(BaseModel):
-    """Binary file request body."""
-
-    binary: SerializablePath | PartialTemplateStr = Field(description="Path to binary file.")
-    model_config = ConfigDict(extra="forbid")
-
-
-class FilesBody(BaseModel):
-    """Multipart file upload request body."""
-
-    files: dict[str, SerializablePath | PartialTemplateStr] = Field(description="Files to upload from file paths.")
-    model_config = ConfigDict(extra="forbid")
-
-
-class GraphQL(BaseModel):
-    """GraphQL query with variables."""
-
-    query: GraphQLQuery | PartialTemplateStr = Field(description="GraphQL query string.", examples=["query { user { id name } }", "{{ graphql_query }}"])
-    variables: NamespaceOrDict | PartialTemplateStr = Field(default_factory=dict, description="GraphQL query variables.")
-    model_config = ConfigDict(extra="forbid")
-
-
-class GraphQLBody(BaseModel):
-    """GraphQL request body."""
-
-    graphql: GraphQL = Field(description="GraphQL query configuration.")
-    model_config = ConfigDict(extra="forbid")
-
-
-# Discriminated union with callable discriminator
 RequestBody = Annotated[
     Annotated[JsonBody, Tag("json")]
     | Annotated[XmlBody, Tag("xml")]
@@ -170,8 +174,6 @@ RequestBody = Annotated[
 
 
 class CallSecurity(BaseModel):
-    """Security configuration for HTTP calls."""
-
     ssl: SSLConfig = Field(
         default_factory=SSLConfig,
         description="SSL/TLS configuration.",
@@ -183,8 +185,6 @@ class CallSecurity(BaseModel):
 
 
 class Request(CallSecurity):
-    """HTTP request configuration."""
-
     url: HttpUrl | PartialTemplateStr = Field()
     method: HTTPMethod | TemplateExpression = Field(default=HTTPMethod.GET)
     params: dict[str, Any] = Field(default_factory=dict)
@@ -194,42 +194,65 @@ class Request(CallSecurity):
     allow_redirects: Literal[True, False] | TemplateExpression = Field(default=True, description="Whether to follow redirects.")
 
 
-class Substitution(BaseModel):
-    """Single variable substitution step."""
+class VarsSubstitution(Descripted):
+    vars: dict[str, NamespaceFromDict] = Field(description="Variables for substitution.")
+    model_config = ConfigDict(extra="forbid")
 
-    description: str | None = Field(default=None, description="Extended description for the substitution step.")
-    vars: dict[str, NamespaceFromDict] = Field(default_factory=dict, description="Variables for substitution.")
+
+class FunctionsSubstitution(Descripted):
     functions: FunctionsDict
+    model_config = ConfigDict(extra="forbid")
 
 
-# Type alias for list of substitution steps
+def get_substitution_discriminator(v: Any) -> str:
+    if isinstance(v, dict):
+        if "vars" in v:
+            return "vars"
+        elif "functions" in v:
+            return "functions"
+
+    if hasattr(v, "__class__"):
+        class_to_tag = {
+            "VarsSubstitution": "vars",
+            "FunctionsSubstitution": "functions",
+        }
+        tag = class_to_tag.get(v.__class__.__name__)
+        if tag:
+            return tag
+
+    raise ValueError("Unable to determine substitution type")
+
+
+Substitution = Annotated[
+    Annotated[VarsSubstitution, Tag("vars")] | Annotated[FunctionsSubstitution, Tag("functions")],
+    Discriminator(get_substitution_discriminator),
+]
+
+
 Substitutions = Annotated[
     list[Substitution],
+    BeforeValidator(_normalize_list_input),
     Field(
         default_factory=list,
         description="Sequential substitution steps to apply.",
         examples=[
             [
                 {"vars": {"base_url": "https://api.example.com"}},
-                {"vars": {"endpoint": "/users"}, "functions": {"auth_token": "auth:get_token"}},
+                {"vars": {"endpoint": "/users"}},
+                {"functions": {"auth_token": "auth:get_token"}},
             ],
         ],
     ),
 ]
 
 
-class Save(BaseModel):
-    """Configuration for saving data from HTTP response."""
-
-    description: str | None = Field(default=None, description="Extended description for the save step.")
+class Save(Descripted):
     jmespath: dict[str, JMESPathExpression | PartialTemplateStr] = Field(default_factory=dict, description="JMESPath expressions to extract values from response.")
     substitutions: Substitutions = Field(default_factory=Substitutions, description="Variable substitution configuration.")
     user_functions: FunctionsList
 
 
 class ResponseBody(BaseModel):
-    """Response body validation configuration."""
-
     schema: JSONSchemaInline | SerializablePath | PartialTemplateStr | None = Field(default=None, description="JSON schema for validation.")
     contains: list[str] = Field(default_factory=list)
     not_contains: list[str] = Field(default_factory=list)
@@ -237,10 +260,7 @@ class ResponseBody(BaseModel):
     not_matches: list[RegexPattern] = Field(default_factory=list)
 
 
-class Verify(BaseModel):
-    """Response verification configuration."""
-
-    description: str | None = Field(default=None, description="Extended description for the verify step.")
+class Verify(Descripted):
     status: HTTPStatus | None | TemplateExpression = Field(default=None)
     headers: dict[str, str] = Field(default_factory=dict)
     expressions: list[Any | TemplateExpression] = Field(
@@ -250,32 +270,6 @@ class Verify(BaseModel):
     )
     user_functions: FunctionsList
     body: ResponseBody = Field(default_factory=ResponseBody)
-
-
-class Decorated(BaseModel):
-    """Pytest test decoration configuration."""
-
-    marks: list[str] = Field(default_factory=list, examples=["xfail", "skip"])
-    fixtures: list[str] = Field(default_factory=list)
-
-
-def get_response_step_discriminator(v: Any) -> str:
-    """Discriminator function for response steps."""
-    # For dict inputs, check which field is present
-    if isinstance(v, dict):
-        step_fields = {"save", "verify"}
-        found = step_fields & v.keys()
-        if found:
-            return found.pop()
-
-    # For object inputs, map class name to discriminator
-    if hasattr(v, "__class__"):
-        class_to_tag = {"SaveStep": "save", "VerifyStep": "verify"}
-        tag = class_to_tag.get(v.__class__.__name__)
-        if tag:
-            return tag
-
-    raise ValueError("Unable to determine step type")
 
 
 class SaveStep(BaseModel):
@@ -292,42 +286,50 @@ class VerifyStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-# Discriminated union with callable discriminator
+def get_response_step_discriminator(v: Any) -> str:
+    if isinstance(v, dict):
+        step_fields = {"save", "verify"}
+        found = step_fields & v.keys()
+        if found:
+            return found.pop()
+
+    if hasattr(v, "__class__"):
+        class_to_tag = {"SaveStep": "save", "VerifyStep": "verify"}
+        tag = class_to_tag.get(v.__class__.__name__)
+        if tag:
+            return tag
+
+    raise ValueError("Unable to determine step type")
+
+
 ResponseStep = Annotated[
     Annotated[SaveStep, Tag("save")] | Annotated[VerifyStep, Tag("verify")],
     Discriminator(get_response_step_discriminator),
 ]
 
 
-class Response(RootModel):
-    """Sequential response processing configuration."""
-
-    root: list[ResponseStep] = Field(
+Responses = Annotated[
+    list[ResponseStep],
+    BeforeValidator(_normalize_list_input),
+    Field(
         default_factory=list,
         description="Sequential steps to process the response. Each step is either a save or verify action.",
         examples=[
             [
                 {"verify": {"status": 200}},
-                {"save": {"vars": {"user_id": "$.id"}}},
-                {"verify": {"vars": {"user_id": "12345"}}},
+                {"save": {"jmespath": {"user_id": "$.id"}}},
+                {"verify": {"expressions": ["{{ user_id == '12345' }}"]}},
             ],
             [
                 {"verify": {"status": 500}},
                 {"verify": {"body": {"contains": ["error", "failed"]}}},
             ],
         ],
-    )
-
-    def __iter__(self):
-        return iter(self.root)
-
-    def __getitem__(self, item):
-        return self.root[item]
+    ),
+]
 
 
 class IndividualStep(BaseModel):
-    """Individual parameter step that creates cartesian product."""
-
     individual: dict[str, Annotated[list[Any], Field(min_length=1)] | PartialTemplateStr] = Field(
         max_length=1, description="Parameter name mapped to list of values (single parameter per step, non-empty values) or template expression"
     )
@@ -346,8 +348,6 @@ class IndividualStep(BaseModel):
 
 
 class CombinationsStep(BaseModel):
-    """Explicit parameter combinations step."""
-
     combinations: list[Annotated[dict[str, Any], Field(min_length=1)]] | PartialTemplateStr = Field(
         description="List of parameter combinations (each dict must have at least one parameter) or template expression"
     )
@@ -374,15 +374,12 @@ class CombinationsStep(BaseModel):
 
 
 def get_parameter_step_discriminator(v: Any) -> str:
-    """Discriminator function for parameter step types."""
-    # For dict inputs, check which field is present
     if isinstance(v, dict):
         if "individual" in v:
             return "individual"
         elif "combinations" in v:
             return "combinations"
 
-    # For object inputs, map class name to discriminator
     if hasattr(v, "__class__"):
         class_to_tag = {"IndividualStep": "individual", "CombinationsStep": "combinations"}
         tag = class_to_tag.get(v.__class__.__name__)
@@ -398,10 +395,9 @@ ParameterStep = Annotated[
 ]
 
 
-class Parameters(RootModel):
-    """List of parameter steps to be applied sequentially (creates cartesian product)."""
-
-    root: list[ParameterStep] = Field(
+Parameters = Annotated[
+    list[ParameterStep],
+    Field(
         default_factory=list,
         description="Sequential parameter steps. Multiple steps create cartesian product.",
         examples=[
@@ -411,33 +407,19 @@ class Parameters(RootModel):
             ],
             [{"combinations": [{"user": "alice", "role": "admin"}, {"user": "bob", "role": "user"}]}],
         ],
-    )
-
-    def __iter__(self):
-        return iter(self.root)
-
-    def __getitem__(self, item):
-        return self.root[item]
-
-    def __len__(self):
-        return len(self.root)
+    ),
+]
 
 
-class Stage(Decorated):
-    """HTTP test stage configuration."""
-
+class Stage(Marked, Fixtured, Descripted):
     name: str = Field(description="Stage name (human-readable).")
-    description: str | None = Field(default=None, description="Extended description for the test stage.")
     substitutions: Substitutions = Field(default_factory=Substitutions, description="Variable substitution configuration.")
     always_run: Literal[True, False] | TemplateExpression = Field(default=False, examples=[True, "{{ should_run }}", "{{ env == 'production' }}"])
     parameters: Parameters | None = Field(default=None, description="Stage parametrization steps")
     request: Request = Field(description="HTTP request details.")
-    response: Response = Field(default_factory=Response)
+    response: Responses = Field(default_factory=list)
 
 
-class Scenario(Decorated, CallSecurity):
-    """HTTP test scenario with multiple stages."""
-
-    description: str | None = Field(default=None, description="Extended description for the test scenario.")
+class Scenario(Marked, CallSecurity, Descripted):
     stages: list[Stage] = Field(default_factory=list)
     substitutions: Substitutions = Field(default_factory=Substitutions, description="Variable substitution configuration.")
