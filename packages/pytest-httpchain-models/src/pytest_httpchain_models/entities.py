@@ -84,9 +84,9 @@ class UserFunctionKwargs(BaseModel):
 
 UserFunctionCall = UserFunctionName | UserFunctionKwargs
 
-FunctionsList = Annotated[list[UserFunctionCall], Field(default_factory=list, description="Functions to process response data.")]
+FunctionsList = list[UserFunctionCall]
 
-FunctionsDict = Annotated[dict[str, UserFunctionCall], Field(default_factory=dict, description="User-defined functions.")]
+FunctionsDict = dict[str, UserFunctionCall]
 
 
 class JsonBody(BaseModel):
@@ -200,7 +200,7 @@ class VarsSubstitution(Descripted):
 
 
 class FunctionsSubstitution(Descripted):
-    functions: FunctionsDict
+    functions: FunctionsDict = Field(description="User-defined functions.")
     model_config = ConfigDict(extra="forbid")
 
 
@@ -232,24 +232,13 @@ Substitution = Annotated[
 Substitutions = Annotated[
     list[Substitution],
     BeforeValidator(_normalize_list_input),
-    Field(
-        default_factory=list,
-        description="Sequential substitution steps to apply.",
-        examples=[
-            [
-                {"vars": {"base_url": "https://api.example.com"}},
-                {"vars": {"endpoint": "/users"}},
-                {"functions": {"auth_token": "auth:get_token"}},
-            ],
-        ],
-    ),
 ]
 
 
 class Save(Descripted):
     jmespath: dict[str, JMESPathExpression | PartialTemplateStr] = Field(default_factory=dict, description="JMESPath expressions to extract values from response.")
-    substitutions: Substitutions = Field(default_factory=Substitutions, description="Variable substitution configuration.")
-    user_functions: FunctionsList
+    substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")
+    user_functions: FunctionsList = Field(default_factory=list, description="Functions to process response data.")
 
 
 class ResponseBody(BaseModel):
@@ -268,7 +257,7 @@ class Verify(Descripted):
         description="Template expressions to evaluate as boolean conditions. Each must be a full template expression that evaluates to a truthy/falsy value.",
         examples=[["{{ user_age >= 18 }}", "{{ status_code == 200 }}", "{{ 'error' not in response_text }}"]],
     )
-    user_functions: FunctionsList
+    user_functions: FunctionsList = Field(default_factory=list, description="Functions to process response data.")
     body: ResponseBody = Field(default_factory=ResponseBody)
 
 
@@ -311,21 +300,6 @@ ResponseStep = Annotated[
 Responses = Annotated[
     list[ResponseStep],
     BeforeValidator(_normalize_list_input),
-    Field(
-        default_factory=list,
-        description="Sequential steps to process the response. Each step is either a save or verify action.",
-        examples=[
-            [
-                {"verify": {"status": 200}},
-                {"save": {"jmespath": {"user_id": "$.id"}}},
-                {"verify": {"expressions": ["{{ user_id == '12345' }}"]}},
-            ],
-            [
-                {"verify": {"status": 500}},
-                {"verify": {"body": {"contains": ["error", "failed"]}}},
-            ],
-        ],
-    ),
 ]
 
 
@@ -395,31 +369,18 @@ ParameterStep = Annotated[
 ]
 
 
-Parameters = Annotated[
-    list[ParameterStep],
-    Field(
-        default_factory=list,
-        description="Sequential parameter steps. Multiple steps create cartesian product.",
-        examples=[
-            [
-                {"individual": {"method": ["GET", "POST"]}},
-                {"individual": {"status": [200, 201]}},
-            ],
-            [{"combinations": [{"user": "alice", "role": "admin"}, {"user": "bob", "role": "user"}]}],
-        ],
-    ),
-]
+Parameters = list[ParameterStep]
 
 
 class Stage(Marked, Fixtured, Descripted):
     name: str = Field(description="Stage name (human-readable).")
-    substitutions: Substitutions = Field(default_factory=Substitutions, description="Variable substitution configuration.")
+    substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")
     always_run: Literal[True, False] | TemplateExpression = Field(default=False, examples=[True, "{{ should_run }}", "{{ env == 'production' }}"])
     parameters: Parameters | None = Field(default=None, description="Stage parametrization steps")
     request: Request = Field(description="HTTP request details.")
-    response: Responses = Field(default_factory=list)
+    response: Responses = Field(default_factory=list, description="Sequential steps to process the response.")
 
 
 class Scenario(Marked, CallSecurity, Descripted):
     stages: list[Stage] = Field(default_factory=list)
-    substitutions: Substitutions = Field(default_factory=Substitutions, description="Variable substitution configuration.")
+    substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")
