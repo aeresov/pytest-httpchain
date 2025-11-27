@@ -1,5 +1,6 @@
 import inspect
 import logging
+from collections import ChainMap
 from types import SimpleNamespace
 from typing import Any, ClassVar, Self
 
@@ -8,12 +9,14 @@ import pytest
 import pytest_httpchain_templates.substitution
 from pydantic import ValidationError
 from pytest_httpchain_models.entities import (
-    CombinationsStep,
-    IndividualStep,
+    CombinationsParameter,
+    IndividualParameter,
+    ParallelConfig,
     Request,
     Save,
     SaveStep,
     Scenario,
+    SSLConfig,
     Stage,
     Verify,
     VerifyStep,
@@ -23,6 +26,7 @@ from simpleeval import EvalWithCompoundTypes
 
 from .context_manager import ContextManager
 from .exceptions import StageExecutionError
+from .parallel import ParallelIterationError, ParallelIterationResult, execute_parallel_requests
 from .request import execute_request, prepare_request
 from .response import process_save_step, process_verify_step
 from .utils import call_user_function, process_substitutions
@@ -52,7 +56,7 @@ class Carrier:
         This method is called for each stage in the scenario. It handles:
         - Checking abort status and skipping if needed
         - Context preparation and template substitution
-        - HTTP request execution and response processing
+        - HTTP request execution and response processing (single or parallel)
         - Updating global context with saved variables
         - Setting abort flag on errors (unless stage is marked with xfail)
 
@@ -86,31 +90,10 @@ class Carrier:
                 fixture_kwargs=fixture_kwargs,
             )
 
-            request_dict = pytest_httpchain_templates.substitution.walk(stage_template.request, local_context)
-            request_model = Request.model_validate(request_dict)
-
-            prepared = prepare_request(cls._client, request_model)
-            response = execute_request(cls._client, prepared)
-            cls._last_request = prepared.last_request
-            cls._last_response = response
-
-            global_context_updates: dict[str, Any] = {}
-
-            for step in stage_template.response:
-                match step:
-                    case SaveStep():
-                        save_dict = pytest_httpchain_templates.substitution.walk(step.save, local_context)
-                        save_model = Save.model_validate(save_dict)
-                        saved_vars = process_save_step(save_model, local_context, response)
-                        local_context = local_context.new_child(saved_vars)
-                        global_context_updates.update(saved_vars)
-
-                    case VerifyStep():
-                        verify_dict = pytest_httpchain_templates.substitution.walk(step.verify, local_context)
-                        verify_model = Verify.model_validate(verify_dict)
-                        process_verify_step(verify_model, local_context, response)
-
-            cls._context_manager.update_global_context(global_context_updates)
+            if stage_template.parallel is not None:
+                cls._execute_parallel_stage(stage_template, local_context)
+            else:
+                cls._execute_single_stage(stage_template, local_context)
 
         except (
             TemplatesError,
@@ -122,6 +105,148 @@ class Carrier:
                 logger.error(str(e))
                 cls._aborted = True
             pytest.fail(reason=str(e), pytrace=False)
+
+    @classmethod
+    def _execute_single_stage(cls, stage_template: Stage, local_context: ChainMap[str, Any]) -> None:
+        """Execute a single HTTP request stage."""
+        request_dict = pytest_httpchain_templates.substitution.walk(stage_template.request, local_context)
+        request_model = Request.model_validate(request_dict)
+
+        prepared = prepare_request(cls._client, request_model)
+        response = execute_request(cls._client, prepared)
+        cls._last_request = prepared.last_request
+        cls._last_response = response
+
+        global_context_updates: dict[str, Any] = {}
+
+        for step in stage_template.response:
+            match step:
+                case SaveStep():
+                    save_dict = pytest_httpchain_templates.substitution.walk(step.save, local_context)
+                    save_model = Save.model_validate(save_dict)
+                    saved_vars = process_save_step(save_model, local_context, response)
+                    local_context = local_context.new_child(saved_vars)
+                    global_context_updates.update(saved_vars)
+
+                case VerifyStep():
+                    verify_dict = pytest_httpchain_templates.substitution.walk(step.verify, local_context)
+                    verify_model = Verify.model_validate(verify_dict)
+                    process_verify_step(verify_model, local_context, response)
+
+        cls._context_manager.update_global_context(global_context_updates)
+
+    @classmethod
+    def _execute_parallel_stage(cls, stage_template: Stage, base_context: ChainMap[str, Any]) -> None:
+        """Execute stage with parallel HTTP requests."""
+        parallel_config = stage_template.parallel
+        iterations = cls._build_iterations(parallel_config, base_context)
+
+        if not iterations:
+            return
+
+        def execute_single(idx: int, iter_vars: dict[str, Any]) -> ParallelIterationResult:
+            iter_context = base_context.new_child(iter_vars)
+            return cls._execute_request_internal(stage_template, iter_context, idx)
+
+        result = execute_parallel_requests(
+            iterations=iterations,
+            execute_fn=execute_single,
+            max_concurrency=parallel_config.max_concurrency,
+            fail_fast=parallel_config.fail_fast,
+        )
+
+        # Merge saved variables in index order (last write wins)
+        merged_saves: dict[str, Any] = {}
+        last_request = None
+        last_response = None
+
+        for iter_result in result.results:
+            if isinstance(iter_result, ParallelIterationResult):
+                merged_saves.update(iter_result.saved_vars)
+                last_request = iter_result.request
+                last_response = iter_result.response
+
+        cls._context_manager.update_global_context(merged_saves)
+        cls._last_request = last_request
+        cls._last_response = last_response
+
+        # Handle errors
+        if result.first_error:
+            error = result.first_error
+            raise StageExecutionError(f"Parallel execution failed at iteration {error.index}: {error.exception}")
+
+        if result.failed_count > 0:
+            errors = [r for r in result.results if isinstance(r, ParallelIterationError)]
+            error_summary = "; ".join(f"[{e.index}]: {e.exception}" for e in errors)
+            raise StageExecutionError(f"Parallel execution had {result.failed_count} failures: {error_summary}")
+
+    @classmethod
+    def _execute_request_internal(
+        cls,
+        stage_template: Stage,
+        local_context: ChainMap[str, Any],
+        iteration_index: int,
+    ) -> ParallelIterationResult:
+        """Execute a single request and return results without mutating global state.
+
+        This method is thread-safe as it:
+        - Uses thread-safe httpx.Client for HTTP
+        - Creates isolated ChainMap for context
+        - Does not mutate any shared state
+        """
+        request_dict = pytest_httpchain_templates.substitution.walk(stage_template.request, local_context)
+        request_model = Request.model_validate(request_dict)
+
+        prepared = prepare_request(cls._client, request_model)
+        response = execute_request(cls._client, prepared)
+
+        saved_vars: dict[str, Any] = {}
+
+        for step in stage_template.response:
+            match step:
+                case SaveStep():
+                    save_dict = pytest_httpchain_templates.substitution.walk(step.save, local_context)
+                    save_model = Save.model_validate(save_dict)
+                    step_saved = process_save_step(save_model, local_context, response)
+                    local_context = local_context.new_child(step_saved)
+                    saved_vars.update(step_saved)
+
+                case VerifyStep():
+                    verify_dict = pytest_httpchain_templates.substitution.walk(step.verify, local_context)
+                    verify_model = Verify.model_validate(verify_dict)
+                    process_verify_step(verify_model, local_context, response)
+
+        return ParallelIterationResult(
+            index=iteration_index,
+            saved_vars=saved_vars,
+            request=prepared.last_request,
+            response=response,
+        )
+
+    @classmethod
+    def _build_iterations(cls, parallel: ParallelConfig, context: ChainMap[str, Any]) -> list[dict[str, Any]]:
+        """Build iteration context dicts for parallel execution."""
+        if parallel.repeat is not None:
+            repeat_val = parallel.repeat
+            if isinstance(repeat_val, str):
+                repeat_val = pytest_httpchain_templates.substitution.walk(repeat_val, context)
+            count = int(repeat_val)
+            return [{} for _ in range(count)]
+
+        elif parallel.foreach is not None:
+            iterations: list[dict[str, Any]] = [{}]
+            for step in parallel.foreach:
+                if isinstance(step, IndividualParameter):
+                    param_name = next(iter(step.individual.keys()))
+                    values = pytest_httpchain_templates.substitution.walk(step.individual[param_name], context)
+                    iterations = [{**existing, param_name: val} for val in values for existing in iterations]
+                elif isinstance(step, CombinationsParameter):
+                    combos = pytest_httpchain_templates.substitution.walk(step.combinations, context)
+                    combos = [vars(item) if isinstance(item, SimpleNamespace) else item for item in combos]
+                    iterations = [{**existing, **combo} for combo in combos for existing in iterations]
+            return iterations
+
+        return []
 
     @classmethod
     def teardown_class(cls) -> None:
@@ -170,11 +295,12 @@ class Carrier:
         context_manager = ContextManager(seed_context=scenario_context)
 
         # Build httpx.Client constructor kwargs
+        resolved_ssl: SSLConfig = pytest_httpchain_templates.substitution.walk(scenario.ssl, scenario_context)
         client_kwargs: dict[str, Any] = {
-            "verify": scenario.ssl.verify,
+            "verify": resolved_ssl.verify,
         }
-        if scenario.ssl.cert is not None:
-            client_kwargs["cert"] = scenario.ssl.cert
+        if resolved_ssl.cert is not None:
+            client_kwargs["cert"] = resolved_ssl.cert
 
         if scenario.auth:
             resolved_auth = pytest_httpchain_templates.substitution.walk(scenario.auth, scenario_context)
@@ -216,9 +342,9 @@ class Carrier:
 
             all_param_names = []
 
-            if stage.parameters:
-                for step in stage.parameters:
-                    if isinstance(step, IndividualStep):
+            if stage.parametrize:
+                for step in stage.parametrize:
+                    if isinstance(step, IndividualParameter):
                         if step.individual:
                             param_name = next(iter(step.individual.keys()))
                             param_values = step.individual[param_name]
@@ -230,7 +356,7 @@ class Carrier:
                             parametrize_marker = pytest.mark.parametrize(param_name, resolved_values, ids=param_ids)
                             stage_method = parametrize_marker(stage_method)
 
-                    elif isinstance(step, CombinationsStep):
+                    elif isinstance(step, CombinationsParameter):
                         if step.combinations:
                             resolved_combinations = pytest_httpchain_templates.substitution.walk(step.combinations, scenario_context)
                             resolved_combinations = [vars(item) if isinstance(item, SimpleNamespace) else item for item in resolved_combinations]

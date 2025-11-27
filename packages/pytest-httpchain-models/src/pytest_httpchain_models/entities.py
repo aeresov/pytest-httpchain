@@ -1,7 +1,7 @@
 from http import HTTPMethod, HTTPStatus
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, JsonValue, PositiveFloat, RootModel, Tag, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, JsonValue, PositiveFloat, PositiveInt, RootModel, Tag, model_validator
 from pydantic.networks import HttpUrl
 
 from pytest_httpchain_models.types import (
@@ -35,18 +35,6 @@ def _normalize_list_input(v: Any) -> list[Any]:
         return result
 
     return v
-
-
-class Descripted(BaseModel):
-    description: str | None = Field(default=None, description="Optional description for this component")
-
-
-class Marked(BaseModel):
-    marks: list[str] = Field(default_factory=list, examples=["xfail", "skip"], description="pytest markers")
-
-
-class Fixtured(BaseModel):
-    fixtures: list[str] = Field(default_factory=list, description="pytest fixtures")
 
 
 class SSLConfig(BaseModel):
@@ -87,6 +75,25 @@ UserFunctionCall = UserFunctionName | UserFunctionKwargs
 FunctionsList = list[UserFunctionCall]
 
 FunctionsDict = dict[str, UserFunctionCall]
+
+
+class Descripted(BaseModel):
+    description: str | None = Field(default=None, description="Optional description for this component")
+
+
+class Marked(BaseModel):
+    marks: list[str] = Field(default_factory=list, examples=["xfail", "skip"], description="pytest markers")
+
+
+class Fixtured(BaseModel):
+    fixtures: list[str] = Field(default_factory=list, description="pytest fixtures")
+
+
+class Authenticated(BaseModel):
+    auth: UserFunctionCall | None = Field(
+        default=None,
+        description="User function to create custom authentication.",
+    )
 
 
 class JsonBody(BaseModel):
@@ -173,18 +180,7 @@ RequestBody = Annotated[
 ]
 
 
-class CallSecurity(BaseModel):
-    ssl: SSLConfig = Field(
-        default_factory=SSLConfig,
-        description="SSL/TLS configuration.",
-    )
-    auth: UserFunctionCall | None = Field(
-        default=None,
-        description="User function to create custom authentication.",
-    )
-
-
-class Request(CallSecurity):
+class Request(Authenticated):
     url: HttpUrl | PartialTemplateStr = Field()
     method: HTTPMethod | TemplateExpression = Field(default=HTTPMethod.GET)
     params: dict[str, Any] = Field(default_factory=dict)
@@ -303,7 +299,7 @@ Responses = Annotated[
 ]
 
 
-class IndividualStep(BaseModel):
+class IndividualParameter(BaseModel):
     individual: dict[str, Annotated[list[Any], Field(min_length=1)] | PartialTemplateStr] = Field(
         max_length=1, description="Parameter name mapped to list of values (single parameter per step, non-empty values) or template expression"
     )
@@ -321,7 +317,7 @@ class IndividualStep(BaseModel):
         return self
 
 
-class CombinationsStep(BaseModel):
+class CombinationsParameter(BaseModel):
     combinations: list[Annotated[dict[str, Any], Field(min_length=1)]] | PartialTemplateStr = Field(
         description="List of parameter combinations (each dict must have at least one parameter) or template expression"
     )
@@ -363,24 +359,58 @@ def get_parameter_step_discriminator(v: Any) -> str:
     raise ValueError("Unable to determine parameter step type")
 
 
-ParameterStep = Annotated[
-    Annotated[IndividualStep, Tag("individual")] | Annotated[CombinationsStep, Tag("combinations")],
+Parameter = Annotated[
+    Annotated[IndividualParameter, Tag("individual")] | Annotated[CombinationsParameter, Tag("combinations")],
     Discriminator(get_parameter_step_discriminator),
 ]
 
 
-Parameters = list[ParameterStep]
+Parameters = list[Parameter]
+
+
+class ParallelConfig(BaseModel):
+    """Configuration for parallel HTTP request execution within a stage."""
+
+    repeat: PositiveInt | TemplateExpression | None = Field(
+        default=None,
+        description="Execute the same request N times in parallel.",
+    )
+    foreach: Parameters | None = Field(
+        default=None,
+        description="Execute request once for each parameter set in parallel.",
+    )
+    max_concurrency: PositiveInt = Field(
+        default=10,
+        description="Maximum number of concurrent requests.",
+    )
+    fail_fast: bool = Field(
+        default=True,
+        description="If True, stop execution on first failure and cancel pending requests.",
+    )
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_parallel_options(self) -> Self:
+        """Ensure repeat and foreach are mutually exclusive."""
+        if self.repeat is not None and self.foreach is not None:
+            raise ValueError("Cannot use both 'repeat' and 'foreach' in the same parallel config")
+        return self
 
 
 class Stage(Marked, Fixtured, Descripted):
     name: str = Field(description="Stage name (human-readable).")
     substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")
     always_run: Literal[True, False] | TemplateExpression = Field(default=False, examples=[True, "{{ should_run }}", "{{ env == 'production' }}"])
-    parameters: Parameters | None = Field(default=None, description="Stage parametrization steps")
+    parametrize: Parameters | None = Field(default=None, description="Stage parametrization steps")
+    parallel: ParallelConfig | None = Field(default=None, description="Parallel execution configuration for load/stress testing.")
     request: Request = Field(description="HTTP request details.")
     response: Responses = Field(default_factory=list, description="Sequential steps to process the response.")
 
 
-class Scenario(Marked, CallSecurity, Descripted):
+class Scenario(Marked, Authenticated, Descripted):
+    ssl: SSLConfig = Field(
+        default_factory=SSLConfig,
+        description="SSL/TLS configuration.",
+    )
     stages: list[Stage] = Field(default_factory=list)
     substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")

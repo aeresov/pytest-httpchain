@@ -1,0 +1,61 @@
+{
+  "description": "Test parallel foreach with CombinationsParameter",
+  "stages": [
+    {
+      "name": "parallel_foreach_combinations",
+      "fixtures": ["server"],
+      "parallel": {
+        "foreach": [
+          {
+            "combinations": [
+              {"val_a": "first", "val_b": 100},
+              {"val_a": "second", "val_b": 200},
+              {"val_a": "third", "val_b": 300}
+            ]
+          }
+        ],
+        "fail_fast": false
+      },
+      "request": {
+        "url": "{{ server }}/ok"
+      },
+      "response": [
+        {
+          "verify": {
+            "status": 200
+          }
+        },
+        {
+          "save": {
+            "substitutions": [
+              {
+                "vars": {
+                  "last_a": "{{ val_a }}",
+                  "last_b": "{{ val_b }}"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "verify_last_wins",
+      "fixtures": ["server"],
+      "request": {
+        "url": "{{ server }}/ok"
+      },
+      "response": [
+        {
+          "verify": {
+            "status": 200,
+            "expressions": [
+              "{{ last_a == 'third' }}",
+              "{{ last_b == 300 }}"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
