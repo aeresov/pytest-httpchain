@@ -298,6 +298,7 @@ class Carrier:
         resolved_ssl: SSLConfig = pytest_httpchain_templates.substitution.walk(scenario.ssl, scenario_context)
         client_kwargs: dict[str, Any] = {
             "verify": resolved_ssl.verify,
+            "http2": True,
         }
         if scenario.ssl.cert is not None:
             client_kwargs["cert"] = resolved_ssl.cert
