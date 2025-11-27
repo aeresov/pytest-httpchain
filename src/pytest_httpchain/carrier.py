@@ -299,7 +299,7 @@ class Carrier:
         client_kwargs: dict[str, Any] = {
             "verify": resolved_ssl.verify,
         }
-        if resolved_ssl.cert is not None:
+        if scenario.ssl.cert is not None:
             client_kwargs["cert"] = resolved_ssl.cert
 
         if scenario.auth:
