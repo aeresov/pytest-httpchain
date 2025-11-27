@@ -1,21 +1,49 @@
 import json
 
-import curlify
-import requests
+import httpx
 
 
-def format_request(request: requests.PreparedRequest) -> str:
-    return curlify.to_curl(request=request, pretty=True)
+def format_request(request: httpx.Request) -> str:
+    """Format an httpx Request for display."""
+    lines = []
+
+    # Request line
+    lines.append(f"{request.method} {request.url}")
+
+    # Headers
+    for name, value in request.headers.items():
+        lines.append(f"{name}: {value}")
+
+    # Empty line between headers and body
+    lines.append("")
+
+    # Body
+    if request.content:
+        content_type = request.headers.get("content-type", "")
+        try:
+            if "application/json" in content_type:
+                body_data = json.loads(request.content.decode())
+                lines.append(json.dumps(body_data, indent=2, ensure_ascii=False))
+            else:
+                decoded = request.content.decode()
+                # Truncate very long bodies
+                if len(decoded) > 1000:
+                    lines.append(f"{decoded[:1000]}... (truncated)")
+                else:
+                    lines.append(decoded)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            lines.append(f"<Binary content: {len(request.content)} bytes>")
+
+    return "\n".join(lines)
 
 
-def format_response(response: requests.Response) -> str:
+def format_response(response: httpx.Response) -> str:
+    """Format an httpx Response for display."""
     lines = []
 
     # Status line
-    if hasattr(response, "raw") and response.raw and hasattr(response.raw, "version"):
-        lines.append(f"HTTP/{response.raw.version // 10}.{response.raw.version % 10} {response.status_code} {response.reason}")
-    else:
-        lines.append(f"HTTP/1.1 {response.status_code} {response.reason}")
+    http_version = response.http_version if response.http_version else "HTTP/1.1"
+    lines.append(f"{http_version} {response.status_code} {response.reason_phrase}")
 
     # Headers
     for key, value in response.headers.items():

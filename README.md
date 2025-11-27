@@ -217,7 +217,7 @@ The MCP server provides:
 ## Thanks
 
 `pytest-httpchain` was inspired by [Tavern](https://github.com/taverntesting/tavern) and [pytest-play](https://github.com/davidemoro/pytest-play).  
-[requests](https://requests.readthedocs.io) does comms.  
+[httpx](https://www.python-httpx.org) does comms.  
 [Pydantic](https://docs.pydantic.dev) keeps structure.  
 [simpleeval](https://github.com/danthedeckie/simpleeval) powers templates.  
 [pytest-order](https://github.com/pytest-dev/pytest-order) sorts chain.  

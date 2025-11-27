@@ -1,10 +1,9 @@
 import base64
-from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import requests
+import httpx
 from pytest_httpchain_models.entities import (
     Base64Body,
     BinaryBody,
@@ -25,12 +24,12 @@ from .utils import call_user_function
 
 @dataclass
 class PrepareRequestResult:
-    request: requests.PreparedRequest
-    send_kwargs: dict[str, Any]
+    request_kwargs: dict[str, Any] = field(default_factory=dict)
+    last_request: httpx.Request | None = None
 
 
 def prepare_request(
-    session: requests.Session,
+    client: httpx.Client,
     request_model: RequestModel,
 ) -> PrepareRequestResult:
     request_kwargs: dict[str, Any] = {
@@ -38,6 +37,8 @@ def prepare_request(
         "url": str(request_model.url),
         "headers": request_model.headers,
         "params": request_model.params,
+        "timeout": request_model.timeout,
+        "follow_redirects": request_model.allow_redirects,
     }
 
     if request_model.auth:
@@ -47,73 +48,64 @@ def prepare_request(
         except Exception as e:
             raise RequestError(f"Failed to configure authentication: {str(e)}") from None
 
-    with ExitStack() as stack:
-        match request_model.body:
-            case None:
-                pass
+    match request_model.body:
+        case None:
+            pass
 
-            case JsonBody(json=data):
-                request_kwargs["json"] = data
+        case JsonBody(json=data):
+            request_kwargs["json"] = data
 
-            case GraphQLBody(graphql=gql):
-                # GraphQL is sent as JSON with query and variables
-                request_kwargs["json"] = {"query": gql.query, "variables": gql.variables}
+        case GraphQLBody(graphql=gql):
+            # GraphQL is sent as JSON with query and variables
+            request_kwargs["json"] = {"query": gql.query, "variables": gql.variables}
 
-            case FormBody(form=data) | XmlBody(xml=data) | TextBody(text=data):
-                request_kwargs["data"] = data
+        case FormBody(form=data):
+            request_kwargs["data"] = data
 
-            case Base64Body(base64=encoded_data):
-                decoded_data = base64.b64decode(encoded_data)
-                request_kwargs["data"] = decoded_data
+        case XmlBody(xml=data) | TextBody(text=data):
+            request_kwargs["content"] = data
 
-            case BinaryBody(binary=file_path):
+        case Base64Body(base64=encoded_data):
+            decoded_data = base64.b64decode(encoded_data)
+            request_kwargs["content"] = decoded_data
+
+        case BinaryBody(binary=file_path):
+            try:
+                with open(file_path, "rb") as f:
+                    binary_data = f.read()
+                request_kwargs["content"] = binary_data
+            except FileNotFoundError:
+                raise RequestError(f"Binary file not found: {file_path}") from None
+
+        case FilesBody(files=file_paths):
+            # File uploads - read files into memory for httpx
+            files_list = []
+            for field_name, file_path in file_paths.items():
                 try:
                     with open(file_path, "rb") as f:
-                        binary_data = f.read()
-                    request_kwargs["data"] = binary_data
+                        file_content = f.read()
+                    files_list.append((field_name, (Path(file_path).name, file_content)))
                 except FileNotFoundError:
-                    raise RequestError(f"Binary file not found: {file_path}") from None
+                    raise RequestError(f"File not found for upload: {file_path}") from None
+            request_kwargs["files"] = files_list
 
-            case FilesBody(files=file_paths):
-                # File uploads - open files and keep them open for preparation
-                files_dict = {}
-                for field_name, file_path in file_paths.items():
-                    try:
-                        file_handle = stack.enter_context(open(file_path, "rb"))
-                        files_dict[field_name] = (Path(file_path).name, file_handle)
-                    except FileNotFoundError:
-                        raise RequestError(f"File not found for upload: {file_path}") from None
-                request_kwargs["files"] = files_dict
-
-        try:
-            req = requests.Request(**request_kwargs)
-            prepared = session.prepare_request(req)
-        except Exception as e:
-            raise RequestError(f"Failed to prepare request: {str(e)}") from None
-
-    send_kwargs = {
-        "timeout": request_model.timeout,
-        "allow_redirects": request_model.allow_redirects,
-        "verify": request_model.ssl.verify,
-    }
-    if request_model.ssl.cert:
-        send_kwargs["cert"] = request_model.ssl.cert
-
-    return PrepareRequestResult(request=prepared, send_kwargs=send_kwargs)
+    return PrepareRequestResult(request_kwargs=request_kwargs)
 
 
 def execute_request(
-    session: requests.Session,
+    client: httpx.Client,
     prepared: PrepareRequestResult,
-) -> requests.Response:
+) -> httpx.Response:
     try:
-        response = session.send(prepared.request, **prepared.send_kwargs)
+        response = client.request(**prepared.request_kwargs)
+        # Store the request that was actually sent for reporting
+        prepared.last_request = response.request
         return response
-    except requests.Timeout as e:
+    except httpx.TimeoutException as e:
         raise RequestError(f"HTTP request timed out: {str(e)}") from None
-    except requests.ConnectionError as e:
+    except httpx.ConnectError as e:
         raise RequestError(f"HTTP connection error: {str(e)}") from None
-    except requests.RequestException as e:
+    except httpx.HTTPError as e:
         raise RequestError(f"HTTP request failed: {str(e)}") from None
     except Exception as e:
         raise RequestError(f"Unexpected error: {str(e)}") from None

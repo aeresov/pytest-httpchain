@@ -5,10 +5,10 @@ from collections import ChainMap
 from pathlib import Path
 from typing import Any
 
+import httpx
 import jmespath
 import jmespath.exceptions
 import jsonschema
-import requests
 from pytest_httpchain_models.entities import Save, Verify
 from pytest_httpchain_models.types import check_json_schema
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def process_save_step(
     save_model: Save,
     local_context: ChainMap[str, Any],
-    response: requests.Response,
+    response: httpx.Response,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {}
     step_context = local_context.new_child(result)
@@ -30,7 +30,7 @@ def process_save_step(
     if len(save_model.jmespath) > 0:
         try:
             response_json = response.json()
-        except (requests.JSONDecodeError, UnicodeDecodeError) as e:
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise SaveError(f"Cannot extract variables, response is not valid JSON: {str(e)}") from None
 
         for var_name, jmespath_expr in save_model.jmespath.items():
@@ -70,7 +70,7 @@ def process_save_step(
 def process_verify_step(
     verify_model: Verify,
     local_context: ChainMap[str, Any],
-    response: requests.Response,
+    response: httpx.Response,
 ) -> None:
     if verify_model.status and response.status_code != verify_model.status.value:
         raise VerificationError(f"Status code doesn't match: expected {verify_model.status.value}, got {response.status_code}")
@@ -110,7 +110,7 @@ def process_verify_step(
 
         try:
             response_json = response.json()
-        except (requests.JSONDecodeError, UnicodeDecodeError) as e:
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise VerificationError(f"Cannot validate schema, response is not valid JSON: {str(e)}") from None
 
         try:

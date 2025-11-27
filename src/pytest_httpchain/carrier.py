@@ -3,9 +3,9 @@ import logging
 from types import SimpleNamespace
 from typing import Any, ClassVar, Self
 
+import httpx
 import pytest
 import pytest_httpchain_templates.substitution
-import requests
 from pydantic import ValidationError
 from pytest_httpchain_models.entities import (
     CombinationsStep,
@@ -39,11 +39,11 @@ class Carrier:
     """
 
     _scenario: ClassVar[Scenario]
-    _session: ClassVar[requests.Session | None] = None
+    _client: ClassVar[httpx.Client | None] = None
     _context_manager: ClassVar[ContextManager | None] = None
     _aborted: ClassVar[bool] = False
-    _last_request: ClassVar[requests.PreparedRequest | None] = None
-    _last_response: ClassVar[requests.Response | None] = None
+    _last_request: ClassVar[httpx.Request | None] = None
+    _last_response: ClassVar[httpx.Response | None] = None
 
     @classmethod
     def execute_stage(cls, stage_template: Stage, fixture_kwargs: dict[str, Any]) -> None:
@@ -74,8 +74,8 @@ class Carrier:
             if cls._aborted and not stage_template.always_run:
                 pytest.skip(reason="Flow aborted")
 
-            if cls._session is None:
-                raise RuntimeError("Session not initialized")
+            if cls._client is None:
+                raise RuntimeError("Client not initialized")
 
             if cls._context_manager is None:
                 raise RuntimeError("Context manager not initialized")
@@ -89,10 +89,9 @@ class Carrier:
             request_dict = pytest_httpchain_templates.substitution.walk(stage_template.request, local_context)
             request_model = Request.model_validate(request_dict)
 
-            prepared = prepare_request(cls._session, request_model)
-            cls._last_request = prepared.request
-
-            response = execute_request(cls._session, prepared)
+            prepared = prepare_request(cls._client, request_model)
+            response = execute_request(cls._client, prepared)
+            cls._last_request = prepared.last_request
             cls._last_response = response
 
             global_context_updates: dict[str, Any] = {}
@@ -129,9 +128,9 @@ class Carrier:
         if cls._context_manager is not None:
             cls._context_manager.cleanup()
             cls._context_manager = None
-        if cls._session is not None:
-            cls._session.close()
-            cls._session = None
+        if cls._client is not None:
+            cls._client.close()
+            cls._client = None
 
     @classmethod
     def create_test_class(cls, scenario: Scenario, class_name: str) -> type[Self]:
@@ -168,21 +167,25 @@ class Carrier:
         # Process scenario-level substitutions to build initial context
         scenario_context = process_substitutions(scenario.substitutions, {})
 
-        session = requests.Session()
         context_manager = ContextManager(seed_context=scenario_context)
 
-        session.verify = scenario.ssl.verify
+        # Build httpx.Client constructor kwargs
+        client_kwargs: dict[str, Any] = {
+            "verify": scenario.ssl.verify,
+        }
         if scenario.ssl.cert is not None:
-            session.cert = scenario.ssl.cert
+            client_kwargs["cert"] = scenario.ssl.cert
 
         if scenario.auth:
             resolved_auth = pytest_httpchain_templates.substitution.walk(scenario.auth, scenario_context)
             auth_result = call_user_function(resolved_auth)
-            session.auth = auth_result
+            client_kwargs["auth"] = auth_result
+
+        client = httpx.Client(**client_kwargs)
 
         class_dict = {
             "_scenario": scenario,
-            "_session": session,
+            "_client": client,
             "_context_manager": context_manager,
             "_aborted": False,
             "_last_request": None,

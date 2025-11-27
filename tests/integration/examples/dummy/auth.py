@@ -1,5 +1,5 @@
-import requests.auth
+import httpx
 
 
-def basic(username: str, password: str) -> requests.auth.AuthBase:
-    return requests.auth.HTTPBasicAuth(username, password)
+def basic(username: str, password: str) -> httpx.BasicAuth:
+    return httpx.BasicAuth(username, password)

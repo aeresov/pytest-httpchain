@@ -9,17 +9,13 @@
     },
     "runArgs": ["--network=host"],
     "remoteUser": "vscode",
-    "mounts": [
-        "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind",
-        "source=${localEnv:HOME}/.claude.json,target=/home/vscode/.claude.json,type=bind"
-    ],
+    "mounts": [],
     "postCreateCommand": {
         "home": "sudo chown --recursive $(whoami): /home/$(whoami)",
-        "uv": "pipx install uv",
-        "claude": "npm install -g @anthropic-ai/claude-code"
+        "uv": "curl -LsSf https://astral.sh/uv/install.sh | sh"
     },
     "postAttachCommand": {
-        "uv": "uv sync --dev --all-packages --all-extras"
+        "uv": "uv sync --all-packages --all-extras"
     },
     "customizations": {
         "vscode": {
@@ -27,7 +23,6 @@
                 "-ms-python.autopep8",
                 "charliermarsh.ruff",
                 "astral-sh.ty@prerelease",
-                "anthropic.claude-code",
                 "tamasfe.even-better-toml",
                 "esbenp.prettier-vscode",
                 "github.vscode-github-actions"
