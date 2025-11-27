@@ -7,6 +7,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 from simpleeval import (
     DEFAULT_FUNCTIONS,
+    DEFAULT_NAMES,
     AttributeDoesNotExist,
     EvalWithCompoundTypes,
     FunctionNotDefined,
@@ -19,6 +20,13 @@ from simpleeval import (
 
 from pytest_httpchain_templates.exceptions import TemplatesError
 from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN
+
+
+def get_env(name: str, default=None):
+    import os
+
+    return os.environ.get(name, default)
+
 
 SAFE_FUNCTIONS = {
     "bool": bool,
@@ -37,12 +45,10 @@ SAFE_FUNCTIONS = {
     "tuple": tuple,
     "set": set,
     "uuid4": lambda: str(uuid4()),
-    "true": True,
-    "false": False,
-    "null": None,
+    "env": lambda var, default=None: get_env(var, default),
 }
 
-evaluator = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS | DEFAULT_FUNCTIONS)
+evaluator = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS | DEFAULT_FUNCTIONS | DEFAULT_NAMES)
 
 
 def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
