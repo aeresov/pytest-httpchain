@@ -379,15 +379,15 @@ class ParallelConfig(BaseModel):
         default=None,
         description="Execute request once for each parameter set in parallel.",
     )
-    max_concurrency: PositiveInt = Field(
+    max_concurrency: PositiveInt | TemplateExpression = Field(
         default=10,
         description="Maximum number of concurrent requests.",
     )
-    fail_fast: bool = Field(
+    fail_fast: bool | TemplateExpression = Field(
         default=True,
         description="If True, stop execution on first failure and cancel pending requests.",
     )
-    start_delay: PositiveFloat | None = Field(
+    start_delay: PositiveFloat | TemplateExpression | None = Field(
         default=None,
         description="Delay in seconds between starting each parallel request. Useful for staggered load testing.",
     )
