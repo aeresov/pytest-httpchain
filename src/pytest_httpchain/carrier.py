@@ -153,6 +153,7 @@ class Carrier:
             execute_fn=execute_single,
             max_concurrency=parallel_config.max_concurrency,
             fail_fast=parallel_config.fail_fast,
+            start_delay=parallel_config.start_delay,
         )
 
         # Merge saved variables in index order (last write wins)

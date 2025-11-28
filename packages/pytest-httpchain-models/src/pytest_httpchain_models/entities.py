@@ -387,6 +387,10 @@ class ParallelConfig(BaseModel):
         default=True,
         description="If True, stop execution on first failure and cancel pending requests.",
     )
+    start_delay: PositiveFloat | None = Field(
+        default=None,
+        description="Delay in seconds between starting each parallel request. Useful for staggered load testing.",
+    )
     model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="after")

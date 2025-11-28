@@ -1,5 +1,6 @@
 """Parallel HTTP request execution infrastructure using ThreadPoolExecutor."""
 
+import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ def execute_parallel_requests(
     execute_fn: Callable[[int, dict[str, Any]], ParallelIterationResult],
     max_concurrency: int,
     fail_fast: bool,
+    start_delay: float | None = None,
 ) -> ParallelExecutionResult:
     """Execute HTTP requests in parallel using ThreadPoolExecutor.
 
@@ -50,6 +52,7 @@ def execute_parallel_requests(
         execute_fn: Function to execute a single iteration (index, context) -> result.
         max_concurrency: Maximum number of concurrent requests.
         fail_fast: If True, stop on first error and cancel pending requests.
+        start_delay: Optional delay in seconds between starting each request.
 
     Returns:
         ParallelExecutionResult with all results and error information.
@@ -65,6 +68,8 @@ def execute_parallel_requests(
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures: dict[Future[ParallelIterationResult], int] = {}
         for idx, iter_context in enumerate(iterations):
+            if start_delay is not None and idx > 0:
+                time.sleep(start_delay)
             future = executor.submit(execute_fn, idx, iter_context)
             futures[future] = idx
 
