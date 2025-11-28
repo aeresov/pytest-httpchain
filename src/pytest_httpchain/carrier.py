@@ -144,6 +144,9 @@ class Carrier:
         if not iterations:
             return
 
+        # Substitute parallel config values
+        resolved = pytest_httpchain_templates.substitution.walk(parallel_config, base_context)
+
         def execute_single(idx: int, iter_vars: dict[str, Any]) -> ParallelIterationResult:
             iter_context = base_context.new_child(iter_vars)
             return cls._execute_request_internal(stage_template, iter_context, idx)
@@ -151,9 +154,9 @@ class Carrier:
         result = execute_parallel_requests(
             iterations=iterations,
             execute_fn=execute_single,
-            max_concurrency=parallel_config.max_concurrency,
-            fail_fast=parallel_config.fail_fast,
-            start_delay=parallel_config.start_delay,
+            max_concurrency=resolved.max_concurrency,
+            fail_fast=resolved.fail_fast,
+            start_delay=resolved.start_delay,
         )
 
         # Merge saved variables in index order (last write wins)
