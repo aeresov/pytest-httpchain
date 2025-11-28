@@ -351,7 +351,7 @@ def get_parameter_step_discriminator(v: Any) -> str:
             return "combinations"
 
     if hasattr(v, "__class__"):
-        class_to_tag = {"IndividualStep": "individual", "CombinationsStep": "combinations"}
+        class_to_tag = {"IndividualParameter": "individual", "CombinationsParameter": "combinations"}
         tag = class_to_tag.get(v.__class__.__name__)
         if tag:
             return tag
