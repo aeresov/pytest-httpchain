@@ -1,8 +1,9 @@
 import logging
+from collections.abc import Mapping, Sequence
 from typing import Any
 
-import pytest_httpchain_templates.substitution
-from pytest_httpchain_models.entities import FunctionsSubstitution, Substitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
+from pytest_httpchain_models import FunctionsSubstitution, Substitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
+from pytest_httpchain_templates import walk
 from pytest_httpchain_userfunc import call_function, wrap_function
 
 from .exceptions import StageExecutionError
@@ -11,28 +12,12 @@ logger = logging.getLogger(__name__)
 
 
 def process_substitutions(
-    substitutions: list[Substitution],
-    context: dict[str, Any],
+    substitutions: Sequence[Substitution],
+    context: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Process a list of substitution steps to build a context dictionary.
-
-    This function handles both function definitions and variable assignments
-    from Substitution models, evaluating them in order and building up
-    a context dictionary.
-
-    Args:
-        substitutions: List of Substitution models to process
-        context: Initial context for variable resolution
-
-    Returns:
-        Dictionary containing all processed functions and resolved variables
-    """
     result = {}
     for step in substitutions:
-        # Update context for this step's evaluation
         current_context = {**context, **result}
-
-        # Handle discriminated union types
         match step:
             case FunctionsSubstitution():
                 for alias, func_def in step.functions.items():
@@ -47,7 +32,7 @@ def process_substitutions(
 
             case VarsSubstitution():
                 for key, value in step.vars.items():
-                    resolved_value = pytest_httpchain_templates.substitution.walk(value, current_context)
+                    resolved_value = walk(value, current_context)
                     result[key] = resolved_value
                     logger.info(f"Seeded {key} = {resolved_value}")
 
@@ -55,14 +40,10 @@ def process_substitutions(
 
 
 def call_user_function(func_call: Any, **extra_kwargs) -> Any:
-    """Helper to call a user function from a UserFunctionCall model."""
-
     match func_call:
         case UserFunctionName():
-            # Pydantic model with just function name
             return call_function(func_call.root, **extra_kwargs)
         case UserFunctionKwargs():
-            # Pydantic model with name and kwargs
             merged_kwargs = {**func_call.kwargs, **extra_kwargs}
             return call_function(func_call.name.root, **merged_kwargs)
         case _:

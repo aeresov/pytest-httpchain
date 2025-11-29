@@ -6,12 +6,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import pytest_httpchain_jsonref.loader
+import pytest_httpchain_jsonref
 import simpleeval
 from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
 from pydantic import ValidationError
-from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
 from pytest_httpchain_models.entities import Scenario
 from simpleeval import EvalWithCompoundTypes
 
@@ -32,20 +31,21 @@ class JsonModule(python.Module):
     """
 
     def collect(self) -> Iterable[nodes.Item | nodes.Collector]:
+        # read JSON and apply references
         ref_parent_traversal_depth = int(self.config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH))
         root_path = Path(self.config.rootpath)
-
         try:
-            test_data = pytest_httpchain_jsonref.loader.load_json(
+            test_data = pytest_httpchain_jsonref.load_json(
                 self.path,
                 max_parent_traversal_depth=ref_parent_traversal_depth,
                 root_path=root_path,
             )
-        except ReferenceResolverError as e:
+        except pytest_httpchain_jsonref.ReferenceResolverError as e:
             raise nodes.Collector.CollectError(f"Cannot load JSON file {self.path}: {str(e)}") from None
         except Exception as e:
             raise nodes.Collector.CollectError(f"Failed to parse JSON file {self.path}: {str(e)}") from None
 
+        # validate general scenario structure
         try:
             scenario = Scenario.model_validate(test_data)
         except ValidationError as e:
@@ -58,11 +58,11 @@ class JsonModule(python.Module):
             full_error_msg = f"Cannot parse test scenario in {self.path}:\n" + "\n".join(error_details)
             raise nodes.Collector.CollectError(full_error_msg) from None
 
+        # generate python test class
         CarrierClass = Carrier.create_test_class(scenario, self.name)
         dummy_module = types.ModuleType("generated")
         setattr(dummy_module, self.name, CarrierClass)
-        self._getobj = lambda: dummy_module
-
+        self._getobj = lambda: dummy_module  # ty: ignore[invalid-assignment]
         json_class = python.Class.from_parent(
             self,
             path=self.path,
@@ -70,9 +70,8 @@ class JsonModule(python.Module):
             obj=CarrierClass,
         )
 
+        # apply class-level markers
         evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
-
-        # Apply class-level marks from scenario
         for mark_str in scenario.marks:
             try:
                 marker = evaluator.eval(f"pytest.mark.{mark_str}")

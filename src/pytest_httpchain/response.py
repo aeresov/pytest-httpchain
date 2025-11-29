@@ -9,8 +9,7 @@ import httpx
 import jmespath
 import jmespath.exceptions
 import jsonschema
-from pytest_httpchain_models.entities import Save, Verify
-from pytest_httpchain_models.types import check_json_schema
+from pytest_httpchain_models import Save, Verify, check_json_schema
 
 from .exceptions import SaveError, VerificationError
 from .utils import call_user_function, process_substitutions

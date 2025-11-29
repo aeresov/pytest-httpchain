@@ -1,14 +1,15 @@
 import inspect
 import logging
 from collections import ChainMap
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from types import SimpleNamespace
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Self, cast
 
 import httpx
 import pytest
-import pytest_httpchain_templates.substitution
 from pydantic import ValidationError
-from pytest_httpchain_models.entities import (
+from pytest_httpchain_models import (
     CombinationsParameter,
     IndividualParameter,
     ParallelConfig,
@@ -21,10 +22,9 @@ from pytest_httpchain_models.entities import (
     Verify,
     VerifyStep,
 )
-from pytest_httpchain_templates.exceptions import TemplatesError
+from pytest_httpchain_templates import TemplatesError, walk
 from simpleeval import EvalWithCompoundTypes
 
-from .context_manager import ContextManager
 from .exceptions import StageExecutionError
 from .parallel import ParallelIterationError, ParallelIterationResult, execute_parallel_requests
 from .request import execute_request, prepare_request
@@ -37,17 +37,20 @@ logger = logging.getLogger(__name__)
 class Carrier:
     """Test carrier class that integrates HTTP chain test execution.
 
-    This base class is subclassed dynamically by carrier_factory to create
-    test classes with scenario-specific test methods. It manages the shared
-    state and execution flow for all stages in a test scenario.
+    This base class is subclassed dynamically to create test classes with scenario-specific test methods.
+    It manages the shared state, context, and execution flow for all stages in a test scenario.
     """
 
     _scenario: ClassVar[Scenario]
     _client: ClassVar[httpx.Client | None] = None
-    _context_manager: ClassVar[ContextManager | None] = None
     _aborted: ClassVar[bool] = False
     _last_request: ClassVar[httpx.Request | None] = None
     _last_response: ClassVar[httpx.Response | None] = None
+
+    # Context management attributes (formerly ContextManager)
+    _data_store: ClassVar[dict[str, Any]] = {}
+    _active_contexts: ClassVar[list[AbstractContextManager]] = []
+    _wrapped_fixtures: ClassVar[dict[str, Any]] = {}
 
     @classmethod
     def execute_stage(cls, stage_template: Stage, fixture_kwargs: dict[str, Any]) -> None:
@@ -81,11 +84,7 @@ class Carrier:
             if cls._client is None:
                 raise RuntimeError("Client not initialized")
 
-            if cls._context_manager is None:
-                raise RuntimeError("Context manager not initialized")
-
-            local_context = cls._context_manager.prepare_stage_context(
-                scenario=cls._scenario,
+            local_context = cls._prepare_stage_context(
                 stage=stage_template,
                 fixture_kwargs=fixture_kwargs,
             )
@@ -109,7 +108,7 @@ class Carrier:
     @classmethod
     def _execute_single_stage(cls, stage_template: Stage, local_context: ChainMap[str, Any]) -> None:
         """Execute a single HTTP request stage."""
-        request_dict = pytest_httpchain_templates.substitution.walk(stage_template.request, local_context)
+        request_dict = walk(stage_template.request, local_context)
         request_model = Request.model_validate(request_dict)
 
         prepared = prepare_request(cls._client, request_model)
@@ -122,18 +121,18 @@ class Carrier:
         for step in stage_template.response:
             match step:
                 case SaveStep():
-                    save_dict = pytest_httpchain_templates.substitution.walk(step.save, local_context)
+                    save_dict = walk(step.save, local_context)
                     save_model = Save.model_validate(save_dict)
                     saved_vars = process_save_step(save_model, local_context, response)
                     local_context = local_context.new_child(saved_vars)
                     global_context_updates.update(saved_vars)
 
                 case VerifyStep():
-                    verify_dict = pytest_httpchain_templates.substitution.walk(step.verify, local_context)
+                    verify_dict = walk(step.verify, local_context)
                     verify_model = Verify.model_validate(verify_dict)
                     process_verify_step(verify_model, local_context, response)
 
-        cls._context_manager.update_global_context(global_context_updates)
+        cls._update_global_context(global_context_updates)
 
     @classmethod
     def _execute_parallel_stage(cls, stage_template: Stage, base_context: ChainMap[str, Any]) -> None:
@@ -145,7 +144,7 @@ class Carrier:
             return
 
         # Substitute parallel config values
-        resolved = pytest_httpchain_templates.substitution.walk(parallel_config, base_context)
+        resolved = walk(parallel_config, base_context)
 
         def execute_single(idx: int, iter_vars: dict[str, Any]) -> ParallelIterationResult:
             iter_context = base_context.new_child(iter_vars)
@@ -170,7 +169,7 @@ class Carrier:
                 last_request = iter_result.request
                 last_response = iter_result.response
 
-        cls._context_manager.update_global_context(merged_saves)
+        cls._update_global_context(merged_saves)
         cls._last_request = last_request
         cls._last_response = last_response
 
@@ -198,7 +197,7 @@ class Carrier:
         - Creates isolated ChainMap for context
         - Does not mutate any shared state
         """
-        request_dict = pytest_httpchain_templates.substitution.walk(stage_template.request, local_context)
+        request_dict = walk(stage_template.request, local_context)
         request_model = Request.model_validate(request_dict)
 
         prepared = prepare_request(cls._client, request_model)
@@ -209,14 +208,14 @@ class Carrier:
         for step in stage_template.response:
             match step:
                 case SaveStep():
-                    save_dict = pytest_httpchain_templates.substitution.walk(step.save, local_context)
+                    save_dict = walk(step.save, local_context)
                     save_model = Save.model_validate(save_dict)
                     step_saved = process_save_step(save_model, local_context, response)
                     local_context = local_context.new_child(step_saved)
                     saved_vars.update(step_saved)
 
                 case VerifyStep():
-                    verify_dict = pytest_httpchain_templates.substitution.walk(step.verify, local_context)
+                    verify_dict = walk(step.verify, local_context)
                     verify_model = Verify.model_validate(verify_dict)
                     process_verify_step(verify_model, local_context, response)
 
@@ -233,7 +232,7 @@ class Carrier:
         if parallel.repeat is not None:
             repeat_val = parallel.repeat
             if isinstance(repeat_val, str):
-                repeat_val = pytest_httpchain_templates.substitution.walk(repeat_val, context)
+                repeat_val = walk(repeat_val, context)
             count = int(repeat_val)
             return [{} for _ in range(count)]
 
@@ -242,10 +241,10 @@ class Carrier:
             for step in parallel.foreach:
                 if isinstance(step, IndividualParameter):
                     param_name = next(iter(step.individual.keys()))
-                    values = pytest_httpchain_templates.substitution.walk(step.individual[param_name], context)
+                    values = walk(step.individual[param_name], context)
                     iterations = [{**existing, param_name: val} for val in values for existing in iterations]
                 elif isinstance(step, CombinationsParameter):
-                    combos = pytest_httpchain_templates.substitution.walk(step.combinations, context)
+                    combos = walk(step.combinations, context)
                     combos = [vars(item) if isinstance(item, SimpleNamespace) else item for item in combos]
                     iterations = [{**existing, **combo} for combo in combos for existing in iterations]
             return iterations
@@ -253,53 +252,80 @@ class Carrier:
         return []
 
     @classmethod
+    def _prepare_stage_context(
+        cls,
+        stage: Stage,
+        fixture_kwargs: Mapping[str, Any],
+    ) -> ChainMap[str, Any]:
+        """Prepare the context for a stage execution."""
+        stage_fixtures = cls._process_fixtures(fixture_kwargs)
+        base_context = ChainMap(stage_fixtures, cls._data_store)
+        local_context = process_substitutions(stage.substitutions, base_context)
+        return ChainMap(local_context, stage_fixtures, cls._data_store)
+
+    @classmethod
+    def _update_global_context(cls, updates: Mapping[str, Any]) -> None:
+        """Update the global data store with new values."""
+        cls._data_store.update(updates)
+
+    @classmethod
+    def _process_fixtures(cls, fixture_kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        """Process fixture values, wrapping factory callables."""
+        processed = {}
+
+        for name, value in fixture_kwargs.items():
+            if callable(value) and not inspect.isclass(value):
+                processed[name] = cls._wrap_factory(name, value)
+            else:
+                processed[name] = value
+
+        cls._wrapped_fixtures = processed
+        return processed
+
+    @classmethod
+    def _wrap_factory(cls, name: str, factory: Callable) -> Callable:
+        """Wrap a factory function to handle context managers."""
+
+        def wrapped(*args, **kwargs):
+            result = factory(*args, **kwargs)
+
+            is_context_manager = isinstance(result, AbstractContextManager) or (hasattr(result, "__enter__") and hasattr(result, "__exit__"))
+            if is_context_manager:
+                value = result.__enter__()
+                cls._active_contexts.append(result)
+                return value
+
+            return result
+
+        return wrapped
+
+    @classmethod
+    def _cleanup_contexts(cls) -> None:
+        """Clean up any active context managers."""
+        while cls._active_contexts:
+            ctx = cls._active_contexts.pop()
+            try:
+                ctx.__exit__(None, None, None)
+            except Exception as e:
+                logger.error(f"Error while cleaning up context manager fixture: {str(e)}")
+
+        cls._wrapped_fixtures.clear()
+        cls._data_store.clear()
+
+    @classmethod
     def teardown_class(cls) -> None:
-        if cls._context_manager is not None:
-            cls._context_manager.cleanup()
-            cls._context_manager = None
+        cls._cleanup_contexts()
         if cls._client is not None:
             cls._client.close()
             cls._client = None
 
     @classmethod
     def create_test_class(cls, scenario: Scenario, class_name: str) -> type[Self]:
-        """Create a dynamic test class for the given scenario.
-
-        This factory method generates a pytest test class with:
-        - One test method per stage in the scenario
-        - Automatic fixture injection based on stage requirements
-        - Marker application (order, skip, xfail, etc.)
-        - Shared session and context management
-
-        The generated class structure:
-        - Inherits from Carrier base class
-        - Has test_0_<stage_name>, test_1_<stage_name>, etc. methods
-        - Each method requests fixtures defined in stage and scenario
-        - Methods are ordered using pytest-order plugin
-        - Session and context manager are initialized at class creation time
-
-        Args:
-            scenario: Validated scenario configuration containing stages
-            class_name: Name for the generated test class
-
-        Returns:
-            A Carrier subclass with test methods for each stage
-
-        Example:
-            >>> scenario = Scenario.model_validate(test_data)
-            >>> TestClass = Carrier.create_test_class(scenario, "TestAPI")
-            >>> # TestClass will have methods: test_00_stage1, test_01_stage2, etc. (with zero-padding)
-        """
-        total_stages = len(scenario.stages)
-        padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
-
         # Process scenario-level substitutions to build initial context
         scenario_context = process_substitutions(scenario.substitutions, {})
 
-        context_manager = ContextManager(seed_context=scenario_context)
-
         # Build httpx.Client constructor kwargs
-        resolved_ssl: SSLConfig = pytest_httpchain_templates.substitution.walk(scenario.ssl, scenario_context)
+        resolved_ssl: SSLConfig = walk(scenario.ssl, scenario_context)
         client_kwargs: dict[str, Any] = {
             "verify": resolved_ssl.verify,
             "http2": True,
@@ -308,7 +334,7 @@ class Carrier:
             client_kwargs["cert"] = resolved_ssl.cert
 
         if scenario.auth:
-            resolved_auth = pytest_httpchain_templates.substitution.walk(scenario.auth, scenario_context)
+            resolved_auth = walk(scenario.auth, scenario_context)
             auth_result = call_user_function(resolved_auth)
             client_kwargs["auth"] = auth_result
 
@@ -317,10 +343,13 @@ class Carrier:
         class_dict = {
             "_scenario": scenario,
             "_client": client,
-            "_context_manager": context_manager,
             "_aborted": False,
             "_last_request": None,
             "_last_response": None,
+            # Context management attributes
+            "_data_store": dict(scenario_context) if scenario_context else {},
+            "_active_contexts": [],
+            "_wrapped_fixtures": {},
         }
 
         if scenario.description:
@@ -332,9 +361,12 @@ class Carrier:
             class_dict,
         )
 
+        total_stages = len(scenario.stages)
+        padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
+
         for i, stage in enumerate(scenario.stages):
 
-            def make_stage_method(stage_template):
+            def make_stage_method(stage_template) -> Callable:
                 def stage_method_impl(self, **kwargs):
                     type(self).execute_stage(stage_template, kwargs)
 
@@ -349,11 +381,11 @@ class Carrier:
 
             if stage.parametrize:
                 for step in stage.parametrize:
-                    if isinstance(step, IndividualParameter):
-                        if step.individual:
-                            param_name = next(iter(step.individual.keys()))
-                            param_values = step.individual[param_name]
-                            resolved_values = pytest_httpchain_templates.substitution.walk(param_values, scenario_context)
+                    match step:
+                        case IndividualParameter(individual=individual) if individual:
+                            param_name = next(iter(individual.keys()))
+                            param_values = individual[param_name]
+                            resolved_values = walk(param_values, scenario_context)
 
                             param_ids = step.ids if step.ids else None
 
@@ -361,9 +393,8 @@ class Carrier:
                             parametrize_marker = pytest.mark.parametrize(param_name, resolved_values, ids=param_ids)
                             stage_method = parametrize_marker(stage_method)
 
-                    elif isinstance(step, CombinationsParameter):
-                        if step.combinations:
-                            resolved_combinations = pytest_httpchain_templates.substitution.walk(step.combinations, scenario_context)
+                        case CombinationsParameter(combinations=combinations) if combinations:
+                            resolved_combinations = walk(combinations, scenario_context)
                             resolved_combinations = [vars(item) if isinstance(item, SimpleNamespace) else item for item in resolved_combinations]
 
                             first_item = resolved_combinations[0]
@@ -388,7 +419,7 @@ class Carrier:
                 except Exception as e:
                     logger.warning(f"Failed to create marker '{mark_str}': {e}")
 
-            method_name = f"test_{str(i).zfill(padding_width)}_{stage.name}"
+            method_name = f"test {str(i).zfill(padding_width)}: {stage.name}"
             setattr(CustomCarrier, method_name, stage_method)
 
-        return CustomCarrier
+        return cast(type[Self], CustomCarrier)

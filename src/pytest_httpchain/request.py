@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from pytest_httpchain_models.entities import (
+from pytest_httpchain_models import (
     Base64Body,
     BinaryBody,
     FilesBody,
@@ -14,7 +14,7 @@ from pytest_httpchain_models.entities import (
     TextBody,
     XmlBody,
 )
-from pytest_httpchain_models.entities import (
+from pytest_httpchain_models import (
     Request as RequestModel,
 )
 
@@ -33,7 +33,7 @@ def prepare_request(
     request_model: RequestModel,
 ) -> PrepareRequestResult:
     request_kwargs: dict[str, Any] = {
-        "method": request_model.method.value,
+        "method": request_model.method,
         "url": str(request_model.url),
         "headers": request_model.headers,
         "params": request_model.params,
@@ -78,7 +78,6 @@ def prepare_request(
                 raise RequestError(f"Binary file not found: {file_path}") from None
 
         case FilesBody(files=file_paths):
-            # File uploads - read files into memory for httpx
             files_list = []
             for field_name, file_path in file_paths.items():
                 try:
@@ -98,7 +97,6 @@ def execute_request(
 ) -> httpx.Response:
     try:
         response = client.request(**prepared.request_kwargs)
-        # Store the request that was actually sent for reporting
         prepared.last_request = response.request
         return response
     except httpx.TimeoutException as e:
