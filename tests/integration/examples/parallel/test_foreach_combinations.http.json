@@ -13,8 +13,7 @@
               {"val_a": "third", "val_b": 300}
             ]
           }
-        ],
-        "fail_fast": false
+        ]
       },
       "request": {
         "url": "{{ server }}/ok"

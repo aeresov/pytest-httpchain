@@ -231,10 +231,57 @@ Substitutions = Annotated[
 ]
 
 
-class Save(Descripted):
-    jmespath: dict[str, JMESPathExpression | PartialTemplateStr] = Field(default_factory=dict, description="JMESPath expressions to extract values from response.")
-    substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")
-    user_functions: FunctionsList = Field(default_factory=list, description="Functions to process response data.")
+class JMESPathSave(Descripted):
+    """Save data using JMESPath expressions to extract values from response."""
+
+    jmespath: dict[str, JMESPathExpression | PartialTemplateStr] = Field(
+        description="JMESPath expressions to extract values from response."
+    )
+    model_config = ConfigDict(extra="forbid")
+
+
+class SubstitutionsSave(Descripted):
+    """Save data using variable substitutions."""
+
+    substitutions: Substitutions = Field(description="Variable substitution configuration.")
+    model_config = ConfigDict(extra="forbid")
+
+
+class UserFunctionsSave(Descripted):
+    """Save data using user-defined functions to process response data."""
+
+    user_functions: FunctionsList = Field(description="Functions to process response data.")
+    model_config = ConfigDict(extra="forbid")
+
+
+def get_save_discriminator(v: Any) -> str:
+    if isinstance(v, dict):
+        if "jmespath" in v:
+            return "jmespath"
+        elif "substitutions" in v:
+            return "substitutions"
+        elif "user_functions" in v:
+            return "user_functions"
+
+    if hasattr(v, "__class__"):
+        class_to_tag = {
+            "JMESPathSave": "jmespath",
+            "SubstitutionsSave": "substitutions",
+            "UserFunctionsSave": "user_functions",
+        }
+        tag = class_to_tag.get(v.__class__.__name__)
+        if tag:
+            return tag
+
+    raise ValueError("Unable to determine save type: must have 'jmespath', 'substitutions', or 'user_functions'")
+
+
+Save = Annotated[
+    Annotated[JMESPathSave, Tag("jmespath")]
+    | Annotated[SubstitutionsSave, Tag("substitutions")]
+    | Annotated[UserFunctionsSave, Tag("user_functions")],
+    Discriminator(get_save_discriminator),
+]
 
 
 class ResponseBody(BaseModel):
@@ -301,7 +348,7 @@ Responses = Annotated[
 
 class IndividualParameter(BaseModel):
     individual: dict[str, Annotated[list[Any], Field(min_length=1)] | PartialTemplateStr] = Field(
-        max_length=1, description="Parameter name mapped to list of values (single parameter per step, non-empty values) or template expression"
+        description="Parameter name mapped to list of values (single parameter per step, non-empty values) or template expression"
     )
     ids: list[str] | None = Field(default=None, description="Optional IDs for each value")
 
@@ -368,37 +415,60 @@ Parameter = Annotated[
 Parameters = list[Parameter]
 
 
-class ParallelConfig(BaseModel):
-    """Configuration for parallel HTTP request execution within a stage."""
+class ParallelConfigBase(BaseModel):
+    """Base configuration for parallel HTTP request execution."""
 
-    repeat: PositiveInt | TemplateExpression | None = Field(
-        default=None,
-        description="Execute the same request N times in parallel.",
-    )
-    foreach: Parameters | None = Field(
-        default=None,
-        description="Execute request once for each parameter set in parallel.",
-    )
     max_concurrency: PositiveInt | TemplateExpression = Field(
         default=10,
         description="Maximum number of concurrent requests.",
-    )
-    fail_fast: bool | TemplateExpression = Field(
-        default=True,
-        description="If True, stop execution on first failure and cancel pending requests.",
     )
     start_delay: PositiveFloat | TemplateExpression | None = Field(
         default=None,
         description="Delay in seconds between starting each parallel request. Useful for staggered load testing.",
     )
+
+
+class ParallelRepeatConfig(ParallelConfigBase):
+    """Execute the same request N times in parallel."""
+
+    repeat: PositiveInt | TemplateExpression = Field(
+        description="Execute the same request N times in parallel.",
+    )
     model_config = ConfigDict(extra="forbid")
 
-    @model_validator(mode="after")
-    def validate_parallel_options(self) -> Self:
-        """Ensure repeat and foreach are mutually exclusive."""
-        if self.repeat is not None and self.foreach is not None:
-            raise ValueError("Cannot use both 'repeat' and 'foreach' in the same parallel config")
-        return self
+
+class ParallelForeachConfig(ParallelConfigBase):
+    """Execute request once for each parameter set in parallel."""
+
+    foreach: Parameters = Field(
+        description="Execute request once for each parameter set in parallel.",
+    )
+    model_config = ConfigDict(extra="forbid")
+
+
+def get_parallel_config_discriminator(v: Any) -> str:
+    if isinstance(v, dict):
+        if "repeat" in v:
+            return "repeat"
+        elif "foreach" in v:
+            return "foreach"
+
+    if hasattr(v, "__class__"):
+        class_to_tag = {
+            "ParallelRepeatConfig": "repeat",
+            "ParallelForeachConfig": "foreach",
+        }
+        tag = class_to_tag.get(v.__class__.__name__)
+        if tag:
+            return tag
+
+    raise ValueError("Unable to determine parallel config type: must have 'repeat' or 'foreach'")
+
+
+ParallelConfig = Annotated[
+    Annotated[ParallelRepeatConfig, Tag("repeat")] | Annotated[ParallelForeachConfig, Tag("foreach")],
+    Discriminator(get_parallel_config_discriminator),
+]
 
 
 class Stage(Marked, Fixtured, Descripted):

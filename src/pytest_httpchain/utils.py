@@ -2,7 +2,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from pytest_httpchain_models import FunctionsSubstitution, Substitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
+from pytest_httpchain_models import FunctionsSubstitution, Substitution, UserFunctionCall, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain_templates import walk
 from pytest_httpchain_userfunc import call_function, wrap_function
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def process_substitutions(
     substitutions: Sequence[Substitution],
-    context: Mapping[str, Any],
+    context: Mapping[str, Any] = {},
 ) -> dict[str, Any]:
     result = {}
     for step in substitutions:
@@ -39,7 +39,7 @@ def process_substitutions(
     return result
 
 
-def call_user_function(func_call: Any, **extra_kwargs) -> Any:
+def call_user_function(func_call: UserFunctionCall, **extra_kwargs) -> object:
     match func_call:
         case UserFunctionName():
             return call_function(func_call.root, **extra_kwargs)

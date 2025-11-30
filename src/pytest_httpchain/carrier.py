@@ -1,37 +1,66 @@
+import base64
 import inspect
+import json
 import logging
+import re
+import time
 from collections import ChainMap
 from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar, Self, cast
 
 import httpx
+import jmespath
+import jmespath.exceptions
+import jsonschema
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from pytest_httpchain_models import (
+    Base64Body,
+    BinaryBody,
     CombinationsParameter,
+    FilesBody,
+    FormBody,
+    GraphQLBody,
     IndividualParameter,
-    ParallelConfig,
+    JMESPathSave,
+    JsonBody,
+    ParallelForeachConfig,
+    ParallelRepeatConfig,
     Request,
     Save,
     SaveStep,
     Scenario,
     SSLConfig,
     Stage,
+    SubstitutionsSave,
+    TextBody,
+    UserFunctionsSave,
     Verify,
     VerifyStep,
+    XmlBody,
+    check_json_schema,
 )
 from pytest_httpchain_templates import TemplatesError, walk
 from simpleeval import EvalWithCompoundTypes
 
-from .exceptions import StageExecutionError
-from .parallel import ParallelIterationError, ParallelIterationResult, execute_parallel_requests
-from .request import execute_request, prepare_request
-from .response import process_save_step, process_verify_step
+from .exceptions import RequestError, SaveError, StageExecutionError, VerificationError
 from .utils import call_user_function, process_substitutions
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ParallelIterationResult:
+    """Result of a successful parallel iteration."""
+
+    saved_context: dict[str, Any]
+    request: httpx.Request
+    response: httpx.Response
 
 
 class Carrier:
@@ -41,258 +70,308 @@ class Carrier:
     It manages the shared state, context, and execution flow for all stages in a test scenario.
     """
 
-    _scenario: ClassVar[Scenario]
-    _client: ClassVar[httpx.Client | None] = None
-    _aborted: ClassVar[bool] = False
-    _last_request: ClassVar[httpx.Request | None] = None
-    _last_response: ClassVar[httpx.Response | None] = None
-
-    # Context management attributes (formerly ContextManager)
-    _data_store: ClassVar[dict[str, Any]] = {}
-    _active_contexts: ClassVar[list[AbstractContextManager]] = []
-    _wrapped_fixtures: ClassVar[dict[str, Any]] = {}
+    client: ClassVar[httpx.Client | None] = None
+    aborted: ClassVar[bool] = False
+    last_request: ClassVar[httpx.Request | None] = None
+    last_response: ClassVar[httpx.Response | None] = None
+    global_context: ClassVar[ChainMap[str, Any]] = ChainMap()
+    active_context_managers: ClassVar[list[AbstractContextManager]] = []
 
     @classmethod
-    def execute_stage(cls, stage_template: Stage, fixture_kwargs: dict[str, Any]) -> None:
-        """Execute a test stage with abort handling and error management.
-
-        This method is called for each stage in the scenario. It handles:
-        - Checking abort status and skipping if needed
-        - Context preparation and template substitution
-        - HTTP request execution and response processing (single or parallel)
-        - Updating global context with saved variables
-        - Setting abort flag on errors (unless stage is marked with xfail)
-
-        Args:
-            stage_template: The stage configuration containing request/response definitions
-            fixture_kwargs: Dictionary of pytest fixture values injected for this stage
-
-        Raises:
-            pytest.skip: If flow is aborted and stage doesn't have always_run=True
-            pytest.fail: If stage execution fails with an error
-
-        Note:
-            Sets cls._aborted to True on failure, causing subsequent stages
-            to be skipped unless they have always_run=True. However, if the stage
-            is marked with xfail, the abort flag is not set, allowing execution
-            to continue normally.
-        """
+    def execute_stage(cls, stage: Stage, fixture_kwargs: dict[str, Any]) -> None:
         try:
-            if cls._aborted and not stage_template.always_run:
+            if cls.aborted and not stage.always_run:
                 pytest.skip(reason="Flow aborted")
 
-            if cls._client is None:
-                raise RuntimeError("Client not initialized")
+            # prepare stage context
+            stage_fixtures: dict[str, Any] = {}
+            for name, value in fixture_kwargs.items():
+                if callable(value) and not inspect.isclass(value):
+                    stage_fixtures[name] = cls._wrap_factory_fixture(value)
+                else:
+                    stage_fixtures[name] = value
 
-            local_context = cls._prepare_stage_context(
-                stage=stage_template,
-                fixture_kwargs=fixture_kwargs,
-            )
+            # Build base context for iterations (substitutions + fixtures + global)
+            local_context = ChainMap(stage_fixtures, cls.global_context)
+            stage_substitutions = process_substitutions(stage.substitutions, local_context)
+            local_context = local_context.new_child(stage_substitutions)
 
-            if stage_template.parallel is not None:
-                cls._execute_parallel_stage(stage_template, local_context)
-            else:
-                cls._execute_single_stage(stage_template, local_context)
+            # build iterations
+            iteration_substitutions: list[dict[str, Any]] = [{}]
+            parallel_config = walk(stage.parallel, local_context) if stage.parallel else None
+            match parallel_config:
+                case None:
+                    pass
+                case ParallelRepeatConfig(repeat=repeat_count):
+                    iteration_substitutions = [{} for _ in range(repeat_count)]
+                case ParallelForeachConfig(foreach=foreach_steps):
+                    # same algorithm like what pytest does for parametrize marker
+                    for step in foreach_steps:
+                        match step:
+                            case IndividualParameter(individual=individual):
+                                param_name = next(iter(individual.keys()))
+                                values = individual[param_name]
+                                iteration_substitutions = [{**existing, param_name: val} for val in values for existing in iteration_substitutions]
+                            case CombinationsParameter(combinations=combinations):
+                                combos: list[dict[str, Any] | SimpleNamespace] = [vars(item) if isinstance(item, SimpleNamespace) else item for item in combinations]
+                                iteration_substitutions = [{**existing, **combo} for combo in combos for existing in iteration_substitutions]
+
+            # execute iterations
+            def execute_single(idx: int, iter_vars: Mapping[str, Any]) -> ParallelIterationResult:
+                iter_context = local_context.new_child(dict(iter_vars))
+
+                request_dict = walk(stage.request, iter_context)
+                request_model = Request.model_validate(request_dict)
+
+                request_kwargs: dict[str, Any] = {
+                    "method": request_model.method,
+                    "url": str(request_model.url),
+                    "headers": request_model.headers,
+                    "params": request_model.params,
+                    "timeout": request_model.timeout,
+                    "follow_redirects": request_model.allow_redirects,
+                }
+
+                if request_model.auth:
+                    try:
+                        auth_result = call_user_function(request_model.auth)
+                        request_kwargs["auth"] = auth_result
+                    except Exception as e:
+                        raise RequestError(f"Failed to configure authentication: {str(e)}") from None
+
+                match request_model.body:
+                    case None:
+                        pass
+
+                    case JsonBody(json=data):
+                        request_kwargs["json"] = data
+
+                    case GraphQLBody(graphql=gql):
+                        request_kwargs["json"] = {"query": gql.query, "variables": gql.variables}
+
+                    case FormBody(form=data):
+                        request_kwargs["data"] = data
+
+                    case XmlBody(xml=data) | TextBody(text=data):
+                        request_kwargs["content"] = data
+
+                    case Base64Body(base64=encoded_data):
+                        decoded_data = base64.b64decode(encoded_data)
+                        request_kwargs["content"] = decoded_data
+
+                    case BinaryBody(binary=file_path):
+                        try:
+                            with open(file_path, "rb") as f:
+                                binary_data = f.read()
+                            request_kwargs["content"] = binary_data
+                        except FileNotFoundError:
+                            raise RequestError(f"Binary file not found: {file_path}") from None
+
+                    case FilesBody(files=file_paths):
+                        files_list = []
+                        for field_name, file_path in file_paths.items():
+                            try:
+                                with open(file_path, "rb") as f:
+                                    file_content = f.read()
+                                files_list.append((field_name, (Path(file_path).name, file_content)))
+                            except FileNotFoundError:
+                                raise RequestError(f"File not found for upload: {file_path}") from None
+                        request_kwargs["files"] = files_list
+
+                try:
+                    response = cls.client.request(**request_kwargs)
+                except httpx.TimeoutException as e:
+                    raise RequestError(f"HTTP request timed out: {str(e)}") from None
+                except httpx.ConnectError as e:
+                    raise RequestError(f"HTTP connection error: {str(e)}") from None
+                except httpx.HTTPError as e:
+                    raise RequestError(f"HTTP request failed: {str(e)}") from None
+                except Exception as e:
+                    raise RequestError(f"Unexpected error: {str(e)}") from None
+
+                saved_context: dict[str, Any] = {}
+
+                for step in stage.response:
+                    match step:
+                        case SaveStep():
+                            save_dict = walk(step.save, iter_context)
+                            save_model = TypeAdapter(Save).validate_python(save_dict)
+                            step_saved: dict[str, Any] = {}
+
+                            match save_model:
+                                case JMESPathSave():
+                                    try:
+                                        response_json = response.json()
+                                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                                        raise SaveError(f"Cannot extract variables, response is not valid JSON: {str(e)}") from None
+
+                                    for var_name, jmespath_expr in save_model.jmespath.items():
+                                        try:
+                                            saved_value = jmespath.search(jmespath_expr, response_json)
+                                            step_saved[var_name] = saved_value
+                                        except jmespath.exceptions.JMESPathError as e:
+                                            raise SaveError(f"Error saving variable {var_name}: {str(e)}") from None
+
+                                case SubstitutionsSave():
+                                    try:
+                                        substitution_result = process_substitutions(save_model.substitutions, iter_context)
+                                        step_saved.update(substitution_result)
+                                    except Exception as e:
+                                        raise SaveError(f"Error processing substitutions: {str(e)}") from None
+
+                                case UserFunctionsSave():
+                                    for func_item in save_model.user_functions:
+                                        try:
+                                            func_result = call_user_function(func_item, response=response)
+
+                                            if not isinstance(func_result, dict):
+                                                raise SaveError(f"Save function must return dict, got {type(func_result).__name__}")
+
+                                            result_dict = cast(dict[str, Any], func_result)
+                                            step_saved.update(result_dict)
+                                        except Exception as e:
+                                            raise SaveError(f"Error calling user function '{func_item}': {str(e)}") from None
+
+                            iter_context = iter_context.new_child(step_saved)
+                            saved_context.update(step_saved)
+
+                        case VerifyStep():
+                            verify_dict = walk(step.verify, iter_context)
+                            verify_model = Verify.model_validate(verify_dict)
+
+                            if verify_model.status and response.status_code != verify_model.status.value:
+                                raise VerificationError(f"Status code doesn't match: expected {verify_model.status.value}, got {response.status_code}")
+
+                            for header_name, expected_value in verify_model.headers.items():
+                                if response.headers.get(header_name) != expected_value:
+                                    raise VerificationError(f"Header '{header_name}' doesn't match: expected {expected_value}, got {response.headers.get(header_name)}")
+
+                            for i, expression in enumerate(verify_model.expressions):
+                                if not expression:
+                                    raise VerificationError(f"Expression {i} failed: evaluated to {expression}")
+
+                            for func_item in verify_model.user_functions:
+                                try:
+                                    result = call_user_function(func_item, response=response)
+
+                                    if not isinstance(result, bool):
+                                        raise VerificationError(f"Verify function must return bool, got {type(result).__name__}")
+
+                                    if not result:
+                                        raise VerificationError(f"Function '{func_item}' verification failed")
+
+                                except Exception as e:
+                                    raise VerificationError(f"Error calling user function '{func_item}': {str(e)}") from None
+
+                            if verify_model.body.schema:
+                                schema = verify_model.body.schema
+                                if isinstance(schema, str | Path):
+                                    schema_path = Path(schema)
+                                    try:
+                                        schema = json.loads(schema_path.read_text())
+                                        check_json_schema(schema)
+                                    except (OSError, json.JSONDecodeError) as e:
+                                        raise VerificationError(f"Error reading body schema file '{schema_path}': {str(e)}") from None
+                                    except jsonschema.SchemaError as e:
+                                        raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e}") from None
+
+                                try:
+                                    response_json = response.json()
+                                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                                    raise VerificationError(f"Cannot validate schema, response is not valid JSON: {str(e)}") from None
+
+                                try:
+                                    jsonschema.validate(instance=response_json, schema=schema)
+                                except jsonschema.ValidationError as e:
+                                    raise VerificationError(f"Body schema validation failed: {str(e)}") from None
+                                except jsonschema.SchemaError as e:
+                                    raise VerificationError(f"Invalid body validation schema: {str(e)}") from None
+
+                            for substring in verify_model.body.contains:
+                                if substring not in response.text:
+                                    raise VerificationError(f"Body doesn't contain '{substring}'")
+
+                            for substring in verify_model.body.not_contains:
+                                if substring in response.text:
+                                    raise VerificationError(f"Body contains '{substring}' while it shouldn't")
+
+                            for pattern in verify_model.body.matches:
+                                if not re.search(pattern, response.text):
+                                    raise VerificationError(f"Body doesn't match '{pattern}'")
+
+                            for pattern in verify_model.body.not_matches:
+                                if re.search(pattern, response.text):
+                                    raise VerificationError(f"Body matches '{pattern}' while it shouldn't")
+
+                return ParallelIterationResult(
+                    saved_context=saved_context,
+                    request=response.request,
+                    response=response,
+                )
+
+            max_concurrency = parallel_config.max_concurrency if parallel_config else 1
+            start_delay = parallel_config.start_delay if parallel_config else None
+
+            total = len(iteration_substitutions)
+            results: list[ParallelIterationResult | None] = [None] * total
+            first_error: tuple[int, Exception] | None = None
+            workers = min(max_concurrency, total) if total > 0 else 1
+
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures: dict[Future[ParallelIterationResult], int] = {}
+                for idx, iter_context in enumerate(iteration_substitutions):
+                    if start_delay is not None and idx > 0:
+                        time.sleep(start_delay)
+                    future = executor.submit(execute_single, idx, iter_context)
+                    futures[future] = idx
+
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        results[idx] = future.result()
+                    except Exception as e:
+                        first_error = (idx, e)
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
+
+            # Apply results in index order - collect all saves for new layer
+            all_saves: dict[str, Any] = {}
+            for iter_result in results:
+                if iter_result is not None:
+                    all_saves.update(iter_result.saved_context)
+                    cls.last_request = iter_result.request
+                    cls.last_response = iter_result.response
+
+            # Add response saves as new layer
+            cls.global_context = cls.global_context.new_child(all_saves)
+
+            # Handle error
+            if first_error:
+                idx, exc = first_error
+                raise StageExecutionError(f"Parallel execution failed at iteration {idx}: {exc}")
 
         except (
             TemplatesError,
             StageExecutionError,
             ValidationError,
         ) as e:
-            is_xfail = any("xfail" in mark for mark in stage_template.marks)
+            is_xfail = any("xfail" in mark for mark in stage.marks)
             if not is_xfail:
                 logger.error(str(e))
-                cls._aborted = True
+                cls.aborted = True
             pytest.fail(reason=str(e), pytrace=False)
 
     @classmethod
-    def _execute_single_stage(cls, stage_template: Stage, local_context: ChainMap[str, Any]) -> None:
-        """Execute a single HTTP request stage."""
-        request_dict = walk(stage_template.request, local_context)
-        request_model = Request.model_validate(request_dict)
-
-        prepared = prepare_request(cls._client, request_model)
-        response = execute_request(cls._client, prepared)
-        cls._last_request = prepared.last_request
-        cls._last_response = response
-
-        global_context_updates: dict[str, Any] = {}
-
-        for step in stage_template.response:
-            match step:
-                case SaveStep():
-                    save_dict = walk(step.save, local_context)
-                    save_model = Save.model_validate(save_dict)
-                    saved_vars = process_save_step(save_model, local_context, response)
-                    local_context = local_context.new_child(saved_vars)
-                    global_context_updates.update(saved_vars)
-
-                case VerifyStep():
-                    verify_dict = walk(step.verify, local_context)
-                    verify_model = Verify.model_validate(verify_dict)
-                    process_verify_step(verify_model, local_context, response)
-
-        cls._update_global_context(global_context_updates)
-
-    @classmethod
-    def _execute_parallel_stage(cls, stage_template: Stage, base_context: ChainMap[str, Any]) -> None:
-        """Execute stage with parallel HTTP requests."""
-        parallel_config = stage_template.parallel
-        iterations = cls._build_iterations(parallel_config, base_context)
-
-        if not iterations:
-            return
-
-        # Substitute parallel config values
-        resolved = walk(parallel_config, base_context)
-
-        def execute_single(idx: int, iter_vars: dict[str, Any]) -> ParallelIterationResult:
-            iter_context = base_context.new_child(iter_vars)
-            return cls._execute_request_internal(stage_template, iter_context, idx)
-
-        result = execute_parallel_requests(
-            iterations=iterations,
-            execute_fn=execute_single,
-            max_concurrency=resolved.max_concurrency,
-            fail_fast=resolved.fail_fast,
-            start_delay=resolved.start_delay,
-        )
-
-        # Merge saved variables in index order (last write wins)
-        merged_saves: dict[str, Any] = {}
-        last_request = None
-        last_response = None
-
-        for iter_result in result.results:
-            if isinstance(iter_result, ParallelIterationResult):
-                merged_saves.update(iter_result.saved_vars)
-                last_request = iter_result.request
-                last_response = iter_result.response
-
-        cls._update_global_context(merged_saves)
-        cls._last_request = last_request
-        cls._last_response = last_response
-
-        # Handle errors
-        if result.first_error:
-            error = result.first_error
-            raise StageExecutionError(f"Parallel execution failed at iteration {error.index}: {error.exception}")
-
-        if result.failed_count > 0:
-            errors = [r for r in result.results if isinstance(r, ParallelIterationError)]
-            error_summary = "; ".join(f"[{e.index}]: {e.exception}" for e in errors)
-            raise StageExecutionError(f"Parallel execution had {result.failed_count} failures: {error_summary}")
-
-    @classmethod
-    def _execute_request_internal(
-        cls,
-        stage_template: Stage,
-        local_context: ChainMap[str, Any],
-        iteration_index: int,
-    ) -> ParallelIterationResult:
-        """Execute a single request and return results without mutating global state.
-
-        This method is thread-safe as it:
-        - Uses thread-safe httpx.Client for HTTP
-        - Creates isolated ChainMap for context
-        - Does not mutate any shared state
-        """
-        request_dict = walk(stage_template.request, local_context)
-        request_model = Request.model_validate(request_dict)
-
-        prepared = prepare_request(cls._client, request_model)
-        response = execute_request(cls._client, prepared)
-
-        saved_vars: dict[str, Any] = {}
-
-        for step in stage_template.response:
-            match step:
-                case SaveStep():
-                    save_dict = walk(step.save, local_context)
-                    save_model = Save.model_validate(save_dict)
-                    step_saved = process_save_step(save_model, local_context, response)
-                    local_context = local_context.new_child(step_saved)
-                    saved_vars.update(step_saved)
-
-                case VerifyStep():
-                    verify_dict = walk(step.verify, local_context)
-                    verify_model = Verify.model_validate(verify_dict)
-                    process_verify_step(verify_model, local_context, response)
-
-        return ParallelIterationResult(
-            index=iteration_index,
-            saved_vars=saved_vars,
-            request=prepared.last_request,
-            response=response,
-        )
-
-    @classmethod
-    def _build_iterations(cls, parallel: ParallelConfig, context: ChainMap[str, Any]) -> list[dict[str, Any]]:
-        """Build iteration context dicts for parallel execution."""
-        if parallel.repeat is not None:
-            repeat_val = parallel.repeat
-            if isinstance(repeat_val, str):
-                repeat_val = walk(repeat_val, context)
-            count = int(repeat_val)
-            return [{} for _ in range(count)]
-
-        elif parallel.foreach is not None:
-            iterations: list[dict[str, Any]] = [{}]
-            for step in parallel.foreach:
-                if isinstance(step, IndividualParameter):
-                    param_name = next(iter(step.individual.keys()))
-                    values = walk(step.individual[param_name], context)
-                    iterations = [{**existing, param_name: val} for val in values for existing in iterations]
-                elif isinstance(step, CombinationsParameter):
-                    combos = walk(step.combinations, context)
-                    combos = [vars(item) if isinstance(item, SimpleNamespace) else item for item in combos]
-                    iterations = [{**existing, **combo} for combo in combos for existing in iterations]
-            return iterations
-
-        return []
-
-    @classmethod
-    def _prepare_stage_context(
-        cls,
-        stage: Stage,
-        fixture_kwargs: Mapping[str, Any],
-    ) -> ChainMap[str, Any]:
-        """Prepare the context for a stage execution."""
-        stage_fixtures = cls._process_fixtures(fixture_kwargs)
-        base_context = ChainMap(stage_fixtures, cls._data_store)
-        local_context = process_substitutions(stage.substitutions, base_context)
-        return ChainMap(local_context, stage_fixtures, cls._data_store)
-
-    @classmethod
-    def _update_global_context(cls, updates: Mapping[str, Any]) -> None:
-        """Update the global data store with new values."""
-        cls._data_store.update(updates)
-
-    @classmethod
-    def _process_fixtures(cls, fixture_kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        """Process fixture values, wrapping factory callables."""
-        processed = {}
-
-        for name, value in fixture_kwargs.items():
-            if callable(value) and not inspect.isclass(value):
-                processed[name] = cls._wrap_factory(name, value)
-            else:
-                processed[name] = value
-
-        cls._wrapped_fixtures = processed
-        return processed
-
-    @classmethod
-    def _wrap_factory(cls, name: str, factory: Callable) -> Callable:
+    def _wrap_factory_fixture(cls, fixture: Callable) -> Callable:
         """Wrap a factory function to handle context managers."""
 
         def wrapped(*args, **kwargs):
-            result = factory(*args, **kwargs)
+            result = fixture(*args, **kwargs)
 
             is_context_manager = isinstance(result, AbstractContextManager) or (hasattr(result, "__enter__") and hasattr(result, "__exit__"))
             if is_context_manager:
                 value = result.__enter__()
-                cls._active_contexts.append(result)
+                cls.active_context_managers.append(result)
                 return value
 
             return result
@@ -300,31 +379,22 @@ class Carrier:
         return wrapped
 
     @classmethod
-    def _cleanup_contexts(cls) -> None:
-        """Clean up any active context managers."""
-        while cls._active_contexts:
-            ctx = cls._active_contexts.pop()
+    def teardown_class(cls) -> None:
+        while cls.active_context_managers:
+            ctx = cls.active_context_managers.pop()
             try:
                 ctx.__exit__(None, None, None)
             except Exception as e:
                 logger.error(f"Error while cleaning up context manager fixture: {str(e)}")
 
-        cls._wrapped_fixtures.clear()
-        cls._data_store.clear()
-
-    @classmethod
-    def teardown_class(cls) -> None:
-        cls._cleanup_contexts()
-        if cls._client is not None:
-            cls._client.close()
-            cls._client = None
+        if cls.client is not None:
+            cls.client.close()
+            cls.client = None
 
     @classmethod
     def create_test_class(cls, scenario: Scenario, class_name: str) -> type[Self]:
-        # Process scenario-level substitutions to build initial context
-        scenario_context = process_substitutions(scenario.substitutions, {})
+        scenario_context = process_substitutions(scenario.substitutions)
 
-        # Build httpx.Client constructor kwargs
         resolved_ssl: SSLConfig = walk(scenario.ssl, scenario_context)
         client_kwargs: dict[str, Any] = {
             "verify": resolved_ssl.verify,
@@ -332,7 +402,6 @@ class Carrier:
         }
         if scenario.ssl.cert is not None:
             client_kwargs["cert"] = resolved_ssl.cert
-
         if scenario.auth:
             resolved_auth = walk(scenario.auth, scenario_context)
             auth_result = call_user_function(resolved_auth)
@@ -340,25 +409,18 @@ class Carrier:
 
         client = httpx.Client(**client_kwargs)
 
-        class_dict = {
-            "_scenario": scenario,
-            "_client": client,
-            "_aborted": False,
-            "_last_request": None,
-            "_last_response": None,
-            # Context management attributes
-            "_data_store": dict(scenario_context) if scenario_context else {},
-            "_active_contexts": [],
-            "_wrapped_fixtures": {},
-        }
-
-        if scenario.description:
-            class_dict["__doc__"] = scenario.description
-
         CustomCarrier = type(
             class_name,
             (cls,),
-            class_dict,
+            {
+                "__doc__": scenario.description,
+                "client": client,
+                "aborted": False,
+                "last_request": None,
+                "last_response": None,
+                "global_context": ChainMap(scenario_context),
+                "active_context_managers": [],
+            },
         )
 
         total_stages = len(scenario.stages)
@@ -366,11 +428,11 @@ class Carrier:
 
         for i, stage in enumerate(scenario.stages):
 
-            def make_stage_method(stage_template) -> Callable:
-                def stage_method_impl(self, **kwargs):
+            def make_stage_method(stage_template: Stage) -> Callable:
+                def call_execute_stage(self, **kwargs):
                     type(self).execute_stage(stage_template, kwargs)
 
-                return stage_method_impl
+                return call_execute_stage
 
             stage_method = make_stage_method(stage)
 
@@ -407,7 +469,7 @@ class Carrier:
                             stage_method = parametrize_marker(stage_method)
 
             all_fixtures = ["self"] + all_param_names + stage.fixtures
-            stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])
+            stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # type: ignore[assignment]
 
             all_marks = [f"order({i})"] + stage.marks
             evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
@@ -419,7 +481,7 @@ class Carrier:
                 except Exception as e:
                     logger.warning(f"Failed to create marker '{mark_str}': {e}")
 
-            method_name = f"test {str(i).zfill(padding_width)}: {stage.name}"
+            method_name = f"test {str(i).zfill(padding_width)} - {stage.name}"
             setattr(CustomCarrier, method_name, stage_method)
 
         return cast(type[Self], CustomCarrier)
