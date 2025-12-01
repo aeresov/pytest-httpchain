@@ -22,9 +22,9 @@ from pytest_httpchain_models.types import (
 )
 
 # Suppress Pydantic warnings about field names shadowing BaseModel attributes.
-# Fields "json" and "schema" are deprecated in Pydantic and we use them here for domain-specific purposes
-warnings.filterwarnings("ignore", message='.*"json".*"BaseModel".*', category=UserWarning, module="pydantic")
-warnings.filterwarnings("ignore", message='.*"schema".*"BaseModel".*', category=UserWarning, module="pydantic")
+# Fields "json" and "schema" are intentional domain-specific names.
+warnings.filterwarnings("ignore", message=r'Field name "json" in "JsonBody" shadows an attribute', category=UserWarning)
+warnings.filterwarnings("ignore", message=r'Field name "schema" in "ResponseBody" shadows an attribute', category=UserWarning)
 
 
 def _normalize_list_input(v: Any) -> list[Any]:
