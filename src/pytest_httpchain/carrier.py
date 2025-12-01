@@ -124,9 +124,7 @@ class Carrier:
             results: list[ParallelIterationResult | None] = [None] * total
             first_error: tuple[int, Exception] | None = None
             workers = min(max_concurrency, total) if total > 0 else 1
-
-            # Create rate limiter if configured
-            limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec else None
+            limiter = Limiter(Rate(calls_per_sec, Duration.SECOND), max_delay=Duration.HOUR) if calls_per_sec else None
 
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures: dict[Future[ParallelIterationResult], int] = {}
