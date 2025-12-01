@@ -418,7 +418,7 @@ class ParallelConfigBase(BaseModel):
         default=10,
         description="Maximum number of concurrent requests.",
     )
-    calls_per_sec: PositiveFloat | TemplateExpression | None = Field(
+    calls_per_sec: PositiveInt | TemplateExpression | None = Field(
         default=None,
         description="Maximum number of API calls per second. When set, requests are rate-limited globally across all workers.",
     )
