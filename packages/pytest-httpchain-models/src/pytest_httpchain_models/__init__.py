@@ -1,5 +1,3 @@
-import warnings
-
 from .entities import (
     Base64Body,
     BinaryBody,
@@ -87,10 +85,3 @@ __all__ = [
     "SSLConfig",
     "check_json_schema",
 ]
-
-
-# Suppress Pydantic UserWarning about json attribute shadowing BaseModel.json method
-warnings.filterwarnings("ignore", message='.*"json".*"BaseModel".*', category=UserWarning, module="pydantic")
-
-# Suppress Pydantic UserWarning about json attribute shadowing BaseModel.schema method
-warnings.filterwarnings("ignore", message='.*"schema".*"BaseModel".*', category=UserWarning, module="pydantic")
