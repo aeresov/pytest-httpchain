@@ -96,6 +96,9 @@ class Carrier:
             stage_substitutions = process_substitutions(stage.substitutions, local_context)
             local_context = local_context.new_child(stage_substitutions)
 
+            logger.info("global context on start", cls.global_context)
+            logger.info("local context on start", local_context)
+
             # build iterations
             iteration_substitutions: list[dict[str, Any]] = [{}]
             parallel_config = walk(stage.parallel, local_context) if stage.parallel else None
@@ -148,6 +151,8 @@ class Carrier:
                     all_saves.update(iter_result.saved_context)
                     cls.last_request = iter_result.request
                     cls.last_response = iter_result.response
+
+            logger.info("updates for global context", all_saves)
 
             # Add response saves as new layer
             cls.global_context = cls.global_context.new_child(all_saves)
