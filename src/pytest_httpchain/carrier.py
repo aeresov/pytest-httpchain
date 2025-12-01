@@ -96,8 +96,8 @@ class Carrier:
             stage_substitutions = process_substitutions(stage.substitutions, local_context)
             local_context = local_context.new_child(stage_substitutions)
 
-            logger.info("global context on start", cls.global_context)
-            logger.info("local context on start", local_context)
+            logger.info(f"global context on start: {dict(cls.global_context)}")
+            logger.info(f"local context on start: {dict(local_context)}")
 
             # build iterations
             iteration_substitutions: list[dict[str, Any]] = [{}]
@@ -152,7 +152,7 @@ class Carrier:
                     cls.last_request = iter_result.request
                     cls.last_response = iter_result.response
 
-            logger.info("updates for global context", all_saves)
+            logger.info(f"updates for global context: {all_saves}")
 
             # Add response saves as new layer
             cls.global_context = cls.global_context.new_child(all_saves)
