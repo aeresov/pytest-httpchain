@@ -234,9 +234,7 @@ Substitutions = Annotated[
 class JMESPathSave(Descripted):
     """Save data using JMESPath expressions to extract values from response."""
 
-    jmespath: dict[str, JMESPathExpression | PartialTemplateStr] = Field(
-        description="JMESPath expressions to extract values from response."
-    )
+    jmespath: dict[str, JMESPathExpression | PartialTemplateStr] = Field(description="JMESPath expressions to extract values from response.")
     model_config = ConfigDict(extra="forbid")
 
 
@@ -277,9 +275,7 @@ def get_save_discriminator(v: Any) -> str:
 
 
 Save = Annotated[
-    Annotated[JMESPathSave, Tag("jmespath")]
-    | Annotated[SubstitutionsSave, Tag("substitutions")]
-    | Annotated[UserFunctionsSave, Tag("user_functions")],
+    Annotated[JMESPathSave, Tag("jmespath")] | Annotated[SubstitutionsSave, Tag("substitutions")] | Annotated[UserFunctionsSave, Tag("user_functions")],
     Discriminator(get_save_discriminator),
 ]
 
@@ -422,9 +418,9 @@ class ParallelConfigBase(BaseModel):
         default=10,
         description="Maximum number of concurrent requests.",
     )
-    start_delay: PositiveFloat | TemplateExpression | None = Field(
+    calls_per_sec: PositiveFloat | TemplateExpression | None = Field(
         default=None,
-        description="Delay in seconds between starting each parallel request. Useful for staggered load testing.",
+        description="Maximum number of API calls per second. When set, requests are rate-limited globally across all workers.",
     )
 
 

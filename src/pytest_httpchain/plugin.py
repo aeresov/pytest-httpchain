@@ -16,7 +16,7 @@ from simpleeval import EvalWithCompoundTypes
 
 from pytest_httpchain.constants import ConfigOptions
 
-from .carrier import Carrier
+from .carrier import Carrier, create_test_class
 from .report_formatter import format_request, format_response
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ class JsonModule(python.Module):
             raise nodes.Collector.CollectError(full_error_msg) from None
 
         # generate python test class
-        CarrierClass = Carrier.create_test_class(scenario, self.name)
+        CarrierClass = create_test_class(scenario, self.name)
         dummy_module = types.ModuleType("generated")
         setattr(dummy_module, self.name, CarrierClass)
         self._getobj = lambda: dummy_module  # ty: ignore[invalid-assignment]

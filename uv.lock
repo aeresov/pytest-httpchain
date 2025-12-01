@@ -894,6 +894,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyrate-limiter"
+version = "3.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ec/da/f682c5c5f9f0a5414363eb4397e6b07d84a02cde69c4ceadcbf32c85537c/pyrate_limiter-3.9.0.tar.gz", hash = "sha256:6b882e2c77cda07a241d3730975daea4258344b39c878f1dd8849df73f70b0ce", size = 289308, upload-time = "2025-07-30T14:36:58.659Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/04/af/d8bf0959ece9bc4679bd203908c31019556a421d76d8143b0c6871c7f614/pyrate_limiter-3.9.0-py3-none-any.whl", hash = "sha256:77357840c8cf97a36d67005d4e090787043f54000c12c2b414ff65657653e378", size = 33628, upload-time = "2025-07-30T14:36:57.71Z" },
+]
+
+[[package]]
 name = "pytest"
 version = "9.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -928,6 +937,7 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx", extra = ["http2"] },
     { name = "pydantic" },
+    { name = "pyrate-limiter" },
     { name = "pytest-httpchain-jsonref" },
     { name = "pytest-httpchain-models" },
     { name = "pytest-order" },
@@ -955,6 +965,7 @@ docs = [
 requires-dist = [
     { name = "httpx", extras = ["http2"], specifier = ">=0.27.0" },
     { name = "pydantic", specifier = ">=2.11.7" },
+    { name = "pyrate-limiter", specifier = ">=3.0.0" },
     { name = "pytest-httpchain-jsonref", editable = "packages/pytest-httpchain-jsonref" },
     { name = "pytest-httpchain-mcp", marker = "extra == 'mcp'", editable = "packages/pytest-httpchain-mcp" },
     { name = "pytest-httpchain-models", editable = "packages/pytest-httpchain-models" },
