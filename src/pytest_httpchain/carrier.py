@@ -96,8 +96,8 @@ class Carrier:
             stage_substitutions = process_substitutions(stage.substitutions, local_context)
             local_context = local_context.new_child(stage_substitutions)
 
-            logger.info(f"global context on start: {dict(cls.global_context)}")
-            logger.info(f"local context on start: {dict(local_context)}")
+            logger.info(f"global context on start: {json.dumps(dict(cls.global_context), indent=2, default=str)}")
+            logger.info(f"local context on start: {json.dumps(dict(local_context), indent=2, default=str)}")
 
             # build iterations
             iteration_substitutions: list[dict[str, Any]] = [{}]
@@ -152,7 +152,7 @@ class Carrier:
                     cls.last_request = iter_result.request
                     cls.last_response = iter_result.response
 
-            logger.info(f"updates for global context: {all_saves}")
+            logger.info(f"updates for global context: {json.dumps(all_saves, indent=2, default=str)}")
 
             # Add response saves as new layer
             cls.global_context = cls.global_context.new_child(all_saves)
@@ -160,6 +160,12 @@ class Carrier:
             # Handle error
             if first_error:
                 idx, exc = first_error
+                # Extract request/response from failed iteration for debugging
+                if isinstance(exc, StageExecutionError):
+                    if exc.request is not None:
+                        cls.last_request = exc.request
+                    if exc.response is not None:
+                        cls.last_response = exc.response
                 raise StageExecutionError(f"Parallel execution failed at iteration {idx}: {exc}")
 
         except (
@@ -365,20 +371,26 @@ class Carrier:
 
         response = cls._execute_http_request(request_kwargs)
 
-        saved_context: dict[str, Any] = {}
-        for step in stage.response:
-            match step:
-                case SaveStep():
-                    save_dict = walk(step.save, iter_context)
-                    save_model = TypeAdapter(Save).validate_python(save_dict)
-                    step_saved = cls._process_save_step(save_model, response, iter_context)
-                    iter_context = iter_context.new_child(step_saved)
-                    saved_context.update(step_saved)
+        try:
+            saved_context: dict[str, Any] = {}
+            for step in stage.response:
+                match step:
+                    case SaveStep():
+                        save_dict = walk(step.save, iter_context)
+                        save_model = TypeAdapter(Save).validate_python(save_dict)
+                        step_saved = cls._process_save_step(save_model, response, iter_context)
+                        iter_context = iter_context.new_child(step_saved)
+                        saved_context.update(step_saved)
 
-                case VerifyStep():
-                    verify_dict = walk(step.verify, iter_context)
-                    verify_model = Verify.model_validate(verify_dict)
-                    cls._process_verify_step(verify_model, response)
+                    case VerifyStep():
+                        verify_dict = walk(step.verify, iter_context)
+                        verify_model = Verify.model_validate(verify_dict)
+                        cls._process_verify_step(verify_model, response)
+        except StageExecutionError as e:
+            # Attach request/response to the exception for debugging
+            e.request = response.request
+            e.response = response
+            raise
 
         return ParallelIterationResult(
             saved_context=saved_context,
