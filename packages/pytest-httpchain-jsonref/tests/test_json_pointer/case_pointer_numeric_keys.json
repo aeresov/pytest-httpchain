@@ -1,0 +1,10 @@
+{
+    "obj": {
+        "0": {"value": "zero"},
+        "1": {"value": "one"},
+        "42": {"value": "forty-two"}
+    },
+    "ref0": {"$ref": "#/obj/0/value"},
+    "ref1": {"$ref": "#/obj/1/value"},
+    "ref42": {"$ref": "#/obj/42/value"}
+}

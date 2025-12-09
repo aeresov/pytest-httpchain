@@ -1,0 +1,6 @@
+{
+    "a~b": {"value": 1},
+    "c/d": {"value": 2},
+    "ref1": {"$ref": "#/a~0b/value"},
+    "ref2": {"$ref": "#/c~1d/value"}
+}

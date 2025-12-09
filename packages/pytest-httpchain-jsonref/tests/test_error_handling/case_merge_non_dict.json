@@ -1,0 +1,7 @@
+{
+    "value": "string",
+    "ref": {
+        "$ref": "#/value",
+        "extra": "property"
+    }
+}

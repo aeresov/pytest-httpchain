@@ -4,15 +4,9 @@ import pytest
 from pydantic import ValidationError
 from pytest_httpchain_models.entities import (
     FunctionsSubstitution,
-    Responses,
-    ResponseStep,
     SaveStep,
     Scenario,
     Stage,
-    Substitution,
-    Substitutions,
-    SubstitutionsInput,
-    ResponsesInput,
     VarsSubstitution,
     VerifyStep,
 )

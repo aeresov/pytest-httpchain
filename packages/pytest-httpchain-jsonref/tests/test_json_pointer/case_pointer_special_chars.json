@@ -1,0 +1,10 @@
+{
+    "key with spaces": {"value": 1},
+    "key-with-dashes": {"value": 2},
+    "key_with_underscores": {"value": 3},
+    "key.with.dots": {"value": 4},
+    "ref1": {"$ref": "#/key with spaces/value"},
+    "ref2": {"$ref": "#/key-with-dashes/value"},
+    "ref3": {"$ref": "#/key_with_underscores/value"},
+    "ref4": {"$ref": "#/key.with.dots/value"}
+}

@@ -1,0 +1,4 @@
+{
+    "": {"value": "empty key"},
+    "ref": {"$ref": "#//value"}
+}

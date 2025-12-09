@@ -1,0 +1,4 @@
+{
+    "existing": {"value": 42},
+    "ref": {"$ref": "#/nonexistent/path"}
+}

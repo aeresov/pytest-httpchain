@@ -34,6 +34,9 @@ dev = [
     "flask-httpauth>=4.8.0",
     "http-server-mock>=1.7",
     "ruff>=0.12.1",
+    "pytest-cov>=6.0.0",
+    "coverage[toml]>=7.0",
+    "pytest-datadir>=1.7.2",
 ]
 docs = [
     "mkdocs>=1.6.1",
@@ -110,3 +113,19 @@ reportMissingTypeStubs = false
 reportExplicitAny = false
 typeCheckingMode = "off"
 pythonPlatform = "Linux"
+
+[tool.coverage.run]
+source = [
+    "src",
+    "packages/pytest-httpchain-jsonref/src",
+    "packages/pytest-httpchain-templates/src",
+    "packages/pytest-httpchain-mcp/src",
+    "packages/pytest-httpchain-models/src",
+    "packages/pytest-httpchain-userfunc/src",
+]
+branch = true
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
