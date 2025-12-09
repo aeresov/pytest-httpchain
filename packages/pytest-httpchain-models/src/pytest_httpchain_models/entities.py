@@ -28,6 +28,18 @@ warnings.filterwarnings("ignore", message=r'Field name "schema" in "ResponseBody
 
 
 def _normalize_list_input(v: Any) -> list[Any]:
+    """Normalize list-or-dict input to a flat list.
+
+    Accepts:
+    - list: returned as-is
+    - dict: values flattened (list values extended, others appended)
+    - other: passed through for Pydantic to handle
+
+    Examples:
+        [a, b] -> [a, b]
+        {"x": a, "y": b} -> [a, b]
+        {"x": [a, b], "y": c} -> [a, b, c]
+    """
     if isinstance(v, list):
         return v
 
@@ -230,10 +242,12 @@ Substitution = Annotated[
     Discriminator(get_substitution_discriminator),
 ]
 
+# Input type unions representing all accepted formats for flexible validation
+SubstitutionsInput = list[Substitution] | dict[str, Substitution | list[Substitution]]
 
 Substitutions = Annotated[
     list[Substitution],
-    BeforeValidator(_normalize_list_input),
+    BeforeValidator(_normalize_list_input, json_schema_input_type=SubstitutionsInput),
 ]
 
 
@@ -341,10 +355,12 @@ ResponseStep = Annotated[
     Discriminator(get_response_step_discriminator),
 ]
 
+# Input type union for Responses - accepts both list and dict formats
+ResponsesInput = list[ResponseStep] | dict[str, ResponseStep | list[ResponseStep]]
 
 Responses = Annotated[
     list[ResponseStep],
-    BeforeValidator(_normalize_list_input),
+    BeforeValidator(_normalize_list_input, json_schema_input_type=ResponsesInput),
 ]
 
 

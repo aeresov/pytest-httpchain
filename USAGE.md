@@ -183,6 +183,67 @@ Down the stages chain, common data context can be used in jinja-style variable s
 }
 ```
 
+### Alternative: Dictionary Format
+
+For better organization, you can also use a dictionary format for `substitutions` and `response` fields. The dictionary keys are for organizational purposes only and are discarded during processing:
+
+```json
+{
+    "substitutions": {
+        "initial_data": {
+            "vars": {
+                "id": 42,
+                "name": "example"
+            }
+        },
+        "computed_values": {
+            "functions": {
+                "timestamp": "utils:get_timestamp"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "use resource",
+            "request": {
+                "url": "https://api.example.com/operation/{{ id }}",
+                "method": "POST"
+            },
+            "response": {
+                "validation": {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                "data_extraction": {
+                    "save": {
+                        "jmespath": {
+                            "result": "data.value"
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
+```
+
+You can even mix list and dictionary values within a dictionary format:
+
+```json
+{
+    "substitutions": {
+        "batch1": [
+            {"vars": {"key1": "value1"}},
+            {"vars": {"key2": "value2"}}
+        ],
+        "batch2": {"vars": {"key3": "value3"}}
+    }
+}
+```
+
+This is particularly useful for organizing complex scenarios with many substitutions or response steps.
+
 ## User functions
 
 ### Exctracting response data
