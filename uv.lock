@@ -1083,14 +1083,10 @@ version = "0.1.0"
 source = { editable = "packages/pytest-httpchain-mcp" }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
-    { name = "pydantic" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "mcp", extras = ["cli"], specifier = ">=1.11.0" },
-    { name = "pydantic", specifier = ">=2.11.7" },
-]
+requires-dist = [{ name = "mcp", extras = ["cli"], specifier = ">=1.11.0" }]
 
 [[package]]
 name = "pytest-httpchain-models"
@@ -1100,7 +1096,6 @@ dependencies = [
     { name = "graphql-core" },
     { name = "jmespath" },
     { name = "jsonschema" },
-    { name = "pydantic" },
     { name = "pytest-httpchain-templates" },
     { name = "pytest-httpchain-userfunc" },
 ]
@@ -1110,7 +1105,6 @@ requires-dist = [
     { name = "graphql-core", specifier = ">=3.0.0" },
     { name = "jmespath", specifier = ">=1.0.0" },
     { name = "jsonschema", specifier = ">=4.0.0" },
-    { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest-httpchain-templates", editable = "packages/pytest-httpchain-templates" },
     { name = "pytest-httpchain-userfunc", editable = "packages/pytest-httpchain-userfunc" },
 ]
@@ -1120,26 +1114,16 @@ name = "pytest-httpchain-templates"
 version = "0.1.0"
 source = { editable = "packages/pytest-httpchain-templates" }
 dependencies = [
-    { name = "pydantic" },
     { name = "simpleeval" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "pydantic", specifier = ">=2.11.0" },
-    { name = "simpleeval", specifier = ">=1.0.3" },
-]
+requires-dist = [{ name = "simpleeval", specifier = ">=1.0.3" }]
 
 [[package]]
 name = "pytest-httpchain-userfunc"
 version = "0.1.0"
 source = { editable = "packages/pytest-httpchain-userfunc" }
-dependencies = [
-    { name = "httpx" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "httpx", specifier = ">=0.27.0" }]
 
 [[package]]
 name = "pytest-order"
