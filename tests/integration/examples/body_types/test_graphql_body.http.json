@@ -1,0 +1,44 @@
+{
+    "stages": [
+        {
+            "name": "graphql_query",
+            "description": "Test GraphQL query with variables",
+            "fixtures": ["server"],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/graphql",
+                "body": {
+                    "graphql": {
+                        "query": "query GetUser($id: Int!) { user(id: $id) { id name email } }",
+                        "variables": {
+                            "id": 42
+                        }
+                    }
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "user_id": "data.user.id",
+                            "user_name": "data.user.name"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ user_id == 42 }}",
+                            "{{ 'User 42' in user_name }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

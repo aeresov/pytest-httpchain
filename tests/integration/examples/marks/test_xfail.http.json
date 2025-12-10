@@ -1,0 +1,20 @@
+{
+    "stages": [
+        {
+            "name": "expected_failure",
+            "description": "This stage is expected to fail (xfail)",
+            "marks": ["xfail"],
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/bad"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

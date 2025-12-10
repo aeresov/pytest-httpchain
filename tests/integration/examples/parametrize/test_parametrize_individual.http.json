@@ -1,0 +1,41 @@
+{
+    "stages": [
+        {
+            "name": "parametrize_individual",
+            "description": "Test parametrize with individual values",
+            "fixtures": ["server"],
+            "parametrize": [
+                {
+                    "individual": {
+                        "item_id": [1, 2, 3]
+                    },
+                    "ids": ["item-one", "item-two", "item-three"]
+                }
+            ],
+            "request": {
+                "url": "{{ server }}/item/{{ item_id }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "response_id": "id"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ response_id == item_id }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

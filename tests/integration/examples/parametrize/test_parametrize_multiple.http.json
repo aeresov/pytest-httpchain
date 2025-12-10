@@ -1,0 +1,45 @@
+{
+    "stages": [
+        {
+            "name": "parametrize_multiple",
+            "description": "Test multiple parametrize steps (cartesian product)",
+            "fixtures": ["server"],
+            "parametrize": [
+                {
+                    "individual": {
+                        "user_id": [1, 2]
+                    }
+                },
+                {
+                    "individual": {
+                        "action": ["view", "edit"]
+                    }
+                }
+            ],
+            "request": {
+                "url": "{{ server }}/user/{{ user_id }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "response_id": "id"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ response_id == user_id }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

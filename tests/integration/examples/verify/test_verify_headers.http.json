@@ -1,0 +1,24 @@
+{
+    "stages": [
+        {
+            "name": "verify_headers",
+            "description": "Verify response headers",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/headers"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "headers": {
+                            "content-type": "application/json",
+                            "x-custom-header": "test-value",
+                            "x-request-id": "12345"
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

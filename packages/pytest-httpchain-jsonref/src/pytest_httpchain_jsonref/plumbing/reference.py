@@ -153,8 +153,16 @@ class ReferenceResolver:
 
         parts = self.path_validator.parse_json_pointer(pointer)
 
+        def navigate_step(obj: Any, key: str) -> Any:
+            if isinstance(obj, list):
+                # RFC 6901: array indices must not have leading zeros (except "0" itself)
+                if len(key) > 1 and key.startswith("0"):
+                    raise ValueError(f"Array index '{key}' has leading zeros")
+                return obj[int(key)]
+            return obj[key]
+
         try:
-            return reduce(lambda obj, key: obj[int(key)] if isinstance(obj, list) else obj[key], parts, data)
+            return reduce(navigate_step, parts, data)
         except (KeyError, IndexError, ValueError, TypeError) as e:
             raise ReferenceResolverError(f"Invalid JSON pointer {pointer}: {e}") from e
 

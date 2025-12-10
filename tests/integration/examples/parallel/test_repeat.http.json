@@ -1,23 +1,23 @@
 {
-  "description": "Test parallel repeat mode - runs same request N times",
-  "stages": [
-    {
-      "name": "parallel_repeat",
-      "fixtures": ["server"],
-      "parallel": {
-        "repeat": 5,
-        "max_concurrency": 3
-      },
-      "request": {
-        "url": "{{ server }}/ok"
-      },
-      "response": [
+    "stages": [
         {
-          "verify": {
-            "status": 200
-          }
+            "name": "repeat_requests",
+            "description": "Execute request 5 times in parallel using repeat",
+            "fixtures": ["server"],
+            "parallel": {
+                "repeat": 5,
+                "max_concurrency": 3
+            },
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
         }
-      ]
-    }
-  ]
+    ]
 }

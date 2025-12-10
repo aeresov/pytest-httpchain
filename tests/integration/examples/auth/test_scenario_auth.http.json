@@ -1,0 +1,40 @@
+{
+    "auth": {
+        "name": "auth:basic",
+        "kwargs": {
+            "username": "user",
+            "password": "pass"
+        }
+    },
+    "stages": [
+        {
+            "name": "authenticated_request",
+            "description": "Request with scenario-level authentication",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/answer"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "the_answer": "answer"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ the_answer == 42 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,53 @@
+{
+    "stages": [
+        {
+            "name": "save_user_function",
+            "description": "Save values using user function",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/user/1"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "user_functions": ["save:extract_user_info"]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "verify_user_function_save",
+            "description": "Verify user function saved values",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/user/{{ user_id }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "fetched_name": "name"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ fetched_name == user_name }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

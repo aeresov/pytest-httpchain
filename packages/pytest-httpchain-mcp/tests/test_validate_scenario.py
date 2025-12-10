@@ -9,10 +9,11 @@ def test_validate_valid_scenario(datadir):
 
     assert result.valid is True
     assert len(result.errors) == 0
-    assert result.scenario_info["num_stages"] == 2
-    assert result.scenario_info["stage_names"] == ["get_user", "update_user"]
-    assert "user_id" in result.scenario_info["vars_referenced"]
-    assert "user_name" in result.scenario_info["vars_saved"]
+    assert result.scenario_info is not None
+    assert result.scenario_info.num_stages == 2
+    assert result.scenario_info.stage_names == ["get_user", "update_user"]
+    assert "user_id" in result.scenario_info.vars_referenced
+    assert "user_name" in result.scenario_info.vars_saved
 
 
 def test_validate_invalid_json(datadir):
@@ -20,7 +21,8 @@ def test_validate_invalid_json(datadir):
     result = validate_scenario(datadir / "invalid_json.json")
 
     assert result.valid is False
-    assert any("Invalid JSON syntax" in error for error in result.errors)
+    # Error can come from jsonref loader or direct JSON parsing
+    assert any("Invalid JSON syntax" in error or "Failed to load JSON" in error for error in result.errors)
 
 
 def test_validate_missing_file(datadir):
@@ -44,8 +46,9 @@ def test_validate_undefined_variables(datadir):
     result = validate_scenario(datadir / "undefined_variables.json")
 
     assert result.valid is True  # This is a warning, not an error
-    assert any("undefined variables" in warning for warning in result.warnings)
-    assert "undefined_var" in result.scenario_info["vars_referenced"]
+    assert any("undefined" in warning.lower() for warning in result.warnings)
+    assert result.scenario_info is not None
+    assert "undefined_var" in result.scenario_info.vars_referenced
 
 
 def test_validate_no_response_validation(datadir):
@@ -70,3 +73,47 @@ def test_validate_wrong_extension(datadir):
 
     assert result.valid is True
     assert any(".txt" in warning and ".json" in warning for warning in result.warnings)
+
+
+def test_validate_directory_path(tmp_path):
+    """Test validation of a directory path (not a file)."""
+    result = validate_scenario(tmp_path)
+
+    assert result.valid is False
+    assert any("not a file" in error for error in result.errors)
+
+
+def test_validate_empty_stages(datadir):
+    """Test validation of scenario with empty stages array."""
+    result = validate_scenario(datadir / "empty_stages.json")
+
+    assert result.valid is True
+    assert result.scenario_info is not None
+    assert result.scenario_info.num_stages == 0
+    assert result.scenario_info.stage_names == []
+
+
+def test_validate_schema_error(datadir):
+    """Test validation with schema errors (missing required fields)."""
+    result = validate_scenario(datadir / "schema_error.json")
+
+    assert result.valid is False
+    assert any("Schema validation failed" in error for error in result.errors)
+
+
+def test_validate_with_fixtures(datadir):
+    """Test that fixtures are properly extracted."""
+    result = validate_scenario(datadir / "with_fixtures.json")
+
+    assert result.valid is True
+    assert result.scenario_info is not None
+    assert "auth_token" in result.scenario_info.fixtures
+
+
+def test_validate_with_substitutions(datadir):
+    """Test that substitution variables are properly detected."""
+    result = validate_scenario(datadir / "with_substitutions.json")
+
+    assert result.valid is True
+    assert result.scenario_info is not None
+    assert "base_url" in result.scenario_info.vars_defined

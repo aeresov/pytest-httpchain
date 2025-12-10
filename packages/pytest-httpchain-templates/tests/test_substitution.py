@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 from pydantic import BaseModel
 from pytest_httpchain_templates.exceptions import TemplatesError
@@ -199,3 +201,202 @@ class TestWalk:
 
         result = walk("{{ [x.upper() for x in get('items', [])] }}", {})
         assert result == []
+
+    # SimpleNamespace tests
+    def test_simple_namespace(self):
+        """Test that SimpleNamespace objects are processed correctly."""
+        ns = SimpleNamespace(name="User {{ id }}", count=5)
+        result = walk(ns, {"id": "123"})
+        assert isinstance(result, SimpleNamespace)
+        assert result.name == "User 123"
+        assert result.count == 5
+
+    def test_simple_namespace_nested(self):
+        """Test SimpleNamespace with nested template expressions."""
+        ns = SimpleNamespace(
+            greeting="Hello {{ name }}",
+            details={"value": "{{ num }}"},
+        )
+        result = walk(ns, {"name": "World", "num": 42})
+        assert isinstance(result, SimpleNamespace)
+        assert result.greeting == "Hello World"
+        assert result.details == {"value": 42}
+
+    def test_simple_namespace_no_templates(self):
+        """Test optimization path - SimpleNamespace without templates returns same object."""
+        ns = SimpleNamespace(name="static", value=42)
+        result = walk(ns, {})
+        assert result is ns  # Should return same object (no copy needed)
+
+    # Pydantic model optimization test
+    def test_pydantic_model_no_templates(self):
+        """Test optimization path - Pydantic model without templates returns same object."""
+        model = TestWalk.SampleModel(name="static", value=100)
+        result = walk(model, {})
+        assert result is model  # Should return same object
+
+    # Additional built-in function tests
+    def test_uuid4_function(self):
+        """Test uuid4() generates valid UUID strings."""
+        result = walk("{{ uuid4() }}", {})
+        assert isinstance(result, str)
+        assert len(result) == 36  # UUID format: 8-4-4-4-12
+        # Verify UUID format with dashes
+        parts = result.split("-")
+        assert len(parts) == 5
+        assert [len(p) for p in parts] == [8, 4, 4, 4, 12]
+
+    def test_env_function(self, monkeypatch):
+        """Test env() for environment variable access."""
+        monkeypatch.setenv("TEST_TEMPLATES_VAR", "test_value")
+        assert walk("{{ env('TEST_TEMPLATES_VAR') }}", {}) == "test_value"
+
+    def test_env_function_with_default(self, monkeypatch):
+        """Test env() returns default for missing variable."""
+        monkeypatch.delenv("NONEXISTENT_VAR_12345", raising=False)
+        assert walk("{{ env('NONEXISTENT_VAR_12345', 'default') }}", {}) == "default"
+
+    def test_env_function_missing_no_default(self, monkeypatch):
+        """Test env() returns None for missing variable without default."""
+        monkeypatch.delenv("NONEXISTENT_VAR_12345", raising=False)
+        assert walk("{{ env('NONEXISTENT_VAR_12345') }}", {}) is None
+
+    def test_abs_function(self):
+        """Test abs() built-in."""
+        assert walk("{{ abs(-5) }}", {}) == 5
+        assert walk("{{ abs(5) }}", {}) == 5
+        assert walk("{{ abs(-3.14) }}", {}) == 3.14
+
+    def test_round_function(self):
+        """Test round() built-in."""
+        assert walk("{{ round(3.7) }}", {}) == 4
+        assert walk("{{ round(3.14159, 2) }}", {}) == 3.14
+
+    def test_tuple_function(self):
+        """Test tuple() built-in."""
+        assert walk("{{ tuple([1, 2, 3]) }}", {}) == (1, 2, 3)
+        assert walk("{{ tuple('abc') }}", {}) == ("a", "b", "c")
+
+    def test_set_function(self):
+        """Test set() built-in."""
+        assert walk("{{ set([1, 1, 2, 2, 3]) }}", {}) == {1, 2, 3}
+
+    def test_enumerate_function(self):
+        """Test enumerate() built-in."""
+        result = walk("{{ list(enumerate(['a', 'b', 'c'])) }}", {})
+        assert result == [(0, "a"), (1, "b"), (2, "c")]
+
+    def test_zip_function(self):
+        """Test zip() built-in."""
+        result = walk("{{ list(zip([1, 2], ['a', 'b'])) }}", {})
+        assert result == [(1, "a"), (2, "b")]
+
+    def test_range_function(self):
+        """Test range() built-in."""
+        assert walk("{{ list(range(5)) }}", {}) == [0, 1, 2, 3, 4]
+        assert walk("{{ list(range(2, 5)) }}", {}) == [2, 3, 4]
+
+    def test_bool_function(self):
+        """Test bool() built-in."""
+        assert walk("{{ bool(1) }}", {}) is True
+        assert walk("{{ bool(0) }}", {}) is False
+        assert walk("{{ bool([]) }}", {}) is False
+        assert walk("{{ bool([1]) }}", {}) is True
+
+    # Edge case tests
+    def test_empty_string(self):
+        """Test empty string passthrough."""
+        assert walk("", {}) == ""
+
+    def test_empty_dict(self):
+        """Test empty dict passthrough."""
+        assert walk({}, {}) == {}
+
+    def test_empty_list(self):
+        """Test empty list passthrough."""
+        assert walk([], {}) == []
+
+    def test_float_passthrough(self):
+        """Test float passthrough."""
+        assert walk(3.14, {}) == 3.14
+        assert walk(-2.5, {}) == -2.5
+
+    def test_deeply_nested_structures(self):
+        """Test deeply nested dict/list structures."""
+        data = {"a": {"b": {"c": {"d": "{{ val }}"}}}}
+        result = walk(data, {"val": "deep"})
+        assert result == {"a": {"b": {"c": {"d": "deep"}}}}
+
+    def test_mixed_nested_structures(self):
+        """Test mixed nested dicts and lists."""
+        data = {"items": [{"name": "{{ n1 }}"}, {"name": "{{ n2 }}"}]}
+        result = walk(data, {"n1": "first", "n2": "second"})
+        assert result == {"items": [{"name": "first"}, {"name": "second"}]}
+
+    # Callable context tests
+    def test_callable_function_in_context(self):
+        """Test that functions in context can be called."""
+
+        def greet(name):
+            return f"Hello, {name}"
+
+        result = walk("{{ greet('World') }}", {"greet": greet})
+        assert result == "Hello, World"
+
+    def test_callable_lambda_in_context(self):
+        """Test that lambdas in context can be called."""
+        result = walk("{{ double(5) }}", {"double": lambda x: x * 2})
+        assert result == 10
+
+    def test_callable_with_multiple_args(self):
+        """Test callable with multiple arguments."""
+
+        def add(a, b, c):
+            return a + b + c
+
+        result = walk("{{ add(1, 2, 3) }}", {"add": add})
+        assert result == 6
+
+    def test_callable_returning_complex_type(self):
+        """Test callable returning dict/list."""
+
+        def get_config():
+            return {"host": "localhost", "port": 8080}
+
+        result = walk("{{ get_config() }}", {"get_config": get_config})
+        assert result == {"host": "localhost", "port": 8080}
+
+    def test_callable_used_in_expression(self):
+        """Test callable result used in further expression."""
+
+        def get_items():
+            return [1, 2, 3]
+
+        result = walk("{{ sum(get_items()) }}", {"get_items": get_items})
+        assert result == 6
+
+
+class TestWalkErrorMessages:
+    """Test error messages with parametrization."""
+
+    @pytest.mark.parametrize(
+        "expr,context,expected_match",
+        [
+            ("{{ missing_var }}", {}, "Undefined variable"),
+            ("{{ unknown_func() }}", {}, "Unknown function"),
+            ("{{ 1 / 0 }}", {}, "ZeroDivisionError"),
+            ("{{ 'text' + 5 }}", {}, "TypeError"),
+            ("{{ [1, 2][10] }}", {}, "IndexError"),
+            ("{{ dict(a=1)['b'] }}", {}, "KeyError"),
+            ("{{ 1 + }}", {}, "Invalid expression"),
+        ],
+    )
+    def test_error_messages(self, expr, context, expected_match):
+        """Test that specific error types produce appropriate messages."""
+        with pytest.raises(TemplatesError, match=expected_match):
+            walk(expr, context)
+
+    def test_attribute_error(self):
+        """Test attribute error on dict (separate due to context requirement)."""
+        with pytest.raises(TemplatesError, match="Attribute error"):
+            walk("{{ x.nonexistent }}", {"x": {"existing": 1}})

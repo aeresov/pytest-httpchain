@@ -1,0 +1,35 @@
+{
+    "stages": [
+        {
+            "name": "xfail_stage",
+            "description": "This xfail stage should not abort subsequent stages",
+            "marks": ["xfail"],
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/bad"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "after_xfail",
+            "description": "This stage should run after the xfail stage",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

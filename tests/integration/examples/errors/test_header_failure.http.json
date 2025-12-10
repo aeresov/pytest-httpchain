@@ -1,0 +1,22 @@
+{
+    "stages": [
+        {
+            "name": "header_failure",
+            "description": "Header verification should fail",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/headers"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "headers": {
+                            "x-custom-header": "wrong-value"
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

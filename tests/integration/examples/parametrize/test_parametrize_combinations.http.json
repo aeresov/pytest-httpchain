@@ -1,0 +1,48 @@
+{
+    "stages": [
+        {
+            "name": "parametrize_combinations",
+            "description": "Test parametrize with combinations",
+            "fixtures": ["server"],
+            "parametrize": [
+                {
+                    "combinations": [
+                        {"category": "electronics", "sort": "price"},
+                        {"category": "books", "sort": "name"}
+                    ],
+                    "ids": ["electronics-by-price", "books-by-name"]
+                }
+            ],
+            "request": {
+                "url": "{{ server }}/search",
+                "params": {
+                    "category": "{{ category }}",
+                    "sort": "{{ sort }}"
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "response_category": "category",
+                            "response_sort": "sort"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ response_category == category }}",
+                            "{{ response_sort == sort }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

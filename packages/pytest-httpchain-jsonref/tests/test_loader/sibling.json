@@ -1,21 +1,21 @@
 {
-    "l0-a": {
-        "l1-a": 1
+    "source": {
+        "value": 42
     },
-    "l0-b": {
-        "$ref": "dir/child.json#/l0-a"
+    "chained": {
+        "$ref": "dir/child.json#/source"
     },
-    "l0-c": {
-        "l1-c": 1
+    "extra": {
+        "extra_value": 42
     },
-    "l0-d": {
-        "l1-d": {
-            "l2-b": 1
+    "nested_source": {
+        "merged": {
+            "other": 42
         }
     },
-    "l0-e": {
-        "l1-e": [
-            "l2-b"
+    "list_source": {
+        "items": [
+            "from_sibling"
         ]
     }
 }

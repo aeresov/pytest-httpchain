@@ -1,0 +1,24 @@
+{
+    "stages": [
+        {
+            "name": "ok",
+            "description": "simple test for /ok endpoint",
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "$ref": "common.json#/requests/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "headers": {
+                            "content-type": "application/json"
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

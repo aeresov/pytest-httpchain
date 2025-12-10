@@ -1,38 +1,39 @@
 {
-  "stages": [
-    {
-      "name": "test_base64_body",
-      "request": {
-        "url": "https://httpbin.org/post",
-        "method": "POST",
-        "headers": {
-          "Content-Type": "application/octet-stream"
-        },
-        "body": {
-          "base64": "SGVsbG8sIFdvcmxkIQ=="
-        }
-      },
-      "response": [
+    "stages": [
         {
-          "verify": {
-            "status": 200
-          }
-        },
-        {
-          "save": {
-            "jmespath": {
-              "received_data": "data"
-            }
-          }
-        },
-        {
-          "verify": {
-            "expressions": [
-              "{{ received_data == 'Hello, World!' }}"
+            "name": "base64_body",
+            "description": "Test base64-encoded binary data",
+            "fixtures": ["server"],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/echo/binary",
+                "body": {
+                    "base64": "SGVsbG8gV29ybGQh"
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "received_base64": "base64",
+                            "received_size": "size"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ received_base64 == 'SGVsbG8gV29ybGQh' }}",
+                            "{{ received_size == 12 }}"
+                        ]
+                    }
+                }
             ]
-          }
         }
-      ]
-    }
-  ]
+    ]
 }

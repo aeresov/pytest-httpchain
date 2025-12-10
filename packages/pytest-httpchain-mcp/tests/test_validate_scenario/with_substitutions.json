@@ -1,0 +1,24 @@
+{
+    "substitutions": [
+        {
+            "vars": {
+                "base_url": "https://api.example.com"
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "test_with_substitutions",
+            "request": {
+                "url": "{{ base_url }}/users"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

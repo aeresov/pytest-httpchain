@@ -1,0 +1,33 @@
+{
+    "stages": [
+        {
+            "name": "expression_failure",
+            "description": "Expression verification should fail",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/schema-test"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "item_id": "id"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ item_id == 999 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

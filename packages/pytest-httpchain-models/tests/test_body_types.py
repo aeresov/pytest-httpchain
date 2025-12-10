@@ -1,4 +1,4 @@
-"""Unit tests for TextBody, Base64Body, and BinaryBody models."""
+"""Unit tests for all RequestBody types."""
 
 import base64
 from pathlib import Path
@@ -8,8 +8,14 @@ from pydantic import ValidationError
 from pytest_httpchain_models.entities import (
     Base64Body,
     BinaryBody,
+    FilesBody,
+    FormBody,
+    GraphQL,
+    GraphQLBody,
+    JsonBody,
     Request,
     TextBody,
+    XmlBody,
 )
 
 
@@ -153,3 +159,266 @@ class TestBodyTypeDiscriminator:
         """Test that only one body type can be specified."""
         with pytest.raises(ValidationError):
             Request(url="https://example.com", body={"text": "content", "base64": "encoded"})
+
+
+class TestJsonBody:
+    """Tests for JsonBody model."""
+
+    def test_json_body_with_dict(self):
+        """Test JsonBody with dictionary."""
+        body = JsonBody(json={"key": "value", "number": 42})
+        assert body.json == {"key": "value", "number": 42}
+
+    def test_json_body_with_list(self):
+        """Test JsonBody with list."""
+        body = JsonBody(json=[1, 2, 3])
+        assert body.json == [1, 2, 3]
+
+    def test_json_body_with_nested_structure(self):
+        """Test JsonBody with nested JSON."""
+        data = {"users": [{"name": "Alice"}, {"name": "Bob"}], "count": 2}
+        body = JsonBody(json=data)
+        assert body.json == data
+
+    def test_json_body_with_primitives(self):
+        """Test JsonBody with primitive values."""
+        assert JsonBody(json="string").json == "string"
+        assert JsonBody(json=42).json == 42
+        assert JsonBody(json=3.14).json == 3.14
+        assert JsonBody(json=True).json is True
+        assert JsonBody(json=None).json is None
+
+    def test_json_body_in_request(self):
+        """Test JsonBody as part of Request model."""
+        request = Request(url="https://example.com/api", body={"json": {"data": "test"}})
+        assert isinstance(request.body, JsonBody)
+        assert request.body.json == {"data": "test"}
+
+    def test_json_body_extra_fields_forbidden(self):
+        """Test that extra fields are not allowed."""
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            JsonBody(json={"key": "value"}, extra="field")
+
+
+class TestXmlBody:
+    """Tests for XmlBody model."""
+
+    def test_xml_body_with_simple_xml(self):
+        """Test XmlBody with simple XML."""
+        xml = "<root>content</root>"
+        body = XmlBody(xml=xml)
+        assert body.xml == xml
+
+    def test_xml_body_with_nested_xml(self):
+        """Test XmlBody with nested XML."""
+        xml = "<root><child><value>test</value></child></root>"
+        body = XmlBody(xml=xml)
+        assert body.xml == xml
+
+    def test_xml_body_with_attributes(self):
+        """Test XmlBody with attributes."""
+        xml = '<user id="1" active="true">John</user>'
+        body = XmlBody(xml=xml)
+        assert body.xml == xml
+
+    def test_xml_body_with_template(self):
+        """Test XmlBody with template expression."""
+        body = XmlBody(xml="<root>{{ content }}</root>")
+        assert body.xml == "<root>{{ content }}</root>"
+
+    def test_xml_body_invalid_xml_rejected(self):
+        """Test that invalid XML is rejected."""
+        with pytest.raises(ValidationError, match="Invalid XML"):
+            XmlBody(xml="<root>unclosed")
+
+    def test_xml_body_in_request(self):
+        """Test XmlBody as part of Request model."""
+        xml = "<data><value>test</value></data>"
+        request = Request(url="https://example.com/api", body={"xml": xml})
+        assert isinstance(request.body, XmlBody)
+        assert request.body.xml == xml
+
+    def test_xml_body_extra_fields_forbidden(self):
+        """Test that extra fields are not allowed."""
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            XmlBody(xml="<root/>", extra="field")
+
+
+class TestFormBody:
+    """Tests for FormBody model."""
+
+    def test_form_body_simple(self):
+        """Test FormBody with simple form data."""
+        body = FormBody(form={"username": "john", "password": "secret"})
+        assert body.form == {"username": "john", "password": "secret"}
+
+    def test_form_body_with_various_types(self):
+        """Test FormBody with various value types."""
+        body = FormBody(form={"string": "value", "number": 42, "boolean": True})
+        assert body.form["string"] == "value"
+        assert body.form["number"] == 42
+        assert body.form["boolean"] is True
+
+    def test_form_body_empty(self):
+        """Test FormBody with empty form."""
+        body = FormBody(form={})
+        assert body.form == {}
+
+    def test_form_body_in_request(self):
+        """Test FormBody as part of Request model."""
+        request = Request(url="https://example.com/api", body={"form": {"field": "value"}})
+        assert isinstance(request.body, FormBody)
+        assert request.body.form == {"field": "value"}
+
+    def test_form_body_extra_fields_forbidden(self):
+        """Test that extra fields are not allowed."""
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            FormBody(form={"key": "value"}, extra="field")
+
+
+class TestFilesBody:
+    """Tests for FilesBody model."""
+
+    def test_files_body_single_file(self):
+        """Test FilesBody with single file."""
+        body = FilesBody(files={"document": "path/to/file.pdf"})
+        assert isinstance(body.files["document"], Path)
+        assert str(body.files["document"]) == "path/to/file.pdf"
+
+    def test_files_body_multiple_files(self):
+        """Test FilesBody with multiple files."""
+        body = FilesBody(files={"doc1": "file1.pdf", "doc2": "file2.pdf"})
+        assert len(body.files) == 2
+        assert str(body.files["doc1"]) == "file1.pdf"
+        assert str(body.files["doc2"]) == "file2.pdf"
+
+    def test_files_body_with_path_object(self):
+        """Test FilesBody with Path object."""
+        body = FilesBody(files={"file": Path("data/upload.bin")})
+        assert body.files["file"] == Path("data/upload.bin")
+
+    def test_files_body_with_template(self):
+        """Test FilesBody with template expression."""
+        body = FilesBody(files={"file": "uploads/{{ filename }}"})
+        assert body.files["file"] == "uploads/{{ filename }}"
+
+    def test_files_body_in_request(self):
+        """Test FilesBody as part of Request model."""
+        request = Request(url="https://example.com/upload", body={"files": {"upload": "file.pdf"}})
+        assert isinstance(request.body, FilesBody)
+
+    def test_files_body_extra_fields_forbidden(self):
+        """Test that extra fields are not allowed."""
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            FilesBody(files={"f": "file.txt"}, extra="field")
+
+
+class TestGraphQLBody:
+    """Tests for GraphQLBody model."""
+
+    def test_graphql_body_simple_query(self):
+        """Test GraphQLBody with simple query."""
+        body = GraphQLBody(graphql={"query": "{ user { id name } }"})
+        assert isinstance(body.graphql, GraphQL)
+        assert body.graphql.query == "{ user { id name } }"
+
+    def test_graphql_body_with_variables(self):
+        """Test GraphQLBody with query and variables."""
+        body = GraphQLBody(
+            graphql={
+                "query": "query GetUser($id: ID!) { user(id: $id) { name } }",
+                "variables": {"id": "123"},
+            }
+        )
+        assert body.graphql.query == "query GetUser($id: ID!) { user(id: $id) { name } }"
+        assert body.graphql.variables == {"id": "123"}
+
+    def test_graphql_body_mutation(self):
+        """Test GraphQLBody with mutation."""
+        body = GraphQLBody(
+            graphql={
+                "query": "mutation CreateUser($name: String!) { createUser(name: $name) { id } }",
+                "variables": {"name": "Alice"},
+            }
+        )
+        assert "mutation" in body.graphql.query
+
+    def test_graphql_body_mutation_from_file(self, datadir):
+        """Test GraphQLBody with mutation loaded from file."""
+        query = (datadir / "mutation_create_user.graphql").read_text()
+        body = GraphQLBody(
+            graphql={
+                "query": query,
+                "variables": {"input": {"name": "Alice", "email": "alice@example.com"}},
+            }
+        )
+        assert "mutation CreateUser" in body.graphql.query
+        assert "createUser(input: $input)" in body.graphql.query
+
+    def test_graphql_body_query_with_directives(self, datadir):
+        """Test GraphQLBody with query containing directives loaded from file."""
+        query = (datadir / "query_with_variables.graphql").read_text()
+        body = GraphQLBody(
+            graphql={
+                "query": query,
+                "variables": {"id": "123", "includeProfile": True},
+            }
+        )
+        assert "@include(if: $includeProfile)" in body.graphql.query
+
+    def test_graphql_body_with_template_query(self):
+        """Test GraphQLBody with template in query."""
+        body = GraphQLBody(graphql={"query": "{{ graphql_query }}"})
+        assert body.graphql.query == "{{ graphql_query }}"
+
+    def test_graphql_body_invalid_query_rejected(self):
+        """Test that invalid GraphQL query is rejected."""
+        with pytest.raises(ValidationError, match="Invalid GraphQL query"):
+            GraphQLBody(graphql={"query": "{ user { id name }"})  # Missing closing brace
+
+    def test_graphql_body_in_request(self):
+        """Test GraphQLBody as part of Request model."""
+        request = Request(
+            url="https://example.com/graphql",
+            body={"graphql": {"query": "{ users { id } }"}},
+        )
+        assert isinstance(request.body, GraphQLBody)
+
+    def test_graphql_body_extra_fields_forbidden(self):
+        """Test that extra fields are not allowed on GraphQL."""
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            GraphQLBody(graphql={"query": "{ test }", "extra": "field"})
+
+    def test_graphql_body_outer_extra_fields_forbidden(self):
+        """Test that extra fields are not allowed on GraphQLBody."""
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            GraphQLBody(graphql={"query": "{ test }"}, extra="field")
+
+
+class TestBodyTypeDiscriminatorExtended:
+    """Extended tests for body type discrimination."""
+
+    def test_discriminator_chooses_json_body(self):
+        """Test discriminator correctly identifies JsonBody."""
+        request = Request(url="https://example.com", body={"json": {"data": "test"}})
+        assert isinstance(request.body, JsonBody)
+
+    def test_discriminator_chooses_xml_body(self):
+        """Test discriminator correctly identifies XmlBody."""
+        request = Request(url="https://example.com", body={"xml": "<root/>"})
+        assert isinstance(request.body, XmlBody)
+
+    def test_discriminator_chooses_form_body(self):
+        """Test discriminator correctly identifies FormBody."""
+        request = Request(url="https://example.com", body={"form": {"key": "value"}})
+        assert isinstance(request.body, FormBody)
+
+    def test_discriminator_chooses_files_body(self):
+        """Test discriminator correctly identifies FilesBody."""
+        request = Request(url="https://example.com", body={"files": {"f": "file.txt"}})
+        assert isinstance(request.body, FilesBody)
+
+    def test_discriminator_chooses_graphql_body(self):
+        """Test discriminator correctly identifies GraphQLBody."""
+        request = Request(url="https://example.com", body={"graphql": {"query": "{ test }"}})
+        assert isinstance(request.body, GraphQLBody)

@@ -1,0 +1,23 @@
+{
+    "stages": [
+        {
+            "name": "verify_body_contains",
+            "description": "Verify response body contains/not contains substrings",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/schema-test"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "contains": ["Test Item", "active"],
+                            "not_contains": ["error", "failed"]
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

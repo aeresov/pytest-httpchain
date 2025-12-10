@@ -1,0 +1,64 @@
+{
+    "stages": [
+        {
+            "name": "save_substitutions",
+            "description": "Save values using substitutions",
+            "fixtures": ["server"],
+            "substitutions": [
+                {
+                    "vars": {
+                        "base_value": 10
+                    }
+                }
+            ],
+            "request": {
+                "url": "{{ server }}/users"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "users_list": "users"
+                        }
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "computed_value": "{{ base_value * 2 }}",
+                                    "user_names": "{{ [u['name'] for u in users_list] }}"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "verify_substitutions",
+            "description": "Verify saved substitutions are available",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ computed_value == 20 }}",
+                            "{{ 'Alice' in user_names }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

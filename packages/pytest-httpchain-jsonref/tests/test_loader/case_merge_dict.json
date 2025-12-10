@@ -1,8 +1,8 @@
 {
-    "l0-a": {
-        "l1-d": {
-            "l2-a": 1
+    "result": {
+        "merged": {
+            "local": 42
         },
-        "$ref": "sibling.json#/l0-d"
+        "$ref": "sibling.json#/nested_source"
     }
 }

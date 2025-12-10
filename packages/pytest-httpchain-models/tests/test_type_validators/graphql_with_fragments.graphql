@@ -1,0 +1,12 @@
+query GetUser {
+    user {
+        ...userFields
+    }
+}
+
+fragment userFields on User {
+    id
+    name
+    email
+    createdAt
+}

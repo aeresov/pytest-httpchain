@@ -1,10 +1,10 @@
 {
-    "l0-a": {
-        "l1-a": {
-            "l2-a": 1
+    "result": {
+        "original": {
+            "value": 42
         },
-        "l1-b": {
-            "$ref": "sibling.json#/l0-a"
+        "from_ref": {
+            "$ref": "sibling.json#/source"
         }
     }
 }

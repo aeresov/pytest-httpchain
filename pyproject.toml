@@ -88,10 +88,10 @@ ignore = []
 [tool.ruff.lint.isort]
 known-first-party = ["tests", "utils"]
 
-[tool.pytest.ini_options]
+[tool.pytest]
+minversion = "9.0"
 log_cli = true
 log_cli_level = "INFO"
-# testpaths = ["tests"]
 norecursedirs = ["examples"]
 pytester_example_dir = "tests/integration/examples"
 addopts = ["--log-disable=werkzeug", "--import-mode=importlib"]

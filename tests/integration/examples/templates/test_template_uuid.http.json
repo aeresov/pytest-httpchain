@@ -1,0 +1,41 @@
+{
+    "stages": [
+        {
+            "name": "template_uuid",
+            "description": "Test uuid4() generation in templates",
+            "fixtures": ["server"],
+            "substitutions": [
+                {
+                    "vars": {
+                        "request_id": "{{ uuid4() }}"
+                    }
+                }
+            ],
+            "request": {
+                "url": "{{ server }}/template/{{ request_id }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "returned_value": "value"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ len(returned_value) == 36 }}",
+                            "{{ '-' in returned_value }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

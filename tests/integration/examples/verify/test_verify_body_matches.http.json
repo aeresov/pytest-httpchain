@@ -1,0 +1,23 @@
+{
+    "stages": [
+        {
+            "name": "verify_body_matches",
+            "description": "Verify response body matches/not matches regex patterns",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/schema-test"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "matches": ["\"id\":\\s*\\d+", "\"name\":\\s*\"[^\"]+\""],
+                            "not_matches": ["error", "exception"]
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

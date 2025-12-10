@@ -1,0 +1,43 @@
+{
+    "stages": [
+        {
+            "name": "form_body",
+            "description": "Test URL-encoded form body",
+            "fixtures": ["server"],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/echo/form",
+                "body": {
+                    "form": {
+                        "username": "testuser",
+                        "password": "secret123",
+                        "remember": "true"
+                    }
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "form_username": "form.username",
+                            "form_password": "form.password"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ form_username == 'testuser' }}",
+                            "{{ form_password == 'secret123' }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

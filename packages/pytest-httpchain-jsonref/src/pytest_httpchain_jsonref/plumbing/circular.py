@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Self
 
+from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
+
 
 class CircularDependencyTracker:
     """Tracks references to detect circular dependencies."""
@@ -19,11 +21,11 @@ class CircularDependencyTracker:
             pointer: The JSON pointer within the file
 
         Raises:
-            RuntimeError: If a circular reference is detected
+            ReferenceResolverError: If a circular reference is detected
         """
         ref_key = (file_path, pointer)
         if ref_key in self.external_refs:
-            raise RuntimeError(f"Circular reference detected: {file_path}#{pointer}")
+            raise ReferenceResolverError(f"Circular reference detected: {file_path}#{pointer}")
         self.external_refs.add(ref_key)
 
     def check_internal_ref(self, pointer: str) -> None:
@@ -33,10 +35,10 @@ class CircularDependencyTracker:
             pointer: The JSON pointer being referenced
 
         Raises:
-            RuntimeError: If a circular reference is detected
+            ReferenceResolverError: If a circular reference is detected
         """
         if pointer in self.internal_refs:
-            raise RuntimeError(f"Circular reference detected: #{pointer}")
+            raise ReferenceResolverError(f"Circular reference detected: #{pointer}")
         self.internal_refs.add(pointer)
 
     def clear_external_ref(self, file_path: Path, pointer: str) -> None:

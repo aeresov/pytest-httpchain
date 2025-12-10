@@ -8,7 +8,7 @@ A pytest plugin for testing HTTP endpoints.
 
 ## Overview
 
-`pytest-httpchain` is an integration testing framework for HTTP APIs based on battle-hardened [requests](https://requests.readthedocs.io) lib.  
+`pytest-httpchain` is an integration testing framework for HTTP APIs based on [httpx](https://www.python-httpx.org) lib.  
 It aims at helping with common HTTP API testing scenarios, where user needs to make several calls in specific order using data obtained along the way, like auth tokens or resource ids.
 
 ## Installation

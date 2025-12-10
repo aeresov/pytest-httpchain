@@ -1,0 +1,39 @@
+{
+    "stages": [
+        {
+            "name": "verify_expressions",
+            "description": "Verify using boolean expressions",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/schema-test"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "item_id": "id",
+                            "item_active": "active",
+                            "item_name": "name",
+                            "item_tags": "tags"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ item_id == 1 }}",
+                            "{{ item_active == True }}",
+                            "{{ 'Test' in item_name }}",
+                            "{{ len(item_tags) == 3 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

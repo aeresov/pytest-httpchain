@@ -1,0 +1,40 @@
+{
+    "stages": [
+        {
+            "name": "request_auth",
+            "description": "Request with request-level authentication",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/answer",
+                "auth": {
+                    "name": "auth:basic",
+                    "kwargs": {
+                        "username": "user",
+                        "password": "pass"
+                    }
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "the_answer": "answer"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ the_answer == 42 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

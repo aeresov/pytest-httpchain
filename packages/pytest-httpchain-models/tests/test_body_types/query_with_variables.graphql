@@ -1,0 +1,11 @@
+query GetUserById($id: ID!, $includeProfile: Boolean = false) {
+    user(id: $id) {
+        id
+        name
+        email
+        profile @include(if: $includeProfile) {
+            bio
+            avatar
+        }
+    }
+}

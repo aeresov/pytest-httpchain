@@ -1,0 +1,36 @@
+{
+    "stages": [
+        {
+            "name": "failing_stage",
+            "description": "This stage will fail and cause abort",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/bad"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "cleanup_stage",
+            "description": "This stage runs even after abort due to always_run",
+            "always_run": true,
+            "fixtures": ["server"],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/counter"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

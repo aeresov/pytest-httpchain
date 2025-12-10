@@ -1,0 +1,55 @@
+{
+    "stages": [
+        {
+            "name": "template_helpers",
+            "description": "Test exists() and get() helper functions",
+            "fixtures": ["server"],
+            "substitutions": [
+                {
+                    "vars": {
+                        "defined_var": "hello"
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/echo/json",
+                "body": {
+                    "json": {
+                        "has_defined": "{{ exists('defined_var') }}",
+                        "has_undefined": "{{ exists('undefined_var') }}",
+                        "get_defined": "{{ get('defined_var', 'default') }}",
+                        "get_undefined": "{{ get('undefined_var', 'default') }}"
+                    }
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "resp_has_defined": "received.has_defined",
+                            "resp_has_undefined": "received.has_undefined",
+                            "resp_get_defined": "received.get_defined",
+                            "resp_get_undefined": "received.get_undefined"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ resp_has_defined == True }}",
+                            "{{ resp_has_undefined == False }}",
+                            "{{ resp_get_defined == 'hello' }}",
+                            "{{ resp_get_undefined == 'default' }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -48,6 +48,13 @@ SAFE_FUNCTIONS = {
     "env": lambda var, default=None: get_env(var, default),
 }
 
+# JSON-style boolean literals (lowercase) for compatibility
+JSON_LITERALS = {
+    "true": True,
+    "false": False,
+    "null": None,
+}
+
 evaluator = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS | DEFAULT_FUNCTIONS | DEFAULT_NAMES)
 
 
@@ -94,7 +101,7 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
             "exists": exists,
             "get": get,
         },
-        names=names,
+        names=JSON_LITERALS | names,
     )
 
     try:

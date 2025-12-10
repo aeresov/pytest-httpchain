@@ -1,0 +1,20 @@
+{
+    "stages": [
+        {
+            "name": "verify_user_function",
+            "description": "Verify using user-defined function",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/schema-test"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "user_functions": ["verify:verify_has_id", "verify:verify_status_ok"]
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -1,60 +1,81 @@
-# Project Overview
+# CLAUDE.md
 
-`pytest-httpchain` is a pytest plugin for declarative HTTP API integration testing. Tests are defined in JSON files that describe multi-stage HTTP request/response scenarios with variable substitution, response verification, and data extraction capabilities.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-# Architecture
+## Project Overview
 
-## Core Flow
+pytest-httpchain is a pytest plugin for declarative HTTP API integration testing. Test scenarios are defined in JSON files with `$ref` support, template expressions (`{{ expr }}`), and multi-stage request chaining.
 
-1. **Test Discovery**: `plugin.py` implements pytest hooks to find `test_*.http.json` files and creates `JsonModule` instances
-2. **Test Generation**: `carrier.py` dynamically creates test classes from JSON scenarios
-3. **Test Execution**: Each stage becomes a test method that:
-    - Prepares context with variables and fixtures
-    - Executes HTTP request
-    - Verifies response and saves data for next stages
-    - Updates global context for subsequent stages
+## Commands
 
-## Key Components
+```bash
+# Run all tests
+uv run pytest
 
-**Main Plugin** (`src/pytest_httpchain/`)
+# Run tests for a specific package
+uv run pytest packages/pytest-httpchain-jsonref/tests -v
+uv run pytest packages/pytest-httpchain-models/tests -v
+uv run pytest packages/pytest-httpchain-templates/tests -v
+uv run pytest packages/pytest-httpchain-mcp/tests -v
+uv run pytest packages/pytest-httpchain-userfunc/tests -v
 
--   `plugin.py`: Pytest hooks for test discovery and collection
--   `carrier.py`: Dynamic test class generation, manages test lifecycle and shared state
--   `context_manager.py`: Manages layered data context
--   `request.py`: HTTP request preparation and execution
--   `response.py`: Response processing, verification, and data extraction
--   `fixture_manager.py`: Handles pytest fixture processing for tests
+# Run a single test file or test
+uv run pytest tests/integration/test_primer.py -v
+uv run pytest tests/unit/test_foo.py::test_specific -v
 
-**Sub-packages** (`packages/`)
+# Lint
+uv run ruff check .
+uv run ruff format --check .
 
--   `pytest-httpchain-models`: Pydantic models for JSON schema validation
--   `pytest-httpchain-templates`: Jinja2 template substitution engine
--   `pytest-httpchain-jsonref`: JSON reference resolution ($ref support)
--   `pytest-httpchain-userfunc`: User function wrapping and execution
--   `pytest-httpchain-mcp`: MCP server for AI assistant integration
+# Format
+uv run ruff format .
 
-## Key Concepts
+# Run MCP server
+uv run pytest-httpchain-mcp
 
-### Variable Substitution
+# Run unit tests with coverage report (main package only)
+uv run pytest tests/unit --cov=src --cov-report=term-missing
 
--   Jinja2-style expressions `{{ variable }}` in JSON values
--   Python expressions supported: `{{ str(value) }}`, `{{ len(items) }}`
--   Variables resolved from context
+# Run all tests (may have conftest conflicts, use specific paths)
+uv run pytest tests/unit tests/integration -v
+```
 
-### Stage Execution
+## Architecture
 
--   Stages execute sequentially with shared context
--   Failed stages abort flow unless marked with `xfail`
--   `always_run: true` ensures cleanup stages run regardless of failures
+This is a uv workspace monorepo with the main plugin in `src/` and supporting packages in `packages/`:
 
-### Response Processing
+```
+src/pytest_httpchain/          # Main pytest plugin
+├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule)
+├── carrier.py                 # Test execution engine (Carrier class)
+├── utils.py                   # Substitution processing, user function calls
+└── report_formatter.py        # HTTP request/response formatting for test reports
 
--   **Save**: Extract data using JMESPath or custom functions
--   **Verify**: Assert status codes, headers, JSON schema, expressions
--   Saved variables available to all subsequent stages
+packages/
+├── pytest-httpchain-jsonref/       # $ref resolution with deep merging
+├── pytest-httpchain-models/        # Pydantic models (Scenario, Stage, Request, etc.)
+├── pytest-httpchain-templates/     # {{ expression }} substitution engine
+├── pytest-httpchain-userfunc/      # Dynamic function import/invocation
+└── pytest-httpchain-mcp/           # MCP server for AI assistants
+```
 
-### JSONRef Support
+Each package has its own CLAUDE.md with detailed API and behavior documentation.
 
--   Reuse test components with `$ref` references
--   Supports local and cross-file references
--   Properties merged recursively with type checking
+## Test File Pattern
+
+Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix configurable via `suffix` ini option).
+
+## Key Execution Flow
+
+1. **Collection**: `plugin.py:JsonModule.collect()` loads JSON, resolves `$ref`, validates against `Scenario` model
+2. **Class generation**: `carrier.py:create_test_class()` creates dynamic test class with stage methods
+3. **Execution**: Each stage method calls `Carrier.execute_stage()` which:
+   - Processes substitutions into context
+   - Walks request model through template engine
+   - Executes HTTP request via httpx
+   - Processes response steps (verify/save)
+   - Updates global context with saved values
+
+## Integration Tests
+
+Integration tests use pytest's `pytester` fixture. Test scenarios live in `tests/integration/examples/` and are executed via pytester's `runpytest()`.

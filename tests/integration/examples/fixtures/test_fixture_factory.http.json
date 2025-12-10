@@ -1,0 +1,41 @@
+{
+    "stages": [
+        {
+            "name": "fixture_factory",
+            "description": "Test callable factory fixture",
+            "fixtures": ["server", "request_id"],
+            "substitutions": [
+                {
+                    "vars": {
+                        "generated_id": "{{ request_id() }}"
+                    }
+                }
+            ],
+            "request": {
+                "url": "{{ server }}/template/{{ generated_id }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "returned_value": "value"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ len(returned_value) == 36 }}",
+                            "{{ '-' in returned_value }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

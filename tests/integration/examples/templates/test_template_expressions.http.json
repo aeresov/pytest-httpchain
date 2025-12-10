@@ -1,0 +1,50 @@
+{
+    "stages": [
+        {
+            "name": "template_expressions",
+            "description": "Test Python expressions in templates",
+            "fixtures": ["server"],
+            "substitutions": [
+                {
+                    "vars": {
+                        "numbers": [1, 2, 3, 4, 5],
+                        "text": "hello world"
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/template/compute",
+                "body": {
+                    "json": {
+                        "number": "{{ sum(numbers) }}",
+                        "text": "{{ text.upper() }}"
+                    }
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "doubled": "computed.doubled",
+                            "upper_text": "computed.upper"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ doubled == 30 }}",
+                            "{{ upper_text == 'HELLO WORLD' }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

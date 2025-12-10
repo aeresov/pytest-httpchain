@@ -1,8 +1,8 @@
 {
-    "l0-a": {
-        "l1-e": [
-            "l2-a"
+    "result": {
+        "items": [
+            "from_local"
         ],
-        "$ref": "sibling.json#/l0-e"
+        "$ref": "sibling.json#/list_source"
     }
 }

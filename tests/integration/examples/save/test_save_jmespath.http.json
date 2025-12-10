@@ -1,0 +1,58 @@
+{
+    "stages": [
+        {
+            "name": "save_jmespath",
+            "description": "Save values using JMESPath extraction",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/users"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "first_user": "users[0]",
+                            "first_user_name": "users[0].name",
+                            "user_count": "length(users)"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "use_saved_values",
+            "description": "Verify saved JMESPath values are available",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/user/{{ first_user.id }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "fetched_name": "name"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ fetched_name == first_user_name }}",
+                            "{{ user_count == 3 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

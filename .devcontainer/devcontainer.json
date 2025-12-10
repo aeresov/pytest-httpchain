@@ -5,11 +5,12 @@
         "ghcr.io/devcontainers/features/node:1": {}
     },
     "remoteEnv": {
-        "UV_LINK_MODE": "copy"
+        "UV_LINK_MODE": "copy",
+        "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
     },
     "runArgs": ["--network=host"],
     "remoteUser": "vscode",
-    "mounts": [],
+    "mounts": [{ "source": "${localEnv:HOME}/.claude", "target": "/home/vscode/.claude", "type": "bind" }],
     "postCreateCommand": {
         "home": "sudo chown --recursive $(whoami): /home/$(whoami)",
         "uv": "curl -LsSf https://astral.sh/uv/install.sh | sh"

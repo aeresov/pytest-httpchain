@@ -1,0 +1,47 @@
+{
+    "stages": [
+        {
+            "name": "verify_body_schema_file",
+            "description": "Verify response body against JSON schema from file",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/schema-test"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "schema": "schema.json"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "verify_body_schema_inline",
+            "description": "Verify response body against inline JSON schema",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/schema-test"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["id", "name"],
+                                "properties": {
+                                    "id": {"type": "integer", "minimum": 1},
+                                    "name": {"type": "string", "minLength": 1}
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

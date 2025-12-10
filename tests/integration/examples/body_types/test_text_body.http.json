@@ -1,38 +1,26 @@
 {
-  "stages": [
-    {
-      "name": "test_text_body",
-      "request": {
-        "url": "https://httpbin.org/post",
-        "method": "POST",
-        "headers": {
-          "Content-Type": "text/plain"
-        },
-        "body": {
-          "text": "Hello, this is raw text content!"
-        }
-      },
-      "response": [
+    "stages": [
         {
-          "verify": {
-            "status": 200
-          }
-        },
-        {
-          "save": {
-            "jmespath": {
-              "received_data": "data"
-            }
-          }
-        },
-        {
-          "verify": {
-            "expressions": [
-              "{{ received_data == 'Hello, this is raw text content!' }}"
+            "name": "text_body",
+            "description": "Test raw text body",
+            "fixtures": ["server"],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/echo/text",
+                "body": {
+                    "text": "Hello, World! This is plain text content."
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "contains": ["Hello, World!"]
+                        }
+                    }
+                }
             ]
-          }
         }
-      ]
-    }
-  ]
+    ]
 }

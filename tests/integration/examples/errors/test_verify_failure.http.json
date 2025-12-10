@@ -1,0 +1,19 @@
+{
+    "stages": [
+        {
+            "name": "verify_failure",
+            "description": "This verification should fail",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/bad"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

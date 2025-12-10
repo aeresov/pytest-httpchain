@@ -1,0 +1,21 @@
+{
+    "fixtures": ["auth_token", "db_connection"],
+    "stages": [
+        {
+            "name": "test_with_fixtures",
+            "request": {
+                "url": "https://api.example.com/",
+                "headers": {
+                    "Authorization": "Bearer {{ auth_token }}"
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

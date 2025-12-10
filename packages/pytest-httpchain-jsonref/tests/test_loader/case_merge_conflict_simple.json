@@ -1,6 +1,6 @@
 {
-    "l0-a": {
-        "l1-a": 2,
-        "$ref": "sibling.json#/l0-a"
+    "result": {
+        "value": 99,
+        "$ref": "sibling.json#/source"
     }
 }

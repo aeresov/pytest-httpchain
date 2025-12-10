@@ -1,8 +1,8 @@
 {
-    "l0-a": {
-        "l1-a": 1
+    "source": {
+        "value": 42
     },
-    "l0-b": {
-        "$ref": "#/l0-a"
+    "target": {
+        "$ref": "#/source"
     }
 }

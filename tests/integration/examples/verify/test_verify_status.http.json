@@ -1,0 +1,34 @@
+{
+    "stages": [
+        {
+            "name": "verify_200",
+            "description": "Verify 200 OK status",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "verify_400",
+            "description": "Verify 400 Bad Request status",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/bad"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 400
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,43 @@
+{
+    "stages": [
+        {
+            "name": "json_body",
+            "description": "Test JSON body in POST request",
+            "fixtures": ["server"],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/echo/json",
+                "body": {
+                    "json": {
+                        "name": "Test User",
+                        "age": 30,
+                        "active": true
+                    }
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "received_name": "received.name",
+                            "received_age": "received.age"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ received_name == 'Test User' }}",
+                            "{{ received_age == 30 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

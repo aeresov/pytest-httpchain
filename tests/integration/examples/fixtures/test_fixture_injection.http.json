@@ -1,0 +1,33 @@
+{
+    "stages": [
+        {
+            "name": "fixture_injection",
+            "description": "Test simple fixture value injection",
+            "fixtures": ["server", "api_key"],
+            "request": {
+                "url": "{{ server }}/template/{{ api_key }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "returned_value": "value"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ returned_value == 'test-api-key-12345' }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

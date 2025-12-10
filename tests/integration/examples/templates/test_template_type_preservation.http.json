@@ -1,0 +1,58 @@
+{
+    "stages": [
+        {
+            "name": "type_preservation",
+            "description": "Test that complete templates preserve type (int, dict, list, bool)",
+            "fixtures": ["server"],
+            "substitutions": [
+                {
+                    "vars": {
+                        "count": "{{ 42 }}",
+                        "items": "{{ [1, 2, 3] }}",
+                        "config": "{{ {'key': 'value'} }}",
+                        "active": "{{ true }}"
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/echo/json",
+                "body": {
+                    "json": {
+                        "count": "{{ count }}",
+                        "items": "{{ items }}",
+                        "config": "{{ config }}",
+                        "active": "{{ active }}"
+                    }
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "received_count": "received.count",
+                            "received_items": "received.items",
+                            "received_config": "received.config",
+                            "received_active": "received.active"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ received_count == 42 }}",
+                            "{{ received_items == [1, 2, 3] }}",
+                            "{{ received_config == {'key': 'value'} }}",
+                            "{{ received_active == True }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

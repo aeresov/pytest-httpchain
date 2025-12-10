@@ -1,53 +1,42 @@
 {
-  "description": "Test parallel foreach with IndividualParameter - saves last value",
-  "stages": [
-    {
-      "name": "parallel_foreach_individual",
-      "fixtures": ["server"],
-      "parallel": {
-        "foreach": [
-          {"individual": {"iteration_value": [1, 2, 3, 4, 5]}}
-        ],
-        "max_concurrency": 3
-      },
-      "request": {
-        "url": "{{ server }}/ok"
-      },
-      "response": [
+    "stages": [
         {
-          "verify": {
-            "status": 200
-          }
-        },
-        {
-          "save": {
-            "substitutions": [
-              {
-                "vars": {
-                  "last_value": "{{ iteration_value }}"
+            "name": "foreach_users",
+            "description": "Fetch multiple users using foreach with individual parameter",
+            "fixtures": ["server"],
+            "parallel": {
+                "foreach": [
+                    {
+                        "individual": {
+                            "user_id": [1, 2, 3]
+                        }
+                    }
+                ]
+            },
+            "request": {
+                "url": "{{ server }}/user/{{ user_id }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "response_id": "id"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ response_id == user_id }}"
+                        ]
+                    }
                 }
-              }
             ]
-          }
         }
-      ]
-    },
-    {
-      "name": "verify_last_wins",
-      "fixtures": ["server"],
-      "request": {
-        "url": "{{ server }}/ok"
-      },
-      "response": [
-        {
-          "verify": {
-            "status": 200,
-            "expressions": [
-              "{{ last_value == 5 }}"
-            ]
-          }
-        }
-      ]
-    }
-  ]
+    ]
 }

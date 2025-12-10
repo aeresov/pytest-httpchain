@@ -1,0 +1,26 @@
+{
+    "stages": [
+        {
+            "name": "xml_body",
+            "description": "Test XML body",
+            "fixtures": ["server"],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/echo/xml",
+                "body": {
+                    "xml": "<?xml version=\"1.0\"?><root><item>Test</item></root>"
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "contains": ["<item>Test</item>"]
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

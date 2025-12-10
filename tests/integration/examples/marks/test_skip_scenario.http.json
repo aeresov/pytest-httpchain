@@ -1,0 +1,20 @@
+{
+    "marks": ["skip"],
+    "stages": [
+        {
+            "name": "skipped_stage",
+            "description": "This entire scenario should be skipped",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

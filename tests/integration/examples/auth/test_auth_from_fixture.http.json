@@ -1,0 +1,40 @@
+{
+    "stages": [
+        {
+            "name": "auth_from_fixture",
+            "description": "Authentication using values from fixture",
+            "fixtures": ["server", "user_credentials"],
+            "request": {
+                "url": "{{ server }}/answer",
+                "auth": {
+                    "name": "auth:basic",
+                    "kwargs": {
+                        "username": "{{ user_credentials['username'] }}",
+                        "password": "{{ user_credentials['password'] }}"
+                    }
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "the_answer": "answer"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ the_answer == 42 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

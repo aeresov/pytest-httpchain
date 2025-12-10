@@ -1,0 +1,33 @@
+{
+    "stages": [
+        {
+            "name": "fixture_dict",
+            "description": "Test fixture providing dict values",
+            "fixtures": ["server", "user_credentials"],
+            "request": {
+                "url": "{{ server }}/template/{{ user_credentials['username'] }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "returned_value": "value"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ returned_value == 'user' }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}
