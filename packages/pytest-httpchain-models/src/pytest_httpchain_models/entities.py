@@ -1,4 +1,5 @@
 import warnings
+from collections.abc import Callable
 from http import HTTPMethod, HTTPStatus
 from typing import Annotated, Any, Literal, Self
 
@@ -20,6 +21,35 @@ from pytest_httpchain_models.types import (
     VariableName,
     XMLString,
 )
+
+
+def _create_discriminator(class_to_tag: dict[str, str], error_message: str) -> Callable[[Any], str]:
+    """Factory function to create Pydantic discriminator functions.
+
+    Args:
+        class_to_tag: Mapping from class names to discriminator tags.
+        error_message: Error message to raise when type cannot be determined.
+
+    Returns:
+        A discriminator function that can be used with Pydantic's Discriminator.
+    """
+    tag_fields = set(class_to_tag.values())
+
+    def discriminator(v: Any) -> str:
+        if isinstance(v, dict):
+            found = tag_fields & v.keys()
+            if found:
+                return found.pop()
+
+        if hasattr(v, "__class__"):
+            tag = class_to_tag.get(v.__class__.__name__)
+            if tag:
+                return tag
+
+        raise ValueError(error_message)
+
+    return discriminator
+
 
 # Suppress Pydantic warnings about field names shadowing BaseModel attributes.
 # Fields "json" and "schema" are intentional domain-specific names.
@@ -160,29 +190,19 @@ class GraphQLBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-def get_request_body_discriminator(v: Any) -> str:
-    if isinstance(v, dict):
-        body_fields = {"json", "xml", "form", "text", "base64", "binary", "files", "graphql"}
-        found = body_fields & v.keys()
-        if found:
-            return found.pop()
-
-    if hasattr(v, "__class__"):
-        class_to_tag = {
-            "JsonBody": "json",
-            "XmlBody": "xml",
-            "FormBody": "form",
-            "TextBody": "text",
-            "Base64Body": "base64",
-            "BinaryBody": "binary",
-            "FilesBody": "files",
-            "GraphQLBody": "graphql",
-        }
-        tag = class_to_tag.get(v.__class__.__name__)
-        if tag:
-            return tag
-
-    raise ValueError("Unable to determine body type")
+get_request_body_discriminator = _create_discriminator(
+    {
+        "JsonBody": "json",
+        "XmlBody": "xml",
+        "FormBody": "form",
+        "TextBody": "text",
+        "Base64Body": "base64",
+        "BinaryBody": "binary",
+        "FilesBody": "files",
+        "GraphQLBody": "graphql",
+    },
+    "Unable to determine body type",
+)
 
 
 RequestBody = Annotated[
@@ -218,23 +238,13 @@ class FunctionsSubstitution(Descripted):
     model_config = ConfigDict(extra="forbid")
 
 
-def get_substitution_discriminator(v: Any) -> str:
-    if isinstance(v, dict):
-        if "vars" in v:
-            return "vars"
-        elif "functions" in v:
-            return "functions"
-
-    if hasattr(v, "__class__"):
-        class_to_tag = {
-            "VarsSubstitution": "vars",
-            "FunctionsSubstitution": "functions",
-        }
-        tag = class_to_tag.get(v.__class__.__name__)
-        if tag:
-            return tag
-
-    raise ValueError("Unable to determine substitution type")
+get_substitution_discriminator = _create_discriminator(
+    {
+        "VarsSubstitution": "vars",
+        "FunctionsSubstitution": "functions",
+    },
+    "Unable to determine substitution type",
+)
 
 
 Substitution = Annotated[
@@ -272,26 +282,14 @@ class UserFunctionsSave(Descripted):
     model_config = ConfigDict(extra="forbid")
 
 
-def get_save_discriminator(v: Any) -> str:
-    if isinstance(v, dict):
-        if "jmespath" in v:
-            return "jmespath"
-        elif "substitutions" in v:
-            return "substitutions"
-        elif "user_functions" in v:
-            return "user_functions"
-
-    if hasattr(v, "__class__"):
-        class_to_tag = {
-            "JMESPathSave": "jmespath",
-            "SubstitutionsSave": "substitutions",
-            "UserFunctionsSave": "user_functions",
-        }
-        tag = class_to_tag.get(v.__class__.__name__)
-        if tag:
-            return tag
-
-    raise ValueError("Unable to determine save type: must have 'jmespath', 'substitutions', or 'user_functions'")
+get_save_discriminator = _create_discriminator(
+    {
+        "JMESPathSave": "jmespath",
+        "SubstitutionsSave": "substitutions",
+        "UserFunctionsSave": "user_functions",
+    },
+    "Unable to determine save type: must have 'jmespath', 'substitutions', or 'user_functions'",
+)
 
 
 Save = Annotated[
@@ -334,20 +332,10 @@ class VerifyStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-def get_response_step_discriminator(v: Any) -> str:
-    if isinstance(v, dict):
-        step_fields = {"save", "verify"}
-        found = step_fields & v.keys()
-        if found:
-            return found.pop()
-
-    if hasattr(v, "__class__"):
-        class_to_tag = {"SaveStep": "save", "VerifyStep": "verify"}
-        tag = class_to_tag.get(v.__class__.__name__)
-        if tag:
-            return tag
-
-    raise ValueError("Unable to determine step type")
+get_response_step_discriminator = _create_discriminator(
+    {"SaveStep": "save", "VerifyStep": "verify"},
+    "Unable to determine step type",
+)
 
 
 ResponseStep = Annotated[
@@ -408,20 +396,10 @@ class CombinationsParameter(BaseModel):
         return self
 
 
-def get_parameter_step_discriminator(v: Any) -> str:
-    if isinstance(v, dict):
-        if "individual" in v:
-            return "individual"
-        elif "combinations" in v:
-            return "combinations"
-
-    if hasattr(v, "__class__"):
-        class_to_tag = {"IndividualParameter": "individual", "CombinationsParameter": "combinations"}
-        tag = class_to_tag.get(v.__class__.__name__)
-        if tag:
-            return tag
-
-    raise ValueError("Unable to determine parameter step type")
+get_parameter_step_discriminator = _create_discriminator(
+    {"IndividualParameter": "individual", "CombinationsParameter": "combinations"},
+    "Unable to determine parameter step type",
+)
 
 
 Parameter = Annotated[
@@ -464,23 +442,13 @@ class ParallelForeachConfig(ParallelConfigBase):
     model_config = ConfigDict(extra="forbid")
 
 
-def get_parallel_config_discriminator(v: Any) -> str:
-    if isinstance(v, dict):
-        if "repeat" in v:
-            return "repeat"
-        elif "foreach" in v:
-            return "foreach"
-
-    if hasattr(v, "__class__"):
-        class_to_tag = {
-            "ParallelRepeatConfig": "repeat",
-            "ParallelForeachConfig": "foreach",
-        }
-        tag = class_to_tag.get(v.__class__.__name__)
-        if tag:
-            return tag
-
-    raise ValueError("Unable to determine parallel config type: must have 'repeat' or 'foreach'")
+get_parallel_config_discriminator = _create_discriminator(
+    {
+        "ParallelRepeatConfig": "repeat",
+        "ParallelForeachConfig": "foreach",
+    },
+    "Unable to determine parallel config type: must have 'repeat' or 'foreach'",
+)
 
 
 ParallelConfig = Annotated[

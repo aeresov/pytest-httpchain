@@ -1,3 +1,17 @@
+"""Pydantic models for pytest-httpchain test scenarios.
+
+This package defines the data models used to validate and represent HTTP test
+scenarios, including requests, responses, verification steps, and configuration.
+All models use Pydantic V2 with discriminated unions for flexible body types.
+
+Key models:
+- Scenario: Root model representing a complete test scenario
+- Stage: Individual test stage with request and response processing
+- Request: HTTP request configuration (method, URL, headers, body)
+- Verify: Response verification rules (status, headers, body, expressions)
+- Save: Data extraction from responses (JMESPath, substitutions, user functions)
+"""
+
 from .entities import (
     Base64Body,
     BinaryBody,

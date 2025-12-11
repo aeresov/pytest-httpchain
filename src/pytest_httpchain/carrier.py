@@ -46,6 +46,7 @@ from pytest_httpchain_models import (
     check_json_schema,
 )
 from pytest_httpchain_templates import TemplatesError, walk
+from pytest_httpchain_userfunc import UserFunctionError
 from simpleeval import EvalWithCompoundTypes
 
 from .exceptions import RequestError, SaveError, StageExecutionError, VerificationError
@@ -126,23 +127,29 @@ class Carrier:
             total = len(iteration_substitutions)
             results: list[ParallelIterationResult | None] = [None] * total
             first_error: tuple[int, Exception] | None = None
-            workers = min(max_concurrency, total) if total > 0 else 1
             limiter = Limiter(Rate(calls_per_sec, Duration.SECOND), max_delay=Duration.HOUR) if calls_per_sec else None
 
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures: dict[Future[ParallelIterationResult], int] = {}
-                for idx, iter_vars in enumerate(iteration_substitutions):
-                    future = executor.submit(cls._execute_single_iteration, stage, local_context, iter_vars, limiter)
-                    futures[future] = idx
+            if total == 1:
+                try:
+                    results[0] = cls._execute_single_iteration(stage, local_context, iteration_substitutions[0], limiter)
+                except (StageExecutionError, TemplatesError, ValidationError) as e:
+                    first_error = (0, e)
+            else:
+                workers = min(max_concurrency, total) if total > 0 else 1
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures: dict[Future[ParallelIterationResult], int] = {}
+                    for idx, iter_vars in enumerate(iteration_substitutions):
+                        future = executor.submit(cls._execute_single_iteration, stage, local_context, iter_vars, limiter)
+                        futures[future] = idx
 
-                for future in as_completed(futures):
-                    idx = futures[future]
-                    try:
-                        results[idx] = future.result()
-                    except Exception as e:
-                        first_error = (idx, e)
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        break
+                    for future in as_completed(futures):
+                        idx = futures[future]
+                        try:
+                            results[idx] = future.result()
+                        except (StageExecutionError, TemplatesError, ValidationError) as e:
+                            first_error = (idx, e)
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            break
 
             # Apply results in index order - collect all saves for new layer
             all_saves: dict[str, Any] = {}
@@ -194,7 +201,7 @@ class Carrier:
             try:
                 auth_result = call_user_function(request_model.auth)
                 request_kwargs["auth"] = auth_result
-            except Exception as e:
+            except UserFunctionError as e:
                 raise RequestError(f"Failed to configure authentication: {str(e)}") from None
 
         match request_model.body:
@@ -273,7 +280,7 @@ class Carrier:
                 try:
                     substitution_result = process_substitutions(save_model.substitutions, context)
                     step_saved.update(substitution_result)
-                except Exception as e:
+                except TemplatesError as e:
                     raise SaveError(f"Error processing substitutions: {str(e)}") from None
 
             case UserFunctionsSave():
@@ -286,7 +293,9 @@ class Carrier:
 
                         result_dict = cast(dict[str, Any], func_result)
                         step_saved.update(result_dict)
-                    except Exception as e:
+                    except SaveError:
+                        raise
+                    except UserFunctionError as e:
                         raise SaveError(f"Error calling user function '{func_item}': {str(e)}") from None
 
         return step_saved
@@ -314,7 +323,9 @@ class Carrier:
                 if not result:
                     raise VerificationError(f"Function '{func_item}' verification failed")
 
-            except Exception as e:
+            except VerificationError:
+                raise
+            except UserFunctionError as e:
                 raise VerificationError(f"Error calling user function '{func_item}': {str(e)}") from None
 
         if verify_model.body.schema:
@@ -387,10 +398,11 @@ class Carrier:
                         verify_model = Verify.model_validate(verify_dict)
                         cls._process_verify_step(verify_model, response)
         except StageExecutionError as e:
-            # Attach request/response to the exception for debugging
             e.request = response.request
             e.response = response
             raise
+        except (TemplatesError, ValidationError) as e:
+            raise StageExecutionError(str(e), request=response.request, response=response) from e
 
         return ParallelIterationResult(
             saved_context=saved_context,
@@ -403,8 +415,7 @@ class Carrier:
         def wrapped(*args, **kwargs):
             result = fixture(*args, **kwargs)
 
-            is_context_manager = isinstance(result, AbstractContextManager) or (hasattr(result, "__enter__") and hasattr(result, "__exit__"))
-            if is_context_manager:
+            if isinstance(result, AbstractContextManager):
                 value = result.__enter__()
                 cls.active_context_managers.append(result)
                 return value

@@ -32,3 +32,12 @@ def test_header_failure(pytester):
     pytester.copy_example("errors/test_header_failure.http.json")
     result = pytester.runpytest("-s")
     result.assert_outcomes(errors=0, failed=1, passed=0)
+
+
+def test_parallel_failure(pytester):
+    """Test parallel execution failure handling"""
+    pytester.copy_example("auth.py")
+    pytester.copy_example("conftest.py")
+    pytester.copy_example("errors/test_parallel_failure.http.json")
+    result = pytester.runpytest("-s")
+    result.assert_outcomes(errors=0, failed=1, passed=0)

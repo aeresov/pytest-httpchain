@@ -1,0 +1,26 @@
+{
+    "description": "Test parallel execution failure handling",
+    "stages": [
+        {
+            "name": "parallel_with_failure",
+            "description": "Parallel execution where one iteration fails verification",
+            "fixtures": ["server"],
+            "parallel": {
+                "foreach": [
+                    {"individual": {"status_path": ["/ok", "/bad", "/ok"]}}
+                ],
+                "max_concurrency": 3
+            },
+            "request": {
+                "url": "{{ server }}{{ status_path }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}
