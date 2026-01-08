@@ -8,7 +8,7 @@ A pytest plugin for testing HTTP endpoints.
 
 ## Overview
 
-`pytest-httpchain` is an integration testing framework for HTTP APIs based on battle-hardened [requests](https://requests.readthedocs.io) lib.\
+`pytest-httpchain` is an integration testing framework for HTTP APIs based on [httpx](https://www.python-httpx.org/) lib.\
 It aims at helping with common HTTP API testing scenarios, where user needs to make several calls in specific order using data obtained along the way, like auth tokens or resource ids.
 
 ## Installation
@@ -63,7 +63,7 @@ Values from common data context also might be verified during verified/asserted.
 
 -   to extract data from HTTP response
 -   to verify HTTP response and values in common data context
--   to provide [custom authentication for requests](https://requests.readthedocs.io/en/latest/user/advanced/#custom-authentication)
+-   to provide [custom authentication for httpx](https://www.python-httpx.org/advanced/authentication/)
 
 ### JMESPath support
 
@@ -213,5 +213,5 @@ The MCP server provides:
 
 ## Thanks
 
-`pytest-httpchain` was heavily inspired by [Tavern](https://github.com/taverntesting/tavern) and [pytest-play](https://github.com/davidemoro/pytest-play).  
-Crucial parts rely on [requests](https://requests.readthedocs.io), [pytest-order](https://github.com/pytest-dev/pytest-order) and [Pydantic](https://docs.pydantic.dev).
+`pytest-httpchain` was heavily inspired by [Tavern](https://github.com/taverntesting/tavern) and [pytest-play](https://github.com/davidemoro/pytest-play).
+Crucial parts rely on [httpx](https://www.python-httpx.org/), [pytest-order](https://github.com/pytest-dev/pytest-order) and [Pydantic](https://docs.pydantic.dev).

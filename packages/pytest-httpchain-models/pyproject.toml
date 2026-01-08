@@ -1,6 +1,6 @@
 [project]
 name = "pytest-httpchain-models"
-version = "0.1.0"
+version = "0.2.0"
 description = "Pydantic models for pytest-httpchain"
 readme = "README.md"
 requires-python = ">=3.13"
