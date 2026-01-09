@@ -68,7 +68,7 @@ class TestSSLConfigCert:
 
     def test_cert_tuple_paths(self):
         """Test cert with tuple of (cert, key) paths."""
-        config = SSLConfig(cert=["/path/to/client.crt", "/path/to/client.key"])
+        config = SSLConfig(cert=(Path("/path/to/client.crt"), Path("/path/to/client.key")))
         assert isinstance(config.cert, tuple)
         assert len(config.cert) == 2
         assert isinstance(config.cert[0], Path)
@@ -81,15 +81,19 @@ class TestSSLConfigCert:
 
     def test_cert_with_template_tuple(self):
         """Test cert with templates in tuple paths."""
-        config = SSLConfig(cert=["{{ cert_path }}", "{{ key_path }}"])
-        assert config.cert[0] == "{{ cert_path }}"
-        assert config.cert[1] == "{{ key_path }}"
+        config = SSLConfig(cert=("{{ cert_path }}", "{{ key_path }}"))
+        cert = config.cert
+        assert isinstance(cert, tuple)
+        assert cert[0] == "{{ cert_path }}"
+        assert cert[1] == "{{ key_path }}"
 
     def test_cert_mixed_template_and_path(self):
         """Test cert with mixed template and regular path."""
-        config = SSLConfig(cert=["/path/to/{{ client }}.crt", "/path/to/client.key"])
-        assert config.cert[0] == "/path/to/{{ client }}.crt"
-        assert isinstance(config.cert[1], Path)
+        config = SSLConfig(cert=("/path/to/{{ client }}.crt", Path("/path/to/client.key")))
+        cert = config.cert
+        assert isinstance(cert, tuple)
+        assert cert[0] == "/path/to/{{ client }}.crt"
+        assert isinstance(cert[1], Path)
 
 
 class TestSSLConfigInScenario:
@@ -104,17 +108,17 @@ class TestSSLConfigInScenario:
 
     def test_scenario_custom_ssl_config(self):
         """Test Scenario with custom SSLConfig."""
-        scenario = Scenario(ssl={"verify": False, "cert": "/path/to/cert.pem"})
+        scenario = Scenario(ssl=SSLConfig(verify=False, cert=Path("/path/to/cert.pem")))
         assert scenario.ssl.verify is False
         assert isinstance(scenario.ssl.cert, Path)
 
     def test_scenario_ssl_config_with_templates(self):
         """Test Scenario with templated SSLConfig."""
         scenario = Scenario(
-            ssl={
-                "verify": "{{ ssl_verify }}",
-                "cert": ["{{ cert_path }}", "{{ key_path }}"],
-            }
+            ssl=SSLConfig(
+                verify="{{ ssl_verify }}",
+                cert=("{{ cert_path }}", "{{ key_path }}"),
+            )
         )
         assert scenario.ssl.verify == "{{ ssl_verify }}"
 
@@ -125,15 +129,15 @@ class TestSSLConfigValidation:
     def test_verify_invalid_string(self):
         """Test that non-template strings for verify are treated as paths."""
         # Non-template string is treated as a path
-        config = SSLConfig(verify="some/path.crt")
+        config = SSLConfig(verify=Path("some/path.crt"))
         assert isinstance(config.verify, Path)
 
     def test_cert_invalid_tuple_length(self):
         """Test that cert tuple must have exactly 2 elements."""
         with pytest.raises(ValidationError):
-            SSLConfig(cert=["/path/cert.crt", "/path/key.key", "/extra.pem"])
+            SSLConfig(cert=["/path/cert.crt", "/path/key.key", "/extra.pem"])  # type: ignore[arg-type]
 
     def test_cert_single_element_list_treated_as_tuple(self):
         """Test that single-element list for cert is invalid tuple."""
         with pytest.raises(ValidationError):
-            SSLConfig(cert=["/path/only.pem"])
+            SSLConfig(cert=["/path/only.pem"])  # type: ignore[arg-type]

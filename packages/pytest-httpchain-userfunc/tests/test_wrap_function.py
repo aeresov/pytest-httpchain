@@ -156,21 +156,21 @@ class TestWrapFunctionName:
     def test_wrapped_name_simple(self):
         """Wrapped function has descriptive __name__."""
         wrapped = wrap_function("conftest_helper")
-        assert "conftest_helper" in wrapped.__name__
-        assert wrapped.__name__.startswith("wrapped_")
+        assert "conftest_helper" in wrapped.__name__  # type: ignore[attr-defined]
+        assert wrapped.__name__.startswith("wrapped_")  # type: ignore[attr-defined]
 
     def test_wrapped_name_with_module(self):
         """Wrapped function name includes module info."""
         wrapped = wrap_function("json:loads")
-        assert "json" in wrapped.__name__
-        assert "loads" in wrapped.__name__
+        assert "json" in wrapped.__name__  # type: ignore[attr-defined]
+        assert "loads" in wrapped.__name__  # type: ignore[attr-defined]
 
     def test_wrapped_name_nested_module(self):
         """Wrapped function name handles nested modules."""
         wrapped = wrap_function("os.path:join")
-        assert "os" in wrapped.__name__
-        assert "path" in wrapped.__name__
-        assert "join" in wrapped.__name__
+        assert "os" in wrapped.__name__  # type: ignore[attr-defined]
+        assert "path" in wrapped.__name__  # type: ignore[attr-defined]
+        assert "join" in wrapped.__name__  # type: ignore[attr-defined]
 
 
 class TestWrapFunctionErrors:

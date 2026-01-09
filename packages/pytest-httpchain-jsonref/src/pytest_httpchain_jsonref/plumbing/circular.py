@@ -65,7 +65,7 @@ class CircularDependencyTracker:
         Returns:
             A new tracker with copies of the current reference sets
         """
-        child = CircularDependencyTracker()
+        child = self.__class__()
         child.external_refs = self.external_refs.copy()
         child.internal_refs = self.internal_refs.copy()
         return child

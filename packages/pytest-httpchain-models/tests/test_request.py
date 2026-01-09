@@ -56,7 +56,7 @@ class TestRequestMethod:
 
     def test_method_post(self):
         """Test POST method."""
-        request = Request(url="https://example.com", method="POST")
+        request = Request(url="https://example.com", method=HTTPMethod.POST)
         assert request.method == HTTPMethod.POST
 
     def test_method_all_http_methods(self):
@@ -185,21 +185,24 @@ class TestRequestAuth:
 
     def test_auth_simple_function(self):
         """Test auth with simple function name."""
-        request = Request(url="https://example.com", auth="auth:get_credentials")
+        request = Request(url="https://example.com", auth=UserFunctionName("auth:get_credentials"))
         assert isinstance(request.auth, UserFunctionName)
 
     def test_auth_with_kwargs(self):
         """Test auth with function kwargs."""
         request = Request(
             url="https://example.com",
-            auth={"name": "auth:oauth2", "kwargs": {"client_id": "abc123"}},
+            auth=UserFunctionKwargs(
+                name=UserFunctionName("auth:oauth2"),
+                kwargs={"client_id": "abc123"},
+            ),
         )
         assert isinstance(request.auth, UserFunctionKwargs)
         assert request.auth.kwargs == {"client_id": "abc123"}
 
     def test_auth_with_template(self):
         """Test auth with template in function name."""
-        request = Request(url="https://example.com", auth="auth:{{ auth_func }}")
+        request = Request(url="https://example.com", auth=UserFunctionName("auth:{{ auth_func }}"))
         assert isinstance(request.auth, UserFunctionName)
 
 
@@ -215,7 +218,7 @@ class TestRequestBody:
         """Test body with JSON data."""
         request = Request(
             url="https://example.com",
-            body={"json": {"key": "value"}},
+            body=JsonBody(json={"key": "value"}),
         )
         assert isinstance(request.body, JsonBody)
 
@@ -227,16 +230,16 @@ class TestRequestComplete:
         """Test Request with all fields."""
         request = Request(
             url="https://api.example.com/users",
-            method="POST",
+            method=HTTPMethod.POST,
             params={"version": "v1"},
             headers={
                 "Content-Type": "application/json",
                 "Authorization": "Bearer token",
             },
-            body={"json": {"name": "Alice", "email": "alice@example.com"}},
+            body=JsonBody(json={"name": "Alice", "email": "alice@example.com"}),
             timeout=45.0,
             allow_redirects=False,
-            auth="auth:api_key",
+            auth=UserFunctionName("auth:api_key"),
         )
         assert str(request.url) == "https://api.example.com/users"
         assert request.method == HTTPMethod.POST

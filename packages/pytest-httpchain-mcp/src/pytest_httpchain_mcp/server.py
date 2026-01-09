@@ -43,8 +43,8 @@ def extract_saved_variables(scenario: Scenario) -> set[str]:
             # Check for save steps with jmespath
             if hasattr(response_step, "save"):
                 save = response_step.save
-                if hasattr(save, "jmespath"):
-                    saved_vars.update(save.jmespath.keys())
+                if hasattr(save, "jmespath") and isinstance(save.jmespath, dict):
+                    saved_vars.update(k for k in save.jmespath if isinstance(k, str))
 
     return saved_vars
 
@@ -55,18 +55,18 @@ def extract_defined_variables(scenario: Scenario, test_data: dict[str, Any]) -> 
 
     # Top-level vars
     if "vars" in test_data and isinstance(test_data["vars"], dict):
-        defined_vars.update(test_data["vars"].keys())
+        defined_vars.update(k for k in test_data["vars"] if isinstance(k, str))
 
     # Top-level substitutions
     for sub in scenario.substitutions:
-        if hasattr(sub, "vars"):
-            defined_vars.update(sub.vars.keys())
+        if hasattr(sub, "vars") and isinstance(sub.vars, dict):
+            defined_vars.update(k for k in sub.vars if isinstance(k, str))
 
     # Stage-level substitutions
     for stage in scenario.stages:
         for sub in stage.substitutions:
-            if hasattr(sub, "vars"):
-                defined_vars.update(sub.vars.keys())
+            if hasattr(sub, "vars") and isinstance(sub.vars, dict):
+                defined_vars.update(k for k in sub.vars if isinstance(k, str))
 
     return defined_vars
 

@@ -1,13 +1,16 @@
 """Unit tests for Verify and ResponseBody models."""
 
 import json
-from http import HTTPStatus
+from http import HTTPMethod, HTTPStatus
 
 import pytest
 from pydantic import ValidationError
 from pytest_httpchain_models.entities import (
+    Request,
     ResponseBody,
     Stage,
+    UserFunctionKwargs,
+    UserFunctionName,
     Verify,
     VerifyStep,
 )
@@ -23,7 +26,7 @@ class TestVerifyStatus:
 
     def test_status_integer(self):
         """Test status with integer value."""
-        verify = Verify(status=200)
+        verify = Verify(status=HTTPStatus.OK)
         assert verify.status == HTTPStatus.OK
 
     def test_status_http_status(self):
@@ -33,10 +36,21 @@ class TestVerifyStatus:
 
     def test_status_various_codes(self):
         """Test various HTTP status codes."""
-        codes = [200, 201, 204, 400, 401, 403, 404, 500, 502, 503]
+        codes = [
+            HTTPStatus.OK,
+            HTTPStatus.CREATED,
+            HTTPStatus.NO_CONTENT,
+            HTTPStatus.BAD_REQUEST,
+            HTTPStatus.UNAUTHORIZED,
+            HTTPStatus.FORBIDDEN,
+            HTTPStatus.NOT_FOUND,
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            HTTPStatus.BAD_GATEWAY,
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        ]
         for code in codes:
             verify = Verify(status=code)
-            assert verify.status.value == code
+            assert verify.status == code
 
     def test_status_with_template(self):
         """Test status with template expression."""
@@ -109,22 +123,29 @@ class TestVerifyUserFunctions:
 
     def test_user_functions_simple(self):
         """Test simple function names."""
-        verify = Verify(user_functions=["validators:check_response"])
+        verify = Verify(user_functions=[UserFunctionName("validators:check_response")])
         assert len(verify.user_functions) == 1
 
     def test_user_functions_multiple(self):
         """Test multiple user functions."""
         verify = Verify(
             user_functions=[
-                "validators:check_schema",
-                "validators:check_permissions",
+                UserFunctionName("validators:check_schema"),
+                UserFunctionName("validators:check_permissions"),
             ]
         )
         assert len(verify.user_functions) == 2
 
     def test_user_functions_with_kwargs(self):
         """Test user functions with kwargs."""
-        verify = Verify(user_functions=[{"name": "validators:custom", "kwargs": {"strict": True}}])
+        verify = Verify(
+            user_functions=[
+                UserFunctionKwargs(
+                    name=UserFunctionName("validators:custom"),
+                    kwargs={"strict": True},
+                )
+            ]
+        )
         assert len(verify.user_functions) == 1
 
 
@@ -139,7 +160,7 @@ class TestVerifyDescription:
     def test_description_custom(self):
         """Test custom description."""
         verify = Verify(
-            status=200,
+            status=HTTPStatus.OK,
             description="Verify successful user creation",
         )
         assert verify.description == "Verify successful user creation"
@@ -166,6 +187,7 @@ class TestResponseBody:
                 "required": ["id"],
             }
         )
+        assert isinstance(body.schema, dict)
         assert body.schema["type"] == "object"
 
     def test_response_body_schema_path(self):
@@ -214,6 +236,7 @@ class TestResponseBody:
         """Test ResponseBody with complex schema loaded from file."""
         schema = json.loads((datadir / "user_response_schema.json").read_text())
         body = ResponseBody(schema=schema)
+        assert isinstance(body.schema, dict)
         assert body.schema["type"] == "object"
         assert "id" in body.schema["properties"]
         assert "status" in body.schema["properties"]
@@ -230,12 +253,12 @@ class TestVerifyBody:
 
     def test_verify_body_with_schema(self):
         """Test verify with body schema."""
-        verify = Verify(body={"schema": {"type": "object"}})
+        verify = Verify(body=ResponseBody(schema={"type": "object"}))
         assert verify.body.schema == {"type": "object"}
 
     def test_verify_body_with_contains(self):
         """Test verify with body contains."""
-        verify = Verify(body={"contains": ["success"]})
+        verify = Verify(body=ResponseBody(contains=["success"]))
         assert "success" in verify.body.contains
 
 
@@ -244,22 +267,22 @@ class TestVerifyStep:
 
     def test_verify_step_simple(self):
         """Test simple VerifyStep."""
-        step = VerifyStep(verify={"status": 200})
+        step = VerifyStep(verify=Verify(status=HTTPStatus.OK))
         assert isinstance(step.verify, Verify)
         assert step.verify.status == HTTPStatus.OK
 
     def test_verify_step_full(self):
         """Test VerifyStep with full configuration."""
         step = VerifyStep(
-            verify={
-                "status": 201,
-                "headers": {"Content-Type": "application/json"},
-                "expressions": ["{{ response_json.success == true }}"],
-                "body": {
-                    "contains": ["created"],
-                    "schema": {"type": "object"},
-                },
-            }
+            verify=Verify(
+                status=HTTPStatus.CREATED,
+                headers={"Content-Type": "application/json"},
+                expressions=["{{ response_json.success == true }}"],
+                body=ResponseBody(
+                    contains=["created"],
+                    schema={"type": "object"},
+                ),
+            )
         )
         assert step.verify.status == HTTPStatus.CREATED
         assert len(step.verify.headers) == 1
@@ -272,8 +295,8 @@ class TestVerifyInStage:
         """Test Stage with status verification."""
         stage = Stage(
             name="test",
-            request={"url": "https://example.com"},
-            response=[{"verify": {"status": 200}}],
+            request=Request(url="https://example.com"),
+            response=[VerifyStep(verify=Verify(status=HTTPStatus.OK))],
         )
         assert len(stage.response) == 1
         assert isinstance(stage.response[0], VerifyStep)
@@ -282,11 +305,11 @@ class TestVerifyInStage:
         """Test Stage with multiple verify steps."""
         stage = Stage(
             name="test",
-            request={"url": "https://example.com"},
+            request=Request(url="https://example.com"),
             response=[
-                {"verify": {"status": 200}},
-                {"verify": {"headers": {"Content-Type": "application/json"}}},
-                {"verify": {"body": {"contains": ["success"]}}},
+                VerifyStep(verify=Verify(status=HTTPStatus.OK)),
+                VerifyStep(verify=Verify(headers={"Content-Type": "application/json"})),
+                VerifyStep(verify=Verify(body=ResponseBody(contains=["success"]))),
             ],
         )
         assert len(stage.response) == 3
@@ -296,18 +319,18 @@ class TestVerifyInStage:
         """Test Stage with complex verification."""
         stage = Stage(
             name="create-user",
-            request={"url": "https://example.com/users", "method": "POST"},
+            request=Request(url="https://example.com/users", method=HTTPMethod.POST),
             response=[
-                {
-                    "verify": {
-                        "status": 201,
-                        "headers": {"Content-Type": "application/json"},
-                        "expressions": [
+                VerifyStep(
+                    verify=Verify(
+                        status=HTTPStatus.CREATED,
+                        headers={"Content-Type": "application/json"},
+                        expressions=[
                             "{{ response_json.id is defined }}",
                             "{{ response_json.name == request_json.name }}",
                         ],
-                        "body": {
-                            "schema": {
+                        body=ResponseBody(
+                            schema={
                                 "type": "object",
                                 "properties": {
                                     "id": {"type": "integer"},
@@ -315,10 +338,10 @@ class TestVerifyInStage:
                                 },
                                 "required": ["id", "name"],
                             }
-                        },
-                        "description": "Verify user was created successfully",
-                    }
-                }
+                        ),
+                        description="Verify user was created successfully",
+                    )
+                )
             ],
         )
         verify = stage.response[0].verify

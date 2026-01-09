@@ -3,8 +3,11 @@
 import pytest
 from pydantic import ValidationError
 from pytest_httpchain_models.entities import (
+    CombinationsParameter,
+    IndividualParameter,
     ParallelForeachConfig,
     ParallelRepeatConfig,
+    Request,
     Stage,
 )
 
@@ -72,7 +75,7 @@ class TestParallelRepeatConfig:
     def test_repeat_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            ParallelRepeatConfig(repeat=10, extra="field")
+            ParallelRepeatConfig(repeat=10, extra="field")  # type: ignore[call-arg]
 
 
 class TestParallelForeachConfig:
@@ -80,19 +83,19 @@ class TestParallelForeachConfig:
 
     def test_foreach_with_individual_params(self):
         """Test foreach with individual parameters."""
-        config = ParallelForeachConfig(foreach=[{"individual": {"id": [1, 2, 3, 4, 5]}}])
+        config = ParallelForeachConfig(foreach=[IndividualParameter(individual={"id": [1, 2, 3, 4, 5]})])
         assert len(config.foreach) == 1
 
     def test_foreach_with_combinations(self):
         """Test foreach with combination parameters."""
         config = ParallelForeachConfig(
             foreach=[
-                {
-                    "combinations": [
+                CombinationsParameter(
+                    combinations=[
                         {"method": "GET", "path": "/a"},
                         {"method": "POST", "path": "/b"},
                     ]
-                }
+                )
             ]
         )
         assert len(config.foreach) == 1
@@ -100,7 +103,7 @@ class TestParallelForeachConfig:
     def test_foreach_with_concurrency(self):
         """Test foreach with custom max_concurrency."""
         config = ParallelForeachConfig(
-            foreach=[{"individual": {"x": [1, 2]}}],
+            foreach=[IndividualParameter(individual={"x": [1, 2]})],
             max_concurrency=20,
         )
         assert config.max_concurrency == 20
@@ -108,7 +111,7 @@ class TestParallelForeachConfig:
     def test_foreach_with_rate_limit(self):
         """Test foreach with rate limiting."""
         config = ParallelForeachConfig(
-            foreach=[{"individual": {"x": [1, 2]}}],
+            foreach=[IndividualParameter(individual={"x": [1, 2]})],
             calls_per_sec=5,
         )
         assert config.calls_per_sec == 5
@@ -117,8 +120,8 @@ class TestParallelForeachConfig:
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
             ParallelForeachConfig(
-                foreach=[{"individual": {"x": [1]}}],
-                extra="field",
+                foreach=[IndividualParameter(individual={"x": [1]})],
+                extra="field",  # type: ignore[call-arg]
             )
 
 
@@ -129,8 +132,8 @@ class TestParallelConfigDiscriminator:
         """Test discriminator identifies ParallelRepeatConfig."""
         stage = Stage(
             name="load-test",
-            request={"url": "https://example.com"},
-            parallel={"repeat": 100},
+            request=Request(url="https://example.com"),
+            parallel=ParallelRepeatConfig(repeat=100),
         )
         assert isinstance(stage.parallel, ParallelRepeatConfig)
         assert stage.parallel.repeat == 100
@@ -139,8 +142,8 @@ class TestParallelConfigDiscriminator:
         """Test discriminator identifies ParallelForeachConfig."""
         stage = Stage(
             name="batch-test",
-            request={"url": "https://example.com"},
-            parallel={"foreach": [{"individual": {"id": [1, 2, 3]}}]},
+            request=Request(url="https://example.com"),
+            parallel=ParallelForeachConfig(foreach=[IndividualParameter(individual={"id": [1, 2, 3]})]),
         )
         assert isinstance(stage.parallel, ParallelForeachConfig)
 
@@ -149,8 +152,8 @@ class TestParallelConfigDiscriminator:
         with pytest.raises(ValueError, match="Unable to determine parallel config type"):
             Stage(
                 name="test",
-                request={"url": "https://example.com"},
-                parallel={"invalid": "value"},
+                request=Request(url="https://example.com"),
+                parallel={"invalid": "value"},  # type: ignore[arg-type]
             )
 
 
@@ -159,20 +162,21 @@ class TestParallelInStage:
 
     def test_stage_without_parallel(self):
         """Test Stage without parallel field."""
-        stage = Stage(name="test", request={"url": "https://example.com"})
+        stage = Stage(name="test", request=Request(url="https://example.com"))
         assert stage.parallel is None
 
     def test_stage_repeat_with_full_config(self):
         """Test Stage with full repeat configuration."""
         stage = Stage(
             name="stress-test",
-            request={"url": "https://example.com/api"},
-            parallel={
-                "repeat": 1000,
-                "max_concurrency": 50,
-                "calls_per_sec": 100,
-            },
+            request=Request(url="https://example.com/api"),
+            parallel=ParallelRepeatConfig(
+                repeat=1000,
+                max_concurrency=50,
+                calls_per_sec=100,
+            ),
         )
+        assert isinstance(stage.parallel, ParallelRepeatConfig)
         assert stage.parallel.repeat == 1000
         assert stage.parallel.max_concurrency == 50
         assert stage.parallel.calls_per_sec == 100
@@ -181,10 +185,10 @@ class TestParallelInStage:
         """Test Stage with foreach using template parameters."""
         stage = Stage(
             name="batch-test",
-            request={"url": "https://example.com/{{ item_id }}"},
-            parallel={
-                "foreach": [{"individual": {"item_id": "{{ item_ids }}"}}],
-                "max_concurrency": 10,
-            },
+            request=Request(url="https://example.com/{{ item_id }}"),
+            parallel=ParallelForeachConfig(
+                foreach=[IndividualParameter(individual={"item_id": "{{ item_ids }}"})],
+                max_concurrency=10,
+            ),
         )
         assert isinstance(stage.parallel, ParallelForeachConfig)

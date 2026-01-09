@@ -10,6 +10,7 @@ Success cases for body types, verify, and save are covered by integration tests:
 import json
 import tempfile
 from collections import ChainMap
+from http import HTTPMethod
 from pathlib import Path
 
 import httpx
@@ -33,7 +34,7 @@ class TestBuildRequestKwargsErrors:
     def test_binary_body_file_not_found(self):
         request = Request(
             url="https://example.com/api",
-            method="POST",
+            method=HTTPMethod.POST,
             body=BinaryBody(binary="/nonexistent/file.bin"),
         )
 
@@ -43,7 +44,7 @@ class TestBuildRequestKwargsErrors:
     def test_files_body_file_not_found(self):
         request = Request(
             url="https://example.com/api",
-            method="POST",
+            method=HTTPMethod.POST,
             body=FilesBody(files={"upload": "/nonexistent/file.txt"}),
         )
 

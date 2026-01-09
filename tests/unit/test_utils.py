@@ -75,7 +75,7 @@ class TestProcessSubstitutions:
     def test_functions_substitution_simple_name(self):
         substitutions = [
             FunctionsSubstitution(
-                functions={"my_func": "tests.unit.test_utils:sample_func"},
+                functions={"my_func": UserFunctionName("tests.unit.test_utils:sample_func")},
             ),
         ]
         result = process_substitutions(substitutions)
@@ -86,7 +86,7 @@ class TestProcessSubstitutions:
 
     def test_functions_substitution_with_kwargs(self):
         func_def = UserFunctionKwargs(
-            name=UserFunctionName(root="tests.unit.test_utils:func_with_args"),
+            name=UserFunctionName("tests.unit.test_utils:func_with_args"),
             kwargs={"a": 1, "b": 2},
         )
         substitutions = [
@@ -102,7 +102,7 @@ class TestProcessSubstitutions:
     def test_mixed_substitutions(self):
         substitutions = [
             VarsSubstitution(vars={"x": 5, "y": 10}),
-            FunctionsSubstitution(functions={"adder": "tests.unit.test_utils:add_numbers"}),
+            FunctionsSubstitution(functions={"adder": UserFunctionName("tests.unit.test_utils:add_numbers")}),
         ]
         result = process_substitutions(substitutions)
 
@@ -123,14 +123,14 @@ class TestProcessSubstitutions:
 
 class TestCallUserFunction:
     def test_call_with_simple_name(self):
-        func_call = UserFunctionName(root="tests.unit.test_utils:sample_func")
+        func_call = UserFunctionName("tests.unit.test_utils:sample_func")
         result = call_user_function(func_call)
 
         assert result == "sample_result"
 
     def test_call_with_kwargs(self):
         func_call = UserFunctionKwargs(
-            name=UserFunctionName(root="tests.unit.test_utils:func_with_args"),
+            name=UserFunctionName("tests.unit.test_utils:func_with_args"),
             kwargs={"a": 1, "b": 2, "c": 3},
         )
         result = call_user_function(func_call)
@@ -139,7 +139,7 @@ class TestCallUserFunction:
 
     def test_call_with_extra_kwargs(self):
         func_call = UserFunctionKwargs(
-            name=UserFunctionName(root="tests.unit.test_utils:func_with_args"),
+            name=UserFunctionName("tests.unit.test_utils:func_with_args"),
             kwargs={"a": 1, "b": 2},
         )
         result = call_user_function(func_call, c="extra")
@@ -148,16 +148,16 @@ class TestCallUserFunction:
 
     def test_call_extra_kwargs_override(self):
         func_call = UserFunctionKwargs(
-            name=UserFunctionName(root="tests.unit.test_utils:func_with_args"),
+            name=UserFunctionName("tests.unit.test_utils:func_with_args"),
             kwargs={"a": 1, "b": 2, "c": "original"},
         )
         # extra_kwargs should override kwargs from UserFunctionKwargs
         result = call_user_function(func_call, c="overridden")
 
-        assert result["c"] == "overridden"
+        assert result == {"a": 1, "b": 2, "c": "overridden"}
 
     def test_call_simple_name_with_extra_kwargs(self):
-        func_call = UserFunctionName(root="tests.unit.test_utils:func_with_args")
+        func_call = UserFunctionName("tests.unit.test_utils:func_with_args")
         result = call_user_function(func_call, a=10, b=20, c=30)
 
         assert result == {"a": 10, "b": 20, "c": 30}
@@ -165,8 +165,8 @@ class TestCallUserFunction:
     def test_invalid_function_call_format(self):
         # Pass something that's neither UserFunctionName nor UserFunctionKwargs
         with pytest.raises(StageExecutionError, match="Invalid function call format"):
-            call_user_function("invalid_string")
+            call_user_function("invalid_string")  # type: ignore
 
     def test_invalid_function_call_none(self):
         with pytest.raises(StageExecutionError, match="Invalid function call format"):
-            call_user_function(None)
+            call_user_function(None)  # type: ignore

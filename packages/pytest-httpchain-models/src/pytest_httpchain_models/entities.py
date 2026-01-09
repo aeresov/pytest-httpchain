@@ -85,6 +85,33 @@ def _normalize_list_input(v: Any) -> list[Any]:
     return v
 
 
+def _normalize_stages_input(v: Any) -> list[Any]:
+    """Normalize stages from dict format to list format.
+
+    For dict input, the key becomes the stage's 'name' field (overrides any explicit name).
+
+    Examples:
+        [{"name": "a", ...}] -> [{"name": "a", ...}]
+        {"stage1": {...}, "stage2": {...}} -> [{"name": "stage1", ...}, {"name": "stage2", ...}]
+    """
+    if isinstance(v, list):
+        return v
+
+    if isinstance(v, dict):
+        result = []
+        for name, stage_data in v.items():
+            if isinstance(stage_data, dict):
+                # Dict key takes precedence over any explicit name in stage_data
+                stage_with_name = {**stage_data, "name": name}
+                result.append(stage_with_name)
+            else:
+                # Let Pydantic handle validation errors
+                result.append(stage_data)
+        return result
+
+    return v
+
+
 class SSLConfig(BaseModel):
     verify: Literal[True, False] | SerializablePath | TemplateExpression = Field(
         default=True,
@@ -458,7 +485,7 @@ ParallelConfig = Annotated[
 
 
 class Stage(Marked, Fixtured, Descripted):
-    name: str = Field(description="Stage name (human-readable).")
+    name: str = Field(default="", description="Stage name (human-readable).")
     substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")
     always_run: Literal[True, False] | TemplateExpression = Field(default=False, examples=[True, "{{ should_run }}", "{{ env == 'production' }}"])
     parametrize: Parameters | None = Field(default=None, description="Stage parametrization steps")
@@ -467,10 +494,16 @@ class Stage(Marked, Fixtured, Descripted):
     response: Responses = Field(default_factory=list, description="Sequential steps to process the response.")
 
 
+Stages = Annotated[
+    list[Stage],
+    BeforeValidator(_normalize_stages_input, json_schema_input_type=list[Stage] | dict[str, Stage]),
+]
+
+
 class Scenario(Marked, Authenticated, Descripted):
     ssl: SSLConfig = Field(
         default_factory=SSLConfig,
         description="SSL/TLS configuration.",
     )
-    stages: list[Stage] = Field(default_factory=list)
+    stages: Stages = Field(default_factory=list)
     substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")

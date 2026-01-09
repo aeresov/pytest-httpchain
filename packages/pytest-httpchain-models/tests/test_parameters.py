@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from pytest_httpchain_models.entities import (
     CombinationsParameter,
     IndividualParameter,
+    Request,
     Stage,
 )
 
@@ -130,15 +131,16 @@ class TestCombinationsParameter:
 
 
 class TestParameterDiscriminator:
-    """Tests for Parameter discriminated union."""
+    """Tests for Parameter discriminated union using raw dicts."""
 
     def test_discriminator_individual(self):
         """Test discriminator identifies IndividualParameter."""
         stage = Stage(
             name="test",
-            request={"url": "https://example.com"},
-            parametrize=[{"individual": {"x": [1, 2, 3]}}],
+            request=Request(url="https://example.com"),
+            parametrize=[IndividualParameter(individual={"x": [1, 2, 3]})],
         )
+        assert stage.parametrize is not None
         assert len(stage.parametrize) == 1
         assert isinstance(stage.parametrize[0], IndividualParameter)
 
@@ -146,9 +148,10 @@ class TestParameterDiscriminator:
         """Test discriminator identifies CombinationsParameter."""
         stage = Stage(
             name="test",
-            request={"url": "https://example.com"},
-            parametrize=[{"combinations": [{"x": 1}, {"x": 2}]}],
+            request=Request(url="https://example.com"),
+            parametrize=[CombinationsParameter(combinations=[{"x": 1}, {"x": 2}])],
         )
+        assert stage.parametrize is not None
         assert len(stage.parametrize) == 1
         assert isinstance(stage.parametrize[0], CombinationsParameter)
 
@@ -156,12 +159,13 @@ class TestParameterDiscriminator:
         """Test discriminator with mixed parameter types."""
         stage = Stage(
             name="test",
-            request={"url": "https://example.com"},
+            request=Request(url="https://example.com"),
             parametrize=[
-                {"individual": {"id": [1, 2]}},
-                {"combinations": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]},
+                IndividualParameter(individual={"id": [1, 2]}),
+                CombinationsParameter(combinations=[{"a": 1, "b": 2}, {"a": 3, "b": 4}]),
             ],
         )
+        assert stage.parametrize is not None
         assert isinstance(stage.parametrize[0], IndividualParameter)
         assert isinstance(stage.parametrize[1], CombinationsParameter)
 
@@ -170,8 +174,8 @@ class TestParameterDiscriminator:
         with pytest.raises(ValueError, match="Unable to determine parameter step type"):
             Stage(
                 name="test",
-                request={"url": "https://example.com"},
-                parametrize=[{"invalid": "value"}],
+                request=Request(url="https://example.com"),
+                parametrize=[{"invalid": "value"}],  # type: ignore[list-item]
             )
 
 
@@ -180,14 +184,14 @@ class TestParametersInStage:
 
     def test_stage_without_parametrize(self):
         """Test Stage without parametrize field."""
-        stage = Stage(name="test", request={"url": "https://example.com"})
+        stage = Stage(name="test", request=Request(url="https://example.com"))
         assert stage.parametrize is None
 
     def test_stage_with_empty_parametrize(self):
         """Test Stage with empty parametrize list."""
         stage = Stage(
             name="test",
-            request={"url": "https://example.com"},
+            request=Request(url="https://example.com"),
             parametrize=[],
         )
         assert stage.parametrize == []
@@ -196,7 +200,8 @@ class TestParametersInStage:
         """Test Stage with parametrize and template URL."""
         stage = Stage(
             name="test",
-            request={"url": "https://example.com/users/{{ user_id }}"},
-            parametrize=[{"individual": {"user_id": [1, 2, 3]}}],
+            request=Request(url="https://example.com/users/{{ user_id }}"),
+            parametrize=[IndividualParameter(individual={"user_id": [1, 2, 3]})],
         )
+        assert stage.parametrize is not None
         assert len(stage.parametrize) == 1

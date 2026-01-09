@@ -143,6 +143,7 @@ class ReferenceResolver:
 
         try:
             referenced_data = self._navigate_pointer(root_data, pointer)
+            assert self.base_path is not None
             return self._resolve_refs(referenced_data, self.base_path, root_data)
         finally:
             self.tracker.clear_internal_ref(pointer)

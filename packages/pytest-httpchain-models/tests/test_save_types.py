@@ -3,11 +3,16 @@
 import pytest
 from pydantic import ValidationError
 from pytest_httpchain_models.entities import (
+    FunctionsSubstitution,
     JMESPathSave,
+    Request,
     SaveStep,
     Stage,
     SubstitutionsSave,
+    UserFunctionKwargs,
+    UserFunctionName,
     UserFunctionsSave,
+    VarsSubstitution,
 )
 
 
@@ -61,7 +66,7 @@ class TestJMESPathSave:
     def test_jmespath_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            JMESPathSave(jmespath={"x": "y"}, extra="field")
+            JMESPathSave(jmespath={"x": "y"}, extra="field")  # type: ignore[call-arg]
 
 
 class TestSubstitutionsSave:
@@ -69,20 +74,20 @@ class TestSubstitutionsSave:
 
     def test_substitutions_with_vars(self):
         """Test SubstitutionsSave with vars substitution."""
-        save = SubstitutionsSave(substitutions=[{"vars": {"saved_value": "extracted"}}])
+        save = SubstitutionsSave(substitutions=[VarsSubstitution(vars={"saved_value": "extracted"})])
         assert len(save.substitutions) == 1
 
     def test_substitutions_with_functions(self):
         """Test SubstitutionsSave with functions substitution."""
-        save = SubstitutionsSave(substitutions=[{"functions": {"processor": "utils:process_data"}}])
+        save = SubstitutionsSave(substitutions=[FunctionsSubstitution(functions={"processor": UserFunctionName("utils:process_data")})])
         assert len(save.substitutions) == 1
 
     def test_substitutions_mixed(self):
         """Test SubstitutionsSave with mixed substitutions."""
         save = SubstitutionsSave(
             substitutions=[
-                {"vars": {"constant": "value"}},
-                {"functions": {"computed": "module:compute"}},
+                VarsSubstitution(vars={"constant": "value"}),
+                FunctionsSubstitution(functions={"computed": UserFunctionName("module:compute")}),
             ]
         )
         assert len(save.substitutions) == 2
@@ -90,7 +95,7 @@ class TestSubstitutionsSave:
     def test_substitutions_dict_format(self):
         """Test SubstitutionsSave with dict format."""
         save = SubstitutionsSave(
-            substitutions={
+            substitutions={  # type: ignore[arg-type]
                 "constants": {"vars": {"x": 1}},
                 "computed": {"functions": {"y": "mod:func"}},
             }
@@ -100,7 +105,7 @@ class TestSubstitutionsSave:
     def test_substitutions_with_description(self):
         """Test SubstitutionsSave with description."""
         save = SubstitutionsSave(
-            substitutions=[{"vars": {"x": 1}}],
+            substitutions=[VarsSubstitution(vars={"x": 1})],
             description="Save computed values",
         )
         assert save.description == "Save computed values"
@@ -108,7 +113,7 @@ class TestSubstitutionsSave:
     def test_substitutions_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            SubstitutionsSave(substitutions=[], extra="field")
+            SubstitutionsSave(substitutions=[], extra="field")  # type: ignore[call-arg]
 
 
 class TestUserFunctionsSave:
@@ -116,30 +121,40 @@ class TestUserFunctionsSave:
 
     def test_user_functions_simple(self):
         """Test UserFunctionsSave with simple function."""
-        save = UserFunctionsSave(user_functions=["module:save_data"])
+        save = UserFunctionsSave(user_functions=[UserFunctionName("module:save_data")])
         assert len(save.user_functions) == 1
 
     def test_user_functions_multiple(self):
         """Test UserFunctionsSave with multiple functions."""
         save = UserFunctionsSave(
             user_functions=[
-                "validators:check_response",
-                "storage:save_to_db",
+                UserFunctionName("validators:check_response"),
+                UserFunctionName("storage:save_to_db"),
             ]
         )
         assert len(save.user_functions) == 2
 
     def test_user_functions_with_kwargs(self):
         """Test UserFunctionsSave with function kwargs."""
-        save = UserFunctionsSave(user_functions=[{"name": "module:process", "kwargs": {"format": "json", "validate": True}}])
+        save = UserFunctionsSave(
+            user_functions=[
+                UserFunctionKwargs(
+                    name=UserFunctionName("module:process"),
+                    kwargs={"format": "json", "validate": True},
+                )
+            ]
+        )
         assert len(save.user_functions) == 1
 
     def test_user_functions_mixed(self):
         """Test UserFunctionsSave with mixed formats."""
         save = UserFunctionsSave(
             user_functions=[
-                "simple:func",
-                {"name": "complex:func", "kwargs": {"arg": "value"}},
+                UserFunctionName("simple:func"),
+                UserFunctionKwargs(
+                    name=UserFunctionName("complex:func"),
+                    kwargs={"arg": "value"},
+                ),
             ]
         )
         assert len(save.user_functions) == 2
@@ -147,7 +162,7 @@ class TestUserFunctionsSave:
     def test_user_functions_with_description(self):
         """Test UserFunctionsSave with description."""
         save = UserFunctionsSave(
-            user_functions=["module:func"],
+            user_functions=[UserFunctionName("module:func")],
             description="Custom save handler",
         )
         assert save.description == "Custom save handler"
@@ -155,7 +170,7 @@ class TestUserFunctionsSave:
     def test_user_functions_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            UserFunctionsSave(user_functions=[], extra="field")
+            UserFunctionsSave(user_functions=[], extra="field")  # type: ignore[call-arg]
 
 
 class TestSaveDiscriminator:
@@ -163,23 +178,23 @@ class TestSaveDiscriminator:
 
     def test_discriminator_jmespath(self):
         """Test discriminator identifies JMESPathSave."""
-        step = SaveStep(save={"jmespath": {"result": "data"}})
+        step = SaveStep(save=JMESPathSave(jmespath={"result": "data"}))
         assert isinstance(step.save, JMESPathSave)
 
     def test_discriminator_substitutions(self):
         """Test discriminator identifies SubstitutionsSave."""
-        step = SaveStep(save={"substitutions": [{"vars": {"x": 1}}]})
+        step = SaveStep(save=SubstitutionsSave(substitutions=[VarsSubstitution(vars={"x": 1})]))
         assert isinstance(step.save, SubstitutionsSave)
 
     def test_discriminator_user_functions(self):
         """Test discriminator identifies UserFunctionsSave."""
-        step = SaveStep(save={"user_functions": ["module:func"]})
+        step = SaveStep(save=UserFunctionsSave(user_functions=[UserFunctionName("module:func")]))
         assert isinstance(step.save, UserFunctionsSave)
 
     def test_discriminator_invalid_rejected(self):
         """Test that invalid save type is rejected."""
         with pytest.raises(ValueError, match="Unable to determine save type"):
-            SaveStep(save={"invalid": "value"})
+            SaveStep(save={"invalid": "value"})  # type: ignore[arg-type]
 
 
 class TestSaveStepInStage:
@@ -189,8 +204,8 @@ class TestSaveStepInStage:
         """Test Stage with JMESPath save step."""
         stage = Stage(
             name="test",
-            request={"url": "https://example.com"},
-            response=[{"save": {"jmespath": {"token": "data.token"}}}],
+            request=Request(url="https://example.com"),
+            response=[SaveStep(save=JMESPathSave(jmespath={"token": "data.token"}))],
         )
         assert len(stage.response) == 1
         assert isinstance(stage.response[0], SaveStep)
@@ -200,10 +215,10 @@ class TestSaveStepInStage:
         """Test Stage with multiple save steps."""
         stage = Stage(
             name="test",
-            request={"url": "https://example.com"},
+            request=Request(url="https://example.com"),
             response=[
-                {"save": {"jmespath": {"id": "data.id"}}},
-                {"save": {"user_functions": ["custom:saver"]}},
+                SaveStep(save=JMESPathSave(jmespath={"id": "data.id"})),
+                SaveStep(save=UserFunctionsSave(user_functions=[UserFunctionName("custom:saver")])),
             ],
         )
         assert len(stage.response) == 2

@@ -1,6 +1,6 @@
 [project]
 name = "pytest-httpchain-jsonref"
-version = "0.2.0"
+version = "0.2.1"
 description = "JSON reference ($ref) support for pytest-httpchain"
 readme = "README.md"
 requires-python = ">=3.13"

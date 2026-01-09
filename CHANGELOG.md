@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2025-01-08
+## [0.2.1] - 2026-01-09
+
+### Added
+
+- Stages can now be defined as a dict with stage names as keys, in addition to the existing list format
+  ```json
+  // List format (existing)
+  { "stages": [{ "name": "login", "request": {...} }] }
+
+  // Dict format (new)
+  { "stages": { "login": { "request": {...} } } }
+  ```
+
+### Changed
+
+- Stage `name` field is now optional (defaults to empty string)
+- Improved type safety in MCP server variable extraction functions
+- `CircularDependencyTracker.create_child()` now properly supports subclasses
+
+## [0.2.0] - 2026-01-08
 
 ### Changed
 
@@ -74,7 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.1.0...v0.1.1

@@ -13,7 +13,8 @@
     "mounts": [{ "source": "${localEnv:HOME}/.claude", "target": "/home/vscode/.claude", "type": "bind" }],
     "postCreateCommand": {
         "home": "sudo chown --recursive $(whoami): /home/$(whoami)",
-        "uv": "curl -LsSf https://astral.sh/uv/install.sh | sh"
+        "uv": "curl -LsSf https://astral.sh/uv/install.sh | sh",
+        "claude": "curl -fsSL https://claude.ai/install.sh | bash"
     },
     "postAttachCommand": {
         "uv": "uv sync --all-packages --all-extras"

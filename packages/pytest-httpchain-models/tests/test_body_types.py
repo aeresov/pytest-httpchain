@@ -39,14 +39,14 @@ class TestTextBody:
 
     def test_text_body_in_request(self):
         """Test TextBody as part of Request model."""
-        request = Request(url="https://example.com/api", body={"text": "raw content"})
+        request = Request(url="https://example.com/api", body=TextBody(text="raw content"))
         assert isinstance(request.body, TextBody)
         assert request.body.text == "raw content"
 
     def test_text_body_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            TextBody(text="content", extra="field")
+            TextBody(text="content", extra="field")  # type: ignore[call-arg]
 
 
 class TestBase64Body:
@@ -82,7 +82,7 @@ class TestBase64Body:
     def test_base64_body_in_request(self):
         """Test Base64Body as part of Request model."""
         encoded = base64.b64encode(b"test data").decode()
-        request = Request(url="https://example.com/api", body={"base64": encoded})
+        request = Request(url="https://example.com/api", body=Base64Body(base64=encoded))
         assert isinstance(request.body, Base64Body)
         assert request.body.base64 == encoded
 
@@ -95,7 +95,7 @@ class TestBase64Body:
         """Test that extra fields are not allowed."""
         encoded = base64.b64encode(b"test").decode()
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            Base64Body(base64=encoded, extra="field")
+            Base64Body(base64=encoded, extra="field")  # type: ignore[call-arg]
 
 
 class TestBinaryBody:
@@ -125,7 +125,7 @@ class TestBinaryBody:
 
     def test_binary_body_in_request(self):
         """Test BinaryBody as part of Request model."""
-        request = Request(url="https://example.com/upload", body={"binary": "files/data.bin"})
+        request = Request(url="https://example.com/upload", body=BinaryBody(binary="files/data.bin"))
         assert isinstance(request.body, BinaryBody)
         assert isinstance(request.body.binary, Path)
         assert str(request.body.binary) == "files/data.bin"
@@ -133,32 +133,32 @@ class TestBinaryBody:
     def test_binary_body_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            BinaryBody(binary="file.bin", extra="field")
+            BinaryBody(binary="file.bin", extra="field")  # type: ignore[call-arg]
 
 
 class TestBodyTypeDiscriminator:
-    """Tests for body type discrimination."""
+    """Tests for body type discrimination using raw dicts."""
 
     def test_discriminator_chooses_text_body(self):
         """Test discriminator correctly identifies TextBody."""
-        request = Request(url="https://example.com", body={"text": "content"})
+        request = Request(url="https://example.com", body={"text": "content"})  # type: ignore[arg-type]
         assert isinstance(request.body, TextBody)
 
     def test_discriminator_chooses_base64_body(self):
         """Test discriminator correctly identifies Base64Body."""
         encoded = base64.b64encode(b"test").decode()
-        request = Request(url="https://example.com", body={"base64": encoded})
+        request = Request(url="https://example.com", body={"base64": encoded})  # type: ignore[arg-type]
         assert isinstance(request.body, Base64Body)
 
     def test_discriminator_chooses_binary_body(self):
         """Test discriminator correctly identifies BinaryBody."""
-        request = Request(url="https://example.com", body={"binary": "file.bin"})
+        request = Request(url="https://example.com", body={"binary": "file.bin"})  # type: ignore[arg-type]
         assert isinstance(request.body, BinaryBody)
 
     def test_multiple_body_types_not_allowed(self):
         """Test that only one body type can be specified."""
         with pytest.raises(ValidationError):
-            Request(url="https://example.com", body={"text": "content", "base64": "encoded"})
+            Request(url="https://example.com", body={"text": "content", "base64": "encoded"})  # type: ignore[arg-type]
 
 
 class TestJsonBody:
@@ -190,14 +190,14 @@ class TestJsonBody:
 
     def test_json_body_in_request(self):
         """Test JsonBody as part of Request model."""
-        request = Request(url="https://example.com/api", body={"json": {"data": "test"}})
+        request = Request(url="https://example.com/api", body=JsonBody(json={"data": "test"}))
         assert isinstance(request.body, JsonBody)
         assert request.body.json == {"data": "test"}
 
     def test_json_body_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            JsonBody(json={"key": "value"}, extra="field")
+            JsonBody(json={"key": "value"}, extra="field")  # type: ignore[call-arg]
 
 
 class TestXmlBody:
@@ -234,14 +234,14 @@ class TestXmlBody:
     def test_xml_body_in_request(self):
         """Test XmlBody as part of Request model."""
         xml = "<data><value>test</value></data>"
-        request = Request(url="https://example.com/api", body={"xml": xml})
+        request = Request(url="https://example.com/api", body=XmlBody(xml=xml))
         assert isinstance(request.body, XmlBody)
         assert request.body.xml == xml
 
     def test_xml_body_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            XmlBody(xml="<root/>", extra="field")
+            XmlBody(xml="<root/>", extra="field")  # type: ignore[call-arg]
 
 
 class TestFormBody:
@@ -266,14 +266,14 @@ class TestFormBody:
 
     def test_form_body_in_request(self):
         """Test FormBody as part of Request model."""
-        request = Request(url="https://example.com/api", body={"form": {"field": "value"}})
+        request = Request(url="https://example.com/api", body=FormBody(form={"field": "value"}))
         assert isinstance(request.body, FormBody)
         assert request.body.form == {"field": "value"}
 
     def test_form_body_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            FormBody(form={"key": "value"}, extra="field")
+            FormBody(form={"key": "value"}, extra="field")  # type: ignore[call-arg]
 
 
 class TestFilesBody:
@@ -304,13 +304,13 @@ class TestFilesBody:
 
     def test_files_body_in_request(self):
         """Test FilesBody as part of Request model."""
-        request = Request(url="https://example.com/upload", body={"files": {"upload": "file.pdf"}})
+        request = Request(url="https://example.com/upload", body=FilesBody(files={"upload": "file.pdf"}))
         assert isinstance(request.body, FilesBody)
 
     def test_files_body_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            FilesBody(files={"f": "file.txt"}, extra="field")
+            FilesBody(files={"f": "file.txt"}, extra="field")  # type: ignore[call-arg]
 
 
 class TestGraphQLBody:
@@ -318,17 +318,17 @@ class TestGraphQLBody:
 
     def test_graphql_body_simple_query(self):
         """Test GraphQLBody with simple query."""
-        body = GraphQLBody(graphql={"query": "{ user { id name } }"})
+        body = GraphQLBody(graphql=GraphQL(query="{ user { id name } }"))
         assert isinstance(body.graphql, GraphQL)
         assert body.graphql.query == "{ user { id name } }"
 
     def test_graphql_body_with_variables(self):
         """Test GraphQLBody with query and variables."""
         body = GraphQLBody(
-            graphql={
-                "query": "query GetUser($id: ID!) { user(id: $id) { name } }",
-                "variables": {"id": "123"},
-            }
+            graphql=GraphQL(
+                query="query GetUser($id: ID!) { user(id: $id) { name } }",
+                variables={"id": "123"},
+            )
         )
         assert body.graphql.query == "query GetUser($id: ID!) { user(id: $id) { name } }"
         assert body.graphql.variables == {"id": "123"}
@@ -336,10 +336,10 @@ class TestGraphQLBody:
     def test_graphql_body_mutation(self):
         """Test GraphQLBody with mutation."""
         body = GraphQLBody(
-            graphql={
-                "query": "mutation CreateUser($name: String!) { createUser(name: $name) { id } }",
-                "variables": {"name": "Alice"},
-            }
+            graphql=GraphQL(
+                query="mutation CreateUser($name: String!) { createUser(name: $name) { id } }",
+                variables={"name": "Alice"},
+            )
         )
         assert "mutation" in body.graphql.query
 
@@ -347,10 +347,10 @@ class TestGraphQLBody:
         """Test GraphQLBody with mutation loaded from file."""
         query = (datadir / "mutation_create_user.graphql").read_text()
         body = GraphQLBody(
-            graphql={
-                "query": query,
-                "variables": {"input": {"name": "Alice", "email": "alice@example.com"}},
-            }
+            graphql=GraphQL(
+                query=query,
+                variables={"input": {"name": "Alice", "email": "alice@example.com"}},
+            )
         )
         assert "mutation CreateUser" in body.graphql.query
         assert "createUser(input: $input)" in body.graphql.query
@@ -359,66 +359,66 @@ class TestGraphQLBody:
         """Test GraphQLBody with query containing directives loaded from file."""
         query = (datadir / "query_with_variables.graphql").read_text()
         body = GraphQLBody(
-            graphql={
-                "query": query,
-                "variables": {"id": "123", "includeProfile": True},
-            }
+            graphql=GraphQL(
+                query=query,
+                variables={"id": "123", "includeProfile": True},
+            )
         )
         assert "@include(if: $includeProfile)" in body.graphql.query
 
     def test_graphql_body_with_template_query(self):
         """Test GraphQLBody with template in query."""
-        body = GraphQLBody(graphql={"query": "{{ graphql_query }}"})
+        body = GraphQLBody(graphql=GraphQL(query="{{ graphql_query }}"))
         assert body.graphql.query == "{{ graphql_query }}"
 
     def test_graphql_body_invalid_query_rejected(self):
         """Test that invalid GraphQL query is rejected."""
         with pytest.raises(ValidationError, match="Invalid GraphQL query"):
-            GraphQLBody(graphql={"query": "{ user { id name }"})  # Missing closing brace
+            GraphQLBody(graphql=GraphQL(query="{ user { id name }"))  # Missing closing brace
 
     def test_graphql_body_in_request(self):
         """Test GraphQLBody as part of Request model."""
         request = Request(
             url="https://example.com/graphql",
-            body={"graphql": {"query": "{ users { id } }"}},
+            body=GraphQLBody(graphql=GraphQL(query="{ users { id } }")),
         )
         assert isinstance(request.body, GraphQLBody)
 
     def test_graphql_body_extra_fields_forbidden(self):
         """Test that extra fields are not allowed on GraphQL."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            GraphQLBody(graphql={"query": "{ test }", "extra": "field"})
+            GraphQLBody(graphql={"query": "{ test }", "extra": "field"})  # type: ignore[arg-type]
 
     def test_graphql_body_outer_extra_fields_forbidden(self):
         """Test that extra fields are not allowed on GraphQLBody."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            GraphQLBody(graphql={"query": "{ test }"}, extra="field")
+            GraphQLBody(graphql=GraphQL(query="{ test }"), extra="field")  # type: ignore[call-arg]
 
 
 class TestBodyTypeDiscriminatorExtended:
-    """Extended tests for body type discrimination."""
+    """Extended tests for body type discrimination using raw dicts."""
 
     def test_discriminator_chooses_json_body(self):
         """Test discriminator correctly identifies JsonBody."""
-        request = Request(url="https://example.com", body={"json": {"data": "test"}})
+        request = Request(url="https://example.com", body={"json": {"data": "test"}})  # type: ignore[arg-type]
         assert isinstance(request.body, JsonBody)
 
     def test_discriminator_chooses_xml_body(self):
         """Test discriminator correctly identifies XmlBody."""
-        request = Request(url="https://example.com", body={"xml": "<root/>"})
+        request = Request(url="https://example.com", body={"xml": "<root/>"})  # type: ignore[arg-type]
         assert isinstance(request.body, XmlBody)
 
     def test_discriminator_chooses_form_body(self):
         """Test discriminator correctly identifies FormBody."""
-        request = Request(url="https://example.com", body={"form": {"key": "value"}})
+        request = Request(url="https://example.com", body={"form": {"key": "value"}})  # type: ignore[arg-type]
         assert isinstance(request.body, FormBody)
 
     def test_discriminator_chooses_files_body(self):
         """Test discriminator correctly identifies FilesBody."""
-        request = Request(url="https://example.com", body={"files": {"f": "file.txt"}})
+        request = Request(url="https://example.com", body={"files": {"f": "file.txt"}})  # type: ignore[arg-type]
         assert isinstance(request.body, FilesBody)
 
     def test_discriminator_chooses_graphql_body(self):
         """Test discriminator correctly identifies GraphQLBody."""
-        request = Request(url="https://example.com", body={"graphql": {"query": "{ test }"}})
+        request = Request(url="https://example.com", body={"graphql": {"query": "{ test }"}})  # type: ignore[arg-type]
         assert isinstance(request.body, GraphQLBody)
