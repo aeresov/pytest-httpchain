@@ -53,11 +53,22 @@ markdown_extensions:
 
 nav:
     - Home: index.md
+    - Getting Started: getting-started.md
+    - Usage:
+          - Scenarios & Stages: usage/scenarios.md
+          - HTTP Requests: usage/requests.md
+          - Response Processing: usage/responses.md
+          - Substitutions & Templates: usage/substitutions.md
+    - Advanced:
+          - Parametrization: advanced/parametrization.md
+          - Parallel Execution: advanced/parallel.md
+          - $ref & Deep Merging: advanced/ref-merging.md
+    - Troubleshooting: troubleshooting.md
 
 extra:
     social:
         - icon: fontawesome/brands/github
-          link: https://github.com/yourusername/pytest-httpchain
+          link: https://github.com/aeresov/pytest-httpchain
         - icon: fontawesome/brands/python
           link: https://pypi.org/project/pytest-httpchain/
 

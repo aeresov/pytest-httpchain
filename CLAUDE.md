@@ -49,7 +49,9 @@ src/pytest_httpchain/          # Main pytest plugin
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule)
 ├── carrier.py                 # Test execution engine (Carrier class)
 ├── utils.py                   # Substitution processing, user function calls
-└── report_formatter.py        # HTTP request/response formatting for test reports
+├── report_formatter.py        # HTTP request/response formatting for test reports
+├── constants.py               # ConfigOptions enum for pytest.ini settings
+└── exceptions.py              # Stage execution exception classes (RequestError, SaveError, VerificationError)
 
 packages/
 ├── pytest-httpchain-jsonref/       # $ref resolution with deep merging
