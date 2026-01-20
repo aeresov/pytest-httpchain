@@ -11,66 +11,44 @@ A pytest plugin for testing HTTP endpoints.
 `pytest-httpchain` is an integration testing framework for HTTP APIs based on [httpx](https://www.python-httpx.org) lib.  
 It aims at helping with common HTTP API testing scenarios, where user needs to make several calls in specific order using data obtained along the way, like auth tokens or resource ids.
 
-## Installation
+## Why pytest-httpchain?
 
-Install normally via package manager of your choice from PyPi:
+Testing HTTP APIs with plain pytest often leads to these pain points:
 
-```bash
-pip install pytest-httpchain
-```
+-   **Boilerplate accumulates** — Every test repeats the same setup: create client, set headers, make request, parse response, assert. The actual test intent gets buried.
+-   **Data threading is manual** — When one call returns a token or ID needed by the next, you end up with fragile helper functions passing state around.
+-   **Common patterns get copy-pasted** — Auth flows, base URLs, shared headers end up duplicated across test files. Fixtures might help, but they are not designed for that.
+-   **Code reviews are noisy** — The actual test logic is rarely clear because of all the boilerplate and helpers, following changes gets overwhelming quickly.
 
-or directly from Github, in case you need a particular ref:
-
-```bash
-pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
-```
-
-### Optional dependencies
-
-The following optional dependencies are available:
-
--   `mcp`: installs MCP server package and its starting script. Details in [MCP Server](#mcp-server).
+`pytest-httpchain` offers a more structured approach.
 
 ## Features
 
-### Pytest integration
+### Declarative JSON format
 
-Most of pytest magic can be used: markers, fixtures, other plugins.
+Test scenarios are JSON documents that describe _what_ to test, not _how_. No setup code to scroll through — the request and assertions are right there.
 
-### Declarative format
+### `$ref` with deep merging
 
-Test scenarios are written declaratively in JSON files.  
-`pytest-httpchain` supports JSONRef, so use can reuse arbitrary parts of your scenarios with `$ref` directive.  
-Properties are merged in a greedy way with type checking.
+Reuse arbitrary parts of your scenarios with JSONRef. Properties merge with type checking, so you can compose scenarios from shared fragments (auth flows, common headers, base URLs).
 
-### Multi-stage tests
+### Multi-stage execution
 
-Each test scenario contains 1+ stages; each stage is a single HTTP call.  
-`pytest-httpchain` executes stages in the order they are listed in scenario file; one stage failure stops the execution chain.
+Each scenario contains 1+ stages executed in order. One stage failure stops the chain. Use `always_run` for cleanup stages that should execute regardless.
 
-### Common data context and variable substitution
+### Common data context
 
-`pytest-httpchain` maintains key-value data storage throughout the execution.  
-This storage ("common data context") is populated with declared variables, fixtures and data saved by stages. The data remains there throughout the scenario execution.  
-Writing scenarios, you can use Jinja-style expressions like `"{{ var }}"` for JSON values. `pytest-httpchain` does variable substitution dynamically right before executing a stage, and uses common data context keys as variables in these expressions.  
-Values from common data context also might be verified during verified/asserted.
+A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use Jinja-style expressions (`{{ var }}`) anywhere in your requests — substitution happens dynamically before each stage.
 
-### User functions
+### Response processing
 
-`pytest-httpchain` can import and call regular python functions:
+-   **JMESPath** — Extract values from JSON responses directly
+-   **JSON Schema** — Validate response structure against a schema
+-   **User functions** — Call Python functions for custom extraction, verification, or [authentication](https://requests.readthedocs.io/en/latest/user/advanced/#custom-authentication)
 
--   to extract data from HTTP response
--   to verify HTTP response and values in common data context
--   to provide [custom authentication for requests](https://requests.readthedocs.io/en/latest/user/advanced/#custom-authentication)
--   to call in substitution expressions
+### Full pytest integration
 
-### JMESPath support
-
-`pytest-httpchain` can extract values from JSON responses using JMESPath expressions directly.
-
-### JSON schema support
-
-`pytest-httpchain` can verify JSON reponses against user-defined JSON schema.
+Markers, fixtures, parametrization, and other plugins work as expected. You're not locked into a separate ecosystem.
 
 ## Quick Start
 
@@ -95,9 +73,8 @@ def now_utc():
             }
         }
     ],
-    "stages": [
-        {
-            "name": "get_user",
+    "stages": {
+        "get_user": {
             "request": {
                 "url": "https://api.example.com/users/{{ user_id }}"
             },
@@ -116,8 +93,7 @@ def now_utc():
                 }
             ]
         },
-        {
-            "name": "update_user",
+        "update_user": {
             "fixtures": ["now_utc"],
             "request": {
                 "url": "https://api.example.com/users/{{ user_id }}",
@@ -139,15 +115,14 @@ def now_utc():
                 }
             ]
         },
-        {
-            "name": "cleanup",
+        "cleanup": {
             "always_run": true,
             "request": {
                 "url": "https://api.example.com/cleanup",
                 "method": "POST"
             }
         }
-    ]
+    }
 }
 ```
 
@@ -170,6 +145,26 @@ Scenario we created:
     `always_run` parameter means this stage will be executed regardless of errors in previous stages
 
 For detailed examples see [USAGE.md](USAGE.md).
+
+## Installation
+
+Install normally via package manager of your choice from PyPi:
+
+```bash
+pip install pytest-httpchain
+```
+
+or directly from Github, in case you need a particular ref:
+
+```bash
+pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
+```
+
+### Optional dependencies
+
+The following optional dependencies are available:
+
+-   `mcp`: installs MCP server package and its starting script. Details in [MCP Server](#mcp-server).
 
 ## Configuration
 
@@ -216,7 +211,8 @@ The MCP server provides:
 
 ## Thanks
 
-`pytest-httpchain` was inspired by [Tavern](https://github.com/taverntesting/tavern) and [pytest-play](https://github.com/davidemoro/pytest-play).  
+This project was inspired by [Tavern](https://github.com/taverntesting/tavern) and [pytest-play](https://github.com/davidemoro/pytest-play).  
+
 [httpx](https://www.python-httpx.org) does comms.  
 [Pydantic](https://docs.pydantic.dev) keeps structure.  
 [simpleeval](https://github.com/danthedeckie/simpleeval) powers templates.  
