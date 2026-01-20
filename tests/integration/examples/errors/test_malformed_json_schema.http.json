@@ -1,0 +1,24 @@
+{
+    "description": "Test error handling when validating malformed JSON against schema",
+    "stages": [
+        {
+            "name": "malformed_json_schema",
+            "description": "Schema validation on malformed JSON should fail gracefully",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/malformed-json"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "body": {
+                            "schema": {
+                                "type": "object"
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

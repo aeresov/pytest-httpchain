@@ -33,8 +33,11 @@ jobs:
             - name: Set up Python
               run: uv python install 3.13
 
-            - name: Install docs dependencies
+            - name: Install dependencies
               run: uv sync --group docs
+
+            - name: Generate JSON Schema
+              run: uv run python scripts/generate_schema.py
 
             - name: Build documentation
               run: uv run mkdocs build

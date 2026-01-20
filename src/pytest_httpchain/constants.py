@@ -19,8 +19,10 @@ class ConfigOptions(StrEnum):
             in $ref paths for security (default: "3").
         MAX_COMPREHENSION_LENGTH: Maximum length for list/dict comprehensions
             in template expressions (default: "50000").
+        OUTPUT_DIR: Directory path for test output files (HAR, etc).
     """
 
     SUFFIX = "suffix"
     REF_PARENT_TRAVERSAL_DEPTH = "ref_parent_traversal_depth"
     MAX_COMPREHENSION_LENGTH = "max_comprehension_length"
+    OUTPUT_DIR = "output_dir"

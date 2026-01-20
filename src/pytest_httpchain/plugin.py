@@ -17,6 +17,7 @@ from simpleeval import EvalWithCompoundTypes
 from pytest_httpchain.constants import ConfigOptions
 
 from .carrier import Carrier, create_test_class
+from .har_writer import write_har_file
 from .report_formatter import format_request, format_response
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,12 @@ def pytest_addoption(parser: argparsing.Parser) -> None:
         type="string",
         default="50000",
     )
+    parser.addoption(
+        "--output-dir",
+        dest="output_dir",
+        default=None,
+        help="Directory to write test output files (HAR format for HTTP communications).",
+    )
 
 
 def pytest_configure(config: config.Config) -> None:
@@ -150,3 +157,16 @@ def pytest_runtest_makereport(item: nodes.Item, call: runner.CallInfo[Any]) -> A
                     report.sections.append(("HTTP Response", format_response(carrier.last_response)))
                 except Exception as e:
                     report.sections.append(("HTTP Response", f"<Error formatting response: {e}>"))
+
+            output_dir = item.config.getoption("output_dir")
+            if output_dir and carrier.last_request is not None and carrier.last_response is not None:
+                try:
+                    har_path = write_har_file(
+                        output_dir=Path(output_dir),
+                        test_name=item.nodeid,
+                        request=carrier.last_request,
+                        response=carrier.last_response,
+                    )
+                    report.sections.append(("HAR File", str(har_path)))
+                except Exception as e:
+                    logger.warning(f"Failed to write HAR file for {item.nodeid}: {e}")

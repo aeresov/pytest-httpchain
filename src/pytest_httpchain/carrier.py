@@ -123,11 +123,12 @@ class Carrier:
             # execute iterations
             max_concurrency = parallel_config.max_concurrency if parallel_config else 1
             calls_per_sec = parallel_config.calls_per_sec if parallel_config else None
+            max_rate_limit_delay = parallel_config.max_rate_limit_delay if parallel_config else 60
 
             total = len(iteration_substitutions)
             results: list[ParallelIterationResult | None] = [None] * total
             first_error: tuple[int, Exception] | None = None
-            limiter = Limiter(Rate(calls_per_sec, Duration.SECOND), max_delay=Duration.HOUR) if calls_per_sec else None
+            limiter = Limiter(Rate(calls_per_sec, Duration.SECOND), max_delay=Duration.SECOND * max_rate_limit_delay) if calls_per_sec else None
 
             if total == 1:
                 try:

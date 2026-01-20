@@ -1,0 +1,22 @@
+{
+    "description": "Test error handling when trying to save from malformed JSON response",
+    "stages": [
+        {
+            "name": "malformed_json_save",
+            "description": "Save from malformed JSON should fail gracefully",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/malformed-json"
+            },
+            "response": [
+                {
+                    "save": {
+                        "jmespath": {
+                            "data": "some_field"
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

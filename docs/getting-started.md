@@ -41,6 +41,38 @@ ref_parent_traversal_depth = 3
 max_comprehension_length = 50000
 ```
 
+## IDE Support
+
+pytest-httpchain provides a JSON Schema for test files, enabling autocomplete and validation in your IDE.
+
+### VS Code
+
+Add to your `.vscode/settings.json`:
+
+```json
+{
+    "json.schemas": [
+        {
+            "fileMatch": ["**/test_*.http.json"],
+            "url": "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json"
+        }
+    ]
+}
+```
+
+Or reference the schema directly in your test files:
+
+```json
+{
+    "$schema": "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json",
+    "stages": [...]
+}
+```
+
+### JetBrains IDEs
+
+Go to **Settings → Languages & Frameworks → Schemas and DTDs → JSON Schema Mappings** and add a mapping for `**/test_*.http.json` files, pointing to `https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json`.
+
 ## Your First Test
 
 Create a test file named `test_example.http.json`:

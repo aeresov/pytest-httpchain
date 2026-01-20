@@ -41,7 +41,11 @@ markdown_extensions:
           anchor_linenums: true
     - pymdownx.inlinehilite
     - pymdownx.snippets
-    - pymdownx.superfences
+    - pymdownx.superfences:
+          custom_fences:
+              - name: mermaid
+                class: mermaid
+                format: !!python/name:pymdownx.superfences.fence_code_format
     - pymdownx.details
     - pymdownx.tabbed:
           alternate_style: true
@@ -62,6 +66,7 @@ nav:
     - Advanced:
           - Parametrization: advanced/parametrization.md
           - Parallel Execution: advanced/parallel.md
+          - Context Layering: advanced/context-layering.md
           - $ref & Deep Merging: advanced/ref-merging.md
     - Troubleshooting: troubleshooting.md
 

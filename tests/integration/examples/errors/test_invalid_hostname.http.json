@@ -1,0 +1,20 @@
+{
+    "description": "Test error handling for invalid hostname",
+    "stages": [
+        {
+            "name": "invalid_hostname",
+            "description": "Request to invalid hostname should fail",
+            "request": {
+                "url": "http://this-hostname-definitely-does-not-exist-12345.invalid/test",
+                "timeout": 5
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -449,6 +449,10 @@ class ParallelConfigBase(BaseModel):
         default=None,
         description="Maximum number of API calls per second. When set, requests are rate-limited globally across all workers.",
     )
+    max_rate_limit_delay: PositiveInt | TemplateExpression = Field(
+        default=60,
+        description="Maximum seconds to wait when rate-limited before giving up. Defaults to 60 seconds.",
+    )
 
 
 class ParallelRepeatConfig(ParallelConfigBase):

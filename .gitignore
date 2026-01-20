@@ -10,3 +10,6 @@ __pycache__/
 
 # mkdocs
 /site/
+
+# generated files
+/docs/schema/

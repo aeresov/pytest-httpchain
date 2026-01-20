@@ -1,0 +1,20 @@
+{
+    "description": "Test connection refused error when server is not running",
+    "stages": [
+        {
+            "name": "connection_refused",
+            "description": "Request to non-existent server should fail",
+            "request": {
+                "url": "http://localhost:59999/nonexistent",
+                "timeout": 2
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}
