@@ -17,7 +17,22 @@ Ensure your test files follow the naming pattern `test_<name>.<suffix>.json` whe
 -   `test_users.http.json`
 -   `test_auth.api.json` (if suffix configured as `api`)
 
-## $ref Resolution Fails
+## Reference Resolution Fails (`$include` / `$merge` / `$ref`)
+
+All three directives (`$include`, `$merge`, `$ref`) work identically. Use `$include` or `$merge` to avoid VS Code/IDE validation conflicts.
+
+### VS Code Shows Validation Errors for `$ref`
+
+VS Code treats `$ref` as a JSON Schema keyword and may show spurious errors. Use `$include` or `$merge` instead:
+
+```json
+// Use these - no IDE conflicts
+{ "$include": "common/auth.json#/login_stage" }
+{ "$merge": "base.json", "override": "value" }
+
+// Instead of this - may show VS Code errors
+{ "$ref": "common/auth.json#/login_stage" }
+```
 
 ### Path Issues
 
@@ -35,7 +50,7 @@ Ensure your test files follow the naming pattern `test_<name>.<suffix>.json` whe
 
 ```json
 {
-    "$ref": "common/auth.json#/login_stage"
+    "$include": "common/auth.json#/login_stage"
 }
 ```
 

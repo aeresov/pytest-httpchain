@@ -1,8 +1,25 @@
-# $ref and Deep Merging
+# References and Deep Merging
 
-pytest-httpchain supports JSON Reference (`$ref`) for reusing scenario components across files. References are resolved with deep merging, allowing you to compose scenarios from shared fragments.
+pytest-httpchain supports JSON references for reusing scenario components across files. References are resolved with deep merging, allowing you to compose scenarios from shared fragments.
 
-## Basic $ref Syntax
+## `$include` / `$merge` vs `$ref`
+
+Three directives are supported and work identically:
+
+- **`$include`** (recommended): Avoids conflicts with VS Code's JSON Schema validation
+- **`$merge`** (recommended): Alias for `$include`, semantically clearer when merging properties
+- **`$ref`**: Standard JSON Reference syntax, but may cause VS Code/IDE validation warnings
+
+```json
+// Recommended - no VS Code conflicts
+{ "$include": "common.json#/headers" }
+{ "$merge": "base.json", "extra": "value" }
+
+// Also works, but may show VS Code warnings
+{ "$ref": "common.json#/headers" }
+```
+
+## Basic Syntax
 
 Reference another file:
 

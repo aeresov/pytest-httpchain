@@ -14,6 +14,9 @@ from pytest_httpchain_jsonref.plumbing.path import PathValidator
 
 REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 
+# Supported reference keys: $include/$merge (preferred, avoids VS Code conflicts) and $ref (legacy)
+REF_KEYS = ("$include", "$merge", "$ref")
+
 
 class ReferenceResolver:
     """Resolves JSON references ($ref) in documents."""
@@ -79,7 +82,7 @@ class ReferenceResolver:
         root_data: Any,
     ) -> Any:
         match data:
-            case dict() if "$ref" in data:
+            case dict() if self._get_ref_key(data):
                 return self._resolve_single_ref(data, current_path, root_data)
             case dict():
                 return {key: self._resolve_refs(value, current_path, root_data) for key, value in data.items()}
@@ -88,17 +91,26 @@ class ReferenceResolver:
             case _:
                 return data
 
+    def _get_ref_key(self, data: dict[str, Any]) -> str | None:
+        """Get the reference key ($include or $ref) if present in data."""
+        for key in REF_KEYS:
+            if key in data:
+                return key
+        return None
+
     def _resolve_single_ref(
         self,
         data: dict[str, Any],
         current_path: Path,
         root_data: Any,
     ) -> Any:
-        ref_value = data["$ref"]
+        ref_key = self._get_ref_key(data)
+        assert ref_key is not None
+        ref_value = data[ref_key]
         match = REF_PATTERN.match(ref_value)
 
         if not match:
-            raise ReferenceResolverError(f"Invalid $ref format: {ref_value}")
+            raise ReferenceResolverError(f"Invalid {ref_key} format: {ref_value}")
 
         file_path = match.group("file")
         pointer = match.group("pointer") or ""
@@ -174,7 +186,7 @@ class ReferenceResolver:
         current_path: Path,
         root_data: Any,
     ) -> Any:
-        siblings = {k: v for k, v in ref_dict.items() if k != "$ref"}
+        siblings = {k: v for k, v in ref_dict.items() if k not in REF_KEYS}
 
         if not siblings:
             return referenced_data

@@ -28,9 +28,9 @@ Testing HTTP APIs with plain pytest often leads to these pain points:
 
 Test scenarios are JSON documents that describe _what_ to test, not _how_. No setup code to scroll through — the request and assertions are right there.
 
-### `$ref` with Deep Merging
+### `$include` / `$merge` / `$ref` with Deep Merging
 
-Reuse arbitrary parts of your scenarios with JSONRef. Properties merge with type checking, so you can compose scenarios from shared fragments (auth flows, common headers, base URLs).
+Reuse arbitrary parts of your scenarios with JSON references. Properties merge with type checking, so you can compose scenarios from shared fragments (auth flows, common headers, base URLs). Use `$include` or `$merge` for better IDE support.
 
 ### Multi-Stage Execution
 

@@ -44,18 +44,22 @@ def add_jsonref_support(schema: dict) -> dict:
     if "$defs" not in schema:
         schema["$defs"] = {}
 
-    # Add a definition for $ref objects
+    # Add a definition for reference objects ($include, $merge, or $ref)
+    # $include/$merge are preferred as VS Code treats $ref as a JSON Schema keyword
     schema["$defs"]["JsonRef"] = {
         "type": "object",
-        "description": "Reference to an external JSON file or JSON pointer. Resolved at runtime by pytest-httpchain-jsonref.",
+        "description": "Reference to external JSON file or JSON pointer. Use $include or $merge (preferred) or $ref. Resolved at runtime by pytest-httpchain-jsonref.",
         "properties": {
-            "$ref": {
+            "$include": {
                 "type": "string",
-                "description": "Path to external JSON file, JSON pointer (#/path), or combined (file.json#/path)",
-            }
+                "description": "Path to external JSON file, JSON pointer (#/path), or combined (file.json#/path). Preferred over $ref to avoid VS Code conflicts.",
+            },
+            "$merge": {
+                "type": "string",
+                "description": "Alias for $include. Path to external JSON file, JSON pointer (#/path), or combined (file.json#/path).",
+            },
         },
-        "required": ["$ref"],
-        "additionalProperties": True,  # Allow sibling properties for deep merging
+        "additionalProperties": True,
     }
 
     # Wrap ALL definitions with anyOf to allow $ref as alternative

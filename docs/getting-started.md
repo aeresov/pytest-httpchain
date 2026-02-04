@@ -29,7 +29,7 @@ Configuration options can be set in `pytest.ini` or `pyproject.toml` under `[too
 | Option | Default | Description |
 |--------|---------|-------------|
 | `suffix` | `http` | File suffix for test discovery. Files must match `test_<name>.<suffix>.json` |
-| `ref_parent_traversal_depth` | `3` | Maximum parent directory traversals allowed in `$ref` paths |
+| `ref_parent_traversal_depth` | `3` | Maximum parent directory traversals allowed in `$include`/`$merge`/`$ref` paths |
 | `max_comprehension_length` | `50000` | Maximum length for list/dict comprehensions in template expressions |
 
 Example `pyproject.toml`:

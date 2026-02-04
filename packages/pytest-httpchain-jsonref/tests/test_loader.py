@@ -260,3 +260,97 @@ class TestArrayReferences:
         )
         result = load_json(file)
         assert result["first_user_name"] == "Alice"
+
+
+class TestIncludeDirective:
+    """Tests for $include as an alternative to $ref (avoids VS Code JSON Schema conflicts)."""
+
+    def test_include_resolves_internal_reference(self, create_json_file):
+        """$include works the same as $ref for internal references."""
+        file = create_json_file(
+            "test.json",
+            {"source": {"value": 42}, "target": {"$include": "#/source"}},
+        )
+        result = load_json(file)
+        assert result["target"]["value"] == 42
+        assert "$include" not in result["target"]
+
+    def test_include_resolves_external_reference(self, create_json_file):
+        """$include works for external file references."""
+        create_json_file("external.json", {"data": "from external"})
+        file = create_json_file(
+            "test.json",
+            {"imported": {"$include": "external.json"}},
+        )
+        result = load_json(file)
+        assert result["imported"]["data"] == "from external"
+
+    def test_include_with_pointer(self, create_json_file):
+        """$include works with JSON pointers."""
+        create_json_file("external.json", {"nested": {"value": 99}})
+        file = create_json_file(
+            "test.json",
+            {"target": {"$include": "external.json#/nested/value"}},
+        )
+        result = load_json(file)
+        assert result["target"] == 99
+
+    def test_include_with_sibling_merge(self, create_json_file):
+        """$include supports deep merging with sibling properties."""
+        file = create_json_file(
+            "test.json",
+            {
+                "base": {"a": 1, "b": 2},
+                "extended": {"$include": "#/base", "c": 3},
+            },
+        )
+        result = load_json(file)
+        assert result["extended"] == {"a": 1, "b": 2, "c": 3}
+
+    def test_include_in_array(self, create_json_file):
+        """$include works inside arrays."""
+        file = create_json_file(
+            "test.json",
+            {
+                "template": {"type": "item"},
+                "items": [{"$include": "#/template"}, {"$include": "#/template"}],
+            },
+        )
+        result = load_json(file)
+        assert result["items"] == [{"type": "item"}, {"type": "item"}]
+
+
+class TestMergeDirective:
+    """Tests for $merge as an alternative to $ref (avoids VS Code JSON Schema conflicts)."""
+
+    def test_merge_resolves_internal_reference(self, create_json_file):
+        """$merge works the same as $ref for internal references."""
+        file = create_json_file(
+            "test.json",
+            {"source": {"value": 42}, "target": {"$merge": "#/source"}},
+        )
+        result = load_json(file)
+        assert result["target"]["value"] == 42
+        assert "$merge" not in result["target"]
+
+    def test_merge_resolves_external_reference(self, create_json_file):
+        """$merge works for external file references."""
+        create_json_file("external.json", {"data": "from external"})
+        file = create_json_file(
+            "test.json",
+            {"imported": {"$merge": "external.json"}},
+        )
+        result = load_json(file)
+        assert result["imported"]["data"] == "from external"
+
+    def test_merge_with_sibling_properties(self, create_json_file):
+        """$merge supports deep merging with sibling properties."""
+        file = create_json_file(
+            "test.json",
+            {
+                "base": {"a": 1, "b": 2},
+                "extended": {"$merge": "#/base", "c": 3},
+            },
+        )
+        result = load_json(file)
+        assert result["extended"] == {"a": 1, "b": 2, "c": 3}
