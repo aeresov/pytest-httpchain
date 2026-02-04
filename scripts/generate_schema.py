@@ -32,13 +32,82 @@ def find_project_root() -> Path:
     raise RuntimeError("Could not find project root (no pyproject.toml found)")
 
 
+def is_object_type(definition: dict) -> bool:
+    """Check if a schema definition represents an object type."""
+    if definition.get("type") == "object":
+        return True
+    if "properties" in definition:
+        return True
+    if "additionalProperties" in definition:
+        return True
+    return False
+
+
+def add_jsonref_support(schema: dict) -> dict:
+    """Add support for pytest-httpchain's $ref resolution to the schema.
+
+    pytest-httpchain-jsonref allows $ref at any object level in JSON files,
+    resolving external file references at runtime. This function modifies
+    the schema to allow objects with $ref as valid alternatives, so VS Code
+    and other JSON Schema validators don't complain about missing properties
+    when $ref is used.
+    """
+    if "$defs" not in schema:
+        schema["$defs"] = {}
+
+    # Add a definition for $ref objects
+    schema["$defs"]["JsonRef"] = {
+        "type": "object",
+        "description": "Reference to an external JSON file or JSON pointer. Resolved at runtime by pytest-httpchain-jsonref.",
+        "properties": {
+            "$ref": {
+                "type": "string",
+                "description": "Path to external JSON file, JSON pointer (#/path), or combined (file.json#/path)",
+            }
+        },
+        "required": ["$ref"],
+        "additionalProperties": True,  # Allow sibling properties for deep merging
+    }
+
+    # Wrap ALL object-type definitions with anyOf to allow $ref as alternative
+    for type_name, original_def in list(schema["$defs"].items()):
+        if type_name == "JsonRef":
+            continue
+        if not is_object_type(original_def):
+            continue
+
+        schema["$defs"][type_name] = {
+            "anyOf": [original_def, {"$ref": "#/$defs/JsonRef"}]
+        }
+        # Preserve title and description at the anyOf level
+        if "title" in original_def:
+            schema["$defs"][type_name]["title"] = original_def.pop("title")
+        if "description" in original_def:
+            schema["$defs"][type_name]["description"] = original_def.pop("description")
+
+    # Also handle root-level properties that are objects
+    for prop_name, prop_def in list(schema.get("properties", {}).items()):
+        if is_object_type(prop_def) or "$ref" in prop_def:
+            schema["properties"][prop_name] = {
+                "anyOf": [prop_def, {"$ref": "#/$defs/JsonRef"}],
+                "title": prop_def.get("title", prop_name),
+            }
+            if "description" in prop_def:
+                schema["properties"][prop_name]["description"] = prop_def.get("description")
+
+    return schema
+
+
 def main():
     # Generate JSON Schema from the Scenario model
     schema = Scenario.model_json_schema()
 
     # Add $schema and metadata
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-    schema["$id"] = "https://pytest-httpchain.readthedocs.io/schema/scenario.json"
+    schema["$id"] = "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json"
+
+    # Add support for pytest-httpchain's $ref resolution
+    schema = add_jsonref_support(schema)
 
     # Write to docs folder
     project_root = find_project_root()
