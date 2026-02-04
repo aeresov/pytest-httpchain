@@ -32,17 +32,6 @@ def find_project_root() -> Path:
     raise RuntimeError("Could not find project root (no pyproject.toml found)")
 
 
-def is_object_type(definition: dict) -> bool:
-    """Check if a schema definition represents an object type."""
-    if definition.get("type") == "object":
-        return True
-    if "properties" in definition:
-        return True
-    if "additionalProperties" in definition:
-        return True
-    return False
-
-
 def add_jsonref_support(schema: dict) -> dict:
     """Add support for pytest-httpchain's $ref resolution to the schema.
 
@@ -69,31 +58,27 @@ def add_jsonref_support(schema: dict) -> dict:
         "additionalProperties": True,  # Allow sibling properties for deep merging
     }
 
-    # Wrap ALL object-type definitions with anyOf to allow $ref as alternative
+    # Wrap ALL definitions with anyOf to allow $ref as alternative
+    # (jsonref can substitute any element, not just objects)
     for type_name, original_def in list(schema["$defs"].items()):
         if type_name == "JsonRef":
             continue
-        if not is_object_type(original_def):
-            continue
 
-        schema["$defs"][type_name] = {
-            "anyOf": [original_def, {"$ref": "#/$defs/JsonRef"}]
-        }
+        schema["$defs"][type_name] = {"anyOf": [{"$ref": "#/$defs/JsonRef"}, original_def]}
         # Preserve title and description at the anyOf level
         if "title" in original_def:
             schema["$defs"][type_name]["title"] = original_def.pop("title")
         if "description" in original_def:
             schema["$defs"][type_name]["description"] = original_def.pop("description")
 
-    # Also handle root-level properties that are objects
+    # Also handle ALL root-level properties
     for prop_name, prop_def in list(schema.get("properties", {}).items()):
-        if is_object_type(prop_def) or "$ref" in prop_def:
-            schema["properties"][prop_name] = {
-                "anyOf": [prop_def, {"$ref": "#/$defs/JsonRef"}],
-                "title": prop_def.get("title", prop_name),
-            }
-            if "description" in prop_def:
-                schema["properties"][prop_name]["description"] = prop_def.get("description")
+        schema["properties"][prop_name] = {
+            "anyOf": [{"$ref": "#/$defs/JsonRef"}, prop_def],
+            "title": prop_def.get("title", prop_name),
+        }
+        if "description" in prop_def:
+            schema["properties"][prop_name]["description"] = prop_def.get("description")
 
     return schema
 

@@ -5,5 +5,11 @@
     },
     "[toml]": {
         "editor.defaultFormatter": "tamasfe.even-better-toml"
-    }
+    },
+    "json.schemas": [
+        {
+            "fileMatch": ["**/test_*.http.json"],
+            "url": "./docs/schema/scenario.schema.json"
+        }
+    ]
 }
