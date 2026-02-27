@@ -46,6 +46,11 @@ class PathValidator:
         # Try resolving from different base paths in order of preference
         paths_to_try = [base_path]
 
+        # Add CWD so that paths like "tests/common.json" resolve from where the user runs the tool
+        cwd = Path.cwd()
+        if cwd.resolve() not in (base_path_resolved, root_path_resolved):
+            paths_to_try.append(cwd)
+
         # Add root_path if it's different from base_path
         if root_path_resolved != base_path_resolved:
             paths_to_try.append(root_path)
