@@ -60,7 +60,8 @@ class JsonModule(python.Module):
             raise nodes.Collector.CollectError(full_error_msg) from None
 
         # generate python test class
-        CarrierClass = create_test_class(scenario, self.name)
+        max_parallel_iterations = int(self.config.getini(ConfigOptions.MAX_PARALLEL_ITERATIONS))
+        CarrierClass = create_test_class(scenario, self.name, max_parallel_iterations=max_parallel_iterations)
         dummy_module = types.ModuleType("generated")
         setattr(dummy_module, self.name, CarrierClass)
         self._getobj = lambda: dummy_module  # ty: ignore[invalid-assignment]
@@ -79,7 +80,7 @@ class JsonModule(python.Module):
                 if marker:
                     json_class.add_marker(marker)
             except Exception as e:
-                logger.warning(f"Failed to create marker '{mark_str}': {e}")
+                raise nodes.Collector.CollectError(f"Invalid marker '{mark_str}' in {self.path}: {e}") from None
 
         yield json_class
 
@@ -102,6 +103,12 @@ def pytest_addoption(parser: argparsing.Parser) -> None:
         help="Maximum length for list/dict comprehensions in template expressions.",
         type="string",
         default="50000",
+    )
+    parser.addini(
+        name=ConfigOptions.MAX_PARALLEL_ITERATIONS,
+        help="Maximum number of parallel iterations allowed per stage.",
+        type="string",
+        default="10000",
     )
     parser.addoption(
         "--output-dir",
@@ -126,6 +133,12 @@ def pytest_configure(config: config.Config) -> None:
     if max_comprehension_length > 1_000_000:
         raise ValueError("Maximum comprehension length must not exceed 1,000,000")
     simpleeval.MAX_COMPREHENSION_LENGTH = max_comprehension_length  # type: ignore[misc]
+
+    max_parallel_iterations = int(config.getini(ConfigOptions.MAX_PARALLEL_ITERATIONS))
+    if max_parallel_iterations < 1:
+        raise ValueError("Maximum parallel iterations must be a positive integer")
+    if max_parallel_iterations > 1_000_000:
+        raise ValueError("Maximum parallel iterations must not exceed 1,000,000")
 
 
 def pytest_collect_file(file_path: Path, parent: nodes.Collector) -> nodes.Collector | None:

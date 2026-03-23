@@ -1,7 +1,8 @@
 import httpx
+from pytest_httpchain_core import HttpChainError
 
 
-class StageExecutionError(Exception):
+class StageExecutionError(HttpChainError):
     """Base exception for stage execution errors.
 
     Optionally carries HTTP request/response for debugging failed stages.

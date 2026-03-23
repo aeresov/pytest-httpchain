@@ -8,15 +8,13 @@
         "UV_LINK_MODE": "copy",
         "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
     },
-    "runArgs": ["--network=host"],
+    "runArgs": ["--network=host", "--add-host=host.docker.internal:host-gateway"],
     "remoteUser": "vscode",
     "postCreateCommand": {
-        "home": "sudo chown --recursive $(whoami): /home/$(whoami)",
-        "uv": "curl -LsSf https://astral.sh/uv/install.sh | sh",
-        "claude": "curl -fsSL https://claude.ai/install.sh | bash"
+        "uv": "curl -LsSf https://astral.sh/uv/install.sh | sh"
     },
     "postAttachCommand": {
-        "uv": "uv sync --all-packages --all-extras"
+        "uv": "uv venv --clear --seed; uv sync --dev --all-packages --all-extras"
     },
     "customizations": {
         "vscode": {

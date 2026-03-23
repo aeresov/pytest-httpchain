@@ -38,7 +38,7 @@ Each scenario contains 1+ stages executed in order. One stage failure stops the 
 
 ### Common data context
 
-A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use Jinja-style expressions (`{{ var }}`) anywhere in your requests — substitution happens dynamically before each stage.
+A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use template expressions (`{{ var }}`) anywhere in your requests — substitution happens dynamically before each stage.
 
 ### Response processing
 
@@ -173,6 +173,7 @@ The following optional dependencies are available:
 -   `$ref` instructions can point to other files; absolute and relative paths are supported.
     You can limit the depth of relative path traversal using `ref_parent_traversal_depth` ini option, default value is **3**.
 -   Template expressions support list/dict comprehensions. You can limit the maximum comprehension length using `max_comprehension_length` ini option, default value is **50000**.
+-   Parallel stage iterations (repeat/foreach) have a safety limit configurable via `max_parallel_iterations` ini option, default value is **10000**.
 
 ## MCP Server
 

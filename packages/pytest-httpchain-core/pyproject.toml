@@ -1,14 +1,11 @@
 [project]
-name = "pytest-httpchain-mcp"
+name = "pytest-httpchain-core"
 version = "0.2.2"
-description = "MCP server for pytest-httpchain"
+description = "Shared base types for pytest-httpchain"
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [{ name = "Alexander Eresov", email = "aeresov@gmail.com" }]
-dependencies = ["mcp[cli]>=1.11.0"]
-
-[project.scripts]
-pytest-httpchain-mcp = "pytest_httpchain_mcp.cli:serve"
+dependencies = []
 
 [build-system]
 requires = ["uv_build>=0.7.21,<0.8.0"]

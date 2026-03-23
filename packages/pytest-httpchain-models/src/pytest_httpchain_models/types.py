@@ -1,5 +1,6 @@
 import base64
 import keyword
+import logging
 import re
 import types
 import xml.etree.ElementTree
@@ -11,6 +12,7 @@ import jmespath
 import jsonschema
 from pydantic import AfterValidator, BeforeValidator, JsonValue, PlainSerializer
 from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN, is_complete_template
+from pytest_httpchain_userfunc import NAME_PATTERN
 
 
 def create_string_validator(validation_func, error_message: str):
@@ -52,6 +54,9 @@ SCHEMA_VALIDATORS = {
 }
 
 
+logger = logging.getLogger(__name__)
+
+
 def check_json_schema(schema: dict[str, Any]) -> None:
     """Check JSON schema validity using appropriate validator version."""
     schema_uri = schema.get("$schema", "http://json-schema.org/draft-07/schema#")
@@ -62,6 +67,9 @@ def check_json_schema(schema: dict[str, Any]) -> None:
         if version_key in schema_uri:
             validator_class = validator
             break
+    else:
+        if "$schema" in schema:
+            logger.warning(f"Unrecognized JSON Schema version '{schema_uri}', falling back to Draft 7")
 
     validator_class.check_schema(schema)
 
@@ -115,7 +123,6 @@ def validate_function_import_name(v: str) -> str:
 
     Format: [module.path:]function_name
     """
-    NAME_PATTERN = re.compile(r"^(?:(?P<module>[a-zA-Z_][a-zA-Z0-9_.]*):)?(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$")
     if not NAME_PATTERN.match(v):
         raise ValueError(f"Invalid function name format: {v}")
     return v

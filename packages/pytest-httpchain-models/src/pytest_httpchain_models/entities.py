@@ -39,7 +39,7 @@ def _create_discriminator(class_to_tag: dict[str, str], error_message: str) -> C
         if isinstance(v, dict):
             found = tag_fields & v.keys()
             if found:
-                return found.pop()
+                return min(found)
 
         if hasattr(v, "__class__"):
             tag = class_to_tag.get(v.__class__.__name__)

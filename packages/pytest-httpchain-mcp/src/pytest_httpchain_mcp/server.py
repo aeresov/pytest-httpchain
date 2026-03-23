@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 from pathlib import Path
@@ -9,27 +10,46 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ValidationError
 from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
 from pytest_httpchain_models.entities import Scenario
+from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN
+from pytest_httpchain_templates.substitution import JSON_LITERALS, SAFE_FUNCTIONS
 
 mcp = FastMCP("pytest-httpchain")
 
-# Regex pattern for Jinja2 variable references: {{ var_name }} or {{ var.attr }}
-JINJA_VAR_PATTERN = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)")
+# Names provided by the template engine that don't need user definition
+TEMPLATE_BUILTINS = (
+    set(SAFE_FUNCTIONS)
+    | set(JSON_LITERALS)
+    | {"exists", "get"}  # context helpers added at eval time
+    | {"rand", "randint", "int", "float", "str"}  # simpleeval defaults
+)
 
 
-def extract_jinja_variables(obj: Any, variables: set[str] | None = None) -> set[str]:
-    """Recursively extract Jinja2 variable names from a data structure."""
+def _extract_names_from_expr(expr: str) -> set[str]:
+    """Extract variable names from a Python expression using AST parsing."""
+    try:
+        tree = ast.parse(expr.strip(), mode="eval")
+        return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    except SyntaxError:
+        # Fallback to regex for unparseable expressions
+        return set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", expr))
+
+
+def extract_template_variables(obj: Any, variables: set[str] | None = None) -> set[str]:
+    """Recursively extract variable names from {{ expr }} template expressions."""
     if variables is None:
         variables = set()
 
     if isinstance(obj, str):
-        for match in JINJA_VAR_PATTERN.finditer(obj):
-            variables.add(match.group(1))
+        for match in re.finditer(TEMPLATE_PATTERN, obj):
+            expr = match.group("expr")
+            names = _extract_names_from_expr(expr)
+            variables.update(names - TEMPLATE_BUILTINS)
     elif isinstance(obj, dict):
         for value in obj.values():
-            extract_jinja_variables(value, variables)
+            extract_template_variables(value, variables)
     elif isinstance(obj, list):
         for item in obj:
-            extract_jinja_variables(item, variables)
+            extract_template_variables(item, variables)
 
     return variables
 
@@ -40,11 +60,19 @@ def extract_saved_variables(scenario: Scenario) -> set[str]:
 
     for stage in scenario.stages:
         for response_step in stage.response:
-            # Check for save steps with jmespath
-            if hasattr(response_step, "save"):
-                save = response_step.save
-                if hasattr(save, "jmespath") and isinstance(save.jmespath, dict):
-                    saved_vars.update(k for k in save.jmespath if isinstance(k, str))
+            if not hasattr(response_step, "save"):
+                continue
+            save = response_step.save
+            # JMESPathSave: keys are variable names
+            if hasattr(save, "jmespath") and isinstance(save.jmespath, dict):
+                saved_vars.update(save.jmespath.keys())
+            # SubstitutionsSave: extract from vars and functions substitutions
+            if hasattr(save, "substitutions"):
+                for sub in save.substitutions:
+                    if hasattr(sub, "vars") and isinstance(sub.vars, dict):
+                        saved_vars.update(sub.vars.keys())
+                    if hasattr(sub, "functions") and isinstance(sub.functions, dict):
+                        saved_vars.update(sub.functions.keys())
 
     return saved_vars
 
@@ -233,7 +261,7 @@ def validate_scenario(
     vars_saved = extract_saved_variables(scenario)
 
     # Extract referenced variables from templates
-    vars_referenced = extract_jinja_variables(test_data)
+    vars_referenced = extract_template_variables(test_data)
 
     # Check for fixture/variable name conflicts
     fixture_set = set(fixtures)

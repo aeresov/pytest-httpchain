@@ -8,12 +8,13 @@ from pytest_httpchain.plugin import pytest_collect_file, pytest_configure
 
 
 class TestPytestConfigure:
-    def make_config(self, suffix="http", ref_depth="3", max_comp="50000"):
+    def make_config(self, suffix="http", ref_depth="3", max_comp="50000", max_parallel="10000"):
         config = MagicMock()
         config.getini.side_effect = lambda name: {
             ConfigOptions.SUFFIX: suffix,
             ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH: ref_depth,
             ConfigOptions.MAX_COMPREHENSION_LENGTH: max_comp,
+            ConfigOptions.MAX_PARALLEL_ITERATIONS: max_parallel,
         }[name]
         return config
 
@@ -109,6 +110,34 @@ class TestPytestConfigure:
 
     def test_invalid_max_comprehension_too_large(self):
         config = self.make_config(max_comp="1000001")
+
+        with pytest.raises(ValueError, match="must not exceed 1,000,000"):
+            pytest_configure(config)
+
+    def test_valid_max_parallel_iterations_minimum(self):
+        config = self.make_config(max_parallel="1")
+
+        pytest_configure(config)
+
+    def test_valid_max_parallel_iterations_maximum(self):
+        config = self.make_config(max_parallel="1000000")
+
+        pytest_configure(config)
+
+    def test_invalid_max_parallel_iterations_zero(self):
+        config = self.make_config(max_parallel="0")
+
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            pytest_configure(config)
+
+    def test_invalid_max_parallel_iterations_negative(self):
+        config = self.make_config(max_parallel="-1")
+
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            pytest_configure(config)
+
+    def test_invalid_max_parallel_iterations_too_large(self):
+        config = self.make_config(max_parallel="1000001")
 
         with pytest.raises(ValueError, match="must not exceed 1,000,000"):
             pytest_configure(config)

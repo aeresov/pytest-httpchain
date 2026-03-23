@@ -13,12 +13,14 @@ Example:
 
 from .exceptions import UserFunctionError
 from .userfunc import (
+    NAME_PATTERN,
     call_function,
     import_function,
     wrap_function,
 )
 
 __all__ = [
+    "NAME_PATTERN",
     "import_function",
     "call_function",
     "wrap_function",

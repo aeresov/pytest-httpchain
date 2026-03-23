@@ -1,6 +1,6 @@
 [project]
 name = "pytest-httpchain"
-version = "0.2.1"
+version = "0.2.2"
 description = "pytest plugin for HTTP testing using JSON files"
 readme = "README.md"
 requires-python = ">=3.13,<4.0"
@@ -52,6 +52,7 @@ default-groups = ["dev", "docs"]
 members = ["packages/*"]
 
 [tool.uv.sources]
+pytest-httpchain-core = { workspace = true }
 pytest-httpchain-jsonref = { workspace = true }
 pytest-httpchain-templates = { workspace = true }
 pytest-httpchain-mcp = { workspace = true }
@@ -97,6 +98,7 @@ pytester_example_dir = "tests/integration/examples"
 addopts = ["--log-disable=werkzeug", "--import-mode=importlib"]
 pythonpath = [
     ".",
+    "packages/pytest-httpchain-core/src",
     "packages/pytest-httpchain-jsonref/src",
     "packages/pytest-httpchain-templates/src",
     "packages/pytest-httpchain-mcp/src",
@@ -117,6 +119,7 @@ pythonPlatform = "Linux"
 [tool.coverage.run]
 source = [
     "src",
+    "packages/pytest-httpchain-core/src",
     "packages/pytest-httpchain-jsonref/src",
     "packages/pytest-httpchain-templates/src",
     "packages/pytest-httpchain-mcp/src",

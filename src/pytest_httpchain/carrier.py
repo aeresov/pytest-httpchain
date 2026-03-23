@@ -77,6 +77,7 @@ class Carrier:
     last_response: ClassVar[httpx.Response | None] = None
     global_context: ClassVar[ChainMap[str, Any]] = ChainMap()
     active_context_managers: ClassVar[list[AbstractContextManager]] = []
+    max_parallel_iterations: ClassVar[int] = 10_000
 
     @classmethod
     def execute_stage(cls, stage: Stage, fixture_kwargs: dict[str, Any]) -> None:
@@ -119,6 +120,12 @@ class Carrier:
                             case CombinationsParameter(combinations=combinations):
                                 combos: list[dict[str, Any] | SimpleNamespace] = [vars(item) if isinstance(item, SimpleNamespace) else item for item in combinations]
                                 iteration_substitutions = [{**existing, **combo} for combo in combos for existing in iteration_substitutions]
+
+            if len(iteration_substitutions) > cls.max_parallel_iterations:
+                raise StageExecutionError(
+                    f"Parallel iteration count ({len(iteration_substitutions)}) exceeds maximum ({cls.max_parallel_iterations}). "
+                    f"Set 'max_parallel_iterations' in pytest.ini to increase the limit."
+                )
 
             # execute iterations
             max_concurrency = parallel_config.max_concurrency if parallel_config else 1
@@ -439,7 +446,7 @@ class Carrier:
             cls.client = None
 
 
-def create_test_class(scenario: Scenario, class_name: str) -> type[Carrier]:
+def create_test_class(scenario: Scenario, class_name: str, max_parallel_iterations: int = 10_000) -> type[Carrier]:
     """Create a dynamic test class from a scenario definition."""
     scenario_context = process_substitutions(scenario.substitutions)
 
@@ -468,6 +475,7 @@ def create_test_class(scenario: Scenario, class_name: str) -> type[Carrier]:
             "last_response": None,
             "global_context": ChainMap(scenario_context),
             "active_context_managers": [],
+            "max_parallel_iterations": max_parallel_iterations,
         },
     )
 

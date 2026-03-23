@@ -49,8 +49,8 @@ Validates a pytest-httpchain test scenario JSON file with comprehensive checks.
 **ScenarioInfo fields:**
 - `num_stages`: Number of stages in the scenario
 - `stage_names`: List of stage names
-- `vars_referenced`: Variables referenced in Jinja templates
-- `vars_saved`: Variables saved via jmespath in response steps
+- `vars_referenced`: Variables referenced in template expressions
+- `vars_saved`: Variables saved in response steps (jmespath, substitutions, functions)
 - `vars_defined`: Variables defined in vars/substitutions
 - `fixtures`: Pytest fixtures used
 

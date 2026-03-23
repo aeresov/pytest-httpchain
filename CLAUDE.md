@@ -12,7 +12,7 @@ pytest-httpchain is a pytest plugin for declarative HTTP API integration testing
 # Run all tests
 uv run pytest
 
-# Run tests for a specific package
+# Run tests for a specific package (core has no tests)
 uv run pytest packages/pytest-httpchain-jsonref/tests -v
 uv run pytest packages/pytest-httpchain-models/tests -v
 uv run pytest packages/pytest-httpchain-templates/tests -v
@@ -50,10 +50,12 @@ src/pytest_httpchain/          # Main pytest plugin
 ├── carrier.py                 # Test execution engine (Carrier class)
 ├── utils.py                   # Substitution processing, user function calls
 ├── report_formatter.py        # HTTP request/response formatting for test reports
+├── har_writer.py              # HAR file export for HTTP request/response logging
 ├── constants.py               # ConfigOptions enum for pytest.ini settings
 └── exceptions.py              # Stage execution exception classes (RequestError, SaveError, VerificationError)
 
 packages/
+├── pytest-httpchain-core/          # Shared base types (HttpChainError)
 ├── pytest-httpchain-jsonref/       # $ref resolution with deep merging
 ├── pytest-httpchain-models/        # Pydantic models (Scenario, Stage, Request, etc.)
 ├── pytest-httpchain-templates/     # {{ expression }} substitution engine
