@@ -1,8 +1,5 @@
-import click
-
 from pytest_httpchain_mcp.server import mcp
 
 
-@click.command()
-def serve():
+def serve() -> None:
     mcp.run()

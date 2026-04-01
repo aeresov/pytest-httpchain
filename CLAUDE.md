@@ -31,7 +31,7 @@ uv run ruff format --check .
 uv run ruff format .
 
 # Run MCP server
-uv run pytest-httpchain-mcp
+uv run pytest-httpchain mcp
 
 # Run unit tests with coverage report (main package only)
 uv run pytest tests/unit --cov=src --cov-report=term-missing
@@ -46,9 +46,11 @@ This is a uv workspace monorepo with the main plugin in `src/` and supporting pa
 
 ```
 src/pytest_httpchain/          # Main pytest plugin
+├── cli.py                     # Typer CLI (mcp server, install skill/config)
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule)
 ├── carrier.py                 # Test execution engine (Carrier class)
-├── utils.py                   # Substitution processing, user function calls
+├── utils.py                   # Marker construction, substitution processing, user function calls
+├── skill.md                   # Claude Code skill for test authoring
 ├── report_formatter.py        # HTTP request/response formatting for test reports
 ├── har_writer.py              # HAR file export for HTTP request/response logging
 ├── constants.py               # ConfigOptions enum for pytest.ini settings

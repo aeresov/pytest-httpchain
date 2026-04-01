@@ -35,7 +35,7 @@ from pytest_httpchain_models import (
     # Parameterization
     Parameter, IndividualParameter, CombinationsParameter,
     # Parallel execution
-    ParallelConfig, ParallelRepeatConfig, ParallelForeachConfig,
+    ParallelConfig, ParallelConfigBase, ParallelRepeatConfig, ParallelForeachConfig,
     # Utilities
     check_json_schema,
 )

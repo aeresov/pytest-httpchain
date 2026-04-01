@@ -101,24 +101,22 @@ See [Getting Started](getting-started.md) for detailed installation and configur
 
 ## MCP Server
 
-`pytest-httpchain` includes an MCP (Model Context Protocol) server to aid AI code assistants.
+`pytest-httpchain` includes an MCP (Model Context Protocol) server and a Claude Code skill for AI-assisted test authoring.
 
-Install with the `mcp` extra:
+Install the MCP server config and skill into your project:
 
 ```bash
-pip install 'pytest-httpchain[mcp]'
+uvx pytest-httpchain install --skill --mcp
 ```
 
-Configure in Claude Code `.mcp.json`:
+Or configure manually in Claude Code `.mcp.json`:
 
 ```json
 {
     "mcpServers": {
         "pytest-httpchain": {
-            "type": "stdio",
-            "command": "uv",
-            "args": ["run", "pytest-httpchain-mcp"],
-            "env": {}
+            "command": "uvx",
+            "args": ["pytest-httpchain", "mcp"]
         }
     }
 }

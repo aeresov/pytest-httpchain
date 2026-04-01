@@ -16,17 +16,17 @@ This package provides an MCP server that exposes tools for AI code agents to:
 src/pytest_httpchain_mcp/
 ├── __init__.py     # Empty module init
 ├── server.py       # MCP server with FastMCP, tools defined here
-└── cli.py          # CLI entry point using Click
+└── cli.py          # Simple serve() entry point
 ```
 
 ## Running the MCP Server
 
 ```bash
-# From monorepo root
-uv run pytest-httpchain-mcp
+# Via root package CLI (recommended)
+uv run pytest-httpchain mcp
 
-# Or directly
-uv run python -m pytest_httpchain_mcp.cli
+# Or via this package's entry point directly
+uv run pytest-httpchain-mcp
 ```
 
 ## Available MCP Tools

@@ -160,12 +160,6 @@ or directly from Github, in case you need a particular ref:
 pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
 ```
 
-### Optional dependencies
-
-The following optional dependencies are available:
-
--   `mcp`: installs MCP server package and its starting script. Details in [MCP Server](#mcp-server).
-
 ## Configuration
 
 -   Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`.
@@ -179,21 +173,22 @@ The following optional dependencies are available:
 
 `pytest-httpchain` includes an MCP (Model Context Protocol) server to aid AI code assistants.
 
-### Installation
+### Setup
 
-The optional dependency `mcp` installs MCP server's package and `pytest-httpchain-mcp` script.  
-Use this script as call target for your MCP configuration.
+Install the MCP server config and Claude Code skill into your project:
 
-Claude Code `.mcp.json` example:
+```bash
+uvx pytest-httpchain install --skill --mcp
+```
+
+Or configure manually in `.mcp.json`:
 
 ```json
 {
     "mcpServers": {
         "pytest-httpchain": {
-            "type": "stdio",
-            "command": "uv",
-            "args": ["run", "pytest-httpchain-mcp"],
-            "env": {}
+            "command": "uvx",
+            "args": ["pytest-httpchain", "mcp"]
         }
     }
 }
@@ -204,6 +199,7 @@ Claude Code `.mcp.json` example:
 The MCP server provides:
 
 -   **Scenario validation** - validate test scenario and scan for possible problems
+-   **Claude Code skill** - authoring guidance for writing test scenarios
 
 ## Documentation
 

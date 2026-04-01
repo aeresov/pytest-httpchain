@@ -1,6 +1,6 @@
 [project]
 name = "pytest-httpchain-templates"
-version = "0.2.3"
+version = "0.2.4"
 description = "Templating support for pytest-httpchain"
 readme = "README.md"
 requires-python = ">=3.13"

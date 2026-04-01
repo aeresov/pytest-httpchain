@@ -51,8 +51,8 @@ extract_template_expression("{{ value }}")  # "value"
 
 ### Built-in Functions
 Safe functions available in expressions:
-- Type conversion: `bool`, `dict`, `list`, `tuple`, `set`
-- Math: `min`, `max`, `sum`, `abs`, `round`
+- Type conversion: `bool`, `int`, `float`, `str`, `dict`, `list`, `tuple`, `set`
+- Math: `min`, `max`, `sum`, `abs`, `round`, `rand()`, `randint(a, b)`
 - Collections: `len`, `sorted`, `enumerate`, `zip`, `range`
 - Utilities: `uuid4()`, `env(var, default)`
 - Context helpers: `get(var, default)`, `exists(var)`

@@ -14,14 +14,6 @@ Or directly from GitHub:
 pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
 ```
 
-### Optional Dependencies
-
--   `mcp`: Installs the MCP server package for AI assistant integration
-
-```bash
-pip install 'pytest-httpchain[mcp]'
-```
-
 ## Configuration
 
 Configuration options can be set in `pytest.ini` or `pyproject.toml` under `[tool.pytest.ini_options]`.
