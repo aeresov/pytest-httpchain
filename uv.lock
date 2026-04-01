@@ -1034,7 +1034,7 @@ wheels = [
 
 [[package]]
 name = "pytest-httpchain"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "httpx", extra = ["http2"] },
@@ -1096,12 +1096,12 @@ docs = [
 
 [[package]]
 name = "pytest-httpchain-core"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "packages/pytest-httpchain-core" }
 
 [[package]]
 name = "pytest-httpchain-jsonref"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "packages/pytest-httpchain-jsonref" }
 dependencies = [
     { name = "deepmerge" },
@@ -1116,7 +1116,7 @@ requires-dist = [
 
 [[package]]
 name = "pytest-httpchain-mcp"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "packages/pytest-httpchain-mcp" }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
@@ -1127,7 +1127,7 @@ requires-dist = [{ name = "mcp", extras = ["cli"], specifier = ">=1.11.0" }]
 
 [[package]]
 name = "pytest-httpchain-models"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "packages/pytest-httpchain-models" }
 dependencies = [
     { name = "graphql-core" },
@@ -1148,7 +1148,7 @@ requires-dist = [
 
 [[package]]
 name = "pytest-httpchain-templates"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "packages/pytest-httpchain-templates" }
 dependencies = [
     { name = "pytest-httpchain-core" },
@@ -1163,7 +1163,7 @@ requires-dist = [
 
 [[package]]
 name = "pytest-httpchain-userfunc"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "packages/pytest-httpchain-userfunc" }
 dependencies = [
     { name = "pytest-httpchain-core" },
