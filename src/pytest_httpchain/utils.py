@@ -1,7 +1,9 @@
+import ast
 import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import pytest
 from pytest_httpchain_models import FunctionsSubstitution, Substitution, UserFunctionCall, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain_templates import walk
 from pytest_httpchain_userfunc import call_function, wrap_function
@@ -9,6 +11,22 @@ from pytest_httpchain_userfunc import call_function, wrap_function
 from .exceptions import StageExecutionError
 
 logger = logging.getLogger(__name__)
+
+
+def make_marker(mark_str: str) -> pytest.MarkDecorator:
+    """Create a pytest marker from a string like 'skip(reason="foo")' or 'geofencing'."""
+    tree = ast.parse(mark_str, mode="eval")
+    node = tree.body
+
+    if isinstance(node, ast.Name):
+        return getattr(pytest.mark, node.id)
+
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        args = [ast.literal_eval(a) for a in node.args]
+        kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in node.keywords if kw.arg is not None}
+        return getattr(pytest.mark, node.func.id)(*args, **kwargs)
+
+    raise ValueError(f"unsupported marker expression: {mark_str}")
 
 
 def process_substitutions(

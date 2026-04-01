@@ -47,10 +47,9 @@ from pytest_httpchain_models import (
 )
 from pytest_httpchain_templates import TemplatesError, walk
 from pytest_httpchain_userfunc import UserFunctionError
-from simpleeval import EvalWithCompoundTypes
 
 from .exceptions import RequestError, SaveError, StageExecutionError, VerificationError
-from .utils import call_user_function, process_substitutions
+from .utils import call_user_function, make_marker, process_substitutions
 
 logger = logging.getLogger(__name__)
 
@@ -528,12 +527,9 @@ def create_test_class(scenario: Scenario, class_name: str, max_parallel_iteratio
         stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # type: ignore[assignment]
 
         all_marks = [f"order({i})"] + stage.marks
-        evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
         for mark_str in all_marks:
             try:
-                marker = evaluator.eval(f"pytest.mark.{mark_str}")
-                if marker:
-                    stage_method = marker(stage_method)
+                stage_method = make_marker(mark_str)(stage_method)
             except Exception as e:
                 logger.warning(f"Failed to create marker '{mark_str}': {e}")
 

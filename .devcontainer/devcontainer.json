@@ -5,8 +5,7 @@
         "ghcr.io/devcontainers/features/node:1": {}
     },
     "remoteEnv": {
-        "UV_LINK_MODE": "copy",
-        "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
+        "UV_LINK_MODE": "copy"
     },
     "runArgs": ["--network=host", "--add-host=host.docker.internal:host-gateway"],
     "remoteUser": "vscode",

@@ -12,13 +12,13 @@ from _pytest import config, nodes, python, reports, runner
 from _pytest.config import argparsing
 from pydantic import ValidationError
 from pytest_httpchain_models.entities import Scenario
-from simpleeval import EvalWithCompoundTypes
 
 from pytest_httpchain.constants import ConfigOptions
 
 from .carrier import Carrier, create_test_class
 from .har_writer import write_har_file
 from .report_formatter import format_request, format_response
+from .utils import make_marker
 
 logger = logging.getLogger(__name__)
 
@@ -73,12 +73,9 @@ class JsonModule(python.Module):
         )
 
         # apply class-level markers
-        evaluator = EvalWithCompoundTypes(names={"pytest": pytest})
         for mark_str in scenario.marks:
             try:
-                marker = evaluator.eval(f"pytest.mark.{mark_str}")
-                if marker:
-                    json_class.add_marker(marker)
+                json_class.add_marker(make_marker(mark_str))
             except Exception as e:
                 raise nodes.Collector.CollectError(f"Invalid marker '{mark_str}' in {self.path}: {e}") from None
 
@@ -132,7 +129,7 @@ def pytest_configure(config: config.Config) -> None:
         raise ValueError("Maximum comprehension length must be a positive integer")
     if max_comprehension_length > 1_000_000:
         raise ValueError("Maximum comprehension length must not exceed 1,000,000")
-    simpleeval.MAX_COMPREHENSION_LENGTH = max_comprehension_length  # type: ignore[misc]
+    simpleeval.MAX_COMPREHENSION_LENGTH = max_comprehension_length  # ty: ignore[invalid-assignment]
 
     max_parallel_iterations = int(config.getini(ConfigOptions.MAX_PARALLEL_ITERATIONS))
     if max_parallel_iterations < 1:

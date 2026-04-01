@@ -1,6 +1,6 @@
 [project]
 name = "pytest-httpchain-core"
-version = "0.2.2"
+version = "0.2.3"
 description = "Shared base types for pytest-httpchain"
 readme = "README.md"
 requires-python = ">=3.13"
