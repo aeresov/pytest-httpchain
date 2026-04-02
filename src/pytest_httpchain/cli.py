@@ -9,8 +9,8 @@ app = typer.Typer()
 SKILL_FILE = Path(__file__).parent / "skill.md"
 
 MCP_SERVER_CONFIG = {
-    "command": "uvx",
-    "args": ["pytest-httpchain", "mcp"],
+    "command": "uv",
+    "args": ["run", "pytest-httpchain", "mcp"],
 }
 
 
@@ -35,7 +35,7 @@ def install(
             _install_skill(Path.home() / ".claude" / "skills" / "pytest-httpchain")
         if mcp_config:
             typer.echo("To add the MCP server globally, run:")
-            typer.echo("  claude mcp add --scope user pytest-httpchain -- uvx pytest-httpchain mcp")
+            typer.echo("  claude mcp add --scope user pytest-httpchain -- uv run pytest-httpchain mcp")
     else:
         project_dir = project_dir.resolve()
         if skill:
