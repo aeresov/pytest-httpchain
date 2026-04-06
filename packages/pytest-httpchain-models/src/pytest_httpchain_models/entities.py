@@ -20,6 +20,7 @@ from pytest_httpchain_models.types import (
     TemplateExpression,
     VariableName,
     XMLString,
+    convert_namespace_to_dict,
 )
 
 
@@ -172,7 +173,7 @@ class Authenticated(BaseModel):
 
 
 class JsonBody(BaseModel):
-    json: JsonValue = Field(description="JSON data to send.")
+    json: Annotated[JsonValue, BeforeValidator(convert_namespace_to_dict)] = Field(description="JSON data to send.")
     model_config = ConfigDict(extra="forbid")
 
 
