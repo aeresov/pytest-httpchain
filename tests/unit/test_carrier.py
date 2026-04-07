@@ -52,6 +52,30 @@ class TestBuildRequestKwargsErrors:
             Carrier._build_request_kwargs(request)
 
 
+class TestBuildRequestKwargsParams:
+    """Params handling edge cases."""
+
+    def test_empty_params_does_not_override_url_query(self):
+        """Empty params default should not strip query parameters from the URL."""
+        request = Request(
+            url="https://example.com/api?streamId=123",
+            method=HTTPMethod.GET,
+        )
+
+        kwargs = Carrier._build_request_kwargs(request)
+        assert kwargs["params"] is None
+
+    def test_non_empty_params_passed_through(self):
+        request = Request(
+            url="https://example.com/api",
+            method=HTTPMethod.GET,
+            params={"key": "value"},
+        )
+
+        kwargs = Carrier._build_request_kwargs(request)
+        assert kwargs["params"] == {"key": "value"}
+
+
 class TestProcessSaveStepErrors:
     """Error cases not covered by integration tests."""
 

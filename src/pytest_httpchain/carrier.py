@@ -199,7 +199,7 @@ class Carrier:
             "method": request_model.method,
             "url": str(request_model.url),
             "headers": request_model.headers,
-            "params": request_model.params,
+            "params": request_model.params or None,
             "timeout": request_model.timeout,
             "follow_redirects": request_model.allow_redirects,
         }
