@@ -238,7 +238,6 @@ def write_har_file(
     entry = request_response_to_har_entry(request, response, started_datetime, elapsed_ms)
     har = create_har_log([entry], comment=f"Test: {test_name}")
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(har, f, indent=2, ensure_ascii=False)
+    filepath.write_text(json.dumps(har, indent=2, ensure_ascii=False), encoding="utf-8")
 
     return filepath

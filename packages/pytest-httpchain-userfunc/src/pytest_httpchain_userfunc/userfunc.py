@@ -103,7 +103,7 @@ def wrap_function(name: str, /, default_args: list[Any] | None = None, default_k
         except UserFunctionError:
             raise
         except Exception as e:
-            raise UserFunctionError(f"Error calling function '{name}': {str(e)}") from e
+            raise UserFunctionError(f"Error calling function '{name}': {e}") from e
 
     # Set a meaningful name for debugging
     wrapped.__name__ = f"wrapped_{name.replace(':', '_').replace('.', '_')}"

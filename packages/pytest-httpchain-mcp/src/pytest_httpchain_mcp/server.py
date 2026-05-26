@@ -196,21 +196,21 @@ def validate_scenario(
     except ReferenceResolverError as e:
         return ValidateResult(
             valid=False,
-            errors=[f"JSON reference resolution error: {str(e)}"],
+            errors=[f"JSON reference resolution error: {e}"],
             warnings=warnings,
             scenario_info=None,
         )
     except json.JSONDecodeError as e:
         return ValidateResult(
             valid=False,
-            errors=[f"Invalid JSON syntax: {str(e)}"],
+            errors=[f"Invalid JSON syntax: {e}"],
             warnings=warnings,
             scenario_info=None,
         )
     except Exception as e:
         return ValidateResult(
             valid=False,
-            errors=[f"Failed to parse JSON file: {str(e)}"],
+            errors=[f"Failed to parse JSON file: {e}"],
             warnings=warnings,
             scenario_info=None,
         )

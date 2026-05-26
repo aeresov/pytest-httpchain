@@ -180,7 +180,7 @@ class Carrier:
                         cls.last_request = exc.request
                     if exc.response is not None:
                         cls.last_response = exc.response
-                raise StageExecutionError(f"Parallel execution failed at iteration {idx}: {exc}")
+                raise StageExecutionError(f"Parallel execution failed at iteration {idx}: {exc}") from exc
 
         except (
             TemplatesError,
@@ -209,7 +209,7 @@ class Carrier:
                 auth_result = call_user_function(request_model.auth)
                 request_kwargs["auth"] = auth_result
             except UserFunctionError as e:
-                raise RequestError(f"Failed to configure authentication: {str(e)}") from None
+                raise RequestError(f"Failed to configure authentication: {e}") from None
 
         match request_model.body:
             case None:
@@ -233,19 +233,16 @@ class Carrier:
 
             case BinaryBody(binary=file_path):
                 try:
-                    with open(file_path, "rb") as f:
-                        binary_data = f.read()
-                    request_kwargs["content"] = binary_data
+                    request_kwargs["content"] = Path(file_path).read_bytes()
                 except FileNotFoundError:
                     raise RequestError(f"Binary file not found: {file_path}") from None
 
             case FilesBody(files=file_paths):
                 files_list = []
                 for field_name, file_path in file_paths.items():
+                    path = Path(file_path)
                     try:
-                        with open(file_path, "rb") as f:
-                            file_content = f.read()
-                        files_list.append((field_name, (Path(file_path).name, file_content)))
+                        files_list.append((field_name, (path.name, path.read_bytes())))
                     except FileNotFoundError:
                         raise RequestError(f"File not found for upload: {file_path}") from None
                 request_kwargs["files"] = files_list
@@ -257,13 +254,13 @@ class Carrier:
         try:
             return cls.client.request(**request_kwargs)
         except httpx.TimeoutException as e:
-            raise RequestError(f"HTTP request timed out: {str(e)}") from None
+            raise RequestError(f"HTTP request timed out: {e}") from None
         except httpx.ConnectError as e:
-            raise RequestError(f"HTTP connection error: {str(e)}") from None
+            raise RequestError(f"HTTP connection error: {e}") from None
         except httpx.HTTPError as e:
-            raise RequestError(f"HTTP request failed: {str(e)}") from None
+            raise RequestError(f"HTTP request failed: {e}") from None
         except Exception as e:
-            raise RequestError(f"Unexpected error: {str(e)}") from None
+            raise RequestError(f"Unexpected error: {e}") from None
 
     @staticmethod
     def _process_save_step(save_model: Save, response: httpx.Response, context: ChainMap[str, Any]) -> dict[str, Any]:
@@ -274,21 +271,21 @@ class Carrier:
                 try:
                     response_json = response.json()
                 except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                    raise SaveError(f"Cannot extract variables, response is not valid JSON: {str(e)}") from None
+                    raise SaveError(f"Cannot extract variables, response is not valid JSON: {e}") from None
 
                 for var_name, jmespath_expr in save_model.jmespath.items():
                     try:
                         saved_value = jmespath.search(jmespath_expr, response_json)
                         step_saved[var_name] = saved_value
                     except jmespath.exceptions.JMESPathError as e:
-                        raise SaveError(f"Error saving variable {var_name}: {str(e)}") from None
+                        raise SaveError(f"Error saving variable {var_name}: {e}") from None
 
             case SubstitutionsSave():
                 try:
                     substitution_result = process_substitutions(save_model.substitutions, context)
                     step_saved.update(substitution_result)
                 except TemplatesError as e:
-                    raise SaveError(f"Error processing substitutions: {str(e)}") from None
+                    raise SaveError(f"Error processing substitutions: {e}") from None
 
             case UserFunctionsSave():
                 for func_item in save_model.user_functions:
@@ -298,12 +295,11 @@ class Carrier:
                         if not isinstance(func_result, dict):
                             raise SaveError(f"Save function must return dict, got {type(func_result).__name__}")
 
-                        result_dict = cast(dict[str, Any], func_result)
-                        step_saved.update(result_dict)
+                        step_saved.update(func_result)
                     except SaveError:
                         raise
                     except UserFunctionError as e:
-                        raise SaveError(f"Error calling user function '{func_item}': {str(e)}") from None
+                        raise SaveError(f"Error calling user function '{func_item}': {e}") from None
 
         return step_saved
 
@@ -333,7 +329,7 @@ class Carrier:
             except VerificationError:
                 raise
             except UserFunctionError as e:
-                raise VerificationError(f"Error calling user function '{func_item}': {str(e)}") from None
+                raise VerificationError(f"Error calling user function '{func_item}': {e}") from None
 
         if verify_model.body.schema:
             schema = verify_model.body.schema
@@ -343,21 +339,21 @@ class Carrier:
                     schema = json.loads(schema_path.read_text())
                     check_json_schema(schema)
                 except (OSError, json.JSONDecodeError) as e:
-                    raise VerificationError(f"Error reading body schema file '{schema_path}': {str(e)}") from None
+                    raise VerificationError(f"Error reading body schema file '{schema_path}': {e}") from None
                 except jsonschema.SchemaError as e:
                     raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e}") from None
 
             try:
                 response_json = response.json()
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                raise VerificationError(f"Cannot validate schema, response is not valid JSON: {str(e)}") from None
+                raise VerificationError(f"Cannot validate schema, response is not valid JSON: {e}") from None
 
             try:
                 jsonschema.validate(instance=response_json, schema=schema)
             except jsonschema.ValidationError as e:
-                raise VerificationError(f"Body schema validation failed: {str(e)}") from None
+                raise VerificationError(f"Body schema validation failed: {e}") from None
             except jsonschema.SchemaError as e:
-                raise VerificationError(f"Invalid body validation schema: {str(e)}") from None
+                raise VerificationError(f"Invalid body validation schema: {e}") from None
 
         for substring in verify_model.body.contains:
             if substring not in response.text:
@@ -438,7 +434,7 @@ class Carrier:
             try:
                 ctx.__exit__(None, None, None)
             except Exception as e:
-                logger.error(f"Error while cleaning up context manager fixture: {str(e)}")
+                logger.error(f"Error while cleaning up context manager fixture: {e}")
 
         if cls.client is not None:
             cls.client.close()

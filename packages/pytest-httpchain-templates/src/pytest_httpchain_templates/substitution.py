@@ -1,3 +1,4 @@
+import os
 import re
 from collections.abc import Mapping
 from types import SimpleNamespace
@@ -21,13 +22,6 @@ from simpleeval import (
 from pytest_httpchain_templates.exceptions import TemplatesError
 from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN
 
-
-def get_env(name: str, default=None):
-    import os
-
-    return os.environ.get(name, default)
-
-
 SAFE_FUNCTIONS = {
     "bool": bool,
     "len": len,
@@ -45,7 +39,7 @@ SAFE_FUNCTIONS = {
     "tuple": tuple,
     "set": set,
     "uuid4": lambda: str(uuid4()),
-    "env": lambda var, default=None: get_env(var, default),
+    "env": os.environ.get,
 }
 
 # JSON-style boolean literals (lowercase) for compatibility

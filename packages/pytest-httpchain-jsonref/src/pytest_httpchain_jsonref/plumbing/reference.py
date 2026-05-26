@@ -57,8 +57,7 @@ class ReferenceResolver:
             ReferenceResolverError: If the file cannot be loaded or references cannot be resolved
         """
         try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
+            data = json.loads(path.read_text(encoding="utf-8"))
 
             # If root_path wasn't provided, find a suitable one by going up the directory tree
             # up to max_parent_traversal_depth levels
@@ -204,8 +203,7 @@ class ReferenceResolver:
 
     def _load_json_file(self, path: Path) -> dict[str, Any]:
         """Load JSON file content."""
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def _create_child_resolver(self) -> Self:
         """Create a child resolver with inherited state."""

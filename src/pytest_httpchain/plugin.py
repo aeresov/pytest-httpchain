@@ -42,9 +42,9 @@ class JsonModule(python.Module):
                 root_path=root_path,
             )
         except pytest_httpchain_jsonref.ReferenceResolverError as e:
-            raise nodes.Collector.CollectError(f"Cannot load JSON file {self.path}: {str(e)}") from None
+            raise nodes.Collector.CollectError(f"Cannot load JSON file {self.path}: {e}") from None
         except Exception as e:
-            raise nodes.Collector.CollectError(f"Failed to parse JSON file {self.path}: {str(e)}") from None
+            raise nodes.Collector.CollectError(f"Failed to parse JSON file {self.path}: {e}") from None
 
         # validate general scenario structure
         try:

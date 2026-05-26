@@ -31,11 +31,11 @@ def make_marker(mark_str: str) -> pytest.MarkDecorator:
 
 def process_substitutions(
     substitutions: Sequence[Substitution],
-    context: Mapping[str, Any] = {},
+    context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    result = {}
+    result: dict[str, Any] = {}
     for step in substitutions:
-        current_context = {**context, **result}
+        current_context = {**(context or {}), **result}
         match step:
             case FunctionsSubstitution():
                 for alias, func_def in step.functions.items():

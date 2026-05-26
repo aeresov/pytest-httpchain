@@ -84,7 +84,7 @@ def validate_json_schema_inline(v: dict[str, Any]) -> dict[str, Any]:
     except jsonschema.SchemaError as e:
         raise ValueError(f"Invalid JSON Schema: {e.message}") from e
     except Exception as e:
-        raise ValueError(f"JSON Schema validation error: {str(e)}") from e
+        raise ValueError(f"JSON Schema validation error: {e}") from e
 
     return v
 
