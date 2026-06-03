@@ -1,6 +1,7 @@
 import logging
 import re
 import types
+import warnings
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -19,8 +20,13 @@ from .carrier import Carrier, create_test_class
 from .har_writer import write_har_file
 from .report_formatter import format_request, format_response
 from .utils import make_marker
+from .validation import check_scenario
 
 logger = logging.getLogger(__name__)
+
+
+class ScenarioValidationWarning(pytest.PytestWarning):
+    """A collected scenario has a non-fatal validation issue (e.g. an undefined variable)."""
 
 
 class JsonModule(python.Module):
@@ -58,6 +64,15 @@ class JsonModule(python.Module):
 
             full_error_msg = f"Cannot parse test scenario in {self.path}:\n" + "\n".join(error_details)
             raise nodes.Collector.CollectError(full_error_msg) from None
+
+        # semantic validation: cross-cutting checks the schema cannot express
+        # (duplicate stage names, fixture/variable conflicts, undefined variables, ...)
+        semantic_errors, semantic_warnings, _ = check_scenario(scenario, test_data)
+        for warning in semantic_warnings:
+            warnings.warn(ScenarioValidationWarning(f"{self.path}: {warning}"), stacklevel=2)
+        if semantic_errors:
+            detail = "\n".join(f"  - {e}" for e in semantic_errors)
+            raise nodes.Collector.CollectError(f"Invalid test scenario in {self.path}:\n{detail}")
 
         # generate python test class
         max_parallel_iterations = int(self.config.getini(ConfigOptions.MAX_PARALLEL_ITERATIONS))

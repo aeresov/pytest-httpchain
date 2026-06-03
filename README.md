@@ -169,37 +169,39 @@ pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
 -   Template expressions support list/dict comprehensions. You can limit the maximum comprehension length using `max_comprehension_length` ini option, default value is **50000**.
 -   Parallel stage iterations (repeat/foreach) have a safety limit configurable via `max_parallel_iterations` ini option, default value is **10000**.
 
-## MCP Server
+## AI agent support
 
-`pytest-httpchain` includes an MCP (Model Context Protocol) server to aid AI code assistants.
+`pytest-httpchain` ships tooling to help AI coding agents (and humans) author and check test scenarios.
 
-### Setup
+### Claude Code skill
 
-Install the MCP server config and Claude Code skill into your project:
+Install the authoring skill into your project (or `--global` for personal scope):
 
 ```bash
-uvx pytest-httpchain install --skill --mcp
+uvx pytest-httpchain install
 ```
 
-Or configure manually in `.mcp.json`:
+This writes `.claude/skills/pytest-httpchain/SKILL.md` with guidance for writing scenarios.
+
+### Scenario validation
+
+Validate scenario files for structure and common problems — undefined variables, duplicate stage names, fixture/variable conflicts, stages with no assertions:
+
+```bash
+uvx pytest-httpchain validate tests/test_login.http.json
+```
+
+It exits non-zero when any file is invalid, so it doubles as a CI gate. The same checks also run automatically at **pytest collection time** — semantic errors fail collection and warnings are reported — so `pytest --collect-only` validates every scenario in your suite.
+
+### Editor schema
+
+A JSON Schema is published for as-you-type validation and autocomplete. Reference it from your test files:
 
 ```json
 {
-    "mcpServers": {
-        "pytest-httpchain": {
-            "command": "uvx",
-            "args": ["pytest-httpchain", "mcp"]
-        }
-    }
+    "$schema": "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json"
 }
 ```
-
-### Features
-
-The MCP server provides:
-
--   **Scenario validation** - validate test scenario and scan for possible problems
--   **Claude Code skill** - authoring guidance for writing test scenarios
 
 ## Documentation
 

@@ -82,10 +82,6 @@ Response is a list of verify and save steps, executed in order:
     "verify": {
       "status": 200,
       "headers": { "content-type": "application/json" },
-      "expressions": [
-        "{{ user_count > 0 }}",
-        "{{ 'error' not in body }}"
-      ],
       "body": {
         "schema": { "type": "object", "required": ["id"] },
         "contains": ["expected text"],
@@ -103,9 +99,21 @@ Response is a list of verify and save steps, executed in order:
         "total": "length(items)"
       }
     }
+  },
+  {
+    "verify": {
+      "expressions": [
+        "{{ total > 0 }}",
+        "{{ user_name != '' }}"
+      ]
+    }
   }
 ]
 ```
+
+**Important:** `verify.expressions` are `{{ }}` templates evaluated against the **context** (saved variables, fixtures, substitutions). The HTTP response is **not** ambient in templates — there is no `response`/`status_code`/`body`/`json` variable. To assert on response data, either:
+- use `verify.status`, `verify.headers`, `verify.body` (these check the response directly), or
+- `save` the value first (e.g. via `jmespath`) and reference the saved variable in a later `expressions` step (as shown above).
 
 **Save types:**
 - `{"jmespath": {...}}` - extract values from JSON response via JMESPath
@@ -229,12 +237,9 @@ Or iterate over parameter sets in parallel:
         "url": "{{ base }}/users/{{ user_id }}"
       },
       "response": [
-        {
-          "verify": {
-            "status": 200,
-            "expressions": ["{{ body.name == 'Alice' }}"]
-          }
-        }
+        { "verify": { "status": 200 } },
+        { "save": { "jmespath": { "name": "name" } } },
+        { "verify": { "expressions": ["{{ name == 'Alice' }}"] } }
       ]
     },
     {

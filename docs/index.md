@@ -99,28 +99,25 @@ pip install pytest-httpchain
 
 See [Getting Started](getting-started.md) for detailed installation and configuration instructions.
 
-## MCP Server
+## AI agent support
 
-`pytest-httpchain` includes an MCP (Model Context Protocol) server and a Claude Code skill for AI-assisted test authoring.
+`pytest-httpchain` ships a Claude Code skill and a validator to help AI agents (and humans) author and check test scenarios.
 
-Install the MCP server config and skill into your project:
+Install the authoring skill into your project (or `--global` for personal scope):
 
 ```bash
-uvx pytest-httpchain install --skill --mcp
+uvx pytest-httpchain install
 ```
 
-Or configure manually in Claude Code `.mcp.json`:
+Validate scenario files for structure and common problems (undefined variables, duplicate stage names, fixture conflicts, missing assertions); exits non-zero on failure, so it works as a CI gate:
 
-```json
-{
-    "mcpServers": {
-        "pytest-httpchain": {
-            "command": "uvx",
-            "args": ["pytest-httpchain", "mcp"]
-        }
-    }
-}
+```bash
+uvx pytest-httpchain validate tests/test_login.http.json
 ```
+
+These checks also run automatically at pytest collection time: semantic errors fail collection and warnings are reported, so `pytest --collect-only` validates your whole suite.
+
+Editors get as-you-type validation and autocomplete via the published [JSON Schema](getting-started.md) — reference it with a `$schema` key in your test files.
 
 ## Thanks
 

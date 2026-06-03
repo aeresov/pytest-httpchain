@@ -1,0 +1,15 @@
+{
+    "substitutions": [
+        { "functions": { "make_token": "auth.utils:make_token" } }
+    ],
+    "stages": [
+        {
+            "name": "s",
+            "request": {
+                "url": "https://x.test/a",
+                "headers": { "Authorization": "{{ make_token() }}" }
+            },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

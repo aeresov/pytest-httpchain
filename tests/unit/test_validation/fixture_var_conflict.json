@@ -1,0 +1,13 @@
+{
+    "substitutions": [
+        { "vars": { "token": "abc" } }
+    ],
+    "stages": [
+        {
+            "name": "s",
+            "fixtures": ["token"],
+            "request": { "url": "https://x.test/a" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

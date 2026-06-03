@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-03
+
+### Added
+
+- `pytest-httpchain validate <file>...` CLI command for validating scenario files (structure plus semantic checks); exits non-zero on failure, so it can be used as a CI gate.
+- Semantic validation now runs at **pytest collection time**: semantic errors (duplicate stage names, fixture/variable conflicts) fail collection with a clear message, and issues (undefined variables, stages with no verify) are reported as `ScenarioValidationWarning`. `pytest --collect-only` validates an entire suite.
+
+### Changed
+
+- Scenario validation logic now lives in the main package (`pytest_httpchain.validation`) as the single source of truth.
+- `pytest-httpchain install` now installs only the Claude Code skill (the `--skill`/`--mcp` flags are removed).
+
+### Removed
+
+- **BREAKING**: Removed the bundled MCP server — the `pytest-httpchain-mcp` package, the `pytest-httpchain mcp` command, and the `mcp[cli]` dependency. Scenario validation is now available through the `pytest-httpchain validate` CLI command and at pytest collection time.
+
+### Fixed
+
+- Undefined-variable detection no longer emits false positives for names injected by `parametrize`, `parallel.foreach`, or `functions` substitutions.
+- Undefined-variable detection now flags references to response data (`response`, `status_code`, `body`, etc.) inside `{{ }}` templates, where they are not available — response values reach templates only via an earlier `save` step.
+
 ## [0.2.1] - 2026-01-09
 
 ### Added
@@ -93,7 +114,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.2.4...v0.3.0
 [0.2.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.1.1...v0.1.2

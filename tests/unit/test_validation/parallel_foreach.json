@@ -1,0 +1,13 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "parallel": {
+                "foreach": [ { "individual": { "worker_id": [1, 2, 3] } } ],
+                "max_concurrency": 2
+            },
+            "request": { "url": "https://x.test/w/{{ worker_id }}" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

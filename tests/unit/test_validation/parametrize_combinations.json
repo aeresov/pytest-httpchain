@@ -1,0 +1,17 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "parametrize": [
+                {
+                    "combinations": [
+                        { "method": "GET", "code": 200 },
+                        { "method": "DELETE", "code": 403 }
+                    ]
+                }
+            ],
+            "request": { "url": "https://x.test/a", "method": "{{ method }}" },
+            "response": [ { "verify": { "expressions": ["{{ code > 0 }}"] } } ]
+        }
+    ]
+}

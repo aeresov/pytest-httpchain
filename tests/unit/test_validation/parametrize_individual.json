@@ -1,0 +1,10 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "parametrize": [ { "individual": { "user_id": [1, 2, 3] } } ],
+            "request": { "url": "https://x.test/users/{{ user_id }}" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

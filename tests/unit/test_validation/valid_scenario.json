@@ -1,0 +1,26 @@
+{
+    "substitutions": [
+        { "vars": { "base_url": "https://api.example.com" } }
+    ],
+    "stages": [
+        {
+            "name": "get_user",
+            "request": { "url": "{{ base_url }}/users/1" },
+            "response": [
+                { "verify": { "status": 200 } },
+                { "save": { "jmespath": { "user_name": "name" } } }
+            ]
+        },
+        {
+            "name": "update_user",
+            "request": {
+                "url": "{{ base_url }}/users/1",
+                "method": "PUT",
+                "body": { "json": { "name": "{{ user_name }}" } }
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

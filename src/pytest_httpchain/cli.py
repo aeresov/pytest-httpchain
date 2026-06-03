@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from typing import Annotated
 
@@ -8,40 +7,45 @@ app = typer.Typer()
 
 SKILL_FILE = Path(__file__).parent / "skill.md"
 
-MCP_SERVER_CONFIG = {
-    "command": "uv",
-    "args": ["run", "pytest-httpchain", "mcp"],
-}
-
 
 @app.command()
-def mcp() -> None:
-    """Run the MCP server."""
-    from pytest_httpchain_mcp.server import mcp as server
+def validate(
+    paths: Annotated[list[Path], typer.Argument(help="Scenario JSON file(s) to validate.")],
+    ref_parent_traversal_depth: Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")] = 3,
+) -> None:
+    """Validate pytest-httpchain scenario file(s).
 
-    server.run()
+    Prints errors and warnings per file and exits non-zero if any file is invalid.
+    """
+    from pytest_httpchain.validation import validate_scenario
+
+    all_valid = True
+    for path in paths:
+        result = validate_scenario(path, ref_parent_traversal_depth=ref_parent_traversal_depth)
+        if result.valid:
+            status = "OK with warnings" if result.warnings else "OK"
+        else:
+            status = "INVALID"
+            all_valid = False
+        typer.echo(f"{path}: {status}")
+        for error in result.errors:
+            typer.echo(f"  error: {error}")
+        for warning in result.warnings:
+            typer.echo(f"  warning: {warning}")
+
+    raise typer.Exit(0 if all_valid else 1)
 
 
 @app.command()
 def install(
-    skill: bool = typer.Option(..., "--skill/--no-skill", "-s/-S", help="Install Claude Code skill"),
-    mcp_config: bool = typer.Option(..., "--mcp/--no-mcp", "-m/-M", help="Install MCP server config"),
-    global_: bool = typer.Option(False, "--global", "-g", help="Install to ~/.claude (personal scope) instead of project"),
+    global_: Annotated[bool, typer.Option("--global", "-g", help="Install to ~/.claude (personal scope) instead of project")] = False,
     project_dir: Annotated[Path, typer.Option(help="Project directory (ignored with --global)")] = Path("."),
 ) -> None:
-    """Install MCP server config and/or Claude Code skill."""
+    """Install the Claude Code skill for authoring test scenarios."""
     if global_:
-        if skill:
-            _install_skill(Path.home() / ".claude" / "skills" / "pytest-httpchain")
-        if mcp_config:
-            typer.echo("To add the MCP server globally, run:")
-            typer.echo("  claude mcp add --scope user pytest-httpchain -- uv run pytest-httpchain mcp")
+        _install_skill(Path.home() / ".claude" / "skills" / "pytest-httpchain")
     else:
-        project_dir = project_dir.resolve()
-        if skill:
-            _install_skill(project_dir / ".claude" / "skills" / "pytest-httpchain")
-        if mcp_config:
-            _install_mcp_config(project_dir / ".mcp.json")
+        _install_skill(project_dir.resolve() / ".claude" / "skills" / "pytest-httpchain")
 
 
 def _install_skill(skill_dir: Path) -> None:
@@ -49,18 +53,6 @@ def _install_skill(skill_dir: Path) -> None:
     dest = skill_dir / "SKILL.md"
     dest.write_text(SKILL_FILE.read_text())
     typer.echo(f"Installed skill to {dest}")
-
-
-def _install_mcp_config(mcp_file: Path) -> None:
-    if mcp_file.exists():
-        config = json.loads(mcp_file.read_text())
-    else:
-        config = {}
-
-    config.setdefault("mcpServers", {})
-    config["mcpServers"]["pytest-httpchain"] = MCP_SERVER_CONFIG
-    mcp_file.write_text(json.dumps(config, indent=2) + "\n")
-    typer.echo(f"Installed MCP server config to {mcp_file}")
 
 
 if __name__ == "__main__":

@@ -16,7 +16,6 @@ uv run pytest
 uv run pytest packages/pytest-httpchain-jsonref/tests -v
 uv run pytest packages/pytest-httpchain-models/tests -v
 uv run pytest packages/pytest-httpchain-templates/tests -v
-uv run pytest packages/pytest-httpchain-mcp/tests -v
 uv run pytest packages/pytest-httpchain-userfunc/tests -v
 
 # Run a single test file or test
@@ -30,8 +29,8 @@ uv run ruff format --check .
 # Format
 uv run ruff format .
 
-# Run MCP server
-uv run pytest-httpchain mcp
+# Validate scenario file(s) (exits non-zero if invalid)
+uv run pytest-httpchain validate tests/integration/examples/save/test_save_jmespath.http.json
 
 # Run unit tests with coverage report (main package only)
 uv run pytest tests/unit --cov=src --cov-report=term-missing
@@ -46,7 +45,8 @@ This is a uv workspace monorepo with the main plugin in `src/` and supporting pa
 
 ```
 src/pytest_httpchain/          # Main pytest plugin
-├── cli.py                     # Typer CLI (mcp server, install skill/config)
+├── cli.py                     # Typer CLI (validate scenarios, install skill)
+├── validation.py              # Shared static scenario validator (used by CLI; semantic checks beyond schema)
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule)
 ├── carrier.py                 # Test execution engine (Carrier class)
 ├── utils.py                   # Marker construction, substitution processing, user function calls
@@ -61,8 +61,7 @@ packages/
 ├── pytest-httpchain-jsonref/       # $ref resolution with deep merging
 ├── pytest-httpchain-models/        # Pydantic models (Scenario, Stage, Request, etc.)
 ├── pytest-httpchain-templates/     # {{ expression }} substitution engine
-├── pytest-httpchain-userfunc/      # Dynamic function import/invocation
-└── pytest-httpchain-mcp/           # MCP server for AI assistants
+└── pytest-httpchain-userfunc/      # Dynamic function import/invocation
 ```
 
 Each package has its own CLAUDE.md with detailed API and behavior documentation.
@@ -73,7 +72,7 @@ Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix config
 
 ## Key Execution Flow
 
-1. **Collection**: `plugin.py:JsonModule.collect()` loads JSON, resolves `$ref`, validates against `Scenario` model
+1. **Collection**: `plugin.py:JsonModule.collect()` loads JSON, resolves `$ref`, validates against `Scenario` model, then runs `validation.py:check_scenario()` semantic checks (errors → `CollectError`, warnings → `ScenarioValidationWarning`)
 2. **Class generation**: `carrier.py:create_test_class()` creates dynamic test class with stage methods
 3. **Execution**: Each stage method calls `Carrier.execute_stage()` which:
    - Processes substitutions into context

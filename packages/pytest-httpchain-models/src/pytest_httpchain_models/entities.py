@@ -339,8 +339,13 @@ class Verify(Descripted):
     headers: dict[str, str] = Field(default_factory=dict)
     expressions: list[Any | TemplateExpression] = Field(
         default_factory=list,
-        description="Template expressions to evaluate as boolean conditions. Each must be a full template expression that evaluates to a truthy/falsy value.",
-        examples=[["{{ user_age >= 18 }}", "{{ status_code == 200 }}", "{{ 'error' not in response_text }}"]],
+        description=(
+            "Template expressions evaluated as boolean conditions against the context "
+            "(saved variables, fixtures, substitutions). Each must be a full template "
+            "expression that evaluates to a truthy/falsy value. The HTTP response is not "
+            "directly available here — save response data first, then reference it."
+        ),
+        examples=[["{{ user_age >= 18 }}", "{{ saved_total > 0 }}", "{{ 'admin' in user_roles }}"]],
     )
     user_functions: FunctionsList = Field(default_factory=list, description="Functions to process response data.")
     body: ResponseBody = Field(default_factory=ResponseBody)

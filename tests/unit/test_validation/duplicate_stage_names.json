@@ -1,0 +1,14 @@
+{
+    "stages": [
+        {
+            "name": "dup",
+            "request": { "url": "https://x.test/a" },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "dup",
+            "request": { "url": "https://x.test/b" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

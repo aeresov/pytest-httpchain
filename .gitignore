@@ -8,6 +8,12 @@ __pycache__/
 .claude/
 .cursor/
 
+# coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
 # mkdocs
 /site/
 

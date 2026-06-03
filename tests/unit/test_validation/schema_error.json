@@ -1,0 +1,8 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}
