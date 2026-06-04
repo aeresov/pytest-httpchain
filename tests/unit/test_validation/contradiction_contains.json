@@ -1,0 +1,16 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": { "contains": ["ERROR"], "not_contains": ["ERROR"] }
+                    }
+                }
+            ]
+        }
+    ]
+}

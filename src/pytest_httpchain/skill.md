@@ -255,3 +255,28 @@ Or iterate over parameter sets in parallel:
   ]
 }
 ```
+
+## Validate your scenario
+
+After writing a scenario, validate it (no server or network needed):
+
+```bash
+pytest-httpchain validate test_<name>.http.json
+```
+
+It checks structure plus semantics a JSON Schema cannot, each with a stable `HTTPCHAINxxx` code:
+
+- `HTTPCHAIN003` — a `{{ var }}` that is never defined, saved, or provided as a fixture (likely a typo).
+- `HTTPCHAIN004` — a variable used **before** the stage that saves it, or used in a stage's request when it is only saved in that same stage's response. Remember: a value `save`d in a stage's response is available to *later* response steps and *later* stages, never to the request that produced it.
+- `HTTPCHAIN006` — a `verify` step that asserts nothing.
+- `HTTPCHAIN007` / `HTTPCHAIN008` — body `contains`/`not_contains` (or `matches`/`not_matches`) that list the same value, which can never pass.
+
+Add `--format json` for machine-readable output. The same checks run automatically during `pytest --collect-only`.
+
+For a deeper check that imports your `module:func` references (confirming they resolve and their signatures match — including the injected `response` for save/verify functions) and verifies referenced files/schemas exist, add `--deep` (optionally `--syspath <dir>` for import roots, `--strict` to fail on warnings):
+
+```bash
+pytest-httpchain validate --deep test_<name>.http.json
+```
+
+Note: the HTTP response is **not** ambient in `{{ }}` templates — `save` what you need from a response first, then reference the saved variable.

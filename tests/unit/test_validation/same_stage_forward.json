@@ -1,0 +1,12 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/{{ sid }}" },
+            "response": [
+                { "save": { "jmespath": { "sid": "id" } } },
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

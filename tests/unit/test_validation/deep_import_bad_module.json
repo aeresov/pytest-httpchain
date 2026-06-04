@@ -1,0 +1,14 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": {
+                "url": "https://x.test/a",
+                "auth": "nosuchmodule_xyz:make_auth"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

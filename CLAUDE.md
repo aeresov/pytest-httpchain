@@ -32,6 +32,9 @@ uv run ruff format .
 # Validate scenario file(s) (exits non-zero if invalid)
 uv run pytest-httpchain validate tests/integration/examples/save/test_save_jmespath.http.json
 
+# Deep validation (opt-in): import user functions + check signatures + referenced files
+uv run pytest-httpchain validate --deep --syspath tests/integration/examples tests/integration/examples/save/test_save_user_function.http.json
+
 # Run unit tests with coverage report (main package only)
 uv run pytest tests/unit --cov=src --cov-report=term-missing
 
@@ -46,7 +49,7 @@ This is a uv workspace monorepo with the main plugin in `src/` and supporting pa
 ```
 src/pytest_httpchain/          # Main pytest plugin
 ├── cli.py                     # Typer CLI (validate scenarios, install skill)
-├── validation.py              # Shared static scenario validator (used by CLI; semantic checks beyond schema)
+├── validation.py              # Shared validator (CLI + collection-time): coded Diagnostic objects (HTTPCHAINxxx) for semantic checks incl. order-aware data-flow; plus opt-in `check_scenario_deep` (imports/signatures/files) used only by `validate --deep`
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule)
 ├── carrier.py                 # Test execution engine (Carrier class)
 ├── utils.py                   # Marker construction, substitution processing, user function calls
@@ -72,7 +75,7 @@ Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix config
 
 ## Key Execution Flow
 
-1. **Collection**: `plugin.py:JsonModule.collect()` loads JSON, resolves `$ref`, validates against `Scenario` model, then runs `validation.py:check_scenario()` semantic checks (errors → `CollectError`, warnings → `ScenarioValidationWarning`)
+1. **Collection**: `plugin.py:JsonModule.collect()` loads JSON, resolves `$ref`, validates against `Scenario` model, then runs `validation.py:check_scenario()` which returns coded `Diagnostic` objects — error-severity → `CollectError`, warning-severity → `ScenarioValidationWarning`
 2. **Class generation**: `carrier.py:create_test_class()` creates dynamic test class with stage methods
 3. **Execution**: Each stage method calls `Carrier.execute_stage()` which:
    - Processes substitutions into context

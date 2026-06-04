@@ -1,0 +1,14 @@
+{
+    "stages": [
+        {
+            "name": "s1",
+            "substitutions": [ { "vars": { "stage_n": 2 } } ],
+            "parallel": {
+                "foreach": [ { "individual": { "w": ["{{ stage_n }}"] } } ],
+                "max_concurrency": 2
+            },
+            "request": { "url": "https://x.test/{{ w }}" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

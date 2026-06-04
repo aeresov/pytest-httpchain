@@ -1,0 +1,11 @@
+{
+    "substitutions": [ { "vars": { "sv": 3 } } ],
+    "stages": [
+        {
+            "name": "s1",
+            "parametrize": [ { "individual": { "p": ["{{ sv }}"] } } ],
+            "request": { "url": "https://x.test/{{ p }}" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

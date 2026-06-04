@@ -1,0 +1,17 @@
+{
+    "stages": [
+        {
+            "name": "use",
+            "request": { "url": "https://x.test/{{ token }}" },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "get",
+            "request": { "url": "https://x.test/login" },
+            "response": [
+                { "verify": { "status": 200 } },
+                { "save": { "jmespath": { "token": "data.token" } } }
+            ]
+        }
+    ]
+}

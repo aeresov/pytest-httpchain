@@ -1,0 +1,15 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": {
+                "url": "https://x.test/a",
+                "method": "POST",
+                "body": { "binary": "definitely_missing_file_98765.bin" }
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

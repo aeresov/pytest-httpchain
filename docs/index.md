@@ -109,13 +109,21 @@ Install the authoring skill into your project (or `--global` for personal scope)
 uvx pytest-httpchain install
 ```
 
-Validate scenario files for structure and common problems (undefined variables, duplicate stage names, fixture conflicts, missing assertions); exits non-zero on failure, so it works as a CI gate:
+Validate scenario files for structure and common problems (undefined variables, variables used before they are saved, duplicate stage names, fixture conflicts, no-op `verify` steps, contradictory body checks); every finding carries a stable `HTTPCHAINxxx` diagnostic code, and it exits non-zero on failure, so it works as a CI gate:
 
 ```bash
 uvx pytest-httpchain validate tests/test_login.http.json
+# machine-readable output for editors / CI:
+uvx pytest-httpchain validate --format json tests/test_login.http.json
 ```
 
 These checks also run automatically at pytest collection time: semantic errors fail collection and warnings are reported, so `pytest --collect-only` validates your whole suite.
+
+Add `--deep` for opt-in checks that import your `module:func` references (verifying they resolve and their call signatures match, including the injected `response`) and confirm referenced files/schemas exist. It imports your code, so it never runs at collection time; combine with `--strict` (fail on warnings) and `--syspath` (extra import roots):
+
+```bash
+uvx pytest-httpchain validate --deep --strict tests/test_login.http.json
+```
 
 Editors get as-you-type validation and autocomplete via the published [JSON Schema](getting-started.md) — reference it with a `$schema` key in your test files.
 

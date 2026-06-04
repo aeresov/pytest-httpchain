@@ -185,13 +185,25 @@ This writes `.claude/skills/pytest-httpchain/SKILL.md` with guidance for writing
 
 ### Scenario validation
 
-Validate scenario files for structure and common problems — undefined variables, duplicate stage names, fixture/variable conflicts, stages with no assertions:
+Validate scenario files for structure and common problems — undefined variables, variables referenced before they are saved (data-flow ordering), duplicate stage names, fixture/variable conflicts, no-op `verify` steps, and contradictory body checks:
 
 ```bash
 uvx pytest-httpchain validate tests/test_login.http.json
 ```
 
-It exits non-zero when any file is invalid, so it doubles as a CI gate. The same checks also run automatically at **pytest collection time** — semantic errors fail collection and warnings are reported — so `pytest --collect-only` validates every scenario in your suite.
+Each finding carries a stable diagnostic code (`HTTPCHAINxxx`) and a severity. It exits non-zero when any file is invalid, so it doubles as a CI gate. Use `--format json` for machine-readable output (editor/CI integration):
+
+```bash
+uvx pytest-httpchain validate --format json tests/test_login.http.json
+```
+
+The same checks also run automatically at **pytest collection time** — semantic errors fail collection and warnings are reported — so `pytest --collect-only` validates every scenario in your suite.
+
+For deeper, opt-in checks, add `--deep`: it imports your `module:func` references to confirm they resolve, checks their call signatures (including the injected `response` for save/verify functions), and verifies referenced files and schemas exist. Because it imports your code it is never run at collection time; pair it with `--strict` to fail CI on any warning, and `--syspath` to add import roots:
+
+```bash
+uvx pytest-httpchain validate --deep --strict tests/test_login.http.json
+```
 
 ### Editor schema
 

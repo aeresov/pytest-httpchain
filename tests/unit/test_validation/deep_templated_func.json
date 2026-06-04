@@ -1,0 +1,17 @@
+{
+    "substitutions": [
+        { "vars": { "auth_ref": "userfuncs:good_auth" } }
+    ],
+    "stages": [
+        {
+            "name": "s",
+            "request": {
+                "url": "https://x.test/a",
+                "auth": "{{ auth_ref }}"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

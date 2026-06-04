@@ -66,12 +66,15 @@ class JsonModule(python.Module):
             raise nodes.Collector.CollectError(full_error_msg) from None
 
         # semantic validation: cross-cutting checks the schema cannot express
-        # (duplicate stage names, fixture/variable conflicts, undefined variables, ...)
-        semantic_errors, semantic_warnings, _ = check_scenario(scenario, test_data)
-        for warning in semantic_warnings:
-            warnings.warn(ScenarioValidationWarning(f"{self.path}: {warning}"), stacklevel=2)
-        if semantic_errors:
-            detail = "\n".join(f"  - {e}" for e in semantic_errors)
+        # (duplicate stage names, fixture/variable conflicts, undefined/forward-referenced
+        # variables, no-op verify, contradictory body checks, ...)
+        diagnostics, _ = check_scenario(scenario, test_data)
+        for diagnostic in diagnostics:
+            if diagnostic.severity == "warning":
+                warnings.warn(ScenarioValidationWarning(f"{self.path}: [{diagnostic.code}] {diagnostic.message}"), stacklevel=2)
+        error_diagnostics = [d for d in diagnostics if d.severity == "error"]
+        if error_diagnostics:
+            detail = "\n".join(f"  - [{d.code}] {d.message}" for d in error_diagnostics)
             raise nodes.Collector.CollectError(f"Invalid test scenario in {self.path}:\n{detail}")
 
         # generate python test class

@@ -1,0 +1,18 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "user_functions": [
+                            { "name": "userfuncs:needs_response", "kwargs": { "y": 1 } }
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

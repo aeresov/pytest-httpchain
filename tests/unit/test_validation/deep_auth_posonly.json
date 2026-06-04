@@ -1,0 +1,12 @@
+{
+    "auth": "userfuncs:auth_posonly",
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

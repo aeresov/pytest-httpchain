@@ -1,0 +1,19 @@
+{
+    "substitutions": [
+        { "vars": { "items": [1, 2, 3] } }
+    ],
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [ "{{ [x * 2 for x in items] == [2, 4, 6] }}" ]
+                    }
+                }
+            ]
+        }
+    ]
+}
