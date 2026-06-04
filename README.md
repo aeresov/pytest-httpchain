@@ -171,17 +171,7 @@ pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
 
 ## AI agent support
 
-`pytest-httpchain` ships tooling to help AI coding agents (and humans) author and check test scenarios.
-
-### Claude Code skill
-
-Install the authoring skill into your project (or `--global` for personal scope):
-
-```bash
-uvx pytest-httpchain install
-```
-
-This writes `.claude/skills/pytest-httpchain/SKILL.md` with guidance for writing scenarios.
+`pytest-httpchain` ships a scenario validator to help AI coding agents (and humans) author and check test scenarios.
 
 ### Scenario validation
 

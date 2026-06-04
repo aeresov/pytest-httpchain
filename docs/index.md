@@ -101,13 +101,7 @@ See [Getting Started](getting-started.md) for detailed installation and configur
 
 ## AI agent support
 
-`pytest-httpchain` ships a Claude Code skill and a validator to help AI agents (and humans) author and check test scenarios.
-
-Install the authoring skill into your project (or `--global` for personal scope):
-
-```bash
-uvx pytest-httpchain install
-```
+`pytest-httpchain` ships a scenario validator to help AI agents (and humans) author and check test scenarios.
 
 Validate scenario files for structure and common problems (undefined variables, variables used before they are saved, duplicate stage names, fixture conflicts, no-op `verify` steps, contradictory body checks); every finding carries a stable `HTTPCHAINxxx` diagnostic code, and it exits non-zero on failure, so it works as a CI gate:
 

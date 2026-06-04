@@ -7,12 +7,15 @@ import typer
 
 app = typer.Typer()
 
-SKILL_FILE = Path(__file__).parent / "skill.md"
-
 
 class OutputFormat(enum.StrEnum):
     text = "text"
     json = "json"
+
+
+@app.callback()
+def main() -> None:
+    """pytest-httpchain command-line tools."""
 
 
 @app.command()
@@ -58,25 +61,6 @@ def validate(
                 typer.echo(f"  {diagnostic.severity} [{diagnostic.code}]: {diagnostic.message}")
 
     raise typer.Exit(0 if all_passed else 1)
-
-
-@app.command()
-def install(
-    global_: Annotated[bool, typer.Option("--global", "-g", help="Install to ~/.claude (personal scope) instead of project")] = False,
-    project_dir: Annotated[Path, typer.Option(help="Project directory (ignored with --global)")] = Path("."),
-) -> None:
-    """Install the Claude Code skill for authoring test scenarios."""
-    if global_:
-        _install_skill(Path.home() / ".claude" / "skills" / "pytest-httpchain")
-    else:
-        _install_skill(project_dir.resolve() / ".claude" / "skills" / "pytest-httpchain")
-
-
-def _install_skill(skill_dir: Path) -> None:
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    dest = skill_dir / "SKILL.md"
-    dest.write_text(SKILL_FILE.read_text())
-    typer.echo(f"Installed skill to {dest}")
 
 
 if __name__ == "__main__":

@@ -48,12 +48,11 @@ This is a uv workspace monorepo with the main plugin in `src/` and supporting pa
 
 ```
 src/pytest_httpchain/          # Main pytest plugin
-├── cli.py                     # Typer CLI (validate scenarios, install skill)
+├── cli.py                     # Typer CLI (validate scenarios)
 ├── validation.py              # Shared validator (CLI + collection-time): coded Diagnostic objects (HTTPCHAINxxx) for semantic checks incl. order-aware data-flow; plus opt-in `check_scenario_deep` (imports/signatures/files) used only by `validate --deep`
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule)
 ├── carrier.py                 # Test execution engine (Carrier class)
 ├── utils.py                   # Marker construction, substitution processing, user function calls
-├── skill.md                   # Claude Code skill for test authoring
 ├── report_formatter.py        # HTTP request/response formatting for test reports
 ├── har_writer.py              # HAR file export for HTTP request/response logging
 ├── constants.py               # ConfigOptions enum for pytest.ini settings
