@@ -121,6 +121,15 @@ uvx pytest-httpchain validate --deep --strict tests/test_login.http.json
 
 Editors get as-you-type validation and autocomplete via the published [JSON Schema](getting-started.md) — reference it with a `$schema` key in your test files.
 
+Several read-only commands help inspect scenarios offline — emit the schema matching your installed version, resolve references, summarize the variable data-flow, or render it as a Mermaid diagram:
+
+```bash
+uvx pytest-httpchain schema --output scenario.schema.json
+uvx pytest-httpchain resolve tests/test_login.http.json
+uvx pytest-httpchain show tests/test_login.http.json
+uvx pytest-httpchain graph tests/test_login.http.json
+```
+
 ## Thanks
 
 This project was inspired by [Tavern](https://github.com/taverntesting/tavern) and [pytest-play](https://github.com/davidemoro/pytest-play).

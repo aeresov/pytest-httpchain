@@ -205,6 +205,27 @@ A JSON Schema is published for as-you-type validation and autocomplete. Referenc
 }
 ```
 
+The hosted schema tracks the latest release; to pin the schema matching your installed version (e.g. for CI), emit it locally:
+
+```bash
+uvx pytest-httpchain schema --output scenario.schema.json
+```
+
+### Inspecting scenarios
+
+More read-only commands help author and debug scenarios offline — no network, no test run:
+
+```bash
+# Print a scenario with all $ref/$include/$merge inlined and deep-merged
+uvx pytest-httpchain resolve tests/test_login.http.json
+
+# Summarize stages and the variable data-flow (which stage saves what, who consumes it)
+uvx pytest-httpchain show tests/test_login.http.json
+
+# Render the stage data-flow as a Mermaid flowchart
+uvx pytest-httpchain graph tests/test_login.http.json
+```
+
 ## Documentation
 
 -   [Full Documentation](https://aeresov.github.io/pytest-httpchain) - Complete usage guide

@@ -107,3 +107,114 @@ def test_validate_without_deep_ignores_imports(tmp_path):
     result = runner.invoke(app, ["validate", str(f)])
     assert result.exit_code == 0, result.output
     assert "does_not_exist" not in result.output
+
+
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "docs" / "schema" / "scenario.schema.json"
+
+
+def test_schema_emits_valid_json():
+    result = runner.invoke(app, ["schema"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["$schema"].startswith("https://json-schema.org")
+    assert "JsonRef" in data["$defs"]
+
+
+def test_build_schema_matches_committed():
+    from pytest_httpchain.schema import build_schema
+
+    committed = json.loads(SCHEMA_PATH.read_text())
+    assert build_schema() == committed
+
+
+def test_resolve_inlines_include(tmp_path):
+    (tmp_path / "common.json").write_text(json.dumps({"url": "https://x.test/shared"}))
+    scenario = tmp_path / "test_x.http.json"
+    scenario.write_text(json.dumps({"stages": [{"name": "s", "request": {"$include": "common.json"}, "response": [{"verify": {"status": 200}}]}]}))
+    result = runner.invoke(app, ["resolve", str(scenario)])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["stages"][0]["request"]["url"] == "https://x.test/shared"
+
+
+def test_resolve_missing_ref_exits_one(tmp_path):
+    scenario = tmp_path / "test_x.http.json"
+    scenario.write_text(json.dumps({"stages": [{"name": "s", "request": {"$include": "nope.json"}, "response": [{"verify": {"status": 200}}]}]}))
+    result = runner.invoke(app, ["resolve", str(scenario)])
+    assert result.exit_code == 1
+
+
+def _chain_scenario(tmp_path) -> Path:
+    scenario = tmp_path / "test_chain.http.json"
+    scenario.write_text(
+        json.dumps(
+            {
+                "stages": [
+                    {
+                        "name": "create",
+                        "request": {"url": "https://x.test/u", "method": "POST"},
+                        "response": [{"save": {"jmespath": {"user_id": "id"}}}, {"verify": {"status": 201}}],
+                    },
+                    {"name": "get", "request": {"url": "https://x.test/u/{{ user_id }}"}, "response": [{"verify": {"status": 200}}]},
+                ]
+            }
+        )
+    )
+    return scenario
+
+
+def test_show_text_reports_dataflow(tmp_path):
+    result = runner.invoke(app, ["show", str(_chain_scenario(tmp_path))])
+    assert result.exit_code == 0, result.output
+    assert "consumes" in result.output
+    assert "from #1" in result.output
+
+
+def test_show_json_exposes_edges(tmp_path):
+    result = runner.invoke(app, ["show", "--format", "json", str(_chain_scenario(tmp_path))])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert any(e["vars"] == ["user_id"] for e in data["edges"])
+
+
+def test_show_invalid_scenario_exits_one(tmp_path):
+    scenario = tmp_path / "bad.json"
+    scenario.write_text(json.dumps({"stages": [{"name": "s", "request": {}}]}))
+    result = runner.invoke(app, ["show", str(scenario)])
+    assert result.exit_code == 1
+
+
+def test_graph_emits_mermaid(tmp_path):
+    result = runner.invoke(app, ["graph", str(_chain_scenario(tmp_path))])
+    assert result.exit_code == 0, result.output
+    assert "flowchart TD" in result.output
+    assert "-->|user_id|" in result.output
+
+
+def test_graph_direction_lr(tmp_path):
+    result = runner.invoke(app, ["graph", "--direction", "LR", str(_chain_scenario(tmp_path))])
+    assert result.exit_code == 0, result.output
+    assert "flowchart LR" in result.output
+
+
+def test_show_reports_scenario_fixtures_and_vars(tmp_path):
+    scenario = tmp_path / "test_meta.http.json"
+    scenario.write_text(
+        json.dumps(
+            {
+                "fixtures": ["server"],
+                "substitutions": [{"vars": {"base_url": "https://x.test", "api_key": "k"}}],
+                "stages": [{"name": "s", "request": {"url": "{{ base_url }}/u"}, "response": [{"verify": {"status": 200}}]}],
+            }
+        )
+    )
+    result = runner.invoke(app, ["show", str(scenario)])
+    assert result.exit_code == 0, result.output
+    assert "server" in result.output
+    assert "base_url" in result.output
+    assert "api_key" in result.output
+
+    rj = runner.invoke(app, ["show", "--format", "json", str(scenario)])
+    data = json.loads(rj.output)
+    assert data["scenario_fixtures"] == ["server"]
+    assert data["scenario_vars"] == ["api_key", "base_url"]

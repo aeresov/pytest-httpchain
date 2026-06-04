@@ -13,6 +13,11 @@ class OutputFormat(enum.StrEnum):
     json = "json"
 
 
+class GraphDirection(enum.StrEnum):
+    TD = "TD"
+    LR = "LR"
+
+
 @app.callback()
 def main() -> None:
     """pytest-httpchain command-line tools."""
@@ -61,6 +66,156 @@ def validate(
                 typer.echo(f"  {diagnostic.severity} [{diagnostic.code}]: {diagnostic.message}")
 
     raise typer.Exit(0 if all_passed else 1)
+
+
+@app.command()
+def schema(
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="Write schema to PATH instead of stdout.")] = None,
+) -> None:
+    """Emit the JSON Schema for scenario files (editor autocomplete/validation)."""
+    from pytest_httpchain.schema import build_schema
+
+    text = json.dumps(build_schema(), indent=2, default=str)
+    if output is not None:
+        output.write_text(text + "\n")
+        typer.echo(f"Wrote schema to {output}")
+    else:
+        typer.echo(text)
+
+
+@app.command()
+def resolve(
+    scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to resolve.")],
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="Write resolved JSON to PATH instead of stdout.")] = None,
+    ref_parent_traversal_depth: Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")] = 3,
+) -> None:
+    """Resolve $ref/$include/$merge and print the merged scenario JSON."""
+    import pytest_httpchain_jsonref.loader
+    from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
+
+    from pytest_httpchain.validation import resolve_root_path
+
+    try:
+        data = pytest_httpchain_jsonref.loader.load_json(
+            scenario,
+            max_parent_traversal_depth=ref_parent_traversal_depth,
+            root_path=resolve_root_path(scenario),
+        )
+    except (ReferenceResolverError, json.JSONDecodeError, OSError) as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    text = json.dumps(data, indent=2, default=str)
+    if output is not None:
+        output.write_text(text + "\n")
+        typer.echo(f"Wrote resolved scenario to {output}")
+    else:
+        typer.echo(text)
+
+
+def _load_for_inspection(path: Path, depth: int):
+    """Load + validate a scenario for show/graph, mapping failures to Exit(1)."""
+    from pydantic import ValidationError
+    from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
+
+    from pytest_httpchain.dataflow import load_scenario
+
+    try:
+        return load_scenario(path, ref_parent_traversal_depth=depth)
+    except (ReferenceResolverError, json.JSONDecodeError, OSError) as e:
+        typer.echo(f"error: cannot load {path}: {e}", err=True)
+        raise typer.Exit(1) from e
+    except ValidationError:
+        typer.echo(f"error: {path} is not a valid scenario — run `pytest-httpchain validate {path}` for details", err=True)
+        raise typer.Exit(1) from None
+
+
+def _render_show_text(path: Path, scenario, flow) -> list[str]:
+    producer_of: dict[tuple[int, str], int] = {}
+    for edge in flow.edges:
+        for name in edge.vars:
+            producer_of[(edge.consumer, name)] = edge.producer
+
+    all_fixtures = sorted({*flow.scenario_fixtures, *(f for s in flow.stages for f in s.fixtures)})
+    lines: list[str] = [scenario.description or path.name]
+    summary = f"{len(flow.stages)} stage(s)"
+    if all_fixtures:
+        summary += f" · fixtures: {all_fixtures}"
+    if flow.scenario_vars:
+        summary += f" · vars: {flow.scenario_vars}"
+    lines.append(summary)
+    lines.append("")
+
+    for s in flow.stages:
+        name = s.name or f"(stage {s.index + 1})"
+        lines.append(f"{s.index + 1} · {name}    {s.method} {s.url}")
+        if s.saves:
+            lines.append(f"    saves:    {', '.join(s.saves)}")
+        if s.consumes:
+            parts: list[str] = []
+            for name in s.consumes:
+                producer = producer_of.get((s.index, name))
+                if producer is None:
+                    parts.append(name)
+                else:
+                    producer_name = flow.stages[producer].name or f"stage {producer + 1}"
+                    parts.append(f"{name} (from #{producer + 1} {producer_name})")
+            lines.append(f"    consumes: {', '.join(parts)}")
+        if s.marks:
+            lines.append(f"    marks:    {', '.join(s.marks)}")
+    return lines
+
+
+@app.command()
+def show(
+    scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to summarize.")],
+    output_format: Annotated[OutputFormat, typer.Option("--format", help="Output format: human-readable text or machine-readable JSON.")] = OutputFormat.text,
+    ref_parent_traversal_depth: Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")] = 3,
+) -> None:
+    """Summarize a scenario's stages and variable data-flow."""
+    from pytest_httpchain.dataflow import analyze_dataflow
+
+    sc, test_data = _load_for_inspection(scenario, ref_parent_traversal_depth)
+    flow = analyze_dataflow(sc, test_data)
+
+    if output_format is OutputFormat.json:
+        payload = flow.model_dump()
+        payload["description"] = sc.description or None
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        for line in _render_show_text(scenario, sc, flow):
+            typer.echo(line)
+
+
+def _mermaid_label(text: str) -> str:
+    return text.replace('"', "'").replace("\n", " ")
+
+
+def _to_mermaid(flow, direction: str = "TD") -> str:
+    lines = [f"flowchart {direction}"]
+    if not flow.stages:
+        lines.append("    %% (no stages)")
+        return "\n".join(lines)
+    for s in flow.stages:
+        label = f"{s.index + 1} · {s.name}" if s.name else f"{s.index + 1}"
+        lines.append(f'    S{s.index}["{_mermaid_label(label)}"]')
+    for edge in flow.edges:
+        lines.append(f"    S{edge.producer} -->|{', '.join(edge.vars)}| S{edge.consumer}")
+    return "\n".join(lines)
+
+
+@app.command()
+def graph(
+    scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to graph.")],
+    direction: Annotated[GraphDirection, typer.Option("--direction", help="Flowchart orientation.")] = GraphDirection.TD,
+    ref_parent_traversal_depth: Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")] = 3,
+) -> None:
+    """Emit a Mermaid flowchart of the stage data-flow."""
+    from pytest_httpchain.dataflow import analyze_dataflow
+
+    sc, test_data = _load_for_inspection(scenario, ref_parent_traversal_depth)
+    flow = analyze_dataflow(sc, test_data)
+    typer.echo(_to_mermaid(flow, direction.value))
 
 
 if __name__ == "__main__":

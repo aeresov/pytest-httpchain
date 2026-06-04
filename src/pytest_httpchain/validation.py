@@ -152,7 +152,7 @@ def extract_template_variables(obj: Any, variables: set[str] | None = None) -> s
     return variables
 
 
-def _substitution_names(substitutions: Any) -> set[str]:
+def substitution_names(substitutions: Any) -> set[str]:
     """Names introduced by a list of ``vars``/``functions`` substitution entries."""
     names: set[str] = set()
     for sub in substitutions or []:
@@ -165,7 +165,7 @@ def _substitution_names(substitutions: Any) -> set[str]:
     return names
 
 
-def _saved_in_stage(stage: Stage) -> set[str]:
+def saved_in_stage(stage: Stage) -> set[str]:
     """Variable names a single stage's response steps save into the context."""
     saved: set[str] = set()
     for response_step in stage.response:
@@ -177,7 +177,7 @@ def _saved_in_stage(stage: Stage) -> set[str]:
             saved.update(jmespath.keys())
         substitutions = getattr(save, "substitutions", None)
         if substitutions is not None:
-            saved |= _substitution_names(substitutions)
+            saved |= substitution_names(substitutions)
         # user_functions saves return arbitrary dict keys -> not statically known.
     return saved
 
@@ -186,7 +186,7 @@ def extract_saved_variables(scenario: Scenario) -> set[str]:
     """Extract variable names saved across all response steps in the scenario."""
     saved_vars: set[str] = set()
     for stage in scenario.stages:
-        saved_vars |= _saved_in_stage(stage)
+        saved_vars |= saved_in_stage(stage)
     return saved_vars
 
 
@@ -210,10 +210,10 @@ def _parameter_names(params: Any) -> set[str]:
     return names
 
 
-def _stage_defined_names(stage: Stage) -> set[str]:
+def stage_defined_names(stage: Stage) -> set[str]:
     """Names available *within a single stage*: its substitutions, parametrize /
     foreach parameters, and its declared fixtures."""
-    names = _substitution_names(stage.substitutions)
+    names = substitution_names(stage.substitutions)
     names |= _parameter_names(stage.parametrize)
     if stage.parallel is not None:
         names |= _parameter_names(getattr(stage.parallel, "foreach", None))
@@ -236,10 +236,10 @@ def extract_defined_variables(scenario: Scenario, test_data: dict[str, Any]) -> 
     if isinstance(test_data.get("vars"), dict):
         defined_vars.update(k for k in test_data["vars"] if isinstance(k, str))
 
-    defined_vars |= _substitution_names(scenario.substitutions)
+    defined_vars |= substitution_names(scenario.substitutions)
 
     for stage in scenario.stages:
-        defined_vars |= _substitution_names(stage.substitutions)
+        defined_vars |= substitution_names(stage.substitutions)
         defined_vars |= _parameter_names(stage.parametrize)
         if stage.parallel is not None:
             defined_vars |= _parameter_names(getattr(stage.parallel, "foreach", None))
@@ -247,7 +247,7 @@ def extract_defined_variables(scenario: Scenario, test_data: dict[str, Any]) -> 
     return defined_vars
 
 
-def _raw_stages(test_data: dict[str, Any]) -> list[Any]:
+def raw_stages(test_data: dict[str, Any]) -> list[Any]:
     """Raw (pre-validation) stage bodies in declaration order.
 
     Stages may be authored as a list or as a ``{name: stage}`` mapping; both
@@ -298,7 +298,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
     diagnostics: list[Diagnostic] = []
 
     all_saved = extract_saved_variables(scenario)
-    saves_by_stage: list[set[str]] = [_saved_in_stage(stage) for stage in scenario.stages]
+    saves_by_stage: list[set[str]] = [saved_in_stage(stage) for stage in scenario.stages]
     first_save_stage: dict[str, int] = {}
     for i, saved in enumerate(saves_by_stage):
         for name in saved:
@@ -312,19 +312,19 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
     scenario_scope: set[str] = set()
     if isinstance(test_data.get("vars"), dict):
         scenario_scope |= {k for k in test_data["vars"] if isinstance(k, str)}
-    scenario_scope |= _substitution_names(scenario.substitutions)
+    scenario_scope |= substitution_names(scenario.substitutions)
 
     scenario_available = set(scenario_scope)
     if isinstance(test_data.get("fixtures"), list):
         scenario_available |= {f for f in test_data["fixtures"] if isinstance(f, str)}
 
-    raw_stages = _raw_stages(test_data)
+    raws = raw_stages(test_data)
     cumulative_saves: set[str] = set()
 
     for i, stage in enumerate(scenario.stages):
-        raw = raw_stages[i] if i < len(raw_stages) and isinstance(raw_stages[i], dict) else {}
+        raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
-        request_available = scenario_available | _stage_defined_names(stage) | cumulative_saves
+        request_available = scenario_available | stage_defined_names(stage) | cumulative_saves
         response_available = request_available | saves_by_stage[i]
 
         # ``parallel.foreach`` values are resolved at stage execution against the
@@ -736,6 +736,17 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
     return diagnostics, scenario_info
 
 
+def resolve_root_path(path: Path) -> Path:
+    """Directory that constrains ``$ref`` resolution: the nearest ``tests/``
+    ancestor of ``path``, else the file's own parent."""
+    potential_root = path.parent
+    while potential_root.parent != potential_root:
+        if potential_root.name == "tests":
+            return potential_root
+        potential_root = potential_root.parent
+    return path.parent
+
+
 def validate_scenario(
     path: Path,
     ref_parent_traversal_depth: int = 3,
@@ -772,14 +783,7 @@ def validate_scenario(
         )
 
     if root_path is None:
-        potential_root = path.parent
-        while potential_root.parent != potential_root:
-            if potential_root.name == "tests":
-                root_path = potential_root
-                break
-            potential_root = potential_root.parent
-        else:
-            root_path = path.parent
+        root_path = resolve_root_path(path)
 
     try:
         test_data = pytest_httpchain_jsonref.loader.load_json(
