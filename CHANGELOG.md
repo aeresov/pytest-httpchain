@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-04
+
 ### Added
 
 - New read-only inspection CLI commands: `pytest-httpchain schema` (emit the scenario JSON Schema for editor integration), `resolve` (print a scenario with `$ref`/`$include`/`$merge` inlined), `show` (summarize stages and variable data-flow), and `graph` (emit a Mermaid flowchart of the stage data-flow).
@@ -138,7 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.2.4...v0.3.0
 [0.2.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.2.0...v0.2.1
