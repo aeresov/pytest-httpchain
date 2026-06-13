@@ -14,6 +14,18 @@ SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 SCHEMA_ID = "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json"
 
 
+def _one_of_to_any_of(node: Any) -> None:
+    """Recursively rename ``oneOf`` to ``anyOf`` in place."""
+    if isinstance(node, dict):
+        if "oneOf" in node:
+            node["anyOf"] = node.pop("oneOf")
+        for value in node.values():
+            _one_of_to_any_of(value)
+    elif isinstance(node, list):
+        for item in node:
+            _one_of_to_any_of(item)
+
+
 def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
     """Allow ``$include``/``$merge``/``$ref`` objects as alternatives anywhere.
 
@@ -37,9 +49,27 @@ def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
                 "type": "string",
                 "description": "Alias for $include. Path to external JSON file, JSON pointer (#/path), or combined (file.json#/path).",
             },
+            "$ref": {
+                "type": "string",
+                "description": "Legacy alias for $include. May conflict with VS Code's own $ref handling.",
+            },
         },
+        # Without at least one directive key this branch would match EVERY
+        # object, silencing the strict alternative in the surrounding anyOf.
+        "anyOf": [
+            {"required": ["$include"]},
+            {"required": ["$merge"]},
+            {"required": ["$ref"]},
+        ],
         "additionalProperties": True,
     }
+
+    # Pydantic emits oneOf for tagged unions. A reference object matches the
+    # JsonRef branch of EVERY union member (each $defs entry is wrapped below),
+    # which oneOf counts as "valid under more than one" and rejects. anyOf
+    # keeps the same accept set otherwise: members forbid each other's tag
+    # fields, so a non-reference object can never match two branches.
+    _one_of_to_any_of(schema)
 
     for type_name, original_def in list(schema["$defs"].items()):
         if type_name == "JsonRef":
@@ -57,6 +87,23 @@ def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
         }
         if "description" in prop_def:
             schema["properties"][prop_name]["description"] = prop_def.get("description")
+
+    # The Scenario model forbids extra keys, so the root carries
+    # additionalProperties: false. Keys that are legitimate in a scenario
+    # *file* but handled before model validation must be declared explicitly:
+    # "$schema" (editor metadata, stripped by the loader) and the reference
+    # directives (resolved by the loader, supported at the document root).
+    schema.setdefault("properties", {})
+    schema["properties"]["$schema"] = {
+        "type": "string",
+        "description": "URL of this schema, for editor as-you-type validation. Stripped before the file is parsed.",
+    }
+    for directive, directive_def in schema["$defs"]["JsonRef"]["properties"].items():
+        schema["properties"][directive] = directive_def
+    schema["properties"]["$ref"] = {
+        "type": "string",
+        "description": "Legacy alias for $include. May conflict with VS Code's own $ref handling.",
+    }
 
     return schema
 

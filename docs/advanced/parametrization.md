@@ -153,6 +153,10 @@ Parameter values can use template expressions:
 
 ## Complete Example
 
+A request body is a structured, typed value (a JSON body, a form body, …), not a plain string — so template expressions go **inside** a body type, such as `{"json": "{{ payload }}"}`, never as the whole `body` value. Because the body type is fixed by structure, a stage that sends a body and one that doesn't are written as separate stages.
+
+This scenario combines scenario-level substitutions, two parametrized stages (a body-less read and a templated-body write), custom ids, and templated `url`/`status`:
+
 ```json
 {
     "substitutions": [
@@ -164,36 +168,43 @@ Parameter values can use template expressions:
     ],
     "stages": [
         {
-            "name": "test_crud_operations",
+            "name": "read_operations",
             "parametrize": [
                 {
                     "combinations": [
-                        {
-                            "method": "GET",
-                            "path": "/users",
-                            "expected_status": 200,
-                            "body": null
-                        },
-                        {
-                            "method": "POST",
-                            "path": "/users",
-                            "expected_status": 201,
-                            "body": {"name": "New User"}
-                        },
-                        {
-                            "method": "GET",
-                            "path": "/users/999",
-                            "expected_status": 404,
-                            "body": null
-                        }
+                        {"path": "/users", "expected_status": 200},
+                        {"path": "/users/999", "expected_status": 404}
                     ],
-                    "ids": ["list_users", "create_user", "user_not_found"]
+                    "ids": ["list_users", "user_not_found"]
                 }
             ],
             "request": {
                 "url": "{{ base_url }}{{ path }}",
-                "method": "{{ method }}",
-                "body": "{{ {'json': body} if body else None }}"
+                "method": "GET"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": "{{ expected_status }}"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "create_user",
+            "parametrize": [
+                {
+                    "combinations": [
+                        {"payload": {"name": "Alice"}, "expected_status": 201},
+                        {"payload": {"name": "Bob"}, "expected_status": 201}
+                    ],
+                    "ids": ["create_alice", "create_bob"]
+                }
+            ],
+            "request": {
+                "url": "{{ base_url }}/users",
+                "method": "POST",
+                "body": {"json": "{{ payload }}"}
             },
             "response": [
                 {

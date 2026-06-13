@@ -1,0 +1,25 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "failing_stage",
+            "request": {
+                "url": "{{ server }}/bad"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "broken_cleanup",
+            "description": "always_run references an undefined name; the stage fails with a clear message",
+            "always_run": "{{ nonexistent_flag }}",
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

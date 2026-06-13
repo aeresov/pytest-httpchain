@@ -1,0 +1,10 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "use_scenario_fixture",
+            "request": { "url": "{{ server }}/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

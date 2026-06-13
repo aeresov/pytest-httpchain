@@ -1,0 +1,17 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "first",
+            "request": { "url": "{{ server }}/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "cleanup",
+            "substitutions": [{ "vars": { "flag": true } }],
+            "always_run": "{{ flag and missing_name }}",
+            "request": { "url": "{{ server }}/cleanup" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

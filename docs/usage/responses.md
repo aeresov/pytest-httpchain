@@ -63,19 +63,61 @@ Use template expressions:
 
 ### Expression Verification
 
-Evaluate Python expressions that must return truthy values:
+Evaluate template expressions that must return truthy values. Expressions are evaluated against the **context** — saved variables, fixtures, and substitutions — **not** the raw HTTP response. Save the data you want to assert on first, then reference it:
 
 ```json
 {
-    "verify": {
-        "expressions": [
-            "{{ response_time < 1.0 }}",
-            "{{ 'error' not in body_text }}",
-            "{{ len(items) > 0 }}"
-        ]
-    }
+    "response": [
+        {
+            "save": {
+                "jmespath": {
+                    "items": "items",
+                    "status": "status"
+                }
+            }
+        },
+        {
+            "verify": {
+                "expressions": [
+                    "{{ len(items) > 0 }}",
+                    "{{ status == 'ok' }}"
+                ]
+            }
+        }
+    ]
 }
 ```
+
+Response facets that aren't in the JSON body — elapsed time, raw text, individual headers — can't be reached with JMESPath. Capture them with a [save user function](#user-function-save), which receives the `httpx.Response`:
+
+```python
+# checks.py
+import httpx
+
+def response_meta(response: httpx.Response) -> dict:
+    return {
+        "response_time": response.elapsed.total_seconds(),
+        "body_text": response.text,
+    }
+```
+
+```json
+{
+    "response": [
+        {"save": {"user_functions": ["checks:response_meta"]}},
+        {
+            "verify": {
+                "expressions": [
+                    "{{ response_time < 1.0 }}",
+                    "{{ 'error' not in body_text }}"
+                ]
+            }
+        }
+    ]
+}
+```
+
+`validate` can't see the keys a user function returns, so it reports `response_time` and `body_text` as `HTTPCHAIN003` ("potentially undefined"). The warning is expected here — the expressions resolve correctly at runtime once the save step has run.
 
 ### Body Content Checks
 

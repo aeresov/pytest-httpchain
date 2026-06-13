@@ -1,0 +1,20 @@
+{
+    "fixtures": ["server"],
+    "substitutions": [{ "vars": { "env": "dev" } }],
+    "stages": [
+        {
+            "name": "create",
+            "request": { "url": "{{ server }}/resource", "method": "POST" },
+            "response": [
+                { "save": { "jmespath": { "resource_id": "id" } } },
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "cleanup",
+            "always_run": "{{ env == 'dev' and resource_id }}",
+            "request": { "url": "{{ server }}/resource/{{ resource_id }}", "method": "DELETE" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

@@ -60,12 +60,27 @@ class CircularDependencyTracker:
         self.internal_refs.discard(pointer)
 
     def create_child_tracker(self) -> Self:
-        """Create a child tracker that inherits current state.
+        """Create a child tracker for descending into an external document.
+
+        External refs are keyed by ``(file, pointer)`` and inherited, so a
+        cross-document cycle (A -> B -> A) is detected along the resolution
+        chain.
+
+        Internal refs are NOT inherited. A JSON pointer like ``#/a`` is only
+        meaningful relative to its own document's root, and a child tracker is
+        created exactly when resolution crosses into a new document. Carrying
+        the parent's open internal pointers across that boundary would conflate
+        unrelated documents that happen to reuse the same pointer string and
+        raise a phantom cycle. Genuine intra-document internal cycles are still
+        caught, because every internal ref within one document shares a single
+        tracker instance; genuine cross-document cycles are caught by
+        ``external_refs`` (every document-crossing hop is an external ref).
 
         Returns:
-            A new tracker with copies of the current reference sets
+            A new tracker inheriting external refs but starting with a fresh,
+            empty internal-ref set.
         """
         child = self.__class__()
         child.external_refs = self.external_refs.copy()
-        child.internal_refs = self.internal_refs.copy()
+        child.internal_refs = set()
         return child

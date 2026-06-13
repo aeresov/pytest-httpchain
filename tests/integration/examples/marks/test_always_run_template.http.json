@@ -1,0 +1,47 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "save_flag",
+            "request": {
+                "url": "{{ server }}/users"
+            },
+            "response": [
+                { "save": { "jmespath": { "first_user": "users[0].name" } } },
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "failing_stage",
+            "description": "This stage will fail and cause abort",
+            "request": {
+                "url": "{{ server }}/bad"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "conditional_cleanup_runs",
+            "description": "Template evaluates true against the saved variable, so this runs after abort",
+            "always_run": "{{ first_user == 'Alice' }}",
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "conditional_cleanup_skipped",
+            "description": "Template evaluates false, so this is skipped like any other stage after abort",
+            "always_run": "{{ first_user == 'Bob' }}",
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

@@ -79,15 +79,19 @@ class TestCircularDependencyTracker:
         with pytest.raises(ReferenceResolverError, match="Circular reference detected"):
             child.check_external_ref(path, "/pointer")
 
-    def test_child_tracker_inherits_internal_refs(self):
-        """Child tracker should inherit parent's internal reference set."""
+    def test_child_tracker_does_not_inherit_internal_refs(self):
+        """Child tracker must NOT inherit internal refs (H5).
+
+        A child tracker is created only when resolution crosses into a new
+        document, and a JSON pointer is document-local. Inheriting would
+        conflate unrelated documents that reuse the same pointer string.
+        """
         parent = CircularDependencyTracker()
         parent.check_internal_ref("/a/b")
 
         child = parent.create_child_tracker()
-        # Child should see parent's refs
-        with pytest.raises(ReferenceResolverError, match="Circular reference detected"):
-            child.check_internal_ref("/a/b")
+        # Fresh document namespace: the same pointer is allowed, not a cycle.
+        child.check_internal_ref("/a/b")  # must not raise
 
     def test_child_modifications_dont_affect_parent(self):
         """Child tracker modifications should not affect parent."""

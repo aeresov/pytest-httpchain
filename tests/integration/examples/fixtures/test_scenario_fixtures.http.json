@@ -1,0 +1,48 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "scenario_fixture_only",
+            "description": "Scenario-level fixture available without stage declaration",
+            "request": {
+                "url": "{{ server }}/template/first"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "mixed_and_overlapping",
+            "description": "Stage fixtures merge with scenario fixtures; overlap is deduplicated",
+            "fixtures": ["api_key", "server"],
+            "request": {
+                "url": "{{ server }}/template/{{ api_key }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "returned_value": "value"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ returned_value == 'test-api-key-12345' }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

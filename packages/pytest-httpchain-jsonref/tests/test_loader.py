@@ -98,6 +98,36 @@ class TestMerging:
         assert result["data"] is None
 
 
+class TestSchemaKeyPassthrough:
+    """ "$schema" keys are content to the loader — never stripped at any level.
+
+    Stripping here once corrupted a JSON Schema document pulled into a host
+    via $include (its dialect declaration vanished). Tolerating "$schema" is
+    the consumer's job (pytest-httpchain models drop it during validation).
+    """
+
+    def test_schema_key_preserved_in_main_document(self, create_json_file):
+        file = create_json_file(
+            "main.json",
+            {"$schema": "https://example.test/schema.json", "value": 42},
+        )
+        result = load_json(file)
+        assert result["$schema"] == "https://example.test/schema.json"
+        assert result["value"] == 42
+
+    def test_schema_key_preserved_in_included_fragment(self, create_json_files):
+        """An $include'd JSON Schema document must keep its dialect declaration."""
+        files = create_json_files(
+            {
+                "draft07.schema.json": {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object"},
+                "main.json": {"verify": {"schema": {"$include": "draft07.schema.json"}}},
+            }
+        )
+        result = load_json(files["main.json"])
+        assert result["verify"]["schema"]["$schema"] == "http://json-schema.org/draft-07/schema#"
+        assert result["verify"]["schema"]["type"] == "object"
+
+
 class TestExternalReferences:
     """Tests for external file references."""
 

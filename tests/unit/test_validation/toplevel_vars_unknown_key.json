@@ -1,0 +1,10 @@
+{
+    "vars": { "base_url": "https://x.test" },
+    "stages": [
+        {
+            "name": "ref_toplevel_var",
+            "request": { "url": "{{ base_url }}/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

@@ -59,6 +59,12 @@ All errors raise `UserFunctionError` with descriptive messages:
 - Target is not callable
 - Runtime errors during function execution
 
+Import failures and runtime call failures append the underlying exception to the
+message (`...: {cause}`) and also chain it as `__cause__`. Consumers in the main
+plugin render only the message text (stage failures use `pytrace=False`; the
+validator embeds `str(e)`), so the cause must live in the message — not just the
+chain — to be visible.
+
 ## Running Tests
 
 ```bash

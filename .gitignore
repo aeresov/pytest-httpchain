@@ -17,5 +17,3 @@ htmlcov/
 # mkdocs
 /site/
 
-# generated files
-/docs/schema/

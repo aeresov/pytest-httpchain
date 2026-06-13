@@ -39,7 +39,7 @@ def import_function(name: str) -> Callable[..., Any]:
     try:
         module = importlib.import_module(module_path)
     except ImportError as e:
-        raise UserFunctionError(f"Failed to import module '{module_path}'") from e
+        raise UserFunctionError(f"Failed to import module '{module_path}': {e}") from e
 
     if not hasattr(module, function_name):
         raise UserFunctionError(f"Function '{function_name}' not found in module '{module_path}'")
@@ -70,7 +70,7 @@ def call_function(name: str, /, *args, **kwargs) -> Any:
     try:
         return func(*args, **kwargs)
     except Exception as e:
-        raise UserFunctionError(f"Error calling function '{name}'") from e
+        raise UserFunctionError(f"Error calling function '{name}': {e}") from e
 
 
 def wrap_function(name: str, /, default_args: list[Any] | None = None, default_kwargs: dict[str, Any] | None = None) -> Callable[..., Any]:

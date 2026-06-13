@@ -57,8 +57,9 @@ When `$include` (or `$ref`) has sibling properties, they are deep-merged using `
 - `root_path`: Constrains references to stay within a directory tree
 
 ### Circular Reference Detection
-- Tracks both external (file+pointer) and internal (pointer-only) references
-- Raises `RuntimeError` on circular dependency detection
+- External references are tracked by `(file, pointer)` and inherited down the resolution chain, so cross-document cycles (A → B → A) are detected.
+- Internal references (`#/pointer`) are document-local: they are tracked per document and are **not** inherited across a file boundary. Two documents that reuse the same pointer string are not a cycle; a genuine intra-document cycle (`#/a → #/b → #/a`) is still detected.
+- Raises `ReferenceResolverError` on circular dependency detection.
 
 ## Running Tests
 
@@ -79,4 +80,4 @@ All resolution errors raise `ReferenceResolverError` with descriptive messages i
 - File not found (shows all paths tried)
 - Invalid JSON pointer
 - Merge conflicts between incompatible types
-- Circular references (raises `RuntimeError`)
+- Circular references

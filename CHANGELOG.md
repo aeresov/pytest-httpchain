@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-13
+
+### Added
+
+- New validation diagnostic `HTTPCHAIN009` (warning): a stage saves a variable whose name is also a scenario-level fixture. The fixture value takes precedence in every stage, so such a save can never be read back.
+- New validation diagnostic `HTTPCHAIN016` (error): a fixture is referenced in a scenario-level template (`substitutions`, `auth`, or `ssl`). Those templates resolve once at collection time, before any fixture exists, so such a reference is a guaranteed collection-time crash — now caught by `validate` and collection-time validation instead.
+- The order-aware data-flow validator now checks `always_run` template references against their actual evaluation scope — fixtures, parametrize parameters, scenario substitutions, and earlier saves (`HTTPCHAIN003`/`HTTPCHAIN004`) — and `show`/`graph` count them as variable consumption.
+
+### Changed
+
+- **BREAKING**: scenario models now reject unknown keys (every model derives from a shared `extra="forbid"` base). A misspelled field — `"headerz"`, `"alwaysrun"`, `"statu"` — fails validation at collection time with the offending key and its location, instead of being silently ignored and producing a wrong request. The documented `"$schema"` editor key keeps working: models discard it during validation, whether it sits at the top of the test file or at the root of a fragment pulled in by `$include`/`$merge`/`$ref`. A `"$schema"` inside plain data (an inline response-body JSON Schema, a JSON body) is preserved. Migration note: an undocumented pattern of stashing reusable nodes under a custom top-level key (e.g. `"definitions"`) for same-document `#/...` pointers is now rejected — move the stash to a separate fragment file and reference it with `file.json#/...` pointers.
+
+### Fixed
+
+- A whole-string template padded with surrounding whitespace now preserves its type. A value that is a single `{{ … }}` expression with leading or trailing whitespace — `" {{ a == b }} "` — was accepted by schema validation as a complete (type-preserving) template but evaluated at runtime as string interpolation, yielding a *string* instead of the typed value. For `verify.expressions` this was a silent false-negative: the result `" False "` is a non-empty, truthy string, so the assertion passed even when the expression was false; for `always_run` the stage always ran; for `repeat`/`timeout`/`max_concurrency`/etc. it produced a string where a number was expected. Runtime single-expression detection now uses the same whitespace-tolerant predicate as the models, so `" {{ a == b }} "` evaluates to the bool `False`. Note: the surrounding whitespace (spaces, tabs, newlines) is stripped from such whole-string templates — a value that previously carried a leading/trailing newline into its output via interpolation now returns the bare typed value.
+
+- User-function error messages now include the underlying cause. When an `auth`, `save`, or `verify` function failed to import or raised at call time, the error read only `Error calling function '<name>'` / `Failed to import module '<path>'` — the real exception (a `KeyError`, a connection failure, the actual `ImportError`) was attached as `__cause__` but never shown, because stage failures are reported with `pytest.fail(..., pytrace=False)` and the validator embeds only the message text. The two wrappers now append `: {cause}` (matching the wrapper already used for `functions` substitutions), so the actual reason reaches the test output and validation diagnostics. In particular, a module that is missing now reads differently from one that exists but fails to import.
+
+- Circular-reference detection no longer raises a phantom cycle when two documents reuse the same internal JSON pointer. Internal pointers (`#/a`) were tracked by pointer string only and inherited into the tracker used for external files, so a document referencing `#/a` whose subtree pulled in another file that referenced *its own* `#/a` failed to load with `Circular reference detected: #/a`. Internal pointers are document-local and are no longer carried across a file boundary; genuine internal cycles (within one document) and cross-document cycles (tracked by file + pointer) are still detected.
+
+- The published editor JSON Schema now actually validates scenario files. Its `JsonRef` wrapper accepted *any* object (no required keys), so editors caught neither typos nor missing required fields anywhere an object was expected. A reference object must now carry one of `$ref`/`$include`/`$merge`; combined with unknown-key rejection above, editors flag misspelled fields as-you-type. Tagged unions are emitted as `anyOf` instead of `oneOf`, so a reference object at a union position (a `save` value, a request `body`, a `parallel` config…) is no longer rejected as ambiguous. The schema root also explicitly declares `$schema` and the three reference directives.
+
+- `always_run` template expressions are now actually evaluated. Previously the runtime tested the raw field for truthiness, so any template string — e.g. `"always_run": "{{ should_run }}"` — behaved as `always_run: true` regardless of what it evaluated to. The template is now resolved (with Python truthiness) when an earlier stage has failed, against fixtures, parametrize parameters, scenario substitutions, and previously saved variables; a template that fails to evaluate fails the stage with a clear message instead of silently running it.
+
+- Restored scenario-level `fixtures`: the documented top-level `fixtures` field (pytest fixtures available to all stages) had been silently dropped from the `Scenario` model in an earlier refactor — scenarios using it passed validation but failed at runtime with undefined-variable errors. The field is back in the model and the generated JSON Schema, fixtures are injected into every stage (deduplicated against stage-level `fixtures`), and `show`/`graph` report them from the model.
+- The validator and `show`/`graph` no longer treat an undocumented top-level `vars` key as a variable source. The runtime never read it; with unknown keys now rejected, such a file fails validation outright instead of validating "OK" and failing at runtime. Scenario-level variables belong in `substitutions`.
+
 ## [0.5.0] - 2026-06-04
 
 ### Added
@@ -140,7 +167,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.2.4...v0.3.0

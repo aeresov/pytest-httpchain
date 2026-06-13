@@ -35,6 +35,23 @@ def test_local_redefinition_not_consumed():
     assert flow.edges == []
 
 
+def test_scenario_fixture_shadows_save_not_consumed():
+    # At runtime a scenario fixture shadows a same-named save in every stage,
+    # so the reference resolves to the fixture — no producer->consumer edge.
+    data = {
+        "fixtures": ["token"],
+        "stages": [
+            {"name": "a", "request": {"url": "https://x.test/", "method": "POST"}, "response": [{"save": {"jmespath": {"token": "t"}}}]},
+            {"name": "b", "request": {"url": "https://x.test/{{ token }}"}, "response": [{"verify": {"status": 200}}]},
+        ],
+    }
+    sc = Scenario.model_validate(data)
+    flow = analyze_dataflow(sc, data)
+    assert flow.stages[1].consumes == []
+    assert flow.edges == []
+    assert flow.scenario_fixtures == ["token"]
+
+
 def test_multiple_vars_same_pair_merged():
     sc, data = _scenario(
         [
@@ -76,6 +93,45 @@ def test_same_stage_save_and_use_no_self_edge():
     assert flow.stages[0].saves == ["token"]
     assert flow.stages[0].consumes == []
     assert flow.edges == []
+
+
+def test_always_run_ref_shadowed_by_stage_substitution_still_consumed():
+    # always_run resolves before stage substitutions exist, so the earlier save
+    # IS read at runtime even when a stage substitution reuses the name.
+    sc, data = _scenario(
+        [
+            {"name": "a", "request": {"url": "https://x.test/", "method": "POST"}, "response": [{"save": {"jmespath": {"token": "t"}}}]},
+            {
+                "name": "b",
+                "substitutions": [{"vars": {"token": "stage-local"}}],
+                "always_run": "{{ token }}",
+                "request": {"url": "https://x.test/static"},
+                "response": [{"verify": {"status": 200}}],
+            },
+        ]
+    )
+    flow = analyze_dataflow(sc, data)
+    assert flow.stages[1].consumes == ["token"]
+    assert [(e.producer, e.consumer, e.vars) for e in flow.edges] == [(0, 1, ["token"])]
+
+
+def test_always_run_ref_consumed():
+    # always_run resolves against earlier saves, so referencing one is a
+    # genuine producer -> consumer dependency.
+    sc, data = _scenario(
+        [
+            {"name": "create", "request": {"url": "https://x.test/", "method": "POST"}, "response": [{"save": {"jmespath": {"resource_id": "id"}}}]},
+            {
+                "name": "cleanup",
+                "always_run": "{{ resource_id }}",
+                "request": {"url": "https://x.test/static"},
+                "response": [{"verify": {"status": 200}}],
+            },
+        ]
+    )
+    flow = analyze_dataflow(sc, data)
+    assert flow.stages[1].consumes == ["resource_id"]
+    assert [(e.producer, e.consumer, e.vars) for e in flow.edges] == [(0, 1, ["resource_id"])]
 
 
 def test_parametrize_ref_not_consumed():

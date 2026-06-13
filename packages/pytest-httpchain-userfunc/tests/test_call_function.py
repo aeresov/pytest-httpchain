@@ -51,6 +51,9 @@ class TestCallFunctionErrors:
         assert exc_info.value.__cause__ is not None
         assert isinstance(exc_info.value.__cause__, ValueError)
         assert "intentional failure" in str(exc_info.value.__cause__)
+        # The underlying cause is also surfaced in the message itself (H6):
+        # consumers render only str(e) (pytrace=False), never __cause__.
+        assert "intentional failure" in str(exc_info.value)
 
     def test_wraps_type_error_wrong_args(self):
         with pytest.raises(UserFunctionError, match="Error calling function"):

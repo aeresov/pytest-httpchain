@@ -1,0 +1,1798 @@
+{
+  "$defs": {
+    "Base64Body": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "base64": {
+              "description": "Base64-encoded binary data or template expression.",
+              "title": "Base64",
+              "type": "string"
+            }
+          },
+          "required": [
+            "base64"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "Base64Body"
+    },
+    "BinaryBody": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "binary": {
+              "anyOf": [
+                {
+                  "format": "path",
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "description": "Path to binary file.",
+              "title": "Binary"
+            }
+          },
+          "required": [
+            "binary"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "BinaryBody"
+    },
+    "CombinationsParameter": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "combinations": {
+              "anyOf": [
+                {
+                  "items": {
+                    "additionalProperties": true,
+                    "minProperties": 1,
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "description": "List of parameter combinations (each dict must have at least one parameter) or template expression",
+              "title": "Combinations"
+            },
+            "ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional IDs for each combination",
+              "title": "Ids"
+            }
+          },
+          "required": [
+            "combinations"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "CombinationsParameter"
+    },
+    "FilesBody": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "files": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "format": "path",
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "description": "Files to upload from file paths.",
+              "title": "Files",
+              "type": "object"
+            }
+          },
+          "required": [
+            "files"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "FilesBody"
+    },
+    "FormBody": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "form": {
+              "additionalProperties": true,
+              "description": "Form data to be URL-encoded.",
+              "title": "Form",
+              "type": "object"
+            }
+          },
+          "required": [
+            "form"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "FormBody"
+    },
+    "FunctionsSubstitution": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional description for this component",
+              "title": "Description"
+            },
+            "functions": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/UserFunctionName"
+                  },
+                  {
+                    "$ref": "#/$defs/UserFunctionKwargs"
+                  }
+                ]
+              },
+              "description": "User-defined functions.",
+              "title": "Functions",
+              "type": "object"
+            }
+          },
+          "required": [
+            "functions"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "FunctionsSubstitution"
+    },
+    "GraphQL": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "query": {
+              "description": "GraphQL query string.",
+              "examples": [
+                "query { user { id name } }",
+                "{{ graphql_query }}"
+              ],
+              "title": "Query",
+              "type": "string"
+            },
+            "variables": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/JsonValue"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "description": "GraphQL query variables.",
+              "title": "Variables"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "GraphQL"
+    },
+    "GraphQLBody": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "graphql": {
+              "$ref": "#/$defs/GraphQL",
+              "description": "GraphQL query configuration."
+            }
+          },
+          "required": [
+            "graphql"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "GraphQLBody"
+    },
+    "HTTPMethod": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "enum": [
+            "CONNECT",
+            "DELETE",
+            "GET",
+            "HEAD",
+            "OPTIONS",
+            "PATCH",
+            "POST",
+            "PUT",
+            "TRACE"
+          ],
+          "type": "string"
+        }
+      ],
+      "title": "HTTPMethod",
+      "description": "HTTP methods and descriptions\n\nMethods from the following RFCs are all observed:\n\n    * RFC 9110: HTTP Semantics, obsoletes 7231, which obsoleted 2616\n    * RFC 5789: PATCH Method for HTTP"
+    },
+    "HTTPStatus": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "enum": [
+            100,
+            101,
+            102,
+            103,
+            200,
+            201,
+            202,
+            203,
+            204,
+            205,
+            206,
+            207,
+            208,
+            226,
+            300,
+            301,
+            302,
+            303,
+            304,
+            305,
+            307,
+            308,
+            400,
+            401,
+            402,
+            403,
+            404,
+            405,
+            406,
+            407,
+            408,
+            409,
+            410,
+            411,
+            412,
+            413,
+            413,
+            414,
+            414,
+            415,
+            416,
+            416,
+            417,
+            418,
+            421,
+            422,
+            422,
+            423,
+            424,
+            425,
+            426,
+            428,
+            429,
+            431,
+            451,
+            500,
+            501,
+            502,
+            503,
+            504,
+            505,
+            506,
+            507,
+            508,
+            510,
+            511
+          ],
+          "type": "integer"
+        }
+      ],
+      "title": "HTTPStatus",
+      "description": "HTTP status codes and reason phrases\n\nStatus codes from the following RFCs are all observed:\n\n    * RFC 9110: HTTP Semantics, obsoletes 7231, which obsoleted 2616\n    * RFC 6585: Additional HTTP Status Codes\n    * RFC 3229: Delta encoding in HTTP\n    * RFC 4918: HTTP Extensions for WebDAV, obsoletes 2518\n    * RFC 5842: Binding Extensions to WebDAV\n    * RFC 7238: Permanent Redirect\n    * RFC 2295: Transparent Content Negotiation in HTTP\n    * RFC 2774: An HTTP Extension Framework\n    * RFC 7725: An HTTP Status Code to Report Legal Obstacles\n    * RFC 7540: Hypertext Transfer Protocol Version 2 (HTTP/2)\n    * RFC 2324: Hyper Text Coffee Pot Control Protocol (HTCPCP/1.0)\n    * RFC 8297: An HTTP Status Code for Indicating Hints\n    * RFC 8470: Using Early Data in HTTP"
+    },
+    "IndividualParameter": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "individual": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "items": {},
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "description": "Parameter name mapped to list of values (single parameter per step, non-empty values) or template expression",
+              "title": "Individual",
+              "type": "object"
+            },
+            "ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional IDs for each value",
+              "title": "Ids"
+            }
+          },
+          "required": [
+            "individual"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "IndividualParameter"
+    },
+    "JMESPathSave": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional description for this component",
+              "title": "Description"
+            },
+            "jmespath": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "JMESPath expressions to extract values from response.",
+              "title": "Jmespath",
+              "type": "object"
+            }
+          },
+          "required": [
+            "jmespath"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "JMESPathSave",
+      "description": "Save data using JMESPath expressions to extract values from response."
+    },
+    "JsonBody": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "json": {
+              "$ref": "#/$defs/JsonValue",
+              "description": "JSON data to send."
+            }
+          },
+          "required": [
+            "json"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "JsonBody"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {}
+      ]
+    },
+    "ParallelForeachConfig": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "max_concurrency": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "default": 10,
+              "description": "Maximum number of concurrent requests.",
+              "title": "Max Concurrency"
+            },
+            "calls_per_sec": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Maximum number of API calls per second. When set, requests are rate-limited globally across all workers.",
+              "title": "Calls Per Sec"
+            },
+            "max_rate_limit_delay": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "default": 60,
+              "description": "Maximum seconds to wait when rate-limited before giving up. Defaults to 60 seconds.",
+              "title": "Max Rate Limit Delay"
+            },
+            "foreach": {
+              "description": "Execute request once for each parameter set in parallel.",
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IndividualParameter"
+                  },
+                  {
+                    "$ref": "#/$defs/CombinationsParameter"
+                  }
+                ]
+              },
+              "title": "Foreach",
+              "type": "array"
+            }
+          },
+          "required": [
+            "foreach"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ParallelForeachConfig",
+      "description": "Execute request once for each parameter set in parallel."
+    },
+    "ParallelRepeatConfig": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "max_concurrency": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "default": 10,
+              "description": "Maximum number of concurrent requests.",
+              "title": "Max Concurrency"
+            },
+            "calls_per_sec": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Maximum number of API calls per second. When set, requests are rate-limited globally across all workers.",
+              "title": "Calls Per Sec"
+            },
+            "max_rate_limit_delay": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "default": 60,
+              "description": "Maximum seconds to wait when rate-limited before giving up. Defaults to 60 seconds.",
+              "title": "Max Rate Limit Delay"
+            },
+            "repeat": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "description": "Execute the same request N times in parallel.",
+              "title": "Repeat"
+            }
+          },
+          "required": [
+            "repeat"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ParallelRepeatConfig",
+      "description": "Execute the same request N times in parallel."
+    },
+    "Request": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "auth": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UserFunctionName"
+                },
+                {
+                  "$ref": "#/$defs/UserFunctionKwargs"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "User function to create custom authentication.",
+              "title": "Auth"
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "format": "uri",
+                  "maxLength": 2083,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "title": "Url"
+            },
+            "method": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HTTPMethod"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "default": "GET",
+              "title": "Method"
+            },
+            "params": {
+              "additionalProperties": true,
+              "title": "Params",
+              "type": "object"
+            },
+            "headers": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Headers",
+              "type": "object"
+            },
+            "body": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/JsonBody"
+                    },
+                    {
+                      "$ref": "#/$defs/XmlBody"
+                    },
+                    {
+                      "$ref": "#/$defs/FormBody"
+                    },
+                    {
+                      "$ref": "#/$defs/TextBody"
+                    },
+                    {
+                      "$ref": "#/$defs/Base64Body"
+                    },
+                    {
+                      "$ref": "#/$defs/BinaryBody"
+                    },
+                    {
+                      "$ref": "#/$defs/FilesBody"
+                    },
+                    {
+                      "$ref": "#/$defs/GraphQLBody"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Request body configuration.",
+              "title": "Body"
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "default": 30.0,
+              "description": "Request timeout in seconds.",
+              "title": "Timeout"
+            },
+            "allow_redirects": {
+              "anyOf": [
+                {
+                  "enum": [
+                    true,
+                    false
+                  ],
+                  "type": "boolean"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "default": true,
+              "description": "Whether to follow redirects.",
+              "title": "Allow Redirects"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "Request"
+    },
+    "ResponseBody": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "schema": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "format": "path",
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "JSON schema for validation.",
+              "title": "Schema"
+            },
+            "contains": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Contains",
+              "type": "array"
+            },
+            "not_contains": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Not Contains",
+              "type": "array"
+            },
+            "matches": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Matches",
+              "type": "array"
+            },
+            "not_matches": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Not Matches",
+              "type": "array"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "title": "ResponseBody"
+    },
+    "SSLConfig": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "verify": {
+              "anyOf": [
+                {
+                  "enum": [
+                    true,
+                    false
+                  ],
+                  "type": "boolean"
+                },
+                {
+                  "format": "path",
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "default": true,
+              "description": "SSL certificate verification. True (verify), False (no verification), or path to CA bundle.",
+              "examples": [
+                false,
+                "/path/to/ca-bundle.crt",
+                "{{ verify_ssl }}"
+              ],
+              "title": "Verify"
+            },
+            "cert": {
+              "anyOf": [
+                {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "anyOf": [
+                        {
+                          "format": "path",
+                          "type": "string"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "format": "path",
+                          "type": "string"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    }
+                  ],
+                  "type": "array"
+                },
+                {
+                  "format": "path",
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "SSL client certificate. Single file path or tuple of (cert_path, key_path).",
+              "examples": [
+                [
+                  "/path/to/client.crt",
+                  "/path/to/client.key"
+                ],
+                [
+                  "/path/to/{{ client_cert_name }}",
+                  "/path/to/client.key"
+                ],
+                "/path/to/client.pem",
+                "/path/to/{{ cert_file_name }}"
+              ],
+              "title": "Cert"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "title": "SSLConfig"
+    },
+    "SaveStep": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "save": {
+              "description": "Save configuration.",
+              "title": "Save",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JMESPathSave"
+                },
+                {
+                  "$ref": "#/$defs/SubstitutionsSave"
+                },
+                {
+                  "$ref": "#/$defs/UserFunctionsSave"
+                }
+              ]
+            }
+          },
+          "required": [
+            "save"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "SaveStep",
+      "description": "Save data from HTTP response."
+    },
+    "Stage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional description for this component",
+              "title": "Description"
+            },
+            "fixtures": {
+              "description": "pytest fixtures",
+              "items": {
+                "type": "string"
+              },
+              "title": "Fixtures",
+              "type": "array"
+            },
+            "marks": {
+              "description": "pytest markers",
+              "examples": [
+                "xfail",
+                "skip"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "title": "Marks",
+              "type": "array"
+            },
+            "name": {
+              "default": "",
+              "description": "Stage name (human-readable).",
+              "title": "Name",
+              "type": "string"
+            },
+            "substitutions": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/VarsSubstitution"
+                      },
+                      {
+                        "$ref": "#/$defs/FunctionsSubstitution"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/VarsSubstitution"
+                          },
+                          {
+                            "$ref": "#/$defs/FunctionsSubstitution"
+                          }
+                        ]
+                      },
+                      {
+                        "items": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/$defs/VarsSubstitution"
+                            },
+                            {
+                              "$ref": "#/$defs/FunctionsSubstitution"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      }
+                    ]
+                  },
+                  "type": "object"
+                }
+              ],
+              "description": "Variable substitution configuration.",
+              "title": "Substitutions"
+            },
+            "always_run": {
+              "anyOf": [
+                {
+                  "enum": [
+                    true,
+                    false
+                  ],
+                  "type": "boolean"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "default": false,
+              "description": "Execute even if a previous stage failed. A template expression is evaluated (truthiness) when the chain is aborted, against fixtures, parametrize parameters, scenario substitutions, and previously saved variables.",
+              "examples": [
+                true,
+                "{{ should_run }}",
+                "{{ env == 'production' }}"
+              ],
+              "title": "Always Run"
+            },
+            "parametrize": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/IndividualParameter"
+                      },
+                      {
+                        "$ref": "#/$defs/CombinationsParameter"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Stage parametrization steps",
+              "title": "Parametrize"
+            },
+            "parallel": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ParallelRepeatConfig"
+                    },
+                    {
+                      "$ref": "#/$defs/ParallelForeachConfig"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Parallel execution configuration for load/stress testing.",
+              "title": "Parallel"
+            },
+            "request": {
+              "$ref": "#/$defs/Request",
+              "description": "HTTP request details."
+            },
+            "response": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/SaveStep"
+                      },
+                      {
+                        "$ref": "#/$defs/VerifyStep"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/SaveStep"
+                          },
+                          {
+                            "$ref": "#/$defs/VerifyStep"
+                          }
+                        ]
+                      },
+                      {
+                        "items": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/$defs/SaveStep"
+                            },
+                            {
+                              "$ref": "#/$defs/VerifyStep"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      }
+                    ]
+                  },
+                  "type": "object"
+                }
+              ],
+              "description": "Sequential steps to process the response.",
+              "title": "Response"
+            }
+          },
+          "required": [
+            "request"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "Stage"
+    },
+    "SubstitutionsSave": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional description for this component",
+              "title": "Description"
+            },
+            "substitutions": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/VarsSubstitution"
+                      },
+                      {
+                        "$ref": "#/$defs/FunctionsSubstitution"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/VarsSubstitution"
+                          },
+                          {
+                            "$ref": "#/$defs/FunctionsSubstitution"
+                          }
+                        ]
+                      },
+                      {
+                        "items": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/$defs/VarsSubstitution"
+                            },
+                            {
+                              "$ref": "#/$defs/FunctionsSubstitution"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      }
+                    ]
+                  },
+                  "type": "object"
+                }
+              ],
+              "description": "Variable substitution configuration.",
+              "title": "Substitutions"
+            }
+          },
+          "required": [
+            "substitutions"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "SubstitutionsSave",
+      "description": "Save data using variable substitutions."
+    },
+    "TextBody": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "text": {
+              "description": "Raw text content.",
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "TextBody"
+    },
+    "UserFunctionKwargs": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/UserFunctionName"
+            },
+            "kwargs": {
+              "additionalProperties": true,
+              "description": "Function arguments.",
+              "title": "Kwargs",
+              "type": "object"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "UserFunctionKwargs"
+    },
+    "UserFunctionName": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "examples": [
+            "module.submodule:funcname",
+            "module.{{ submodule_name }}:funcname"
+          ],
+          "type": "string"
+        }
+      ],
+      "title": "UserFunctionName",
+      "description": "Name of the function to be called."
+    },
+    "UserFunctionsSave": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional description for this component",
+              "title": "Description"
+            },
+            "user_functions": {
+              "description": "Functions to process response data.",
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/UserFunctionName"
+                  },
+                  {
+                    "$ref": "#/$defs/UserFunctionKwargs"
+                  }
+                ]
+              },
+              "title": "User Functions",
+              "type": "array"
+            }
+          },
+          "required": [
+            "user_functions"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "UserFunctionsSave",
+      "description": "Save data using user-defined functions to process response data."
+    },
+    "VarsSubstitution": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional description for this component",
+              "title": "Description"
+            },
+            "vars": {
+              "additionalProperties": true,
+              "description": "Variables for substitution.",
+              "title": "Vars",
+              "type": "object"
+            }
+          },
+          "required": [
+            "vars"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "VarsSubstitution"
+    },
+    "Verify": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional description for this component",
+              "title": "Description"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HTTPStatus"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Status"
+            },
+            "headers": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Headers",
+              "type": "object"
+            },
+            "expressions": {
+              "description": "Template expressions evaluated as boolean conditions against the context (saved variables, fixtures, substitutions). Each must be a full template expression that evaluates to a truthy/falsy value. The HTTP response is not directly available here \u2014 save response data first, then reference it.",
+              "examples": [
+                [
+                  "{{ user_age >= 18 }}",
+                  "{{ saved_total > 0 }}",
+                  "{{ 'admin' in user_roles }}"
+                ]
+              ],
+              "items": {
+                "anyOf": [
+                  {},
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "title": "Expressions",
+              "type": "array"
+            },
+            "user_functions": {
+              "description": "Functions to process response data.",
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/UserFunctionName"
+                  },
+                  {
+                    "$ref": "#/$defs/UserFunctionKwargs"
+                  }
+                ]
+              },
+              "title": "User Functions",
+              "type": "array"
+            },
+            "body": {
+              "$ref": "#/$defs/ResponseBody"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "title": "Verify"
+    },
+    "VerifyStep": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "verify": {
+              "$ref": "#/$defs/Verify",
+              "description": "Verify configuration."
+            }
+          },
+          "required": [
+            "verify"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "VerifyStep",
+      "description": "Verify HTTP response and data context."
+    },
+    "XmlBody": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "xml": {
+              "description": "XML content as string.",
+              "title": "Xml",
+              "type": "string"
+            }
+          },
+          "required": [
+            "xml"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "XmlBody"
+    },
+    "JsonRef": {
+      "type": "object",
+      "description": "Reference to external JSON file or JSON pointer. Use $include or $merge (preferred) or $ref. Resolved at runtime by pytest-httpchain-jsonref.",
+      "properties": {
+        "$include": {
+          "type": "string",
+          "description": "Path to external JSON file, JSON pointer (#/path), or combined (file.json#/path). Preferred over $ref to avoid VS Code conflicts."
+        },
+        "$merge": {
+          "type": "string",
+          "description": "Alias for $include. Path to external JSON file, JSON pointer (#/path), or combined (file.json#/path)."
+        },
+        "$ref": {
+          "type": "string",
+          "description": "Legacy alias for $include. May conflict with VS Code's own $ref handling."
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "$include"
+          ]
+        },
+        {
+          "required": [
+            "$merge"
+          ]
+        },
+        {
+          "required": [
+            "$ref"
+          ]
+        }
+      ],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "description": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional description for this component",
+          "title": "Description"
+        }
+      ],
+      "title": "Description",
+      "description": "Optional description for this component"
+    },
+    "auth": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserFunctionName"
+            },
+            {
+              "$ref": "#/$defs/UserFunctionKwargs"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "User function to create custom authentication.",
+          "title": "Auth"
+        }
+      ],
+      "title": "Auth",
+      "description": "User function to create custom authentication."
+    },
+    "fixtures": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "description": "pytest fixtures available to all stages",
+          "items": {
+            "type": "string"
+          },
+          "title": "Fixtures",
+          "type": "array"
+        }
+      ],
+      "title": "Fixtures",
+      "description": "pytest fixtures available to all stages"
+    },
+    "marks": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "description": "pytest markers",
+          "examples": [
+            "xfail",
+            "skip"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Marks",
+          "type": "array"
+        }
+      ],
+      "title": "Marks",
+      "description": "pytest markers"
+    },
+    "ssl": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "$ref": "#/$defs/SSLConfig",
+          "description": "SSL/TLS configuration."
+        }
+      ],
+      "title": "ssl",
+      "description": "SSL/TLS configuration."
+    },
+    "stages": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Stage"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/Stage"
+              },
+              "type": "object"
+            }
+          ],
+          "title": "Stages"
+        }
+      ],
+      "title": "Stages"
+    },
+    "substitutions": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/VarsSubstitution"
+                  },
+                  {
+                    "$ref": "#/$defs/FunctionsSubstitution"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/VarsSubstitution"
+                      },
+                      {
+                        "$ref": "#/$defs/FunctionsSubstitution"
+                      }
+                    ]
+                  },
+                  {
+                    "items": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/VarsSubstitution"
+                        },
+                        {
+                          "$ref": "#/$defs/FunctionsSubstitution"
+                        }
+                      ]
+                    },
+                    "type": "array"
+                  }
+                ]
+              },
+              "type": "object"
+            }
+          ],
+          "description": "Variable substitution configuration.",
+          "title": "Substitutions"
+        }
+      ],
+      "title": "Substitutions",
+      "description": "Variable substitution configuration."
+    },
+    "$schema": {
+      "type": "string",
+      "description": "URL of this schema, for editor as-you-type validation. Stripped before the file is parsed."
+    },
+    "$include": {
+      "type": "string",
+      "description": "Path to external JSON file, JSON pointer (#/path), or combined (file.json#/path). Preferred over $ref to avoid VS Code conflicts."
+    },
+    "$merge": {
+      "type": "string",
+      "description": "Alias for $include. Path to external JSON file, JSON pointer (#/path), or combined (file.json#/path)."
+    },
+    "$ref": {
+      "type": "string",
+      "description": "Legacy alias for $include. May conflict with VS Code's own $ref handling."
+    }
+  },
+  "title": "Scenario",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json"
+}

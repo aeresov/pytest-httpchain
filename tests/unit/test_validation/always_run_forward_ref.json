@@ -1,0 +1,20 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "cleanup_early",
+            "always_run": "{{ created }}",
+            "request": { "url": "{{ server }}/precheck" },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "create",
+            "always_run": "{{ self_saved }}",
+            "request": { "url": "{{ server }}/resource", "method": "POST" },
+            "response": [
+                { "save": { "jmespath": { "created": "id", "self_saved": "ok" } } },
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,13 @@
+{
+    "fixtures": ["srv"],
+    "substitutions": [ { "vars": { "base": "{{ srv }}" } } ],
+    "ssl": { "verify": "{{ ca_path }}" },
+    "stages": [
+        {
+            "name": "s",
+            "fixtures": ["ca_path"],
+            "request": { "url": "{{ base }}/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

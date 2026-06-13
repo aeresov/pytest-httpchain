@@ -1,0 +1,40 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "failing_stage",
+            "request": {
+                "url": "{{ server }}/bad"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "fixture_cleanup",
+            "description": "always_run reads a stage fixture; true, so it runs after abort",
+            "fixtures": ["api_key"],
+            "always_run": "{{ api_key == 'test-api-key-12345' }}",
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "param_cleanup",
+            "description": "always_run reads a parametrize parameter; one variant runs, one is skipped",
+            "parametrize": [
+                { "individual": { "flag": [true, false] } }
+            ],
+            "always_run": "{{ flag }}",
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

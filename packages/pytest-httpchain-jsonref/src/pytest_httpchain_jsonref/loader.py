@@ -12,6 +12,9 @@ def load_json(path: Path, max_parent_traversal_depth: int = 3, root_path: Path |
     All three directives ($include, $merge, $ref) work identically. $include and $merge are preferred
     as they avoid conflicts with VS Code's JSON Schema validation (which treats $ref specially).
 
+    "$schema" keys pass through untouched — whether and where to tolerate them
+    is the consumer's decision (pytest-httpchain's models drop them during validation).
+
     Args:
         path: Path to the JSON file to load
         max_parent_traversal_depth: Maximum number of parent directory traversals allowed in reference paths

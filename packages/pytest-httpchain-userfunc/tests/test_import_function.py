@@ -40,8 +40,11 @@ class TestImportErrors:
     """Tests for error handling in import_function."""
 
     def test_nonexistent_module_raises(self):
-        with pytest.raises(UserFunctionError, match="Failed to import module"):
+        with pytest.raises(UserFunctionError, match="Failed to import module") as exc_info:
             import_function("nonexistent_module_xyz:some_func")
+        # The underlying ImportError text is surfaced in the message itself (H6),
+        # so a missing module reads differently from one that fails to import.
+        assert "No module named" in str(exc_info.value)
 
     def test_function_not_in_module_raises(self):
         with pytest.raises(UserFunctionError, match="not found in module"):

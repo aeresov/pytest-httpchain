@@ -20,7 +20,7 @@ from simpleeval import (
 )
 
 from pytest_httpchain_templates.exceptions import TemplatesError
-from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN
+from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN, extract_template_expression
 
 SAFE_FUNCTIONS = {
     "bool": bool,
@@ -118,16 +118,18 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
 
 
 def _sub_string(line: str, context: Mapping[str, Any]) -> Any:
-    def _repl(match: re.Match[str]) -> Any:
-        expr = match.group("expr").strip()
+    # Whole string is a single template expression (surrounding whitespace
+    # allowed) — uses the same predicate the models apply when typing a field
+    # as TemplateExpression, so type preservation is consistent between schema
+    # validation and runtime evaluation.
+    if (expr := extract_template_expression(line)) is not None:
         return _eval_with_context(expr, context)
 
-    # Check if entire string is a single template expression
-    if match := re.fullmatch(TEMPLATE_PATTERN, line):
-        return _repl(match)
+    # Otherwise, interpolate embedded template expressions into the string.
+    def _repl(match: re.Match[str]) -> str:
+        return str(_eval_with_context(match.group("expr").strip(), context))
 
-    # Otherwise, replace template expressions in the string
-    return re.sub(TEMPLATE_PATTERN, lambda m: str(_repl(m)), line)
+    return re.sub(TEMPLATE_PATTERN, _repl, line)
 
 
 def _contains_template(obj: Any) -> bool:

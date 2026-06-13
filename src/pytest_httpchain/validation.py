@@ -24,12 +24,14 @@ Code     Severity Meaning
 006      warning  Verify step asserts nothing (no-op)
 007      error    Body ``contains``/``not_contains`` list the same substring
 008      error    Body ``matches``/``not_matches`` list the same pattern
+009      warning  Saved variable is shadowed by a scenario-level fixture
 010      error    File not found
 011      error    Path is not a file
 012      error    ``$ref`` resolution failed
 013      warning  File extension is not ``.json``
 014      error    Invalid JSON syntax
 015      error    Failed to parse JSON file
+016      error    Fixture referenced in a scenario-level template
 020      warning  Referenced file does not exist (deep, opt-in)
 021      warning  Schema file is not valid JSON / not a valid schema (deep)
 022      warning  User function cannot be imported (deep)
@@ -70,12 +72,14 @@ class DiagnosticCode:
     NOOP_VERIFY = "HTTPCHAIN006"
     CONTAINS_CONTRADICTION = "HTTPCHAIN007"
     MATCHES_CONTRADICTION = "HTTPCHAIN008"
+    FIXTURE_SHADOWS_SAVE = "HTTPCHAIN009"
     FILE_NOT_FOUND = "HTTPCHAIN010"
     NOT_A_FILE = "HTTPCHAIN011"
     REF_ERROR = "HTTPCHAIN012"
     WRONG_EXTENSION = "HTTPCHAIN013"
     INVALID_JSON = "HTTPCHAIN014"
     PARSE_ERROR = "HTTPCHAIN015"
+    FIXTURE_IN_SCENARIO_TEMPLATE = "HTTPCHAIN016"
     # Deep (opt-in) checks: imports, signatures, referenced files.
     REFERENCED_FILE_NOT_FOUND = "HTTPCHAIN020"
     SCHEMA_FILE_INVALID = "HTTPCHAIN021"
@@ -221,7 +225,7 @@ def stage_defined_names(stage: Stage) -> set[str]:
     return names
 
 
-def extract_defined_variables(scenario: Scenario, test_data: dict[str, Any]) -> set[str]:
+def extract_defined_variables(scenario: Scenario) -> set[str]:
     """Extract variable names made available before/within templates (scenario-wide).
 
     Sources: ``vars`` and ``functions`` substitutions (scenario- and stage-level),
@@ -231,10 +235,6 @@ def extract_defined_variables(scenario: Scenario, test_data: dict[str, Any]) -> 
     (:func:`_dataflow_diagnostics`) computes availability per stage instead.
     """
     defined_vars: set[str] = set()
-
-    # Defensive: a top-level "vars" key is not a model field but is tolerated.
-    if isinstance(test_data.get("vars"), dict):
-        defined_vars.update(k for k in test_data["vars"] if isinstance(k, str))
 
     defined_vars |= substitution_names(scenario.substitutions)
 
@@ -283,13 +283,16 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
     Walks stages in execution order tracking which variables are available at
     each reference site, mirroring the runtime scoping in ``carrier.py``:
 
-    * scenario-level substitutions (and a tolerated top-level ``vars``) are
-      available everywhere;
+    * scenario-level substitutions and scenario-level fixtures are available
+      everywhere;
     * a stage's own substitutions, parametrize/foreach parameters and fixtures
       are available to that stage's request and response;
     * a value saved in a stage's response is available to that stage's response
       and to *later* stages — but never to the same stage's request, and never
-      to earlier stages.
+      to earlier stages;
+    * ``always_run`` is evaluated at stage start, before stage substitutions are
+      processed and before any iteration runs: only fixtures, parametrize
+      parameters, scenario substitutions and earlier saves are in scope.
 
     A reference that is unavailable is reported as :data:`DiagnosticCode.FORWARD_REF`
     if the name is saved somewhere later (an ordering bug) or
@@ -309,14 +312,9 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
     # fixtures, no stage substitutions, no parameter names, no saved values exist
     # yet. ``scenario_scope`` is that narrow set; ``scenario_available`` is the
     # everywhere-available set used for ordinary request/response references.
-    scenario_scope: set[str] = set()
-    if isinstance(test_data.get("vars"), dict):
-        scenario_scope |= {k for k in test_data["vars"] if isinstance(k, str)}
-    scenario_scope |= substitution_names(scenario.substitutions)
+    scenario_scope: set[str] = set(substitution_names(scenario.substitutions))
 
-    scenario_available = set(scenario_scope)
-    if isinstance(test_data.get("fixtures"), list):
-        scenario_available |= {f for f in test_data["fixtures"] if isinstance(f, str)}
+    scenario_available = scenario_scope | set(scenario.fixtures)
 
     raws = raw_stages(test_data)
     cumulative_saves: set[str] = set()
@@ -346,6 +344,31 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
                     location=stage.name,
                 )
             )
+
+        # ``always_run`` resolves at stage start (carrier.execute_stage) against
+        # fixtures + parametrize parameters + global context — stage substitutions
+        # and foreach parameters don't exist yet, and neither do this stage's saves.
+        always_run_available = scenario_available | set(stage.fixtures) | _parameter_names(stage.parametrize) | cumulative_saves
+        for name in sorted(extract_template_variables(raw.get("always_run"))):
+            if name in always_run_available:
+                continue
+            if name in all_saved:
+                j = first_save_stage[name]
+                if j == i:
+                    msg = f"Stage '{stage.name}': always_run references '{name}', which is only saved in this stage's response — always_run is evaluated before the stage runs"
+                else:
+                    msg = f"Stage '{stage.name}': always_run references '{name}' before it is saved (saved in stage '{scenario.stages[j].name}')"
+                diagnostics.append(_diag(DiagnosticCode.FORWARD_REF, "warning", msg, location=stage.name))
+            else:
+                diagnostics.append(
+                    _diag(
+                        DiagnosticCode.UNDEFINED_VAR,
+                        "warning",
+                        f"Stage '{stage.name}': always_run references '{name}' — potentially not in scope; only fixtures, "
+                        f"parametrize parameters, scenario substitutions, and variables saved by earlier stages are available",
+                        location=stage.name,
+                    )
+                )
 
         undefined_here: set[str] = set()
 
@@ -642,14 +665,12 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
             )
         )
 
-    fixtures: list[str] = []
-    if isinstance(test_data.get("fixtures"), list):
-        fixtures.extend(test_data["fixtures"])
+    fixtures: list[str] = list(scenario.fixtures)
     for stage in scenario.stages:
         fixtures.extend(stage.fixtures)
     fixtures = sorted(set(fixtures))
 
-    vars_defined = extract_defined_variables(scenario, test_data)
+    vars_defined = extract_defined_variables(scenario)
     vars_saved = extract_saved_variables(scenario)
     vars_referenced = extract_template_variables(test_data)
 
@@ -662,6 +683,35 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
                 f"Conflicting fixtures and vars with same names: {sorted(var_conflicts)}",
             )
         )
+
+    # Scenario fixtures are injected into every stage and sit above the global
+    # context in the runtime ChainMap, so a save under the same name can never
+    # be read back — the fixture value always wins.
+    shadowed_saves = set(scenario.fixtures) & vars_saved
+    if shadowed_saves:
+        diagnostics.append(
+            _diag(
+                DiagnosticCode.FIXTURE_SHADOWS_SAVE,
+                "warning",
+                f"Saved variables shadowed by scenario-level fixtures: {sorted(shadowed_saves)} (fixture values win in every stage; these saves can never be read)",
+            )
+        )
+
+    # Scenario-level templates (substitutions/auth/ssl) resolve once at class
+    # creation (carrier.create_test_class), before any fixture exists — a fixture
+    # reference there is a guaranteed collection-time crash.
+    for key in ("substitutions", "auth", "ssl"):
+        scenario_level_refs = extract_template_variables(test_data.get(key))
+        fixture_refs = scenario_level_refs & set(fixtures)
+        if fixture_refs:
+            diagnostics.append(
+                _diag(
+                    DiagnosticCode.FIXTURE_IN_SCENARIO_TEMPLATE,
+                    "error",
+                    f"Fixtures referenced in scenario-level '{key}' templates: {sorted(fixture_refs)} (scenario-level templates resolve at collection time, before fixtures exist)",
+                    location=key,
+                )
+            )
 
     # NOTE: response data (response/status_code/body/json/text/headers/cookies) is
     # NOT ambient in {{ }} templates — it reaches save/verify handlers directly and

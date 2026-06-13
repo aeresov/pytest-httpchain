@@ -56,3 +56,6 @@ uv run pytest tests -v
 
 ### Discriminated Unions
 Body types, substitutions, and save types use Pydantic discriminators based on field presence for automatic type detection.
+
+### Strict Validation
+All models derive from `StrictModel` (`extra="forbid"` + a before-validator): unknown keys are rejected, so typos fail at validation instead of silently changing behavior. The one exception is `"$schema"` (editor metadata), which `StrictModel` drops from any dict a model consumes; `"$schema"` inside plain dict *values* (e.g. an inline response-body JSON Schema) is preserved.

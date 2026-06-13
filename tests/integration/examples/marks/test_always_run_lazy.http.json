@@ -1,0 +1,25 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "first_ok",
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "never_evaluated",
+            "description": "Template would fail if evaluated; the chain is healthy, so it never is",
+            "always_run": "{{ totally_undefined_name }}",
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,12 @@
+{
+    "stages": [
+        {
+            "name": "typo_in_request",
+            "request": {
+                "url": "https://x.test/ok",
+                "headerz": { "Authorization": "Bearer token" }
+            },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

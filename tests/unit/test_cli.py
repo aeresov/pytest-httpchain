@@ -127,6 +127,42 @@ def test_build_schema_matches_committed():
     assert build_schema() == committed
 
 
+def test_schema_rejects_typos_accepts_documented_keys():
+    """The editor schema must catch misspelled keys while accepting the
+    documented $schema key, reference directives, and ordinary scenarios."""
+    import jsonschema
+
+    from pytest_httpchain.schema import build_schema
+
+    validator = jsonschema.Draft202012Validator(build_schema())
+
+    # documented patterns stay valid
+    validator.validate({"$schema": "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json", "stages": []})
+    validator.validate({"$include": "base.json"})
+    validator.validate({"stages": [{"name": "s", "request": {"$include": "common.json"}}]})
+    validator.validate({"stages": [{"$ref": "stage.json", "name": "override"}]})
+
+    # reference objects are accepted at tagged-union positions too (these are
+    # anyOf in the emitted schema; under oneOf a reference matched the JsonRef
+    # branch of every member and was rejected as ambiguous)
+    stage = {"name": "s", "request": {"url": "https://x.test/"}}
+    validator.validate({"stages": [{**stage, "request": {"url": "https://x.test/", "body": {"$include": "body.json"}}}]})
+    validator.validate({"stages": [{**stage, "response": [{"save": {"$merge": "save.json"}}]}]})
+    validator.validate({"stages": [{**stage, "response": [{"$include": "step.json"}]}]})
+    validator.validate({"stages": [{**stage, "substitutions": [{"$ref": "vars.json"}]}]})
+    validator.validate({"stages": [{**stage, "parallel": {"$include": "parallel.json"}}]})
+    validator.validate({"stages": [{**stage, "parametrize": [{"$include": "params.json"}]}]})
+
+    # typos fail: misspelled keys no longer slip through the JsonRef branch
+    assert not validator.is_valid({"stages": [{"naem": "s", "requst": {"url": "https://x.test/"}}]})
+    assert not validator.is_valid({"stages": [{"name": "s", "request": {"url": "https://x.test/", "headerz": {}}}]})
+    # stage-level typo with an otherwise-complete stage, so additionalProperties
+    # on Stage (not a missing required "request") is what rejects it
+    assert not validator.is_valid({"stages": [{**stage, "alwaysrun": True}]})
+    assert not validator.is_valid({"stages": [{**stage, "response": [{"save": {"jmespth": {"x": "y"}}}]}]})
+    assert not validator.is_valid({"stagez": []})
+
+
 def test_resolve_inlines_include(tmp_path):
     (tmp_path / "common.json").write_text(json.dumps({"url": "https://x.test/shared"}))
     scenario = tmp_path / "test_x.http.json"

@@ -96,6 +96,85 @@ def test_fixture_var_conflict_is_error(datadir):
     assert any("Conflicting fixtures and vars" in e for e in r.errors)
 
 
+def test_scenario_fixtures_available_to_stages(datadir):
+    r = validate_scenario(datadir / "scenario_fixtures_available.json")
+    assert r.valid is True
+    assert DiagnosticCode.UNDEFINED_VAR not in _codes(r)
+    assert "server" in r.scenario_info.fixtures
+
+
+def test_toplevel_vars_key_is_rejected(datadir):
+    # "vars" is not a Scenario field and the runtime never reads it; the model
+    # forbids extra keys, so the file fails schema validation outright.
+    r = validate_scenario(datadir / "toplevel_vars_unknown_key.json")
+    assert r.valid is False
+    assert DiagnosticCode.SCHEMA in _codes(r)
+    assert any("vars" in e and "Extra inputs are not permitted" in e for e in r.errors)
+
+
+def test_misspelled_request_field_is_rejected(datadir):
+    # The flagship typo case: "headerz" must fail validation naming the key
+    # and its location, instead of sending a request with no headers.
+    r = validate_scenario(datadir / "request_field_typo.json")
+    assert r.valid is False
+    assert DiagnosticCode.SCHEMA in _codes(r)
+    assert any("headerz" in e and "Extra inputs are not permitted" in e for e in r.errors)
+
+
+def test_toplevel_schema_key_tolerated(datadir):
+    # The documented editor-integration key is stripped by the loader before
+    # the model (which forbids extras) ever sees it.
+    r = validate_scenario(datadir / "schema_key_tolerated.json")
+    assert r.valid is True
+    assert r.errors == []
+
+
+def test_scenario_fixture_shadows_save_warns(datadir):
+    # Scenario fixtures are injected into every stage above the global context,
+    # so a save under the same name can never be read back.
+    r = validate_scenario(datadir / "scenario_fixture_shadows_save.json")
+    assert r.valid is True
+    assert DiagnosticCode.FIXTURE_SHADOWS_SAVE in _codes(r)
+    assert any("token" in w for w in r.warnings)
+
+
+def test_fixture_in_scenario_level_template_is_error(datadir):
+    # Scenario-level substitutions/auth/ssl resolve at collection time, before
+    # any fixture exists — referencing one there would crash collection.
+    r = validate_scenario(datadir / "scenario_template_fixture_ref.json")
+    assert r.valid is False
+    assert DiagnosticCode.FIXTURE_IN_SCENARIO_TEMPLATE in _codes(r)
+    locations = {d.location for d in r.diagnostics if d.code == DiagnosticCode.FIXTURE_IN_SCENARIO_TEMPLATE}
+    assert locations == {"substitutions", "ssl"}
+
+
+def test_always_run_in_scope_refs_ok(datadir):
+    # always_run may reference fixtures, scenario substitutions, and earlier saves.
+    r = validate_scenario(datadir / "always_run_refs_ok.json")
+    assert r.valid is True
+    assert DiagnosticCode.UNDEFINED_VAR not in _codes(r)
+    assert DiagnosticCode.FORWARD_REF not in _codes(r)
+
+
+def test_always_run_out_of_scope_refs_warn(datadir):
+    # always_run is evaluated before stage substitutions are processed, so a
+    # stage-substitution name there is as unavailable as a plain typo.
+    r = validate_scenario(datadir / "always_run_out_of_scope.json")
+    assert r.valid is True
+    messages = [d.message for d in r.diagnostics if d.code == DiagnosticCode.UNDEFINED_VAR]
+    assert any("always_run references 'flag'" in m for m in messages), messages
+    assert any("always_run references 'missing_name'" in m for m in messages), messages
+
+
+def test_always_run_forward_refs_warn(datadir):
+    # Saves from this or later stages don't exist yet when always_run resolves.
+    r = validate_scenario(datadir / "always_run_forward_ref.json")
+    assert r.valid is True
+    messages = [d.message for d in r.diagnostics if d.code == DiagnosticCode.FORWARD_REF]
+    assert any("'created' before it is saved (saved in stage 'create')" in m for m in messages), messages
+    assert any("'self_saved', which is only saved in this stage's response" in m for m in messages), messages
+
+
 def test_schema_error_is_error(datadir):
     r = validate_scenario(datadir / "schema_error.json")
     assert r.valid is False

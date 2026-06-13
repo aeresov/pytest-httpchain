@@ -107,13 +107,13 @@ Reference specific keys using JSON Pointer syntax:
 
 ## Deep Merging
 
-When a `$ref` is used alongside other properties, values are deep merged:
+When a `$ref` is used alongside other properties, the siblings are deep merged *into* the referenced content — they **add** to it. A sibling cannot change a value the reference already sets; see [Merge Rules](#merge-rules).
 
 **base.json:**
 ```json
 {
     "request": {
-        "url": "https://api.example.com",
+        "url": "https://api.example.com/users",
         "headers": {
             "Content-Type": "application/json"
         },
@@ -130,15 +130,17 @@ When a `$ref` is used alongside other properties, values are deep merged:
             "name": "custom_request",
             "$ref": "base.json",
             "request": {
-                "url": "https://api.example.com/custom",
+                "method": "POST",
                 "headers": {
-                    "X-Custom": "value"
+                    "X-Request-Id": "abc-123"
                 }
             }
         }
     ]
 }
 ```
+
+The sibling `request` adds `method` and a new header. The nested `headers` object is merged recursively, so the referenced `Content-Type` is kept alongside the added `X-Request-Id`, and `url`/`timeout` carry through from `base.json` untouched.
 
 **Resolved result:**
 ```json
@@ -147,10 +149,11 @@ When a `$ref` is used alongside other properties, values are deep merged:
         {
             "name": "custom_request",
             "request": {
-                "url": "https://api.example.com/custom",
+                "url": "https://api.example.com/users",
+                "method": "POST",
                 "headers": {
                     "Content-Type": "application/json",
-                    "X-Custom": "value"
+                    "X-Request-Id": "abc-123"
                 },
                 "timeout": 30
             }
@@ -161,10 +164,16 @@ When a `$ref` is used alongside other properties, values are deep merged:
 
 ## Merge Rules
 
-1. **Objects**: Recursively merged (properties combined)
-2. **Arrays**: Replaced entirely (no element merging)
-3. **Scalars**: Local value overrides referenced value
-4. **Type mismatch**: Local value wins
+A `$ref` (or `$include`/`$merge`) and its sibling properties are combined by **additive deep merge**: siblings extend the referenced value, they do not override it.
+
+1. **Objects**: Recursively merged — sibling keys are added, and keys present in both are merged by these same rules.
+2. **Arrays**: Concatenated — referenced elements first, then sibling elements. Arrays are *not* replaced and *not* merged element-by-element.
+3. **Scalars**: A sibling must match the referenced value. Any **differing** scalar raises a merge conflict at load time (`Merge conflict at <path>`).
+4. **Type mismatch**: Combining different JSON types at the same path (object vs array, scalar vs object, …) raises a merge conflict.
+
+`null` is the one exception: a `null` on either side of a path is always accepted and the sibling wins — so a sibling `null` can blank out a referenced value of any type.
+
+> **References add, they don't override.** To change a value a fragment already sets, don't merge over it — keep that key out of the shared fragment (so the local scenario is its only writer), or point the `$ref` at a sub-node that omits it. Trying to replace a referenced scalar with a different one is a load-time error by design, so a shared fragment can never be silently contradicted.
 
 ## Composing Scenarios
 
@@ -234,6 +243,8 @@ When a `$ref` is used alongside other properties, values are deep merged:
     ]
 }
 ```
+
+A fragment file may carry its own top-level `$schema` key for editor support — wherever the fragment lands in the referencing scenario, validation discards the key. A fragment that *is* a JSON Schema (e.g. pulled into a verify step's `schema` field) keeps its `$schema` dialect declaration, since that position is data rather than scenario structure.
 
 ### Shared Configuration
 

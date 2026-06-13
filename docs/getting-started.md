@@ -61,6 +61,8 @@ Or reference the schema directly in your test files:
 }
 ```
 
+The `$schema` key is editor metadata — the plugin discards it during validation, even though unknown keys are otherwise rejected.
+
 ### JetBrains IDEs
 
 Go to **Settings → Languages & Frameworks → Schemas and DTDs → JSON Schema Mappings** and add a mapping for `**/test_*.http.json` files, pointing to `https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json`.

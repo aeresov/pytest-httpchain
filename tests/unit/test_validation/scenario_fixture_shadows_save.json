@@ -1,0 +1,15 @@
+{
+    "fixtures": ["server", "token"],
+    "stages": [
+        {
+            "name": "login",
+            "request": { "url": "{{ server }}/login", "method": "POST" },
+            "response": [ { "save": { "jmespath": { "token": "token" } } } ]
+        },
+        {
+            "name": "use_token",
+            "request": { "url": "{{ server }}/data", "headers": { "Authorization": "{{ token }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

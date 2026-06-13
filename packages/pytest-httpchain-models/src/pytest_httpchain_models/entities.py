@@ -113,7 +113,28 @@ def _normalize_stages_input(v: Any) -> list[Any]:
     return v
 
 
-class SSLConfig(BaseModel):
+class StrictModel(BaseModel):
+    """Base for all scenario models: unknown keys are rejected, so a typo'd
+    field name fails validation instead of silently changing behavior.
+
+    The one exception is "$schema" — editor metadata that may legitimately sit
+    at the root of a scenario file, or of any fragment pulled in by reference
+    into a model position — which is dropped before validation. "$schema" keys
+    inside plain dict values (e.g. an inline response-body JSON Schema) are
+    untouched, since no model consumes those dicts.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_schema_key(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "$schema" in data:
+            return {k: v for k, v in data.items() if k != "$schema"}
+        return data
+
+
+class SSLConfig(StrictModel):
     verify: Literal[True, False] | SerializablePath | TemplateExpression = Field(
         default=True,
         description="SSL certificate verification. True (verify), False (no verification), or path to CA bundle.",
@@ -141,7 +162,7 @@ class UserFunctionName(RootModel):
     )
 
 
-class UserFunctionKwargs(BaseModel):
+class UserFunctionKwargs(StrictModel):
     name: UserFunctionName
     kwargs: dict[VariableName, Any] = Field(default_factory=dict, description="Function arguments.")
 
@@ -153,69 +174,60 @@ FunctionsList = list[UserFunctionCall]
 FunctionsDict = dict[str, UserFunctionCall]
 
 
-class Descripted(BaseModel):
+class Descripted(StrictModel):
     description: str | None = Field(default=None, description="Optional description for this component")
 
 
-class Marked(BaseModel):
+class Marked(StrictModel):
     marks: list[str] = Field(default_factory=list, examples=["xfail", "skip"], description="pytest markers")
 
 
-class Fixtured(BaseModel):
+class Fixtured(StrictModel):
     fixtures: list[str] = Field(default_factory=list, description="pytest fixtures")
 
 
-class Authenticated(BaseModel):
+class Authenticated(StrictModel):
     auth: UserFunctionCall | None = Field(
         default=None,
         description="User function to create custom authentication.",
     )
 
 
-class JsonBody(BaseModel):
+class JsonBody(StrictModel):
     json: Annotated[JsonValue, BeforeValidator(convert_namespace_to_dict)] = Field(description="JSON data to send.")
-    model_config = ConfigDict(extra="forbid")
 
 
-class XmlBody(BaseModel):
+class XmlBody(StrictModel):
     xml: XMLString | PartialTemplateStr = Field(description="XML content as string.")
-    model_config = ConfigDict(extra="forbid")
 
 
-class FormBody(BaseModel):
+class FormBody(StrictModel):
     form: dict[str, Any] = Field(description="Form data to be URL-encoded.")
-    model_config = ConfigDict(extra="forbid")
 
 
-class TextBody(BaseModel):
+class TextBody(StrictModel):
     text: str | PartialTemplateStr = Field(description="Raw text content.")
-    model_config = ConfigDict(extra="forbid")
 
 
-class Base64Body(BaseModel):
+class Base64Body(StrictModel):
     base64: Base64String | PartialTemplateStr = Field(description="Base64-encoded binary data or template expression.")
-    model_config = ConfigDict(extra="forbid")
 
 
-class BinaryBody(BaseModel):
+class BinaryBody(StrictModel):
     binary: SerializablePath | PartialTemplateStr = Field(description="Path to binary file.")
-    model_config = ConfigDict(extra="forbid")
 
 
-class FilesBody(BaseModel):
+class FilesBody(StrictModel):
     files: dict[str, SerializablePath | PartialTemplateStr] = Field(description="Files to upload from file paths.")
-    model_config = ConfigDict(extra="forbid")
 
 
-class GraphQL(BaseModel):
+class GraphQL(StrictModel):
     query: GraphQLQuery | PartialTemplateStr = Field(description="GraphQL query string.", examples=["query { user { id name } }", "{{ graphql_query }}"])
     variables: NamespaceOrDict | PartialTemplateStr = Field(default_factory=dict, description="GraphQL query variables.")
-    model_config = ConfigDict(extra="forbid")
 
 
-class GraphQLBody(BaseModel):
+class GraphQLBody(StrictModel):
     graphql: GraphQL = Field(description="GraphQL query configuration.")
-    model_config = ConfigDict(extra="forbid")
 
 
 get_request_body_discriminator = _create_discriminator(
@@ -258,12 +270,10 @@ class Request(Authenticated):
 
 class VarsSubstitution(Descripted):
     vars: dict[str, NamespaceFromDict] = Field(description="Variables for substitution.")
-    model_config = ConfigDict(extra="forbid")
 
 
 class FunctionsSubstitution(Descripted):
     functions: FunctionsDict = Field(description="User-defined functions.")
-    model_config = ConfigDict(extra="forbid")
 
 
 get_substitution_discriminator = _create_discriminator(
@@ -293,21 +303,18 @@ class JMESPathSave(Descripted):
     """Save data using JMESPath expressions to extract values from response."""
 
     jmespath: dict[str, JMESPathExpression | PartialTemplateStr] = Field(description="JMESPath expressions to extract values from response.")
-    model_config = ConfigDict(extra="forbid")
 
 
 class SubstitutionsSave(Descripted):
     """Save data using variable substitutions."""
 
     substitutions: Substitutions = Field(description="Variable substitution configuration.")
-    model_config = ConfigDict(extra="forbid")
 
 
 class UserFunctionsSave(Descripted):
     """Save data using user-defined functions to process response data."""
 
     user_functions: FunctionsList = Field(description="Functions to process response data.")
-    model_config = ConfigDict(extra="forbid")
 
 
 get_save_discriminator = _create_discriminator(
@@ -326,7 +333,7 @@ Save = Annotated[
 ]
 
 
-class ResponseBody(BaseModel):
+class ResponseBody(StrictModel):
     schema: JSONSchemaInline | SerializablePath | PartialTemplateStr | None = Field(default=None, description="JSON schema for validation.")
     contains: list[str] = Field(default_factory=list)
     not_contains: list[str] = Field(default_factory=list)
@@ -351,18 +358,16 @@ class Verify(Descripted):
     body: ResponseBody = Field(default_factory=ResponseBody)
 
 
-class SaveStep(BaseModel):
+class SaveStep(StrictModel):
     """Save data from HTTP response."""
 
     save: Save = Field(description="Save configuration.")
-    model_config = ConfigDict(extra="forbid")
 
 
-class VerifyStep(BaseModel):
+class VerifyStep(StrictModel):
     """Verify HTTP response and data context."""
 
     verify: Verify = Field(description="Verify configuration.")
-    model_config = ConfigDict(extra="forbid")
 
 
 get_response_step_discriminator = _create_discriminator(
@@ -385,7 +390,7 @@ Responses = Annotated[
 ]
 
 
-class IndividualParameter(BaseModel):
+class IndividualParameter(StrictModel):
     individual: dict[str, Annotated[list[Any], Field(min_length=1)] | PartialTemplateStr] = Field(
         description="Parameter name mapped to list of values (single parameter per step, non-empty values) or template expression"
     )
@@ -403,7 +408,7 @@ class IndividualParameter(BaseModel):
         return self
 
 
-class CombinationsParameter(BaseModel):
+class CombinationsParameter(StrictModel):
     combinations: list[Annotated[dict[str, Any], Field(min_length=1)]] | PartialTemplateStr = Field(
         description="List of parameter combinations (each dict must have at least one parameter) or template expression"
     )
@@ -444,7 +449,7 @@ Parameter = Annotated[
 Parameters = list[Parameter]
 
 
-class ParallelConfigBase(BaseModel):
+class ParallelConfigBase(StrictModel):
     """Base configuration for parallel HTTP request execution."""
 
     max_concurrency: PositiveInt | TemplateExpression = Field(
@@ -467,7 +472,6 @@ class ParallelRepeatConfig(ParallelConfigBase):
     repeat: PositiveInt | TemplateExpression = Field(
         description="Execute the same request N times in parallel.",
     )
-    model_config = ConfigDict(extra="forbid")
 
 
 class ParallelForeachConfig(ParallelConfigBase):
@@ -476,7 +480,6 @@ class ParallelForeachConfig(ParallelConfigBase):
     foreach: Parameters = Field(
         description="Execute request once for each parameter set in parallel.",
     )
-    model_config = ConfigDict(extra="forbid")
 
 
 get_parallel_config_discriminator = _create_discriminator(
@@ -497,7 +500,12 @@ ParallelConfig = Annotated[
 class Stage(Marked, Fixtured, Descripted):
     name: str = Field(default="", description="Stage name (human-readable).")
     substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")
-    always_run: Literal[True, False] | TemplateExpression = Field(default=False, examples=[True, "{{ should_run }}", "{{ env == 'production' }}"])
+    always_run: Literal[True, False] | TemplateExpression = Field(
+        default=False,
+        description="Execute even if a previous stage failed. A template expression is evaluated (truthiness) when the chain is aborted, "
+        "against fixtures, parametrize parameters, scenario substitutions, and previously saved variables.",
+        examples=[True, "{{ should_run }}", "{{ env == 'production' }}"],
+    )
     parametrize: Parameters | None = Field(default=None, description="Stage parametrization steps")
     parallel: ParallelConfig | None = Field(default=None, description="Parallel execution configuration for load/stress testing.")
     request: Request = Field(description="HTTP request details.")
@@ -510,7 +518,8 @@ Stages = Annotated[
 ]
 
 
-class Scenario(Marked, Authenticated, Descripted):
+class Scenario(Marked, Fixtured, Authenticated, Descripted):
+    fixtures: list[str] = Field(default_factory=list, description="pytest fixtures available to all stages")
     ssl: SSLConfig = Field(
         default_factory=SSLConfig,
         description="SSL/TLS configuration.",

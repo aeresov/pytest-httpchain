@@ -1,0 +1,10 @@
+{
+    "$schema": "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json",
+    "stages": [
+        {
+            "name": "ok",
+            "request": { "url": "https://x.test/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

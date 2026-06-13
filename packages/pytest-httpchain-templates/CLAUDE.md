@@ -40,6 +40,7 @@ extract_template_expression("{{ value }}")  # "value"
 ### Template Syntax
 - Template expressions use `{{ expression }}` syntax
 - Single expressions preserve type: `walk("{{ 42 }}", {})` returns `42` (int)
+- Surrounding whitespace still counts as a single expression: `walk(" {{ 42 }} ", {})` returns `42` (int), not `" 42 "`. The whole-string check (`_sub_string`) uses the same whitespace-tolerant predicate (`extract_template_expression`) as `is_complete_template`, which the models use to type a field as `TemplateExpression` — so schema validation and runtime evaluation agree. The padding (spaces, tabs, newlines) is dropped.
 - Mixed content returns string: `walk("Value: {{ 42 }}", {})` returns `"Value: 42"`
 
 ### Supported Object Types

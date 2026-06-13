@@ -13,7 +13,7 @@ flowchart TB
         iter["🔄 Iteration Variables<br/><small>(parallel execution)</small>"]
         saves["💾 Response Saves<br/><small>(current stage)</small>"]
         stage_sub["📝 Stage Substitutions"]
-        fixtures["🔧 Stage Fixtures"]
+        fixtures["🔧 Fixtures<br/><small>(stage + scenario)</small>"]
         global["🌐 Global Context<br/><small>(previous saves)</small>"]
         scenario["📋 Scenario Substitutions"]
 
@@ -94,6 +94,8 @@ local_context = ChainMap(
     global_context                  # Inherited
 )
 ```
+
+Scenario-level fixtures are requested by every stage and land in the same fixtures layer as stage-level ones. Because that layer sits above the global context, a fixture value always shadows a previously saved variable of the same name.
 
 ### 3. Response Saves
 
@@ -178,12 +180,14 @@ Saves from all stages accumulate in the global context, making values available 
     "stages": [
         {
             "name": "login",
+            "request": {"url": "{{ base_url }}/auth/login", "method": "POST"},
             "response": [
                 {"save": {"jmespath": {"token": "access_token"}}}
             ]
         },
         {
             "name": "get_profile",
+            "request": {"url": "{{ base_url }}/profile"},
             "response": [
                 {"save": {"jmespath": {"user_id": "id"}}}
             ]

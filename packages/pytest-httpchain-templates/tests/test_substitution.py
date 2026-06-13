@@ -21,6 +21,18 @@ class TestWalk:
         result = walk("{{ value }}", {"value": 42})
         assert result == 42  # Type preserved
 
+    def test_single_expression_with_surrounding_whitespace_preserves_type(self):
+        # H7: a complete template padded with whitespace is type-preserving,
+        # matching is_complete_template/extract_template_expression (which the
+        # models use to type a field as TemplateExpression). Previously this
+        # fell through to string interpolation, so a `verify.expressions` entry
+        # like " {{ a == b }} " stringified to the truthy " False " and passed
+        # even when the expression was false.
+        assert walk(" {{ a == b }} ", {"a": 1, "b": 2}) is False
+        assert walk("\t{{ value }}\n", {"value": 42}) == 42
+        # Mixed content with leading whitespace is still interpolated to a string.
+        assert walk(" prefix {{ value }}", {"value": 42}) == " prefix 42"
+
     def test_dict(self):
         input_dict = {"greeting": "Hello {{ name }}", "count": "{{ num }}"}
         result = walk(input_dict, {"name": "Alice", "num": 5})

@@ -79,18 +79,33 @@ class Carrier:
     max_parallel_iterations: ClassVar[int] = 10_000
 
     @classmethod
+    def _resolve_always_run(cls, stage: Stage, stage_fixtures: dict[str, Any]) -> bool:
+        """Resolve ``always_run``, evaluating a template form against the context
+        available at stage start: fixtures and parametrize parameters plus the
+        global context (scenario substitutions and earlier saves). Stage
+        substitutions are not yet processed at this point. The result is coerced
+        with Python truthiness."""
+        if isinstance(stage.always_run, bool):
+            return stage.always_run
+        try:
+            return bool(walk(stage.always_run, ChainMap(stage_fixtures, cls.global_context)))
+        except TemplatesError as e:
+            raise StageExecutionError(f"Failed to evaluate always_run template: {e}") from e
+
+    @classmethod
     def execute_stage(cls, stage: Stage, fixture_kwargs: dict[str, Any]) -> None:
         try:
-            if cls.aborted and not stage.always_run:
-                pytest.skip(reason="Flow aborted")
-
-            # prepare stage context
+            # prepare stage context (before the abort check, so an always_run
+            # template sees the same fixture layer as stage templates)
             stage_fixtures: dict[str, Any] = {}
             for name, value in fixture_kwargs.items():
                 if callable(value) and not inspect.isclass(value):
                     stage_fixtures[name] = cls._wrap_factory_fixture(value)
                 else:
                     stage_fixtures[name] = value
+
+            if cls.aborted and not cls._resolve_always_run(stage, stage_fixtures):
+                pytest.skip(reason="Flow aborted")
 
             # Build base context for iterations (substitutions + fixtures + global)
             local_context = ChainMap(stage_fixtures, cls.global_context)
@@ -519,7 +534,7 @@ def create_test_class(scenario: Scenario, class_name: str, max_parallel_iteratio
                         parametrize_marker = pytest.mark.parametrize(",".join(param_names), param_values, ids=param_ids)
                         stage_method = parametrize_marker(stage_method)
 
-        all_fixtures = ["self"] + all_param_names + stage.fixtures
+        all_fixtures = ["self"] + list(dict.fromkeys(all_param_names + stage.fixtures + scenario.fixtures))
         stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # type: ignore[assignment]
 
         all_marks = [f"order({i})"] + stage.marks
