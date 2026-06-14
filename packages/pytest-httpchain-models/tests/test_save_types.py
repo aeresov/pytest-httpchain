@@ -68,6 +68,14 @@ class TestJMESPathSave:
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
             JMESPathSave(jmespath={"x": "y"}, extra="field")  # type: ignore[call-arg]
 
+    @pytest.mark.parametrize("bad_key", ["my-var", "with space", "1leading", "class"])
+    def test_jmespath_non_identifier_key_rejected(self, bad_key: str):
+        """M24: save keys become context variable names, so a key that is not a
+        valid Python identifier (or is a keyword) can never be referenced in a
+        {{ }} expression and is rejected at validation."""
+        with pytest.raises(ValidationError):
+            JMESPathSave(jmespath={bad_key: "data.value"})
+
 
 class TestSubstitutionsSave:
     """Tests for SubstitutionsSave model."""

@@ -44,7 +44,7 @@ All three directives (`$include`, `$merge`, `$ref`) work identically:
 - Combined: `{"$include": "file.json#/path"}` references specific node in external file
 
 ### Deep Merging
-When `$include` (or `$ref`) has sibling properties, they are deep-merged using `deepmerge.always_merger`:
+When `$include` (or `$ref`) has sibling properties, they are merged **additively** with the referenced content: sibling keys are added, lists are **concatenated**, and nested dicts are merged recursively. There is **no** last-wins override — a sibling that would override an existing scalar (or conflicts by type) raises `ReferenceResolverError` (`Merge conflict at <path>`) rather than silently winning.
 ```json
 {
   "$include": "base.json",

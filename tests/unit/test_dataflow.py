@@ -1,13 +1,18 @@
-"""Unit tests for analyze_dataflow."""
+"""Unit tests for analyze_dataflow (and the closely related check_scenario flow)."""
 
 from pytest_httpchain_models import Scenario
 
 from pytest_httpchain.dataflow import analyze_dataflow
+from pytest_httpchain.validation import DiagnosticCode, check_scenario
 
 
 def _scenario(stages):
     data = {"stages": stages}
     return Scenario.model_validate(data), data
+
+
+def _codes(diags):
+    return {d.code for d in diags}
 
 
 def test_consume_edge_from_earlier_stage():
@@ -151,7 +156,9 @@ def test_parametrize_ref_not_consumed():
     assert flow.edges == []
 
 
-def test_earliest_producer_selected():
+def test_latest_producer_selected():
+    # M10: a re-saved variable is attributed to its LAST writer before the consumer
+    # (stage b, index 1), matching runtime ChainMap layering — not the first (stage a).
     sc, data = _scenario(
         [
             {"name": "a", "request": {"url": "https://x.test/a", "method": "POST"}, "response": [{"save": {"jmespath": {"x": "v"}}}]},
@@ -160,5 +167,78 @@ def test_earliest_producer_selected():
         ]
     )
     flow = analyze_dataflow(sc, data)
-    assert [(e.producer, e.consumer, e.vars) for e in flow.edges] == [(0, 2, ["x"])]
+    assert [(e.producer, e.consumer, e.vars) for e in flow.edges] == [(1, 2, ["x"])]
     assert flow.stages[2].consumes == ["x"]
+
+
+def test_m12_cross_stage_fixture_and_param_not_conflict():
+    # M12: a fixture used only in stage A and a same-named parametrize parameter
+    # used only in stage B never coexist, so this must NOT be a conflict error.
+    sc, data = _scenario(
+        [
+            {"name": "a", "fixtures": ["token"], "request": {"url": "https://x.test/a"}, "response": [{"verify": {"status": 200}}]},
+            {"name": "b", "parametrize": [{"individual": {"token": [1, 2]}}], "request": {"url": "https://x.test/{{ token }}"}, "response": [{"verify": {"status": 200}}]},
+        ]
+    )
+    diags, _ = check_scenario(sc, data)
+    assert DiagnosticCode.FIXTURE_CONFLICT not in _codes(diags)
+
+
+def test_m12_same_stage_fixture_and_var_conflict():
+    # M12: a fixture and a same-named substitution variable IN THE SAME stage still conflict.
+    sc, data = _scenario(
+        [
+            {
+                "name": "a",
+                "fixtures": ["token"],
+                "substitutions": [{"vars": {"token": "x"}}],
+                "request": {"url": "https://x.test/a"},
+                "response": [{"verify": {"status": 200}}],
+            },
+        ]
+    )
+    diags, _ = check_scenario(sc, data)
+    assert DiagnosticCode.FIXTURE_CONFLICT in _codes(diags)
+
+
+def test_m13_scenario_substitution_undefined_is_error():
+    # M13: a scenario-level substitution referencing an undefined name is a
+    # guaranteed collection-time crash, reported as HTTPCHAIN017 (error).
+    data = {
+        "substitutions": [{"vars": {"a": "{{ missing }}"}}],
+        "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
+    }
+    sc = Scenario.model_validate(data)
+    diags, _ = check_scenario(sc, data)
+    assert any(d.code == DiagnosticCode.SCENARIO_UNDEFINED_VAR and d.severity == "error" for d in diags), [d.message for d in diags]
+
+
+def test_m13_scenario_substitution_self_reference_ok():
+    # An earlier scenario substitution referenced by a later one is in scope.
+    data = {
+        "substitutions": [{"vars": {"base": "https://x.test"}}, {"vars": {"url": "{{ base }}/a"}}],
+        "stages": [{"name": "s", "request": {"url": "{{ url }}"}, "response": [{"verify": {"status": 200}}]}],
+    }
+    sc = Scenario.model_validate(data)
+    diags, _ = check_scenario(sc, data)
+    assert DiagnosticCode.SCENARIO_UNDEFINED_VAR not in _codes(diags)
+
+
+def test_m11_substitution_referencing_foreach_param_is_flagged():
+    # M11: stage substitutions resolve before any foreach iteration variable exists,
+    # so referencing a foreach parameter in a substitution is undefined — even though
+    # the request (resolved per iteration) may reference it fine.
+    sc, data = _scenario(
+        [
+            {
+                "name": "s",
+                "substitutions": [{"vars": {"derived": "{{ wid }}-x"}}],
+                "parallel": {"foreach": [{"individual": {"wid": [1, 2]}}]},
+                "request": {"url": "https://x.test/{{ wid }}"},
+                "response": [{"verify": {"status": 200}}],
+            },
+        ]
+    )
+    diags, _ = check_scenario(sc, data)
+    undefined_msgs = [d.message for d in diags if d.code == DiagnosticCode.UNDEFINED_VAR]
+    assert any("wid" in m for m in undefined_msgs), undefined_msgs

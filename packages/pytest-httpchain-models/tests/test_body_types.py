@@ -43,11 +43,6 @@ class TestTextBody:
         assert isinstance(request.body, TextBody)
         assert request.body.text == "raw content"
 
-    def test_text_body_extra_fields_forbidden(self):
-        """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            TextBody(text="content", extra="field")  # type: ignore[call-arg]
-
 
 class TestBase64Body:
     """Tests for Base64Body model."""
@@ -91,12 +86,6 @@ class TestBase64Body:
         body = Base64Body(base64="")
         assert body.base64 == ""
 
-    def test_base64_body_extra_fields_forbidden(self):
-        """Test that extra fields are not allowed."""
-        encoded = base64.b64encode(b"test").decode()
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            Base64Body(base64=encoded, extra="field")  # type: ignore[call-arg]
-
 
 class TestBinaryBody:
     """Tests for BinaryBody model."""
@@ -129,11 +118,6 @@ class TestBinaryBody:
         assert isinstance(request.body, BinaryBody)
         assert isinstance(request.body.binary, Path)
         assert str(request.body.binary) == "files/data.bin"
-
-    def test_binary_body_extra_fields_forbidden(self):
-        """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            BinaryBody(binary="file.bin", extra="field")  # type: ignore[call-arg]
 
 
 class TestBodyTypeDiscriminator:
@@ -194,11 +178,6 @@ class TestJsonBody:
         assert isinstance(request.body, JsonBody)
         assert request.body.json == {"data": "test"}
 
-    def test_json_body_extra_fields_forbidden(self):
-        """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            JsonBody(json={"key": "value"}, extra="field")  # type: ignore[call-arg]
-
 
 class TestXmlBody:
     """Tests for XmlBody model."""
@@ -238,11 +217,6 @@ class TestXmlBody:
         assert isinstance(request.body, XmlBody)
         assert request.body.xml == xml
 
-    def test_xml_body_extra_fields_forbidden(self):
-        """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            XmlBody(xml="<root/>", extra="field")  # type: ignore[call-arg]
-
 
 class TestFormBody:
     """Tests for FormBody model."""
@@ -269,11 +243,6 @@ class TestFormBody:
         request = Request(url="https://example.com/api", body=FormBody(form={"field": "value"}))
         assert isinstance(request.body, FormBody)
         assert request.body.form == {"field": "value"}
-
-    def test_form_body_extra_fields_forbidden(self):
-        """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            FormBody(form={"key": "value"}, extra="field")  # type: ignore[call-arg]
 
 
 class TestFilesBody:
@@ -306,11 +275,6 @@ class TestFilesBody:
         """Test FilesBody as part of Request model."""
         request = Request(url="https://example.com/upload", body=FilesBody(files={"upload": "file.pdf"}))
         assert isinstance(request.body, FilesBody)
-
-    def test_files_body_extra_fields_forbidden(self):
-        """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            FilesBody(files={"f": "file.txt"}, extra="field")  # type: ignore[call-arg]
 
 
 class TestGraphQLBody:
@@ -384,16 +348,6 @@ class TestGraphQLBody:
         )
         assert isinstance(request.body, GraphQLBody)
 
-    def test_graphql_body_extra_fields_forbidden(self):
-        """Test that extra fields are not allowed on GraphQL."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            GraphQLBody(graphql={"query": "{ test }", "extra": "field"})  # type: ignore[arg-type]
-
-    def test_graphql_body_outer_extra_fields_forbidden(self):
-        """Test that extra fields are not allowed on GraphQLBody."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            GraphQLBody(graphql=GraphQL(query="{ test }"), extra="field")  # type: ignore[call-arg]
-
 
 class TestBodyTypeDiscriminatorExtended:
     """Extended tests for body type discrimination using raw dicts."""
@@ -422,3 +376,23 @@ class TestBodyTypeDiscriminatorExtended:
         """Test discriminator correctly identifies GraphQLBody."""
         request = Request(url="https://example.com", body={"graphql": {"query": "{ test }"}})  # type: ignore[arg-type]
         assert isinstance(request.body, GraphQLBody)
+
+
+@pytest.mark.parametrize(
+    "construct",
+    [
+        pytest.param(lambda: TextBody(text="content", extra="field"), id="text"),
+        pytest.param(lambda: Base64Body(base64=base64.b64encode(b"test").decode(), extra="field"), id="base64"),
+        pytest.param(lambda: BinaryBody(binary="file.bin", extra="field"), id="binary"),
+        pytest.param(lambda: JsonBody(json={"key": "value"}, extra="field"), id="json"),
+        pytest.param(lambda: XmlBody(xml="<root/>", extra="field"), id="xml"),
+        pytest.param(lambda: FormBody(form={"key": "value"}, extra="field"), id="form"),
+        pytest.param(lambda: FilesBody(files={"f": "file.txt"}, extra="field"), id="files"),
+        pytest.param(lambda: GraphQLBody(graphql={"query": "{ test }", "extra": "field"}), id="graphql_inner"),
+        pytest.param(lambda: GraphQLBody(graphql=GraphQL(query="{ test }"), extra="field"), id="graphql_outer"),
+    ],
+)
+def test_body_extra_fields_forbidden(construct):
+    """Every body model rejects unknown keys (extra='forbid')."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        construct()

@@ -1,3 +1,16 @@
+"""Annotated string/dict type aliases (with validators) for the scenario models.
+
+Most aliases are ``Annotated[str, AfterValidator(...)]`` that validate a field's
+contents (JMESPath, regex, XML, GraphQL, base64, a complete vs. partial template,
+a function import name, a Python-identifier variable name, an inline JSON Schema,
+a serializable path).
+
+Two aliases handle a ``SimpleNamespace``<->``dict`` round-trip: user-supplied
+``vars`` become attribute-accessible inside ``{{ }}`` templates (dict ->
+SimpleNamespace), and values headed back into a request body are normalized to
+plain dicts so they stay JSON-serializable (SimpleNamespace -> dict).
+"""
+
 import base64
 import keyword
 import logging
@@ -11,7 +24,7 @@ import graphql
 import jmespath
 import jsonschema
 from pydantic import AfterValidator, BeforeValidator, JsonValue, PlainSerializer
-from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN, is_complete_template
+from pytest_httpchain_templates import TEMPLATE_PATTERN, is_complete_template
 from pytest_httpchain_userfunc import NAME_PATTERN
 
 
@@ -33,7 +46,7 @@ def validate_python_identifier(v: str) -> str:
     if not v.isidentifier():
         raise ValueError(f"Invalid Python variable name: '{v}'")
 
-    if keyword.iskeyword(v) or (hasattr(keyword, "softkwlist") and v in keyword.softkwlist):
+    if keyword.iskeyword(v) or v in keyword.softkwlist:
         raise ValueError(f"Python keyword is used as variable name: '{v}'")
 
     return v
@@ -129,6 +142,8 @@ def validate_function_import_name(v: str) -> str:
 
 
 def convert_dict_to_namespace(v: Any) -> Any:
+    """Recursively turn dicts into ``SimpleNamespace`` so ``{{ var.attr }}`` attribute
+    access works in templates (used by ``VarsSubstitution.vars`` via ``NamespaceFromDict``)."""
     if isinstance(v, dict):
         converted = {}
         for key, value in v.items():
@@ -141,6 +156,8 @@ def convert_dict_to_namespace(v: Any) -> Any:
 
 
 def convert_namespace_to_dict(v: Any) -> Any:
+    """Recursively normalize any ``SimpleNamespace`` back to a plain dict so the value
+    is JSON-serializable (used by ``JsonBody.json`` and GraphQL variables via ``NamespaceOrDict``)."""
     if isinstance(v, types.SimpleNamespace):
         result = {}
         for key, value in vars(v).items():
@@ -167,4 +184,5 @@ TemplateExpression = Annotated[str, AfterValidator(validate_template_expression)
 PartialTemplateStr = Annotated[str, AfterValidator(validate_partial_template_str)]
 Base64String = Annotated[str, AfterValidator(validate_base64)]
 NamespaceFromDict = Annotated[Any, AfterValidator(convert_dict_to_namespace)]
+# NamespaceOrDict ACCEPTS a SimpleNamespace or a dict on input and always yields a dict.
 NamespaceOrDict = Annotated[dict[str, JsonValue], BeforeValidator(convert_namespace_to_dict)]

@@ -1,9 +1,14 @@
 import enum
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
+
+if TYPE_CHECKING:
+    from pytest_httpchain_models import Scenario
+
+    from pytest_httpchain.dataflow import DataFlow
 
 app = typer.Typer()
 
@@ -18,6 +23,28 @@ class GraphDirection(enum.StrEnum):
     LR = "LR"
 
 
+# Shared $ref traversal-depth option, reused by validate/resolve/show/graph so the
+# help text and default stay in one place.
+RefParentTraversalDepth = Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")]
+
+
+def _emit(text: str, output: Path | None, label: str) -> None:
+    """Write text to a file (with a confirmation) or echo it to stdout.
+
+    A failed write reports a clean ``error: ...`` and exits non-zero, matching
+    the load-error handling elsewhere in this module instead of a raw traceback.
+    """
+    if output is None:
+        typer.echo(text)
+        return
+    try:
+        output.write_text(text + "\n")
+    except OSError as e:
+        typer.echo(f"error: cannot write {output}: {e}", err=True)
+        raise typer.Exit(1) from e
+    typer.echo(f"Wrote {label} to {output}")
+
+
 @app.callback()
 def main() -> None:
     """pytest-httpchain command-line tools."""
@@ -26,7 +53,8 @@ def main() -> None:
 @app.command()
 def validate(
     paths: Annotated[list[Path], typer.Argument(help="Scenario JSON file(s) to validate.")],
-    ref_parent_traversal_depth: Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")] = 3,
+    ref_parent_traversal_depth: RefParentTraversalDepth = 3,
+    root_path: Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: nearest tests/ ancestor).")] = None,
     output_format: Annotated[OutputFormat, typer.Option("--format", help="Output format: human-readable text or machine-readable JSON.")] = OutputFormat.text,
     deep: Annotated[bool, typer.Option("--deep", help="Run deep checks: resolve user-function imports/signatures and referenced files. Imports user modules.")] = False,
     syspath: Annotated[list[Path] | None, typer.Option("--syspath", help="Extra directories to add to sys.path for --deep import resolution (repeatable).")] = None,
@@ -38,11 +66,13 @@ def validate(
     per file and exits non-zero if any file is invalid (or, with --strict, has any
     warnings).
     """
-    from pytest_httpchain.validation import validate_scenario
+    from pytest_httpchain.validation import ValidateResult, validate_scenario
 
-    results = [(path, validate_scenario(path, ref_parent_traversal_depth=ref_parent_traversal_depth, deep=deep, syspaths=list(syspath or []))) for path in paths]
+    results = [
+        (path, validate_scenario(path, ref_parent_traversal_depth=ref_parent_traversal_depth, root_path=root_path, deep=deep, syspaths=list(syspath or []))) for path in paths
+    ]
 
-    def passed(result) -> bool:
+    def passed(result: ValidateResult) -> bool:
         return result.valid and not (strict and result.warnings)
 
     all_passed = all(passed(result) for _, result in results)
@@ -76,52 +106,44 @@ def schema(
     from pytest_httpchain.schema import build_schema
 
     text = json.dumps(build_schema(), indent=2, default=str)
-    if output is not None:
-        output.write_text(text + "\n")
-        typer.echo(f"Wrote schema to {output}")
-    else:
-        typer.echo(text)
+    _emit(text, output, "schema")
 
 
 @app.command()
 def resolve(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to resolve.")],
     output: Annotated[Path | None, typer.Option("--output", "-o", help="Write resolved JSON to PATH instead of stdout.")] = None,
-    ref_parent_traversal_depth: Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")] = 3,
+    ref_parent_traversal_depth: RefParentTraversalDepth = 3,
+    root_path: Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: nearest tests/ ancestor).")] = None,
 ) -> None:
     """Resolve $ref/$include/$merge and print the merged scenario JSON."""
-    import pytest_httpchain_jsonref.loader
-    from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
+    from pytest_httpchain_jsonref import ReferenceResolverError, load_json
 
     from pytest_httpchain.validation import resolve_root_path
 
     try:
-        data = pytest_httpchain_jsonref.loader.load_json(
+        data = load_json(
             scenario,
             max_parent_traversal_depth=ref_parent_traversal_depth,
-            root_path=resolve_root_path(scenario),
+            root_path=root_path or resolve_root_path(scenario),
         )
     except (ReferenceResolverError, json.JSONDecodeError, OSError) as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(1) from e
 
     text = json.dumps(data, indent=2, default=str)
-    if output is not None:
-        output.write_text(text + "\n")
-        typer.echo(f"Wrote resolved scenario to {output}")
-    else:
-        typer.echo(text)
+    _emit(text, output, "resolved scenario")
 
 
-def _load_for_inspection(path: Path, depth: int):
+def _load_for_inspection(path: Path, depth: int, root_path: Path | None = None) -> tuple["Scenario", dict]:
     """Load + validate a scenario for show/graph, mapping failures to Exit(1)."""
     from pydantic import ValidationError
-    from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
+    from pytest_httpchain_jsonref import ReferenceResolverError
 
-    from pytest_httpchain.dataflow import load_scenario
+    from pytest_httpchain.validation import load_scenario
 
     try:
-        return load_scenario(path, ref_parent_traversal_depth=depth)
+        return load_scenario(path, root_path=root_path, ref_parent_traversal_depth=depth)
     except (ReferenceResolverError, json.JSONDecodeError, OSError) as e:
         typer.echo(f"error: cannot load {path}: {e}", err=True)
         raise typer.Exit(1) from e
@@ -130,11 +152,11 @@ def _load_for_inspection(path: Path, depth: int):
         raise typer.Exit(1) from None
 
 
-def _render_show_text(path: Path, scenario, flow) -> list[str]:
+def _render_show_text(path: Path, scenario: "Scenario", flow: "DataFlow") -> list[str]:
     producer_of: dict[tuple[int, str], int] = {}
     for edge in flow.edges:
-        for name in edge.vars:
-            producer_of[(edge.consumer, name)] = edge.producer
+        for var_name in edge.vars:
+            producer_of[(edge.consumer, var_name)] = edge.producer
 
     all_fixtures = sorted({*flow.scenario_fixtures, *(f for s in flow.stages for f in s.fixtures)})
     lines: list[str] = [scenario.description or path.name]
@@ -153,13 +175,13 @@ def _render_show_text(path: Path, scenario, flow) -> list[str]:
             lines.append(f"    saves:    {', '.join(s.saves)}")
         if s.consumes:
             parts: list[str] = []
-            for name in s.consumes:
-                producer = producer_of.get((s.index, name))
+            for var_name in s.consumes:
+                producer = producer_of.get((s.index, var_name))
                 if producer is None:
-                    parts.append(name)
+                    parts.append(var_name)
                 else:
                     producer_name = flow.stages[producer].name or f"stage {producer + 1}"
-                    parts.append(f"{name} (from #{producer + 1} {producer_name})")
+                    parts.append(f"{var_name} (from #{producer + 1} {producer_name})")
             lines.append(f"    consumes: {', '.join(parts)}")
         if s.marks:
             lines.append(f"    marks:    {', '.join(s.marks)}")
@@ -170,12 +192,13 @@ def _render_show_text(path: Path, scenario, flow) -> list[str]:
 def show(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to summarize.")],
     output_format: Annotated[OutputFormat, typer.Option("--format", help="Output format: human-readable text or machine-readable JSON.")] = OutputFormat.text,
-    ref_parent_traversal_depth: Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")] = 3,
+    ref_parent_traversal_depth: RefParentTraversalDepth = 3,
+    root_path: Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: nearest tests/ ancestor).")] = None,
 ) -> None:
     """Summarize a scenario's stages and variable data-flow."""
     from pytest_httpchain.dataflow import analyze_dataflow
 
-    sc, test_data = _load_for_inspection(scenario, ref_parent_traversal_depth)
+    sc, test_data = _load_for_inspection(scenario, ref_parent_traversal_depth, root_path)
     flow = analyze_dataflow(sc, test_data)
 
     if output_format is OutputFormat.json:
@@ -191,7 +214,7 @@ def _mermaid_label(text: str) -> str:
     return text.replace('"', "'").replace("\n", " ")
 
 
-def _to_mermaid(flow, direction: str = "TD") -> str:
+def _to_mermaid(flow: "DataFlow", direction: str = "TD") -> str:
     lines = [f"flowchart {direction}"]
     if not flow.stages:
         lines.append("    %% (no stages)")
@@ -208,12 +231,13 @@ def _to_mermaid(flow, direction: str = "TD") -> str:
 def graph(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to graph.")],
     direction: Annotated[GraphDirection, typer.Option("--direction", help="Flowchart orientation.")] = GraphDirection.TD,
-    ref_parent_traversal_depth: Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")] = 3,
+    ref_parent_traversal_depth: RefParentTraversalDepth = 3,
+    root_path: Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: nearest tests/ ancestor).")] = None,
 ) -> None:
     """Emit a Mermaid flowchart of the stage data-flow."""
     from pytest_httpchain.dataflow import analyze_dataflow
 
-    sc, test_data = _load_for_inspection(scenario, ref_parent_traversal_depth)
+    sc, test_data = _load_for_inspection(scenario, ref_parent_traversal_depth, root_path)
     flow = analyze_dataflow(sc, test_data)
     typer.echo(_to_mermaid(flow, direction.value))
 

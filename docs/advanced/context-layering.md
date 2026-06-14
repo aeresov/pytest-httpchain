@@ -10,14 +10,14 @@ Variables are resolved through a layered context system. When you reference `{{ 
 flowchart TB
     subgraph lookup["Variable Lookup Order"]
         direction TB
-        iter["🔄 Iteration Variables<br/><small>(parallel execution)</small>"]
         saves["💾 Response Saves<br/><small>(current stage)</small>"]
+        iter["🔄 Iteration Variables<br/><small>(parallel execution)</small>"]
         stage_sub["📝 Stage Substitutions"]
         fixtures["🔧 Fixtures<br/><small>(stage + scenario)</small>"]
         global["🌐 Global Context<br/><small>(previous saves)</small>"]
         scenario["📋 Scenario Substitutions"]
 
-        iter --> saves --> stage_sub --> fixtures --> global --> scenario
+        saves --> iter --> stage_sub --> fixtures --> global --> scenario
     end
 
     style iter fill:#e1f5fe
@@ -28,7 +28,7 @@ flowchart TB
     style scenario fill:#eceff1
 ```
 
-**Highest priority** → Iteration Variables (checked first)
+**Highest priority** → Response Saves (current stage, checked first)
 **Lowest priority** → Scenario Substitutions (checked last)
 
 ## How ChainMap Works
@@ -239,6 +239,20 @@ INFO - global context on start: {"base_url": "https://..."}
 INFO - local context on start: {"endpoint": "/users", "base_url": "..."}
 INFO - updates for global context: {"user_ids": [1, 2, 3]}
 ```
+
+## Secrets and sensitive output
+
+pytest-httpchain is built for **full visibility while debugging** — and that visibility extends to secrets. By design, nothing is redacted:
+
+- **Logs** (`--log-cli-level=INFO`, as shown above) print the entire context as JSON — fixture values, substitution variables, and saved values such as auth tokens.
+- **Report sections** attach the full HTTP request and response of a failing stage, including `Authorization` and other credential headers.
+- **HAR export** (`--output-dir`) writes complete requests and responses — headers, cookies, and bodies — to disk.
+
+This is intentional (you usually *want* to see the real token when a chained request fails), but it means logs, JUnit/terminal reports, and `.har` files all contain whatever credentials your scenario uses. Treat them as sensitive:
+
+- **Scrub or avoid uploading** CI logs, test reports, and HAR artifacts that were produced against real credentials.
+- Prefer **throwaway/test credentials** in scenarios that run in shared CI.
+- The template engine and user functions execute arbitrary Python by design — scenario files are **trusted input**, not a sandbox boundary.
 
 ## Best Practices
 

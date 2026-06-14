@@ -1,7 +1,8 @@
 """Test dict literal expressions in templates."""
 
+import pytest
 import simpleeval
-from pytest_httpchain_templates.substitution import walk
+from pytest_httpchain_templates import TemplatesError, walk
 
 
 def test_dict_literal_in_list_comprehension():
@@ -102,30 +103,25 @@ def test_lowercase_boolean_literals():
     assert result == [{"id": "a", "active": False}, {"id": "b", "active": False}]
 
 
-def test_large_comprehension_with_function_call():
+def test_large_comprehension_with_function_call(monkeypatch):
     """Test that large comprehensions work with function calls in dict literals."""
-    # Save original limit and increase it for this test
-    original_limit = simpleeval.MAX_COMPREHENSION_LENGTH
-    simpleeval.MAX_COMPREHENSION_LENGTH = 50000  # type: ignore[misc]
+    # Increase the global comprehension limit for this test; monkeypatch
+    # restores it automatically at teardown.
+    monkeypatch.setattr(simpleeval, "MAX_COMPREHENSION_LENGTH", 50000)
 
-    try:
+    def mac_address():
+        return "00:11:22:33:44:55"
 
-        def mac_address():
-            return "00:11:22:33:44:55"
+    context = {"mac_address": mac_address}
 
-        context = {"mac_address": mac_address}
+    # Test with dict literal and function call - should work with increased limit
+    expr = "{{ [{'deviceId': mac_address(), 'household': False} for _ in range(11000)] }}"
+    result = walk(expr, context)
 
-        # Test with dict literal and function call - should work with increased limit
-        expr = "{{ [{'deviceId': mac_address(), 'household': False} for _ in range(11000)] }}"
-        result = walk(expr, context)
-
-        assert isinstance(result, list)
-        assert len(result) == 11000
-        assert all(item["deviceId"] == "00:11:22:33:44:55" for item in result)
-        assert all(item["household"] is False for item in result)
-    finally:
-        # Restore original limit
-        simpleeval.MAX_COMPREHENSION_LENGTH = original_limit
+    assert isinstance(result, list)
+    assert len(result) == 11000
+    assert all(item["deviceId"] == "00:11:22:33:44:55" for item in result)
+    assert all(item["household"] is False for item in result)
 
 
 def test_comprehension_with_underscore_variable():
@@ -140,24 +136,17 @@ def test_comprehension_with_underscore_variable():
     assert isinstance(result, list)
 
 
-def test_comprehension_limit_exceeded_error_message():
+def test_comprehension_limit_exceeded_error_message(monkeypatch):
     """Test that exceeding comprehension limit gives correct error message."""
-    import pytest
-    from pytest_httpchain_templates.exceptions import TemplatesError
+    # Set a low limit for testing; monkeypatch restores it at teardown.
+    monkeypatch.setattr(simpleeval, "MAX_COMPREHENSION_LENGTH", 100)
 
-    # Use a context without setting a higher limit
-    original_limit = simpleeval.MAX_COMPREHENSION_LENGTH
-    simpleeval.MAX_COMPREHENSION_LENGTH = 100  # type: ignore[misc]  # Set a low limit for testing
+    context = {}
+    expr = "{{ [i for i in range(200)] }}"  # Exceeds limit of 100
 
-    try:
-        context = {}
-        expr = "{{ [i for i in range(200)] }}"  # Exceeds limit of 100
+    with pytest.raises(TemplatesError) as exc_info:
+        walk(expr, context)
 
-        with pytest.raises(TemplatesError) as exc_info:
-            walk(expr, context)
-
-        # Verify we get "Expression too complex" not "Invalid expression"
-        assert "Expression too complex" in str(exc_info.value)
-        assert "Invalid expression" not in str(exc_info.value)
-    finally:
-        simpleeval.MAX_COMPREHENSION_LENGTH = original_limit
+    # Verify we get "Expression too complex" not "Invalid expression"
+    assert "Expression too complex" in str(exc_info.value)
+    assert "Invalid expression" not in str(exc_info.value)

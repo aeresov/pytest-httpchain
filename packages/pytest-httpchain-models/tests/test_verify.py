@@ -25,9 +25,10 @@ class TestVerifyStatus:
         assert verify.status is None
 
     def test_status_integer(self):
-        """Test status with integer value."""
-        verify = Verify(status=HTTPStatus.OK)
-        assert verify.status == HTTPStatus.OK
+        """Test status with a plain integer value (coerced to HTTPStatus)."""
+        verify = Verify(status=200)
+        assert verify.status == 200
+        assert verify.status is HTTPStatus.OK
 
     def test_status_http_status(self):
         """Test status with HTTPStatus enum."""

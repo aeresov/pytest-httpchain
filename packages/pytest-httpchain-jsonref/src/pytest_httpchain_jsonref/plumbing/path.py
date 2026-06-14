@@ -1,12 +1,17 @@
-"""Path validation utilities for reference resolution."""
+"""Reference path and JSON pointer helpers for reference resolution."""
 
 from pathlib import Path
 
 from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
 
 
-class PathValidator:
-    """Validates paths for security and correctness."""
+class RefPathHelper:
+    """Stateless helpers for resolving reference file paths and parsing JSON pointers.
+
+    Groups two related operations used when resolving ``$include``/``$merge``/``$ref``
+    directives: turning a reference's file part into a validated absolute path, and
+    parsing the JSON pointer part into its component keys.
+    """
 
     @staticmethod
     def validate_ref_path(ref_path: str, base_path: Path, root_path: Path, max_parent_traversal_depth: int) -> Path:
@@ -24,6 +29,11 @@ class PathValidator:
         Raises:
             ReferenceResolverError: If the path is invalid or violates security constraints
         """
+        # Reject absolute ref file paths: they bypass the traversal limit (no "..")
+        # and `base / "/abs"` collapses to "/abs", escaping the sandbox.
+        if Path(ref_path).is_absolute():
+            raise ReferenceResolverError(f"Absolute $ref paths are not allowed: {ref_path}")
+
         # Count parent traversals before resolution
         parent_traversals = sum(1 for part in Path(ref_path).parts if part == "..")
 
@@ -43,13 +53,11 @@ class PathValidator:
             except ValueError:
                 return False
 
-        # Try resolving from different base paths in order of preference
+        # Candidate base paths, in order of preference: the referencing file's
+        # directory first, then the configured root_path. Resolution is a pure
+        # function of the file tree + root_path (no CWD fallback), so it does
+        # not depend on where the tool was launched.
         paths_to_try = [base_path]
-
-        # Add CWD so that paths like "tests/common.json" resolve from where the user runs the tool
-        cwd = Path.cwd()
-        if cwd.resolve() not in (base_path_resolved, root_path_resolved):
-            paths_to_try.append(cwd)
 
         # Add root_path if it's different from base_path
         if root_path_resolved != base_path_resolved:
@@ -99,3 +107,7 @@ class PathValidator:
             parts.append(part)
 
         return parts
+
+
+# Backwards-compatible alias for the previous (misleading) class name.
+PathValidator = RefPathHelper

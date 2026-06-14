@@ -1,6 +1,7 @@
 import json
 
 import httpx
+import pytest
 
 from pytest_httpchain.report_formatter import format_request, format_response
 
@@ -51,7 +52,10 @@ class TestFormatRequest:
         assert "password=secret" in result
 
     def test_request_with_binary_content(self):
+        # Genuinely undecodable bytes: only these earn the binary label.
         binary_data = bytes(range(256))
+        with pytest.raises(UnicodeDecodeError):
+            binary_data.decode()
         request = httpx.Request(
             "POST",
             "https://example.com/api/upload",
@@ -62,6 +66,21 @@ class TestFormatRequest:
 
         assert "POST https://example.com/api/upload" in result
         assert "<Binary content: 256 bytes>" in result
+
+    def test_request_with_malformed_json_shown_as_text(self):
+        # content-type says JSON but the body fails to parse. It still decodes as
+        # text, so it must be displayed as text — NOT mislabeled binary.
+        request = httpx.Request(
+            "POST",
+            "https://example.com/api/data",
+            headers={"content-type": "application/json"},
+            content=b"{not valid json",
+        )
+        result = format_request(request)
+
+        assert "POST https://example.com/api/data" in result
+        assert "{not valid json" in result
+        assert "Binary content" not in result
 
     def test_request_with_long_body_truncated(self):
         long_content = "x" * 2000
@@ -132,6 +151,8 @@ class TestFormatResponse:
         assert '"name": "Alice"' in result
 
     def test_response_with_invalid_json(self):
+        # A body that decodes as text but fails JSON parsing is malformed TEXT,
+        # not binary: show the text, never the binary placeholder.
         response = httpx.Response(
             200,
             headers={"content-type": "application/json"},
@@ -141,27 +162,30 @@ class TestFormatResponse:
 
         assert "200" in result
         assert "not valid json" in result
+        assert "binary" not in result.lower()
 
-    def test_response_with_binary_content_decode_error(self):
-        # Invalid UTF-8 sequence that causes UnicodeDecodeError
+    def test_response_with_non_textual_content_type(self):
+        # A non-textual content type must not dump (possibly mojibake) bytes
+        # into the report; it emits a short placeholder instead.
         binary_data = b"\xff\xfe\x00\x01" + bytes([0x80, 0x81, 0x82])
         response = httpx.Response(
             200,
             headers={"content-type": "application/octet-stream"},
             content=binary_data,
-            request=httpx.Request("GET", "https://example.com"),
         )
-        # Force the response to use utf-8 encoding which will fail
-        response._content = binary_data
         result = format_response(response)
 
         assert "200" in result
-        # Note: httpx may still decode as latin-1, so we just check it doesn't crash
-        assert "200" in result
+        assert f"<binary {len(binary_data)} bytes>" in result
 
-    def test_response_with_decodable_binary(self):
-        # Binary that can be decoded (latin-1 compatible)
+    def test_response_with_binary_content_uses_placeholder(self):
+        # Genuinely undecodable bytes under a non-textual content type: the
+        # report must show the binary placeholder, never the raw (mojibake) bytes.
         binary_data = bytes(range(256))
+        # Sanity-check that these bytes really do not decode as UTF-8, so the
+        # placeholder assertion below is meaningful rather than incidental.
+        with pytest.raises(UnicodeDecodeError):
+            binary_data.decode()
         response = httpx.Response(
             200,
             headers={"content-type": "application/octet-stream"},
@@ -170,7 +194,7 @@ class TestFormatResponse:
         result = format_response(response)
 
         assert "200" in result
-        # Binary is decoded as text since it's latin-1 compatible
+        assert f"<binary {len(binary_data)} bytes>" in result
 
     def test_response_with_headers(self):
         response = httpx.Response(

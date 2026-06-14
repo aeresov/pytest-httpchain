@@ -1,4 +1,10 @@
-"""Shared pytest fixtures for pytest-httpchain-jsonref tests."""
+"""Shared pytest fixtures for pytest-httpchain-jsonref tests.
+
+Note: the ``datadir`` fixture used throughout these tests is NOT defined here.
+It is provided by the third-party ``pytest-datadir`` plugin (a dev dependency),
+which copies the per-module data directory (``<test_module_name>/``) into a
+temporary location and yields its path.
+"""
 
 import json
 from pathlib import Path

@@ -179,9 +179,11 @@ Available functions in expressions:
 -   `list()`, `dict()`, `set()`, `tuple()`
 -   `min()`, `max()`, `sum()`
 -   `abs()`, `round()`
--   `sorted()`, `reversed()`
--   `any()`, `all()`
+-   `sorted()`
 -   `enumerate()`, `zip()`
+-   `uuid4()`, `rand()`, `randint(top)`
+-   `env(var, default)`
+-   `get(var, default)`, `exists(var)`
 
 ### List/Dict Comprehensions
 

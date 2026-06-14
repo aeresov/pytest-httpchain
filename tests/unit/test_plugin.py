@@ -7,140 +7,58 @@ from pytest_httpchain.constants import ConfigOptions
 from pytest_httpchain.plugin import pytest_collect_file, pytest_configure
 
 
+def make_config(suffix="http", ref_depth=3, max_comp=50000, max_parallel=10000):
+    # M17: numeric options are registered type="int", so getini returns ints and
+    # range-check failures raise pytest.UsageError (not bare ValueError).
+    config = MagicMock()
+    config.getini.side_effect = lambda name: {
+        ConfigOptions.SUFFIX: suffix,
+        ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH: ref_depth,
+        ConfigOptions.MAX_COMPREHENSION_LENGTH: max_comp,
+        ConfigOptions.MAX_PARALLEL_ITERATIONS: max_parallel,
+    }[name]
+    return config
+
+
 class TestPytestConfigure:
-    def make_config(self, suffix="http", ref_depth="3", max_comp="50000", max_parallel="10000"):
-        config = MagicMock()
-        config.getini.side_effect = lambda name: {
-            ConfigOptions.SUFFIX: suffix,
-            ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH: ref_depth,
-            ConfigOptions.MAX_COMPREHENSION_LENGTH: max_comp,
-            ConfigOptions.MAX_PARALLEL_ITERATIONS: max_parallel,
-        }[name]
-        return config
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            pytest.param({}, id="defaults"),
+            pytest.param({"suffix": "mytest123"}, id="suffix-alphanumeric"),
+            pytest.param({"suffix": "my_test"}, id="suffix-underscore"),
+            pytest.param({"suffix": "my-test"}, id="suffix-hyphen"),
+            pytest.param({"ref_depth": 0}, id="ref-depth-zero"),
+            pytest.param({"ref_depth": 10}, id="ref-depth-positive"),
+            pytest.param({"max_comp": 1}, id="max-comp-minimum"),
+            pytest.param({"max_comp": 1000000}, id="max-comp-maximum"),
+            pytest.param({"max_parallel": 1}, id="max-parallel-minimum"),
+            pytest.param({"max_parallel": 1000000}, id="max-parallel-maximum"),
+        ],
+    )
+    def test_valid_config(self, kwargs):
+        # Should not raise.
+        pytest_configure(make_config(**kwargs))
 
-    def test_valid_config_defaults(self):
-        config = self.make_config()
-
-        # Should not raise
-        pytest_configure(config)
-
-    def test_valid_suffix_alphanumeric(self):
-        config = self.make_config(suffix="mytest123")
-
-        # Should not raise
-        pytest_configure(config)
-
-    def test_valid_suffix_with_underscore(self):
-        config = self.make_config(suffix="my_test")
-
-        # Should not raise
-        pytest_configure(config)
-
-    def test_valid_suffix_with_hyphen(self):
-        config = self.make_config(suffix="my-test")
-
-        # Should not raise
-        pytest_configure(config)
-
-    def test_invalid_suffix_special_chars(self):
-        config = self.make_config(suffix="test.http")
-
-        with pytest.raises(ValueError, match="suffix must contain only alphanumeric"):
-            pytest_configure(config)
-
-    def test_invalid_suffix_spaces(self):
-        config = self.make_config(suffix="test http")
-
-        with pytest.raises(ValueError, match="suffix must contain only alphanumeric"):
-            pytest_configure(config)
-
-    def test_invalid_suffix_too_long(self):
-        config = self.make_config(suffix="a" * 33)
-
-        with pytest.raises(ValueError, match="suffix must contain only alphanumeric"):
-            pytest_configure(config)
-
-    def test_invalid_suffix_empty(self):
-        config = self.make_config(suffix="")
-
-        with pytest.raises(ValueError, match="suffix must contain only alphanumeric"):
-            pytest_configure(config)
-
-    def test_valid_ref_depth_zero(self):
-        config = self.make_config(ref_depth="0")
-
-        # Should not raise
-        pytest_configure(config)
-
-    def test_valid_ref_depth_positive(self):
-        config = self.make_config(ref_depth="10")
-
-        # Should not raise
-        pytest_configure(config)
-
-    def test_invalid_ref_depth_negative(self):
-        config = self.make_config(ref_depth="-1")
-
-        with pytest.raises(ValueError, match="must be non-negative"):
-            pytest_configure(config)
-
-    def test_valid_max_comprehension_minimum(self):
-        config = self.make_config(max_comp="1")
-
-        # Should not raise
-        pytest_configure(config)
-
-    def test_valid_max_comprehension_maximum(self):
-        config = self.make_config(max_comp="1000000")
-
-        # Should not raise
-        pytest_configure(config)
-
-    def test_invalid_max_comprehension_zero(self):
-        config = self.make_config(max_comp="0")
-
-        with pytest.raises(ValueError, match="must be a positive integer"):
-            pytest_configure(config)
-
-    def test_invalid_max_comprehension_negative(self):
-        config = self.make_config(max_comp="-1")
-
-        with pytest.raises(ValueError, match="must be a positive integer"):
-            pytest_configure(config)
-
-    def test_invalid_max_comprehension_too_large(self):
-        config = self.make_config(max_comp="1000001")
-
-        with pytest.raises(ValueError, match="must not exceed 1,000,000"):
-            pytest_configure(config)
-
-    def test_valid_max_parallel_iterations_minimum(self):
-        config = self.make_config(max_parallel="1")
-
-        pytest_configure(config)
-
-    def test_valid_max_parallel_iterations_maximum(self):
-        config = self.make_config(max_parallel="1000000")
-
-        pytest_configure(config)
-
-    def test_invalid_max_parallel_iterations_zero(self):
-        config = self.make_config(max_parallel="0")
-
-        with pytest.raises(ValueError, match="must be a positive integer"):
-            pytest_configure(config)
-
-    def test_invalid_max_parallel_iterations_negative(self):
-        config = self.make_config(max_parallel="-1")
-
-        with pytest.raises(ValueError, match="must be a positive integer"):
-            pytest_configure(config)
-
-    def test_invalid_max_parallel_iterations_too_large(self):
-        config = self.make_config(max_parallel="1000001")
-
-        with pytest.raises(ValueError, match="must not exceed 1,000,000"):
-            pytest_configure(config)
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            pytest.param({"suffix": "test.http"}, "suffix must contain only alphanumeric", id="suffix-special-chars"),
+            pytest.param({"suffix": "test http"}, "suffix must contain only alphanumeric", id="suffix-spaces"),
+            pytest.param({"suffix": "a" * 33}, "suffix must contain only alphanumeric", id="suffix-too-long"),
+            pytest.param({"suffix": ""}, "suffix must contain only alphanumeric", id="suffix-empty"),
+            pytest.param({"ref_depth": -1}, "must be non-negative", id="ref-depth-negative"),
+            pytest.param({"max_comp": 0}, "must be a positive integer", id="max-comp-zero"),
+            pytest.param({"max_comp": -1}, "must be a positive integer", id="max-comp-negative"),
+            pytest.param({"max_comp": 1000001}, "must not exceed 1,000,000", id="max-comp-too-large"),
+            pytest.param({"max_parallel": 0}, "must be a positive integer", id="max-parallel-zero"),
+            pytest.param({"max_parallel": -1}, "must be a positive integer", id="max-parallel-negative"),
+            pytest.param({"max_parallel": 1000001}, "must not exceed 1,000,000", id="max-parallel-too-large"),
+        ],
+    )
+    def test_invalid_config(self, kwargs, match):
+        with pytest.raises(pytest.UsageError, match=match):
+            pytest_configure(make_config(**kwargs))
 
 
 class TestPytestCollectFile:
@@ -243,12 +161,19 @@ class TestPytestCollectFile:
             assert result == "mock_module"
 
     def test_suffix_special_chars_escaped(self):
-        # Test that regex special characters in suffix are properly escaped
-        parent = self.make_parent(suffix="test")
-        file_path = Path("/some/path/test_example.test.json")
+        # A suffix containing a regex metacharacter ('.') must be matched
+        # literally. pytest_collect_file re.escape()s the suffix, so the '.' only
+        # matches a literal dot — not any character.
+        parent = self.make_parent(suffix="v1.2")
 
+        # Literal match: the dot in the suffix lines up with the dot in the name.
+        literal = Path("/some/path/test_example.v1.2.json")
         with patch("pytest_httpchain.plugin.JsonModule") as MockJsonModule:
             MockJsonModule.from_parent.return_value = "mock_module"
-            result = pytest_collect_file(file_path, parent)
+            assert pytest_collect_file(literal, parent) == "mock_module"
+            assert MockJsonModule.from_parent.call_args[1]["name"] == "example"
 
-            assert result == "mock_module"
+        # Without escaping, '.' would match any char, so 'v1X2' would match too.
+        # With escaping it must NOT, proving the metacharacter is treated literally.
+        injected = Path("/some/path/test_example.v1X2.json")
+        assert pytest_collect_file(injected, parent) is None

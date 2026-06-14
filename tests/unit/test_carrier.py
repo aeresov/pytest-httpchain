@@ -8,18 +8,20 @@ Success cases for body types, verify, and save are covered by integration tests:
 """
 
 import json
-import tempfile
 from collections import ChainMap
+from contextlib import contextmanager
 from http import HTTPMethod
-from pathlib import Path
 
 import httpx
 import pytest
+from pyrate_limiter import Duration, Limiter, Rate
 from pytest_httpchain_models import (
     BinaryBody,
     FilesBody,
     JMESPathSave,
+    ParallelRepeatConfig,
     Request,
+    Stage,
     Verify,
 )
 from pytest_httpchain_models.entities import ResponseBody
@@ -49,6 +51,28 @@ class TestBuildRequestKwargsErrors:
         )
 
         with pytest.raises(RequestError, match="File not found for upload"):
+            Carrier._build_request_kwargs(request)
+
+    def test_binary_body_unreadable_path(self, tmp_path):
+        # A directory raises IsADirectoryError, an OSError that is NOT a
+        # FileNotFoundError, so it must be caught by the broadened handler (M2).
+        request = Request(
+            url="https://example.com/api",
+            method=HTTPMethod.POST,
+            body=BinaryBody(binary=str(tmp_path)),
+        )
+
+        with pytest.raises(RequestError, match="Cannot read binary file"):
+            Carrier._build_request_kwargs(request)
+
+    def test_files_body_unreadable_path(self, tmp_path):
+        request = Request(
+            url="https://example.com/api",
+            method=HTTPMethod.POST,
+            body=FilesBody(files={"upload": str(tmp_path)}),
+        )
+
+        with pytest.raises(RequestError, match="Cannot read file for upload"):
             Carrier._build_request_kwargs(request)
 
 
@@ -114,27 +138,24 @@ class TestProcessVerifyStepErrors:
         with pytest.raises(VerificationError, match="response is not valid JSON"):
             Carrier._process_verify_step(verify, response)
 
-    def test_verify_body_schema_from_file(self):
+    def test_verify_body_schema_from_file(self, tmp_path):
         """Test schema loaded from file path - unique to unit tests."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".json", mode="w") as f:
-            json.dump(
+        schema_path = tmp_path / "schema.json"
+        schema_path.write_text(
+            json.dumps(
                 {
                     "type": "object",
                     "properties": {"id": {"type": "integer"}},
                     "required": ["id"],
-                },
-                f,
+                }
             )
-            schema_path = f.name
+        )
 
-        try:
-            response = httpx.Response(200, json={"id": 123})
-            verify = Verify(body=ResponseBody(schema=schema_path))
+        response = httpx.Response(200, json={"id": 123})
+        verify = Verify(body=ResponseBody(schema=str(schema_path)))
 
-            # Should not raise
-            Carrier._process_verify_step(verify, response)
-        finally:
-            Path(schema_path).unlink()
+        # Should not raise
+        Carrier._process_verify_step(verify, response)
 
     def test_verify_expressions_falsy_values(self):
         """Test that falsy expression values fail verification."""
@@ -151,3 +172,166 @@ class TestProcessVerifyStepErrors:
 
         with pytest.raises(VerificationError, match="Expression.*failed"):
             Carrier._process_verify_step(verify, response)
+
+
+def _make_stage(**kwargs) -> Stage:
+    """Minimal valid stage pointing at a URL that is never actually requested in
+    these unit tests (the code paths under test stop before the HTTP call)."""
+    return Stage(
+        name="s",
+        request=Request(url="https://example.com/", method=HTTPMethod.GET),
+        response=[],
+        **kwargs,
+    )
+
+
+def _make_carrier_subclass(**attrs) -> type[Carrier]:
+    """Fresh Carrier subclass with its own mutable state, so a test never mutates
+    the shared base-class defaults. `client` is None: teardown_class tolerates it."""
+    defaults = {
+        "client": None,
+        "aborted": False,
+        "last_request": None,
+        "last_response": None,
+        "global_context": ChainMap(),
+        "active_context_managers": [],
+        "max_parallel_iterations": 10_000,
+    }
+    defaults.update(attrs)
+    return type("UnitCarrier", (Carrier,), defaults)
+
+
+class TestRateLimiting:
+    """The rate limiter actually blocks and times out (M2)."""
+
+    def test_limiter_timeout_raises_request_error(self):
+        # A 1/sec limiter: consume the only slot, then a second acquire with a
+        # tiny timeout must block for the timeout and fail (not silently pass).
+        limiter = Limiter(Rate(1, Duration.SECOND))
+        assert limiter.try_acquire("api", blocking=True, timeout=2)
+
+        stage = _make_stage()
+        with pytest.raises(RequestError, match="Rate limit exceeded"):
+            # The limiter check happens before the HTTP request, so no client is
+            # needed; an exhausted limiter forces the timeout path.
+            Carrier._execute_single_iteration(stage, ChainMap(), {}, limiter=limiter, rate_limit_delay=0.2)
+
+    def test_limiter_blocks_until_timeout_elapses(self):
+        import time
+
+        limiter = Limiter(Rate(1, Duration.SECOND))
+        assert limiter.try_acquire("api", blocking=True, timeout=2)
+
+        stage = _make_stage()
+        start = time.monotonic()
+        with pytest.raises(RequestError, match="Rate limit exceeded"):
+            Carrier._execute_single_iteration(stage, ChainMap(), {}, limiter=limiter, rate_limit_delay=0.3)
+        # It actually blocked for ~the timeout rather than failing instantly.
+        assert time.monotonic() - start >= 0.25
+
+
+class TestParallelIterationCap:
+    """Exceeding max_parallel_iterations is rejected before any request runs."""
+
+    def test_exceeding_cap_fails(self):
+        carrier = _make_carrier_subclass(max_parallel_iterations=2)
+        stage = _make_stage(parallel=ParallelRepeatConfig(repeat=5))
+
+        # execute_stage turns the StageExecutionError into a clean pytest failure.
+        with pytest.raises(pytest.fail.Exception, match=r"exceeds maximum \(2\)"):
+            carrier.execute_stage(stage, {})
+
+    def test_within_cap_does_not_trip_guard(self):
+        # repeat == cap is allowed (the guard is strict '>'); this run reaches the
+        # HTTP layer and fails there (client is None) — proving the cap did NOT
+        # short-circuit it with the "exceeds maximum" message.
+        carrier = _make_carrier_subclass(max_parallel_iterations=3)
+        stage = _make_stage(parallel=ParallelRepeatConfig(repeat=3))
+
+        with pytest.raises(pytest.fail.Exception) as excinfo:
+            carrier.execute_stage(stage, {})
+        assert "exceeds maximum" not in str(excinfo.value)
+
+
+class TestContextManagerFixtureCleanup:
+    """Context-manager / @contextmanager-generator fixtures are entered on use and
+    their finalizers run during teardown_class."""
+
+    def test_context_manager_fixture_exit_runs(self):
+        carrier = _make_carrier_subclass()
+        events: list[str] = []
+
+        class Resource:
+            def __enter__(self):
+                events.append("enter")
+                return "resource-value"
+
+            def __exit__(self, *exc):
+                events.append("exit")
+                return False
+
+        # A factory fixture returning a context manager: wrapping enters it,
+        # records it for cleanup, and yields the entered value.
+        wrapped = carrier._build_stage_fixtures({"res": lambda: Resource()})
+        value = wrapped["res"]()
+
+        assert value == "resource-value"
+        assert events == ["enter"]
+        assert len(carrier.active_context_managers) == 1
+
+        carrier.teardown_class()
+
+        assert events == ["enter", "exit"]
+        assert carrier.active_context_managers == []
+
+    def test_generator_contextmanager_fixture_cleanup_runs(self):
+        carrier = _make_carrier_subclass()
+        events: list[str] = []
+
+        @contextmanager
+        def resource():
+            events.append("setup")
+            try:
+                yield "gen-value"
+            finally:
+                events.append("teardown")
+
+        wrapped = carrier._build_stage_fixtures({"res": resource})
+        value = wrapped["res"]()
+
+        assert value == "gen-value"
+        assert events == ["setup"]
+
+        carrier.teardown_class()
+
+        assert events == ["setup", "teardown"]
+
+    def test_teardown_continues_when_a_finalizer_raises(self):
+        carrier = _make_carrier_subclass()
+        exited: list[str] = []
+
+        class Bad:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                raise RuntimeError("cleanup boom")
+
+        class Good:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                exited.append("good")
+                return False
+
+        wrapped = carrier._build_stage_fixtures({"bad": lambda: Bad(), "good": lambda: Good()})
+        wrapped["bad"]()
+        wrapped["good"]()
+
+        # teardown_class swallows finalizer errors (logged) so a failing context
+        # manager does not prevent the others from being cleaned up.
+        carrier.teardown_class()
+
+        assert exited == ["good"]
+        assert carrier.active_context_managers == []

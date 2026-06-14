@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
 from pytest_httpchain_jsonref.loader import load_json
@@ -52,6 +54,17 @@ class TestErrorHandling:
         with pytest.raises(ReferenceResolverError, match="Invalid JSON pointer"):
             load_json(json_file)
 
+    def test_non_string_ref_value_raises(self, tmp_path):
+        """M38: a non-string $ref value raises ReferenceResolverError, not a raw TypeError."""
+        test_file = tmp_path / "test.json"
+        test_file.write_text('{"$ref": 42}')
+        with pytest.raises(ReferenceResolverError, match="must be a string"):
+            load_json(test_file)
+
+    @pytest.mark.skipif(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        reason="root bypasses filesystem permission bits, so chmod(0o000) stays readable",
+    )
     def test_file_permission_error(self, tmp_path):
         """Test handling of file permission errors"""
         # Create a file

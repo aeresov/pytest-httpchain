@@ -40,6 +40,8 @@ Each stage represents a single HTTP request:
     "fixtures": [],
     "always_run": false,
     "substitutions": [],
+    "parametrize": null,
+    "parallel": null,
     "request": {},
     "response": []
 }
@@ -53,6 +55,8 @@ Each stage represents a single HTTP request:
 | `fixtures` | array | pytest fixtures for this stage |
 | `always_run` | boolean or template | Execute even if prior stages failed |
 | `substitutions` | array/object | Stage-specific variables |
+| `parametrize` | array/object | Parametrization steps that expand the stage into multiple test cases (see [Parametrization](../advanced/parametrization.md)) |
+| `parallel` | object | Parallel execution config (`repeat`/`foreach`) for running the request concurrently (see [Parallel Execution](../advanced/parallel.md)) |
 | `request` | object | HTTP request configuration |
 | `response` | array/object | Response processing steps |
 

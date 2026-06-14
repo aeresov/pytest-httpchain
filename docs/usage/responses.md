@@ -182,6 +182,13 @@ External schema file:
 }
 ```
 
+A relative schema path is **not** resolved against the scenario file's location.
+It is resolved against the current working directory — the directory pytest was
+launched from — so `"./schemas/user.json"` looks for `schemas/user.json` under
+that directory, regardless of where the test file lives. To avoid surprises when
+tests are run from a different directory, use an absolute path (for example one
+built from a fixture) or run pytest from a consistent project root.
+
 ### User Function Verification
 
 ```json
@@ -241,7 +248,7 @@ Add computed values to context:
         "substitutions": [
             {
                 "vars": {
-                    "timestamp": "{{ str(datetime.now()) }}"
+                    "timestamp": "{{ str(now_utc) }}"
                 }
             },
             {
@@ -252,6 +259,18 @@ Add computed values to context:
         ]
     }
 }
+```
+
+The template evaluator does not expose `datetime`, so provide values like timestamps via a fixture and reference the stage with `fixtures: ["now_utc"]`:
+
+```python
+# conftest.py
+import pytest
+from datetime import datetime
+
+@pytest.fixture
+def now_utc():
+    return datetime.now()
 ```
 
 ### User Function Save

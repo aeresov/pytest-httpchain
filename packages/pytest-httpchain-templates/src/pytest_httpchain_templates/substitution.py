@@ -8,7 +8,6 @@ from uuid import uuid4
 from pydantic import BaseModel
 from simpleeval import (
     DEFAULT_FUNCTIONS,
-    DEFAULT_NAMES,
     AttributeDoesNotExist,
     EvalWithCompoundTypes,
     FunctionNotDefined,
@@ -49,7 +48,11 @@ JSON_LITERALS = {
     "null": None,
 }
 
-evaluator = EvalWithCompoundTypes(functions=SAFE_FUNCTIONS | DEFAULT_FUNCTIONS | DEFAULT_NAMES)
+# Names available inside an expression without the user defining them: the safe
+# builtins, JSON literals, the context helpers added at eval time, and
+# simpleeval's own defaults (int/float/str/rand/randint). The validator imports
+# this to tell a genuinely undefined variable from an engine-provided name.
+TEMPLATE_BUILTINS = set(SAFE_FUNCTIONS) | set(JSON_LITERALS) | {"exists", "get"} | set(DEFAULT_FUNCTIONS)
 
 
 def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
@@ -98,23 +101,34 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
         names=JSON_LITERALS | names,
     )
 
+    # Render the expression back in its original {{ … }} form for error messages
+    # (an f-string would otherwise collapse {{ }} to single braces, showing text
+    # that does not appear in the user's scenario).
+    display = "{{ " + expr + " }}"
     try:
         return eval_instance.eval(expr)
     except NameNotDefined as e:
-        raise TemplatesError(f"Undefined variable in expression '{{ {expr} }}'") from e
+        raise TemplatesError(f"Undefined variable in expression '{display}': {e}") from e
     except FunctionNotDefined as e:
-        raise TemplatesError(f"Unknown function in expression '{{ {expr} }}'") from e
+        raise TemplatesError(f"Unknown function in expression '{display}': {e}") from e
     except AttributeDoesNotExist as e:
-        raise TemplatesError(f"Attribute error in expression '{{ {expr} }}'") from e
+        raise TemplatesError(f"Attribute error in expression '{display}': {e}") from e
     except OperatorNotDefined as e:
-        raise TemplatesError(f"Operator not allowed in expression '{{ {expr} }}'") from e
+        raise TemplatesError(f"Operator not allowed in expression '{display}': {e}") from e
     except (NumberTooHigh, IterableTooLong) as e:
-        raise TemplatesError(f"Expression too complex '{{ {expr} }}'") from e
+        raise TemplatesError(f"Expression too complex '{display}': {e}") from e
     except (InvalidExpression, SyntaxError) as e:
-        raise TemplatesError(f"Invalid expression '{{ {expr} }}'") from e
+        raise TemplatesError(f"Invalid expression '{display}': {e}") from e
     except (ValueError, TypeError, KeyError, IndexError, ZeroDivisionError) as e:
         error_type = type(e).__name__
-        raise TemplatesError(f"{error_type} in expression '{{ {expr} }}'") from e
+        raise TemplatesError(f"{error_type} in expression '{display}': {e}") from e
+    except Exception as e:
+        # Terminal catch-all: anything a context callable (user function or
+        # factory fixture invoked inside the expression) raises — including
+        # UserFunctionError or arbitrary exceptions — would otherwise escape the
+        # enumerated cases above as a raw traceback, breaking the
+        # all-errors-are-TemplatesError contract.
+        raise TemplatesError(f"Error evaluating expression '{display}': {e}") from e
 
 
 def _sub_string(line: str, context: Mapping[str, Any]) -> Any:

@@ -429,3 +429,19 @@ class TestInvalidInputs:
                     "response": [{"invalid_key": "value"}],
                 }
             )
+
+
+class TestSubstitutionKeysMustBeIdentifiers:
+    """M24: substitution keys become context variable names, so a key that is
+    not a valid Python identifier (or is a keyword) can never be referenced in a
+    {{ }} expression and is rejected at validation."""
+
+    @pytest.mark.parametrize("bad_key", ["my-var", "with space", "1leading", "class"])
+    def test_vars_non_identifier_key_rejected(self, bad_key: str):
+        with pytest.raises(ValidationError):
+            VarsSubstitution(vars={bad_key: "value"})
+
+    @pytest.mark.parametrize("bad_key", ["my-func", "with space", "1leading", "return"])
+    def test_functions_non_identifier_key_rejected(self, bad_key: str):
+        with pytest.raises(ValidationError):
+            FunctionsSubstitution(functions={bad_key: UserFunctionName("mod:func")})

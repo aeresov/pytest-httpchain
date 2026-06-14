@@ -126,7 +126,7 @@ class TestSSLConfigInScenario:
 class TestSSLConfigValidation:
     """Tests for SSLConfig validation."""
 
-    def test_verify_invalid_string(self):
+    def test_verify_non_template_string_treated_as_path(self):
         """Test that non-template strings for verify are treated as paths."""
         # Non-template string is treated as a path
         config = SSLConfig(verify=Path("some/path.crt"))

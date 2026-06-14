@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-14
+
+### Added
+
+- `--root-path` option on the `validate`, `resolve`, `show` and `graph` CLI commands to override the directory that constrains `$ref` resolution. The CLI defaults to the nearest `tests/` ancestor while pytest collection uses the repo root, so a `$ref` that resolves during collection can now be made to resolve the same way from the CLI.
+- New validation diagnostic `HTTPCHAIN017` (error): a scenario-level `substitutions`/`auth`/`ssl` template references a name that is not a scenario-level substitution. Such references resolve at collection time against only the scenario substitutions, so anything else is a guaranteed collection-time crash — now caught up front with a coded, located diagnostic.
+
+### Fixed
+
+- A failing stage that does not use `parallel` is no longer reported as `Parallel execution failed at iteration 0`. Both the sequential and parallel execution paths share one error mechanism, and the wrapper that labels a failure with its iteration index was applied unconditionally — so an ordinary verify or request failure surfaced with a misleading parallel prefix and a meaningless `iteration 0`. The prefix is now added only when the stage actually configures `parallel`; otherwise the original error (e.g. `Status code doesn't match: expected 200, got 404`) is reported as-is.
+
+- Request rate limiting (`parallel.calls_per_sec`) works again. The limiter was written against the pyrate-limiter 3.x API — it passed a `max_delay=` argument to the `Limiter` constructor and expected delay/bucket-full exceptions — but the project resolves pyrate-limiter 4.x, where that constructor argument was removed. As a result any stage that set `calls_per_sec` crashed with a raw `TypeError` at limiter construction, before a single request was sent, and the feature had no integration coverage to catch it. The limiter is now built with the 4.x API: each request waits up to `max_rate_limit_delay` seconds (default 60) for a slot and fails with a clean `Rate limit exceeded` error if none becomes available within that window. The `pyrate-limiter` dependency floor is raised to `>=4.0.0` to match the API the code now uses.
+
+- A binary (`body.binary`) or multipart-file (`body.files`) request body that points at an unreadable path now fails with a clean error instead of a raw traceback. The body readers caught only `FileNotFoundError`, so sibling `OSError`s — a path that is actually a directory (`IsADirectoryError`), a permission denial (`PermissionError`) — escaped uncaught and surfaced as an internal pytest error that bypassed the normal abort/`xfail` flow. Both readers now catch `OSError` and report it as a `RequestError`; the existing missing-file messages are unchanged.
+
+- Template error messages now show the expression in its real `{{ … }}` form and include the underlying cause. The message was built with an f-string that collapsed `{{ }}` to single braces, so a failing expression was reported as `'{ missing_var }'` — text that never appears in the user's scenario — and the specific simpleeval detail (which name/attribute) was dropped. Messages now render `'{{ missing_var }}'` and append the cause, e.g. `…: 'missing_var' is not defined`.
+
+- A user module whose top-level code raises a non-`ImportError` (for example a `RuntimeError` while importing) is now reported as a clean `UserFunctionError` instead of escaping as a raw traceback. `import_function` caught only `ImportError`; it now wraps any exception raised during import, with the cause preserved in the message.
+
+- A non-string reference value (e.g. `{"$ref": 42}`) now raises a `ReferenceResolverError` instead of a raw `TypeError`, so the plugin reports a clean collection error and the CLI exits non-zero with a message instead of crashing.
+
+- The `schema`/`resolve` CLI commands now report a clean `error: cannot write …` and exit non-zero when `--output` points at an unwritable path (e.g. a missing directory), instead of surfacing a raw traceback.
+
+- A failure while building a test class at collection time — resolving scenario-level substitutions/`ssl`, calling the scenario `auth` function, or constructing the HTTP client — is now reported as a clean collection error instead of a raw internal traceback, matching the load/validate paths.
+
+- `show`/`graph` now attribute a re-saved variable to its most recent producer before the consumer, not the first one, matching the runtime `ChainMap` layering where a later save shadows an earlier one.
+
+- The order-aware validator now models that stage `substitutions` and the `parallel` config resolve *before* any `foreach` iteration variable exists, so a substitution that references a `foreach` parameter is flagged (it fails at runtime) instead of being treated as valid.
+
+- The `HTTPCHAIN002` fixture/variable-conflict check is now scoped per stage. A fixture used only in one stage and a same-named parametrize parameter used only in another stage never coexist and are no longer falsely reported as a collection error.
+
+- Exported HAR files now report the real request duration. The HAR writer's timing parameters were never supplied at the call site, so every entry recorded `time: 0`; the duration is now taken from the response's elapsed time.
+
+- HTTP response report sections no longer dump unbounded binary mojibake. A response with a non-textual content type is summarised as `<binary N bytes>`, an unreachable decode-error branch was removed, and the response body is truncated with the same limit as the request body.
+
+- An exception raised by a user function or factory fixture invoked *inside* a `{{ }}` expression is now wrapped as a `TemplatesError` (with the cause in the message) instead of escaping as a raw traceback, honoring the documented all-errors-are-`TemplatesError` contract.
+
+- Request report sections no longer mislabel a text body that merely fails JSON parsing as `<Binary content>`. The body is decoded first; only genuinely undecodable bytes get the binary placeholder, while text that fails to parse as JSON is shown as-is.
+
+- Importing `pytest-httpchain-models` no longer mutates the process-wide Python warnings filters as an import side effect. The suppression of Pydantic's field-shadow warning (for the `json`/`schema` body fields) is now scoped with `warnings.catch_warnings()` to only the two model classes that need it.
+
+### Changed
+
+- `parallel.foreach` with an `individual` step now rejects a multi-parameter dict. Only one parameter per `individual` step was ever honored — extra keys were silently discarded — so a dict with more than one key now fails validation (with the offending location) instead of quietly dropping parameters.
+
+- The main `pytest-httpchain` package now declares the dependencies it imports directly (`pytest`, `jmespath`, `jsonschema`, `simpleeval`, and the `pytest-httpchain-core`/`pytest-httpchain-userfunc` workspace packages), which were previously only resolved transitively through sibling packages.
+
+- A failing parallel stage now commits no saved variables. Previously the saves collected from whichever iterations happened to finish before the error were committed to the global context, so which values survived a parallel failure depended on thread timing; a failed stage now leaves the global context unchanged (deterministic).
+
+- A malformed marker on a *stage* now fails collection with a clear error instead of being silently dropped while the stage still runs — matching how an invalid scenario-level marker is already handled.
+
+- The numeric ini options (`ref_parent_traversal_depth`, `max_comprehension_length`, `max_parallel_iterations`) are registered as integers, so a non-integer value is rejected by pytest with a clean message and an out-of-range value raises a pytest usage error instead of an `INTERNALERROR` traceback. The `pytest` dependency floor is raised to `>=8.4` (required for integer ini options).
+
+- Context-variable names — `vars` keys, function-substitution aliases, and JMESPath save keys — must now be valid Python identifiers. A non-identifier key (e.g. `my-var`) could never be referenced in a `{{ }}` expression and is now rejected at validation instead of silently producing an unusable variable.
+
+- The function-reference format (`module.path:function`) is validated more strictly: a malformed module path (e.g. `a..b:f`, `mod.:f`) is rejected at validation/collection time instead of failing later at import.
+
+- `$ref` resolution no longer falls back to the current working directory. References resolve purely from the referencing file's directory and the configured root, so resolution no longer depends on where pytest was launched.
+
+- An object that contains more than one reference directive (any two of `$ref`/`$include`/`$merge`) now raises an error instead of silently honoring one and discarding the rest.
+
+- `wrap_function` in the `pytest-httpchain-userfunc` package dropped its unused `default_args` parameter; pass positional arguments at call time instead. `default_kwargs` is unchanged.
+
+- The four workspace sub-packages (`pytest-httpchain-jsonref`, `-models`, `-templates`, `-userfunc`) now ship real READMEs as their PyPI landing pages, where previously each shipped an empty file.
+
+### Security
+
+- Absolute `$ref`/`$include`/`$merge` paths are now rejected. An absolute path bypassed the parent-traversal limit (it contains no `..`), so a scenario could reference a file anywhere on disk (verified by reading `/etc/hostname`); the resolver now rejects absolute reference paths outright.
+
 ## [0.6.0] - 2026-06-13
 
 ### Added
@@ -80,6 +149,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Undefined-variable detection no longer emits false positives for names injected by `parametrize`, `parallel.foreach`, or `functions` substitutions.
 - Undefined-variable detection now flags references to response data (`response`, `status_code`, `body`, etc.) inside `{{ }}` templates, where they are not available — response values reach templates only via an earlier `save` step.
+
+## [0.2.4] - 2026-04-02
+
+### Added
+
+- HAR export: the `--output-dir` pytest option writes each test's HTTP request/response exchange to a HAR file for inspection and debugging.
+- A full MkDocs documentation site (`docs/`), replacing the single `USAGE.md` guide.
+- A generated JSON Schema for scenario files, enabling editor autocomplete and validation.
+- An `install` command and a bundled MCP server for AI code-assistant integration (the Claude Code skill plus optional MCP server config).
+- New integration tests covering request/save/schema error paths (connection refused, invalid hostname, malformed JSON in save and schema verification).
+
+### Changed
+
+- User-function imports now also search relative paths, so functions can be referenced from modules alongside the scenario file.
+- pytest markers declared in scenarios are now parsed with `ast.literal_eval` instead of the template/`simpleeval` engine, so marker arguments are interpreted as plain Python literals.
 
 ## [0.2.1] - 2026-01-09
 
@@ -167,11 +251,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.2.4...v0.3.0
+[0.2.4]: https://github.com/aeresov/pytest-httpchain/compare/v0.2.1...v0.2.4
 [0.2.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.1.1...v0.1.2

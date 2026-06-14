@@ -34,8 +34,14 @@ jobs:
               run: uv run ruff check .
 
     test:
-        name: Test
+        name: Test (Python ${{ matrix.python-version }})
         runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                python-version: ["3.13", "3.14"]
+        env:
+            UV_PYTHON: ${{ matrix.python-version }}
         steps:
             - uses: actions/checkout@v4
 
@@ -46,7 +52,7 @@ jobs:
                   cache-dependency-glob: "uv.lock"
 
             - name: Set up Python
-              run: uv python install 3.13
+              run: uv python install ${{ matrix.python-version }}
 
             - name: Install dependencies
               run: uv sync --all-extras
@@ -55,6 +61,7 @@ jobs:
               run: uv run pytest tests/unit tests/integration packages/*/tests -v --cov --cov-report=xml --cov-report=term-missing
 
             - name: Upload coverage to Codecov
+              if: matrix.python-version == '3.13'
               uses: codecov/codecov-action@v5
               with:
                   files: ./coverage.xml

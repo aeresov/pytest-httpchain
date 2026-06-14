@@ -17,3 +17,6 @@ htmlcov/
 # mkdocs
 /site/
 
+# local dev notes / planning scratch (kept out of the docs/ tree and out of git)
+/superpowers/
+

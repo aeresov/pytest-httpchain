@@ -2,6 +2,16 @@ import json
 
 import httpx
 
+# Maximum number of characters of a request/response body to include in a report
+# before truncating. Shared by both format_request and format_response.
+_MAX_BODY_CHARS = 1000
+
+
+def _is_textual_content_type(content_type: str) -> bool:
+    """Return True if the Content-Type looks like text we can safely display."""
+    ct = content_type.lower()
+    return ct.startswith("text/") or "json" in ct or "xml" in ct or "x-www-form-urlencoded" in ct
+
 
 def format_request(request: httpx.Request) -> str:
     """Format an httpx Request for display."""
@@ -21,18 +31,20 @@ def format_request(request: httpx.Request) -> str:
     if request.content:
         content_type = request.headers.get("content-type", "")
         try:
-            if "application/json" in content_type:
-                body_data = json.loads(request.content.decode())
-                lines.append(json.dumps(body_data, indent=2, ensure_ascii=False))
-            else:
-                decoded = request.content.decode()
-                # Truncate very long bodies
-                if len(decoded) > 1000:
-                    lines.append(f"{decoded[:1000]}... (truncated)")
-                else:
-                    lines.append(decoded)
-        except (UnicodeDecodeError, json.JSONDecodeError):
+            decoded = request.content.decode()
+        except UnicodeDecodeError:
+            # Genuinely undecodable bytes: only here is the binary label correct.
             lines.append(f"<Binary content: {len(request.content)} bytes>")
+        else:
+            # Decoded fine. Pretty-print JSON when it parses; a JSON body that
+            # fails to parse is malformed *text*, not binary — show it as text.
+            if "application/json" in content_type:
+                try:
+                    lines.append(json.dumps(json.loads(decoded), indent=2, ensure_ascii=False))
+                except json.JSONDecodeError:
+                    lines.append(_format_body_text(decoded))
+            else:
+                lines.append(_format_body_text(decoded))
 
     return "\n".join(lines)
 
@@ -58,12 +70,19 @@ def format_response(response: httpx.Response) -> str:
         if "application/json" in content_type:
             try:
                 lines.append(json.dumps(response.json(), indent=2, ensure_ascii=False))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                lines.append(response.text)
+            except json.JSONDecodeError:
+                lines.append(_format_body_text(response.text))
+        elif _is_textual_content_type(content_type):
+            lines.append(_format_body_text(response.text))
         else:
-            try:
-                lines.append(response.text)
-            except UnicodeDecodeError:
-                lines.append(f"<Binary content: {len(response.content)} bytes>")
+            # Non-textual (or unknown) content type: avoid dumping mojibake.
+            lines.append(f"<binary {len(response.content)} bytes>")
 
     return "\n".join(lines)
+
+
+def _format_body_text(text: str) -> str:
+    """Truncate a decoded body to the shared maximum length for display."""
+    if len(text) > _MAX_BODY_CHARS:
+        return f"{text[:_MAX_BODY_CHARS]}... (truncated)"
+    return text

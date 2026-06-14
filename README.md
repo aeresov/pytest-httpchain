@@ -44,7 +44,7 @@ A key-value store persists throughout scenario execution. Variables, fixtures, a
 
 -   **JMESPath** — Extract values from JSON responses directly
 -   **JSON Schema** — Validate response structure against a schema
--   **User functions** — Call Python functions for custom extraction, verification, or [authentication](https://requests.readthedocs.io/en/latest/user/advanced/#custom-authentication)
+-   **User functions** — Call Python functions for custom extraction, verification, or [authentication](https://www.python-httpx.org/advanced/authentication/#custom-authentication-schemes)
 
 ### Full pytest integration
 

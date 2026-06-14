@@ -28,7 +28,7 @@ class TestJsonPointerBasics:
         assert result["ref2"] == "third"
 
     def test_bare_hash_without_slash_is_invalid(self, datadir):
-        """#foo is invalid - must be #/foo."""
+        """A bare '#' with no pointer is invalid - a pointer must be #/... ."""
         json_file = datadir / "case_pointer_empty.json"
         with pytest.raises(ReferenceResolverError, match="Invalid .ref format"):
             load_json(json_file)

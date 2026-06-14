@@ -1,5 +1,32 @@
+"""Pydantic models for pytest-httpchain HTTP test scenarios.
+
+Two-phase validation lifecycle
+------------------------------
+These models are validated twice against the same scenario data.
+
+1. At collection time, while ``{{ }}`` template strings are still unrendered. A
+   field that may legitimately hold a template is typed to accept the template
+   as opaque text — ``TemplateExpression`` (the whole value is one ``{{ ... }}``
+   expression), ``PartialTemplateStr`` (a string with inline ``{{ ... }}``), or
+   plain ``Any`` (e.g. ``Verify.expressions``, which are evaluated as boolean
+   conditions later). At this phase the template is NOT yet a concrete value, so
+   the model only checks that it is a well-formed template, not that it matches
+   the field's runtime type.
+
+2. At runtime, after the templates engine renders the ``{{ }}`` expressions into
+   concrete values (just before the value is consumed — e.g. a request is built
+   or a response is verified). The rendered structure is re-validated through the
+   same model, so the concrete value is finally checked against the real type
+   (e.g. an ``HTTPStatus`` int, a ``PositiveFloat`` timeout, a URL).
+
+Because of this, several fields are typed as a union of the concrete type and a
+template type. The concrete branch matches in phase 2; the template branch keeps
+phase 1 from rejecting a not-yet-rendered ``{{ }}`` string.
+"""
+
 import warnings
 from collections.abc import Callable
+from contextlib import contextmanager
 from http import HTTPMethod, HTTPStatus
 from typing import Annotated, Any, Literal, Self
 
@@ -40,22 +67,39 @@ def _create_discriminator(class_to_tag: dict[str, str], error_message: str) -> C
         if isinstance(v, dict):
             found = tag_fields & v.keys()
             if found:
+                # Tie-break: if a dict carries several tag keys (e.g. both "json"
+                # and "xml"), pick the alphabetically smallest tag deterministically.
+                # The chosen variant's model then rejects the surplus keys under
+                # extra="forbid", surfacing the ambiguity as a validation error.
                 return min(found)
 
-        if hasattr(v, "__class__"):
-            tag = class_to_tag.get(v.__class__.__name__)
-            if tag:
-                return tag
+        tag = class_to_tag.get(v.__class__.__name__)
+        if tag:
+            return tag
 
         raise ValueError(error_message)
 
     return discriminator
 
 
-# Suppress Pydantic warnings about field names shadowing BaseModel attributes.
-# Fields "json" and "schema" are intentional domain-specific names.
-warnings.filterwarnings("ignore", message=r'Field name "json" in "JsonBody" shadows an attribute', category=UserWarning)
-warnings.filterwarnings("ignore", message=r'Field name "schema" in "ResponseBody" shadows an attribute', category=UserWarning)
+@contextmanager
+def _suppress_field_shadow_warning(field_name: str):
+    """Locally silence Pydantic's "field shadows a BaseModel attribute" warning.
+
+    Fields "json" (``JsonBody``) and "schema" (``ResponseBody``) are intentional
+    domain-specific names that collide with ``BaseModel.json``/``BaseModel.schema``.
+    Pydantic emits the warning at class-definition time. Using
+    ``warnings.catch_warnings()`` here means the filter is scoped to the single
+    ``class`` statement it wraps, so merely importing this module has no
+    process-wide effect on the warnings filter.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=rf'Field name "{field_name}" in ".*" shadows an attribute',
+            category=UserWarning,
+        )
+        yield
 
 
 def _normalize_list_input(v: Any) -> list[Any]:
@@ -171,7 +215,10 @@ UserFunctionCall = UserFunctionName | UserFunctionKwargs
 
 FunctionsList = list[UserFunctionCall]
 
-FunctionsDict = dict[str, UserFunctionCall]
+# Keys are the aliases under which functions are exposed to templates, so they
+# must be valid Python identifiers (a non-identifier key could never be
+# referenced inside a {{ }} expression).
+FunctionsDict = dict[VariableName, UserFunctionCall]
 
 
 class Descripted(StrictModel):
@@ -179,7 +226,7 @@ class Descripted(StrictModel):
 
 
 class Marked(StrictModel):
-    marks: list[str] = Field(default_factory=list, examples=["xfail", "skip"], description="pytest markers")
+    marks: list[str] = Field(default_factory=list, examples=[["xfail"], ["skip", "slow"]], description="pytest markers")
 
 
 class Fixtured(StrictModel):
@@ -193,8 +240,10 @@ class Authenticated(StrictModel):
     )
 
 
-class JsonBody(StrictModel):
-    json: Annotated[JsonValue, BeforeValidator(convert_namespace_to_dict)] = Field(description="JSON data to send.")
+with _suppress_field_shadow_warning("json"):
+
+    class JsonBody(StrictModel):
+        json: Annotated[JsonValue, BeforeValidator(convert_namespace_to_dict)] = Field(description="JSON data to send.")
 
 
 class XmlBody(StrictModel):
@@ -259,17 +308,17 @@ RequestBody = Annotated[
 
 
 class Request(Authenticated):
-    url: HttpUrl | PartialTemplateStr = Field()
-    method: HTTPMethod | TemplateExpression = Field(default=HTTPMethod.GET)
-    params: dict[str, Any] = Field(default_factory=dict)
-    headers: dict[str, str] = Field(default_factory=dict)
+    url: HttpUrl | PartialTemplateStr = Field(description="Request URL (may be a template expression).")
+    method: HTTPMethod | TemplateExpression = Field(default=HTTPMethod.GET, description="HTTP method.")
+    params: dict[str, Any] = Field(default_factory=dict, description="URL query parameters.")
+    headers: dict[str, str] = Field(default_factory=dict, description="HTTP request headers.")
     body: RequestBody | None = Field(default=None, description="Request body configuration.")
     timeout: PositiveFloat | TemplateExpression = Field(default=30.0, description="Request timeout in seconds.")
     allow_redirects: Literal[True, False] | TemplateExpression = Field(default=True, description="Whether to follow redirects.")
 
 
 class VarsSubstitution(Descripted):
-    vars: dict[str, NamespaceFromDict] = Field(description="Variables for substitution.")
+    vars: dict[VariableName, NamespaceFromDict] = Field(description="Variables for substitution.")
 
 
 class FunctionsSubstitution(Descripted):
@@ -302,7 +351,7 @@ Substitutions = Annotated[
 class JMESPathSave(Descripted):
     """Save data using JMESPath expressions to extract values from response."""
 
-    jmespath: dict[str, JMESPathExpression | PartialTemplateStr] = Field(description="JMESPath expressions to extract values from response.")
+    jmespath: dict[VariableName, JMESPathExpression | PartialTemplateStr] = Field(description="JMESPath expressions to extract values from response.")
 
 
 class SubstitutionsSave(Descripted):
@@ -333,18 +382,20 @@ Save = Annotated[
 ]
 
 
-class ResponseBody(StrictModel):
-    schema: JSONSchemaInline | SerializablePath | PartialTemplateStr | None = Field(default=None, description="JSON schema for validation.")
-    contains: list[str] = Field(default_factory=list)
-    not_contains: list[str] = Field(default_factory=list)
-    matches: list[RegexPattern] = Field(default_factory=list)
-    not_matches: list[RegexPattern] = Field(default_factory=list)
+with _suppress_field_shadow_warning("schema"):
+
+    class ResponseBody(StrictModel):
+        schema: JSONSchemaInline | SerializablePath | PartialTemplateStr | None = Field(default=None, description="JSON schema for validation.")
+        contains: list[str] = Field(default_factory=list, description="Substrings the response body must contain.")
+        not_contains: list[str] = Field(default_factory=list, description="Substrings the response body must NOT contain.")
+        matches: list[RegexPattern] = Field(default_factory=list, description="Regex patterns the response body must match.")
+        not_matches: list[RegexPattern] = Field(default_factory=list, description="Regex patterns the response body must NOT match.")
 
 
 class Verify(Descripted):
-    status: HTTPStatus | None | TemplateExpression = Field(default=None)
-    headers: dict[str, str] = Field(default_factory=dict)
-    expressions: list[Any | TemplateExpression] = Field(
+    status: HTTPStatus | None | TemplateExpression = Field(default=None, description="Expected HTTP status code.")
+    headers: dict[str, str] = Field(default_factory=dict, description="Expected response headers (exact match per key).")
+    expressions: list[Any] = Field(
         default_factory=list,
         description=(
             "Template expressions evaluated as boolean conditions against the context "
@@ -391,9 +442,10 @@ Responses = Annotated[
 
 
 class IndividualParameter(StrictModel):
-    individual: dict[str, Annotated[list[Any], Field(min_length=1)] | PartialTemplateStr] = Field(
-        description="Parameter name mapped to list of values (single parameter per step, non-empty values) or template expression"
-    )
+    individual: Annotated[
+        dict[str, Annotated[list[Any], Field(min_length=1)] | PartialTemplateStr],
+        Field(min_length=1, max_length=1),
+    ] = Field(description="Parameter name mapped to list of values (single parameter per step, non-empty values) or template expression")
     ids: list[str] | None = Field(default=None, description="Optional IDs for each value")
 
     @model_validator(mode="after")
@@ -524,5 +576,5 @@ class Scenario(Marked, Fixtured, Authenticated, Descripted):
         default_factory=SSLConfig,
         description="SSL/TLS configuration.",
     )
-    stages: Stages = Field(default_factory=list)
+    stages: Stages = Field(default_factory=list, description="Ordered list (or name-keyed mapping) of stages to execute.")
     substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")

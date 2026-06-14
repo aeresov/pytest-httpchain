@@ -1,4 +1,4 @@
-"""Helper functions for userfunc tests, imported via 'test_helpers:func_name'."""
+"""Helper functions for userfunc tests, imported via '_helpers:func_name'."""
 
 from pytest_httpchain_userfunc import UserFunctionError
 
@@ -34,22 +34,6 @@ def needs_two_args(a, b):
 def raises_key_error():
     d = {}
     return d["missing"]
-
-
-def concat_three(a, b, c):
-    return f"{a}-{b}-{c}"
-
-
-def concat_four(a, b, c, d):
-    return f"{a}.{b}.{c}.{d}"
-
-
-def format_message(prefix, message, suffix="!"):
-    return f"{prefix}: {message}{suffix}"
-
-
-def full_function(a, b, c, x=1, y=2, z=3):
-    return f"{a}{b}{c}-{x}{y}{z}"
 
 
 def always_fails():

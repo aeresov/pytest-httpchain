@@ -10,7 +10,7 @@ from deepmerge import always_merger
 
 from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
 from pytest_httpchain_jsonref.plumbing.circular import CircularDependencyTracker
-from pytest_httpchain_jsonref.plumbing.path import PathValidator
+from pytest_httpchain_jsonref.plumbing.path import RefPathHelper
 
 REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 
@@ -19,21 +19,23 @@ REF_KEYS = ("$include", "$merge", "$ref")
 
 
 class ReferenceResolver:
-    """Resolves JSON references ($ref) in documents."""
+    """Resolves JSON reference directives ($include/$merge, or legacy $ref) in documents."""
 
     def __init__(self, max_parent_traversal_depth: int = 3, root_path: Path | None = None):
         self.max_parent_traversal_depth = max_parent_traversal_depth
-        self.path_validator = PathValidator()
+        self.ref_paths = RefPathHelper()
         self.tracker = CircularDependencyTracker()
         self.base_path: Path | None = None
         self.root_path = root_path
 
-    def resolve_document(self, data: dict[str, Any], base_path: Path) -> dict[str, Any]:
+    def resolve_document(self, data: dict[str, Any], base_path: Path, root_path: Path | None = None) -> dict[str, Any]:
         """Resolve all references in a document.
 
         Args:
             data: The document data to resolve references in
             base_path: The base path for resolving relative references
+            root_path: The root path references must not escape. Defaults to
+                self.root_path (or base_path) when not supplied.
 
         Returns:
             The document with all references resolved
@@ -42,7 +44,8 @@ class ReferenceResolver:
             ReferenceResolverError: If resolution fails
         """
         self.base_path = base_path
-        return self._resolve_refs(data, base_path, root_data=data)
+        effective_root = root_path if root_path is not None else self.root_path
+        return self._resolve_refs(data, base_path, root_data=data, root_path=effective_root or base_path)
 
     def resolve_file(self, path: Path) -> dict[str, Any]:
         """Load a JSON file and resolve all references.
@@ -59,17 +62,21 @@ class ReferenceResolver:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
 
-            # If root_path wasn't provided, find a suitable one by going up the directory tree
-            # up to max_parent_traversal_depth levels
-            if not self.root_path:
-                self.root_path = path.parent
+            # Compute the effective root locally rather than mutating self.root_path,
+            # so the resolver is not single-use (a second call would otherwise be
+            # validated against the first file's derived root).
+            root_path = self.root_path
+            if not root_path:
+                # If root_path wasn't provided, find a suitable one by going up the
+                # directory tree up to max_parent_traversal_depth levels.
+                root_path = path.parent
                 for _ in range(self.max_parent_traversal_depth):
-                    parent = self.root_path.parent
-                    if parent == self.root_path:
+                    parent = root_path.parent
+                    if parent == root_path:
                         break  # Reached filesystem root
-                    self.root_path = parent
+                    root_path = parent
 
-            return self.resolve_document(data, path.parent)
+            return self.resolve_document(data, path.parent, root_path)
 
         except (OSError, json.JSONDecodeError) as e:
             raise ReferenceResolverError(f"Failed to load JSON from {path}: {e}") from e
@@ -79,33 +86,41 @@ class ReferenceResolver:
         data: Any,
         current_path: Path,
         root_data: Any,
+        root_path: Path,
     ) -> Any:
         match data:
             case dict() if self._get_ref_key(data):
-                return self._resolve_single_ref(data, current_path, root_data)
+                return self._resolve_single_ref(data, current_path, root_data, root_path)
             case dict():
-                return {key: self._resolve_refs(value, current_path, root_data) for key, value in data.items()}
+                return {key: self._resolve_refs(value, current_path, root_data, root_path) for key, value in data.items()}
             case list():
-                return [self._resolve_refs(item, current_path, root_data) for item in data]
+                return [self._resolve_refs(item, current_path, root_data, root_path) for item in data]
             case _:
                 return data
 
     def _get_ref_key(self, data: dict[str, Any]) -> str | None:
-        """Get the reference key ($include or $ref) if present in data."""
-        for key in REF_KEYS:
-            if key in data:
-                return key
-        return None
+        """Get the reference key ($include/$merge/$ref) if present in data.
+
+        Raises:
+            ReferenceResolverError: If more than one directive key is present.
+        """
+        present = [key for key in REF_KEYS if key in data]
+        if len(present) > 1:
+            raise ReferenceResolverError(f"Multiple reference directives in one object: {', '.join(present)}")
+        return present[0] if present else None
 
     def _resolve_single_ref(
         self,
         data: dict[str, Any],
         current_path: Path,
         root_data: Any,
+        root_path: Path,
     ) -> Any:
         ref_key = self._get_ref_key(data)
         assert ref_key is not None
         ref_value = data[ref_key]
+        if not isinstance(ref_value, str):
+            raise ReferenceResolverError(f"{ref_key} value must be a string, got {type(ref_value).__name__}: {ref_value!r}")
         match = REF_PATTERN.match(ref_value)
 
         if not match:
@@ -115,19 +130,20 @@ class ReferenceResolver:
         pointer = match.group("pointer") or ""
 
         if file_path:
-            referenced_data = self._resolve_external_ref(file_path, pointer, current_path)
+            referenced_data = self._resolve_external_ref(file_path, pointer, current_path, root_path)
         else:
-            referenced_data = self._resolve_internal_ref(pointer, root_data)
+            referenced_data = self._resolve_internal_ref(pointer, root_data, root_path)
 
-        return self._merge_with_siblings(data, referenced_data, current_path, root_data)
+        return self._merge_with_siblings(data, referenced_data, current_path, root_data, root_path)
 
     def _resolve_external_ref(
         self,
         file_path: str,
         pointer: str,
         current_path: Path,
+        root_path: Path,
     ) -> Any:
-        resolved_path = self.path_validator.validate_ref_path(file_path, current_path, self.root_path or current_path, self.max_parent_traversal_depth)
+        resolved_path = self.ref_paths.validate_ref_path(file_path, current_path, root_path, self.max_parent_traversal_depth)
 
         self.tracker.check_external_ref(resolved_path, pointer)
 
@@ -135,9 +151,9 @@ class ReferenceResolver:
             full_external_data = self._load_json_file(resolved_path)
             external_data = self._navigate_pointer(full_external_data, pointer) if pointer else full_external_data
 
-            child_resolver = self._create_child_resolver()
+            child_resolver = self._create_child_resolver(root_path)
             child_resolver.base_path = resolved_path.parent
-            result = child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data)
+            result = child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data, root_path=root_path)
             return result
 
         except (OSError, json.JSONDecodeError) as e:
@@ -149,13 +165,14 @@ class ReferenceResolver:
         self,
         pointer: str,
         root_data: Any,
+        root_path: Path,
     ) -> Any:
         self.tracker.check_internal_ref(pointer)
 
         try:
             referenced_data = self._navigate_pointer(root_data, pointer)
             assert self.base_path is not None
-            return self._resolve_refs(referenced_data, self.base_path, root_data)
+            return self._resolve_refs(referenced_data, self.base_path, root_data, root_path)
         finally:
             self.tracker.clear_internal_ref(pointer)
 
@@ -163,7 +180,7 @@ class ReferenceResolver:
         if not pointer:
             return data
 
-        parts = self.path_validator.parse_json_pointer(pointer)
+        parts = self.ref_paths.parse_json_pointer(pointer)
 
         def navigate_step(obj: Any, key: str) -> Any:
             if isinstance(obj, list):
@@ -184,18 +201,19 @@ class ReferenceResolver:
         referenced_data: Any,
         current_path: Path,
         root_data: Any,
+        root_path: Path,
     ) -> Any:
         siblings = {k: v for k, v in ref_dict.items() if k not in REF_KEYS}
 
         if not siblings:
             return referenced_data
 
+        # siblings is non-empty here (early return above), so a non-dict
+        # referenced value can never be merged with them.
         if not isinstance(referenced_data, dict):
-            if len(siblings) > 0:
-                raise ReferenceResolverError("Cannot merge non-dict reference with sibling properties")
-            return referenced_data
+            raise ReferenceResolverError("Cannot merge non-dict reference with sibling properties")
 
-        resolved_siblings = self._resolve_refs(siblings, current_path, root_data)
+        resolved_siblings = self._resolve_refs(siblings, current_path, root_data, root_path)
 
         self._detect_merge_conflicts(referenced_data, resolved_siblings)
 
@@ -205,9 +223,9 @@ class ReferenceResolver:
         """Load JSON file content."""
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def _create_child_resolver(self) -> Self:
+    def _create_child_resolver(self, root_path: Path) -> Self:
         """Create a child resolver with inherited state."""
-        child_resolver = type(self)(self.max_parent_traversal_depth, self.root_path)
+        child_resolver = type(self)(self.max_parent_traversal_depth, root_path)
         child_resolver.tracker = self.tracker.create_child_tracker()
         return child_resolver
 

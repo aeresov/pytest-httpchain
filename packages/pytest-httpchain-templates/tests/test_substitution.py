@@ -2,8 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
-from pytest_httpchain_templates.exceptions import TemplatesError
-from pytest_httpchain_templates.substitution import walk
+from pytest_httpchain_templates import TemplatesError, walk
 
 
 class TestWalk:
@@ -55,10 +54,6 @@ class TestWalk:
         assert walk(None, {}) is None
         assert walk(True, {}) is True
 
-    def test_invalid_expression(self):
-        with pytest.raises(TemplatesError, match="Invalid expression"):
-            walk("{{ invalid + }}", {})
-
     # New tests for compound types support
     def test_list_creation(self):
         result = walk("{{ [1, 2, 3, 4] }}", {})
@@ -98,10 +93,6 @@ class TestWalk:
         result = walk("{{ sum([x * multiplier for x in numbers]) }}", context)
         assert result == 30
 
-    def test_undefined_variable(self):
-        with pytest.raises(TemplatesError, match="Undefined variable"):
-            walk("{{ undefined_var }}", {})
-
     def test_no_dangerous_operations(self):
         # Verify that dangerous operations are blocked
         with pytest.raises(TemplatesError):
@@ -109,41 +100,6 @@ class TestWalk:
 
         with pytest.raises(TemplatesError):
             walk("{{ open('/etc/passwd', 'r').read() }}", {})
-
-    def test_specific_error_messages(self):
-        # Test that specific error types produce appropriate messages
-
-        # Undefined variable
-        with pytest.raises(TemplatesError, match="Undefined variable"):
-            walk("{{ missing_var }}", {})
-
-        # Unknown function
-        with pytest.raises(TemplatesError, match="Unknown function"):
-            walk("{{ unknown_func() }}", {})
-
-        # Attribute error
-        with pytest.raises(TemplatesError, match="Attribute error"):
-            walk("{{ x.nonexistent }}", {"x": {"existing": 1}})
-
-        # Syntax error
-        with pytest.raises(TemplatesError, match="Invalid expression"):
-            walk("{{ 1 + }}", {})
-
-        # Division by zero
-        with pytest.raises(TemplatesError, match="ZeroDivisionError"):
-            walk("{{ 1 / 0 }}", {})
-
-        # Type error
-        with pytest.raises(TemplatesError, match="TypeError"):
-            walk("{{ 'text' + 5 }}", {})
-
-        # Index error
-        with pytest.raises(TemplatesError, match="IndexError"):
-            walk("{{ [1, 2][10] }}", {})
-
-        # Key error - using dict() function since literal syntax doesn't work
-        with pytest.raises(TemplatesError, match="KeyError"):
-            walk("{{ dict(a=1)['b'] }}", {})
 
     def test_get_function(self):
         """Test the get() function for dict-like access with defaults."""
@@ -412,3 +368,43 @@ class TestWalkErrorMessages:
         """Test attribute error on dict (separate due to context requirement)."""
         with pytest.raises(TemplatesError, match="Attribute error"):
             walk("{{ x.nonexistent }}", {"x": {"existing": 1}})
+
+    def test_error_message_keeps_braces_and_appends_cause(self):
+        """M29: the rendered expression keeps its {{ }} form and the simpleeval
+        cause is appended, instead of the misleading single-brace text."""
+        with pytest.raises(TemplatesError) as exc_info:
+            walk("{{ missing_var }}", {})
+        msg = str(exc_info.value)
+        assert "{{ missing_var }}" in msg  # double braces, not the collapsed single-brace form
+        assert "is not defined" in msg  # the underlying simpleeval cause is appended
+
+    def test_context_callable_raising_is_wrapped_as_templates_error(self):
+        """M30: an exception raised by a context callable (user function or
+        factory fixture invoked inside the expression) is surfaced as a
+        TemplatesError with the cause in the message and chained, instead of
+        escaping the enumerated except list as a raw traceback."""
+
+        class CustomBoom(Exception):
+            pass
+
+        def boom():
+            raise CustomBoom("kaboom from user function")
+
+        with pytest.raises(TemplatesError) as exc_info:
+            walk("{{ boom() }}", {"boom": boom})
+        msg = str(exc_info.value)
+        assert "{{ boom() }}" in msg  # rendered in its {{ }} form
+        assert "kaboom from user function" in msg  # the cause is appended to the message
+        assert isinstance(exc_info.value.__cause__, CustomBoom)  # and chained
+
+
+class TestTemplateBuiltins:
+    """M14: names the validator treats as engine-provided must really evaluate."""
+
+    def test_advertised_builtins_are_available(self):
+        assert walk("{{ len([1, 2, 3]) }}", {}) == 3
+        assert isinstance(walk("{{ uuid4() }}", {}), str)
+        assert walk("{{ get('k', 'd') }}", {}) == "d"
+        assert walk("{{ exists('k') }}", {}) is False
+        assert walk("{{ env('NOPE_VAR_XYZ', 'fallback') }}", {}) == "fallback"
+        assert walk("{{ str(int('41') + 1) }}", {}) == "42"

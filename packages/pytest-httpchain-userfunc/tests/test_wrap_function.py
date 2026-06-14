@@ -17,34 +17,10 @@ class TestWrapFunctionBasic:
         assert callable(wrapped)
 
     def test_wrapped_multiple_calls(self):
-        wrapped = wrap_function("test_helpers:helper_add")
+        wrapped = wrap_function("_helpers:helper_add")
         assert wrapped(1, 2) == 3
         assert wrapped(10, 20) == 30
         assert wrapped(0, 0) == 0
-
-
-class TestWrapFunctionDefaultArgs:
-    """Tests for default_args behavior."""
-
-    def test_default_args_prepended(self):
-        wrapped = wrap_function("test_helpers:concat_three", default_args=["first"])
-        result = wrapped("second", "third")
-        assert result == "first-second-third"
-
-    def test_default_args_multiple(self):
-        wrapped = wrap_function("test_helpers:concat_four", default_args=["one", "two"])
-        result = wrapped("three", "four")
-        assert result == "one.two.three.four"
-
-    def test_default_args_empty_list(self):
-        wrapped = wrap_function("test_helpers:helper_add", default_args=[])
-        result = wrapped(5, 5)
-        assert result == 10
-
-    def test_default_args_none(self):
-        wrapped = wrap_function("test_helpers:helper_add", default_args=None)
-        result = wrapped(3, 4)
-        assert result == 7
 
 
 class TestWrapFunctionDefaultKwargs:
@@ -56,7 +32,7 @@ class TestWrapFunctionDefaultKwargs:
         assert "\n" in result
 
     def test_call_kwargs_override_default(self):
-        wrapped = wrap_function("test_helpers:helper_with_kwargs", default_kwargs={"name": "default"})
+        wrapped = wrap_function("_helpers:helper_with_kwargs", default_kwargs={"name": "default"})
         result = wrapped(name="override")
         assert result == "hello, override"
 
@@ -74,28 +50,6 @@ class TestWrapFunctionDefaultKwargs:
         wrapped = wrap_function("json:dumps", default_kwargs={"indent": 2})
         result = wrapped({"a": 1}, sort_keys=True)
         assert "\n" in result
-
-
-class TestWrapFunctionCombined:
-    """Tests for combined default_args and default_kwargs."""
-
-    def test_both_defaults_applied(self):
-        wrapped = wrap_function(
-            "test_helpers:format_message",
-            default_args=["INFO"],
-            default_kwargs={"suffix": "..."},
-        )
-        result = wrapped("Processing")
-        assert result == "INFO: Processing..."
-
-    def test_call_args_and_kwargs_merge_with_defaults(self):
-        wrapped = wrap_function(
-            "test_helpers:full_function",
-            default_args=["A"],
-            default_kwargs={"x": 10, "y": 20},
-        )
-        result = wrapped("B", "C", z=30)
-        assert result == "ABC-102030"
 
 
 class TestWrapFunctionName:
@@ -131,7 +85,7 @@ class TestWrapFunctionErrors:
             wrapped()
 
     def test_runtime_error_wrapped(self):
-        wrapped = wrap_function("test_helpers:always_fails")
+        wrapped = wrap_function("_helpers:always_fails")
 
         with pytest.raises(UserFunctionError, match="Error calling function") as exc_info:
             wrapped()
@@ -140,13 +94,13 @@ class TestWrapFunctionErrors:
         assert isinstance(exc_info.value.__cause__, RuntimeError)
 
     def test_user_function_error_preserved(self):
-        wrapped = wrap_function("test_helpers:raises_user_error")
+        wrapped = wrap_function("_helpers:raises_user_error")
 
         with pytest.raises(UserFunctionError, match="custom error"):
             wrapped()
 
     def test_type_error_from_bad_args(self):
-        wrapped = wrap_function("test_helpers:needs_three_args", default_args=["only_one"])
+        wrapped = wrap_function("_helpers:needs_three_args")
 
         with pytest.raises(UserFunctionError, match="Error calling function"):
-            wrapped()
+            wrapped("only_one")

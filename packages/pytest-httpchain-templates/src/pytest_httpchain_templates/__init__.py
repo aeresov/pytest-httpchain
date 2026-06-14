@@ -13,12 +13,14 @@ Example:
 """
 
 from .exceptions import TemplatesError
-from .expressions import extract_template_expression, is_complete_template
-from .substitution import walk
+from .expressions import TEMPLATE_PATTERN, extract_template_expression, is_complete_template
+from .substitution import TEMPLATE_BUILTINS, walk
 
 __all__ = [
     "walk",
     "is_complete_template",
     "extract_template_expression",
+    "TEMPLATE_PATTERN",
+    "TEMPLATE_BUILTINS",
     "TemplatesError",
 ]

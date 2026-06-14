@@ -1,0 +1,25 @@
+{
+    "stages": [
+        {
+            "name": "rate_limit_exceeded",
+            "description": "Giving up after max_rate_limit_delay yields a clean failure (M2)",
+            "fixtures": ["server"],
+            "parallel": {
+                "repeat": 6,
+                "max_concurrency": 6,
+                "calls_per_sec": 1,
+                "max_rate_limit_delay": 1
+            },
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

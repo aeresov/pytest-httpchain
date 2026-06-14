@@ -1,10 +1,9 @@
 """User function handling for pytest-httpchain.
 
 This package provides utilities for importing and invoking user-defined functions
-from test scenarios. Functions can be specified as:
-- Explicit module paths: "module.submodule:func"
-- conftest.py functions: "func_name"
-- Current scope functions: "func_name"
+from test scenarios. Functions must be specified as explicit module paths in
+"module.submodule:func" format. Bare function names (without a module path) are
+rejected with UserFunctionError.
 
 Example:
     >>> from pytest_httpchain_userfunc import call_function

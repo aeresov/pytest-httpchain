@@ -50,12 +50,21 @@ import re
 from pathlib import Path
 from typing import Any, Literal
 
-import pytest_httpchain_jsonref.loader
 from pydantic import BaseModel, ValidationError
-from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
-from pytest_httpchain_models.entities import Scenario, Stage, Verify
-from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN
-from pytest_httpchain_templates.substitution import JSON_LITERALS, SAFE_FUNCTIONS
+from pytest_httpchain_jsonref import ReferenceResolverError, load_json
+from pytest_httpchain_models import (
+    FunctionsSubstitution,
+    JMESPathSave,
+    SaveStep,
+    Scenario,
+    Stage,
+    SubstitutionsSave,
+    UserFunctionsSave,
+    VarsSubstitution,
+    Verify,
+    VerifyStep,
+)
+from pytest_httpchain_templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN
 
 Severity = Literal["error", "warning"]
 
@@ -80,6 +89,7 @@ class DiagnosticCode:
     INVALID_JSON = "HTTPCHAIN014"
     PARSE_ERROR = "HTTPCHAIN015"
     FIXTURE_IN_SCENARIO_TEMPLATE = "HTTPCHAIN016"
+    SCENARIO_UNDEFINED_VAR = "HTTPCHAIN017"
     # Deep (opt-in) checks: imports, signatures, referenced files.
     REFERENCED_FILE_NOT_FOUND = "HTTPCHAIN020"
     SCHEMA_FILE_INVALID = "HTTPCHAIN021"
@@ -99,15 +109,6 @@ class Diagnostic(BaseModel):
 
 def _diag(code: str, severity: Severity, message: str, location: str | None = None) -> Diagnostic:
     return Diagnostic(code=code, severity=severity, message=message, location=location)
-
-
-# Names provided by the template engine that don't need user definition.
-TEMPLATE_BUILTINS = (
-    set(SAFE_FUNCTIONS)
-    | set(JSON_LITERALS)
-    | {"exists", "get"}  # context helpers added at eval time
-    | {"rand", "randint", "int", "float", "str"}  # simpleeval defaults
-)
 
 
 def _extract_names_from_expr(expr: str) -> set[str]:
@@ -160,12 +161,11 @@ def substitution_names(substitutions: Any) -> set[str]:
     """Names introduced by a list of ``vars``/``functions`` substitution entries."""
     names: set[str] = set()
     for sub in substitutions or []:
-        vars_ = getattr(sub, "vars", None)
-        if isinstance(vars_, dict):
-            names.update(k for k in vars_ if isinstance(k, str))
-        functions = getattr(sub, "functions", None)
-        if isinstance(functions, dict):
-            names.update(k for k in functions if isinstance(k, str))
+        match sub:
+            case VarsSubstitution():
+                names.update(sub.vars.keys())
+            case FunctionsSubstitution():
+                names.update(sub.functions.keys())
     return names
 
 
@@ -173,16 +173,16 @@ def saved_in_stage(stage: Stage) -> set[str]:
     """Variable names a single stage's response steps save into the context."""
     saved: set[str] = set()
     for response_step in stage.response:
-        save = getattr(response_step, "save", None)
-        if save is None:
+        if not isinstance(response_step, SaveStep):
             continue
-        jmespath = getattr(save, "jmespath", None)
-        if isinstance(jmespath, dict):
-            saved.update(jmespath.keys())
-        substitutions = getattr(save, "substitutions", None)
-        if substitutions is not None:
-            saved |= substitution_names(substitutions)
-        # user_functions saves return arbitrary dict keys -> not statically known.
+        match response_step.save:
+            case JMESPathSave(jmespath=jmespath):
+                saved.update(jmespath.keys())
+            case SubstitutionsSave(substitutions=substitutions):
+                saved |= substitution_names(substitutions)
+            case UserFunctionsSave():
+                # user_functions saves return arbitrary dict keys -> not statically known.
+                pass
     return saved
 
 
@@ -285,8 +285,14 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
 
     * scenario-level substitutions and scenario-level fixtures are available
       everywhere;
-    * a stage's own substitutions, parametrize/foreach parameters and fixtures
-      are available to that stage's request and response;
+    * a stage's substitutions and ``parallel`` config resolve at stage start,
+      before any iteration: they see fixtures, parametrize parameters, scenario
+      substitutions and earlier saves — but not ``foreach`` parameters;
+    * a stage's request and response additionally see the ``foreach`` parameters
+      (resolved per iteration); intra-step ordering within a stage's response is
+      approximated (all of a stage's own saves are treated as available to its
+      response), so a verify that reads a value saved by a later save step in the
+      same stage is not flagged;
     * a value saved in a stage's response is available to that stage's response
       and to *later* stages — but never to the same stage's request, and never
       to earlier stages;
@@ -322,15 +328,20 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
     for i, stage in enumerate(scenario.stages):
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
-        request_available = scenario_available | stage_defined_names(stage) | cumulative_saves
+        # Stage substitutions and the parallel config are resolved at stage start,
+        # BEFORE any foreach iteration variable exists, so they see fixtures,
+        # parametrize parameters, scenario substitutions and earlier saves — but not
+        # foreach parameters. The request/response are resolved per iteration, so
+        # they additionally see the foreach parameters.
+        foreach_params = _parameter_names(getattr(stage.parallel, "foreach", None)) if stage.parallel is not None else set()
+        pre_iteration_available = scenario_available | set(stage.fixtures) | _parameter_names(stage.parametrize) | substitution_names(stage.substitutions) | cumulative_saves
+        request_available = pre_iteration_available | foreach_params
         response_available = request_available | saves_by_stage[i]
 
-        # ``parallel.foreach`` values are resolved at stage execution against the
-        # full local context, so they belong in the broad request bucket — unlike
-        # ``parametrize`` values, handled separately below against scenario_scope.
-        request_refs: set[str] = set()
-        for key in ("request", "substitutions", "parallel"):
-            extract_template_variables(raw.get(key), request_refs)
+        pre_iteration_refs: set[str] = set()
+        for key in ("substitutions", "parallel"):
+            extract_template_variables(raw.get(key), pre_iteration_refs)
+        request_refs = extract_template_variables(raw.get("request"))
         response_refs = extract_template_variables(raw.get("response"))
 
         for name in sorted(extract_template_variables(raw.get("parametrize"))):
@@ -373,6 +384,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
         undefined_here: set[str] = set()
 
         for refs, available, in_request in (
+            (sorted(pre_iteration_refs), pre_iteration_available, True),
             (sorted(request_refs), request_available, True),
             (sorted(response_refs), response_available, False),
         ):
@@ -400,6 +412,73 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
             )
 
         cumulative_saves |= saves_by_stage[i]
+
+    return diagnostics
+
+
+def _verify_diagnostics(scenario: Scenario) -> list[Diagnostic]:
+    """Per-stage verify-step checks: missing validation, no-op verifies, and
+    contradictory body ``contains``/``matches`` declarations.
+
+    Extracted from :func:`check_scenario` so each check family has its own
+    helper, mirroring :func:`_dataflow_diagnostics` and the deep-check helpers.
+    Behavior, codes and messages are unchanged.
+    """
+    diagnostics: list[Diagnostic] = []
+
+    for i, stage in enumerate(scenario.stages):
+        if not any(isinstance(step, VerifyStep) for step in stage.response):
+            diagnostics.append(
+                _diag(
+                    DiagnosticCode.NO_VERIFY,
+                    "warning",
+                    f"Stage '{stage.name}' has no response validation (no verify step)",
+                    location=stage.name,
+                )
+            )
+
+        for k, step in enumerate(stage.response):
+            if not isinstance(step, VerifyStep):
+                continue
+            verify = step.verify
+            location = f"stages[{i}].response[{k}].verify"
+
+            if _is_noop_verify(verify):
+                diagnostics.append(
+                    _diag(
+                        DiagnosticCode.NOOP_VERIFY,
+                        "warning",
+                        f"Stage '{stage.name}': verify step asserts nothing (no status, headers, expressions, user functions, or body checks)",
+                        location=location,
+                    )
+                )
+
+            # Overlap is compared on the raw (unrendered) strings: identical
+            # entries — including identical templates — are caught. A contradiction
+            # that only emerges after rendering (e.g. a template that resolves to a
+            # literal listed in the opposite set) is intentionally not pursued, since
+            # rendering with a partial static context risks false-positive errors.
+            contains_overlap = {str(s) for s in verify.body.contains} & {str(s) for s in verify.body.not_contains}
+            if contains_overlap:
+                diagnostics.append(
+                    _diag(
+                        DiagnosticCode.CONTAINS_CONTRADICTION,
+                        "error",
+                        f"Stage '{stage.name}': body verification both requires and forbids substring(s): {sorted(contains_overlap)}",
+                        location=f"{location}.body",
+                    )
+                )
+
+            matches_overlap = {str(p) for p in verify.body.matches} & {str(p) for p in verify.body.not_matches}
+            if matches_overlap:
+                diagnostics.append(
+                    _diag(
+                        DiagnosticCode.MATCHES_CONTRADICTION,
+                        "error",
+                        f"Stage '{stage.name}': body verification both requires and forbids pattern(s): {sorted(matches_overlap)}",
+                        location=f"{location}.body",
+                    )
+                )
 
     return diagnostics
 
@@ -674,7 +753,21 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
     vars_saved = extract_saved_variables(scenario)
     vars_referenced = extract_template_variables(test_data)
 
-    var_conflicts = set(fixtures) & vars_defined
+    # HTTPCHAIN002: a fixture and a variable (substitution or parametrize/foreach
+    # parameter) that share a name AND coexist in the same stage conflict — the
+    # fixture shadows the variable in that stage's generated method. Scope the check
+    # per stage so a fixture used only in one stage and a same-named parameter used
+    # only in another (which never coexist) are not falsely flagged.
+    scenario_fixture_set = set(scenario.fixtures)
+    scenario_sub_names = set(substitution_names(scenario.substitutions))
+    var_conflicts: set[str] = set()
+    for stage in scenario.stages:
+        stage_fixtures = scenario_fixture_set | set(stage.fixtures)
+        stage_params = _parameter_names(stage.parametrize)
+        if stage.parallel is not None:
+            stage_params |= _parameter_names(getattr(stage.parallel, "foreach", None))
+        stage_vars = scenario_sub_names | substitution_names(stage.substitutions) | stage_params
+        var_conflicts |= stage_fixtures & stage_vars
     if var_conflicts:
         diagnostics.append(
             _diag(
@@ -712,6 +805,20 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
                     location=key,
                 )
             )
+        # Beyond fixtures, scenario-level templates resolve at collection against
+        # only the scenario substitutions (no stage vars, no saved values). A
+        # reference to anything else is a guaranteed collection-time crash, so flag
+        # it as an error (fixtures are reported separately above).
+        undefined_refs = scenario_level_refs - set(fixtures) - scenario_sub_names
+        if undefined_refs:
+            diagnostics.append(
+                _diag(
+                    DiagnosticCode.SCENARIO_UNDEFINED_VAR,
+                    "error",
+                    f"Undefined variable(s) in scenario-level '{key}' templates: {sorted(undefined_refs)} (these resolve at collection time against only scenario substitutions)",
+                    location=key,
+                )
+            )
 
     # NOTE: response data (response/status_code/body/json/text/headers/cookies) is
     # NOT ambient in {{ }} templates — it reaches save/verify handlers directly and
@@ -720,59 +827,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
     # from references via TEMPLATE_BUILTINS.
     diagnostics.extend(_dataflow_diagnostics(scenario, test_data))
 
-    for i, stage in enumerate(scenario.stages):
-        if not any(getattr(step, "verify", None) is not None for step in stage.response):
-            diagnostics.append(
-                _diag(
-                    DiagnosticCode.NO_VERIFY,
-                    "warning",
-                    f"Stage '{stage.name}' has no response validation (no verify step)",
-                    location=stage.name,
-                )
-            )
-
-        for k, step in enumerate(stage.response):
-            verify = getattr(step, "verify", None)
-            if verify is None:
-                continue
-            location = f"stages[{i}].response[{k}].verify"
-
-            if _is_noop_verify(verify):
-                diagnostics.append(
-                    _diag(
-                        DiagnosticCode.NOOP_VERIFY,
-                        "warning",
-                        f"Stage '{stage.name}': verify step asserts nothing (no status, headers, expressions, user functions, or body checks)",
-                        location=location,
-                    )
-                )
-
-            # Overlap is compared on the raw (unrendered) strings: identical
-            # entries — including identical templates — are caught. A contradiction
-            # that only emerges after rendering (e.g. a template that resolves to a
-            # literal listed in the opposite set) is intentionally not pursued, since
-            # rendering with a partial static context risks false-positive errors.
-            contains_overlap = {str(s) for s in verify.body.contains} & {str(s) for s in verify.body.not_contains}
-            if contains_overlap:
-                diagnostics.append(
-                    _diag(
-                        DiagnosticCode.CONTAINS_CONTRADICTION,
-                        "error",
-                        f"Stage '{stage.name}': body verification both requires and forbids substring(s): {sorted(contains_overlap)}",
-                        location=f"{location}.body",
-                    )
-                )
-
-            matches_overlap = {str(p) for p in verify.body.matches} & {str(p) for p in verify.body.not_matches}
-            if matches_overlap:
-                diagnostics.append(
-                    _diag(
-                        DiagnosticCode.MATCHES_CONTRADICTION,
-                        "error",
-                        f"Stage '{stage.name}': body verification both requires and forbids pattern(s): {sorted(matches_overlap)}",
-                        location=f"{location}.body",
-                    )
-                )
+    diagnostics.extend(_verify_diagnostics(scenario))
 
     scenario_info = ScenarioInfo(
         num_stages=len(scenario.stages),
@@ -795,6 +850,28 @@ def resolve_root_path(path: Path) -> Path:
             return potential_root
         potential_root = potential_root.parent
     return path.parent
+
+
+def load_scenario(path: Path, *, root_path: Path | None = None, ref_parent_traversal_depth: int = 3) -> tuple[Scenario, dict[str, Any]]:
+    """Load, ``$ref``-resolve and validate a scenario file -> ``(scenario, raw_data)``.
+
+    The single load+resolve+validate path shared by the CLI inspection commands
+    (``show``/``graph``) and the data-flow loader. ``root_path`` constrains ``$ref``
+    resolution; when omitted it defaults to :func:`resolve_root_path` (the nearest
+    ``tests/`` ancestor).
+
+    NOTE on the root-path divergence: pytest collection (``plugin.py``) constrains
+    ``$ref`` resolution to ``config.rootpath`` (the repo root), while every CLI path
+    defaults to :func:`resolve_root_path`. A ``$ref`` reaching above ``tests/`` but
+    inside the repo therefore resolves under collection yet may need an explicit
+    ``--root-path`` to resolve the same way from the CLI. Raises
+    ``ReferenceResolverError`` / ``json.JSONDecodeError`` / ``pydantic.ValidationError``
+    on failure; callers map these to user-facing errors.
+    """
+    if root_path is None:
+        root_path = resolve_root_path(path)
+    test_data = load_json(path, max_parent_traversal_depth=ref_parent_traversal_depth, root_path=root_path)
+    return Scenario.model_validate(test_data), test_data
 
 
 def validate_scenario(
@@ -836,7 +913,7 @@ def validate_scenario(
         root_path = resolve_root_path(path)
 
     try:
-        test_data = pytest_httpchain_jsonref.loader.load_json(
+        test_data = load_json(
             path,
             max_parent_traversal_depth=ref_parent_traversal_depth,
             root_path=root_path,

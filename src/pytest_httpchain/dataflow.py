@@ -6,10 +6,8 @@ diagnostics: which variables each stage saves, which it consumes from earlier
 stages, and the producer -> consumer edges between stages.
 """
 
-from pathlib import Path
 from typing import Any
 
-import pytest_httpchain_jsonref.loader
 from pydantic import BaseModel
 from pytest_httpchain_models import Scenario
 
@@ -17,7 +15,6 @@ from pytest_httpchain.validation import (
     _parameter_names,
     extract_template_variables,
     raw_stages,
-    resolve_root_path,
     saved_in_stage,
     stage_defined_names,
     substitution_names,
@@ -69,14 +66,14 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     saves_by_stage = [saved_in_stage(stage) for stage in scenario.stages]
     scenario_fixture_names = set(scenario.fixtures)
 
-    first_save_stage: dict[str, int] = {}
-    for i, saved in enumerate(saves_by_stage):
-        for name in saved:
-            first_save_stage.setdefault(name, i)
-
     stages: list[StageFlow] = []
     edges: list[DataFlowEdge] = []
     cumulative_saves: set[str] = set()
+    # The most recent stage (so far) that saved each name. A re-saved variable is
+    # attributed to its LAST writer before the consumer, matching the runtime
+    # ChainMap layering where a later save shadows an earlier one — not the first
+    # writer, which is what the graph used to (incorrectly) draw.
+    last_save_stage: dict[str, int] = {}
 
     for i, stage in enumerate(scenario.stages):
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
@@ -98,7 +95,7 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
 
         by_producer: dict[int, list[str]] = {}
         for name in consumes:
-            by_producer.setdefault(first_save_stage[name], []).append(name)
+            by_producer.setdefault(last_save_stage[name], []).append(name)
         for producer in sorted(by_producer):
             edges.append(DataFlowEdge(producer=producer, consumer=i, vars=sorted(by_producer[producer])))
 
@@ -116,22 +113,9 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         )
 
         cumulative_saves |= saves_by_stage[i]
+        for name in saves_by_stage[i]:
+            last_save_stage[name] = i
 
     scenario_var_names = set(substitution_names(scenario.substitutions))
 
     return DataFlow(stages=stages, edges=edges, scenario_fixtures=sorted(scenario.fixtures), scenario_vars=sorted(scenario_var_names))
-
-
-def load_scenario(path: Path, ref_parent_traversal_depth: int = 3) -> tuple[Scenario, dict[str, Any]]:
-    """Load + ``$ref``-resolve + validate a scenario file.
-
-    Returns ``(scenario, raw_test_data)``. Raises ``ReferenceResolverError``,
-    ``json.JSONDecodeError`` or ``pydantic.ValidationError`` on failure — callers
-    map these to user-facing errors.
-    """
-    test_data = pytest_httpchain_jsonref.loader.load_json(
-        path,
-        max_parent_traversal_depth=ref_parent_traversal_depth,
-        root_path=resolve_root_path(path),
-    )
-    return Scenario.model_validate(test_data), test_data

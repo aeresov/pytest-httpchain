@@ -23,16 +23,16 @@ class TestImportFromExplicitModule:
         assert func({"a": "1", "b": "2"}) in ["a=1&b=2", "b=2&a=1"]
 
     def test_import_from_test_helper(self):
-        func = import_function("test_helpers:helper_add")
+        func = import_function("_helpers:helper_add")
         assert callable(func)
         assert func(2, 3) == 5
 
     def test_import_no_args_function(self):
-        func = import_function("test_helpers:helper_no_args")
+        func = import_function("_helpers:helper_no_args")
         assert func() == "helper_result"
 
     def test_import_kwargs_function(self):
-        func = import_function("test_helpers:helper_with_kwargs")
+        func = import_function("_helpers:helper_with_kwargs")
         assert func(name="world") == "hello, world"
 
 
@@ -56,7 +56,7 @@ class TestImportErrors:
 
     def test_non_callable_in_helper_raises(self):
         with pytest.raises(UserFunctionError, match="is not callable"):
-            import_function("test_helpers:not_callable")
+            import_function("_helpers:not_callable")
 
     def test_bare_name_raises(self):
         with pytest.raises(UserFunctionError, match="Module path is required"):
@@ -66,10 +66,12 @@ class TestImportErrors:
         with pytest.raises(UserFunctionError, match="Invalid function name format"):
             import_function("123invalid")
 
-
-class TestImportPrecedence:
-    """Tests for import resolution."""
-
-    def test_explicit_module_used(self):
-        func = import_function("json:dumps")
-        assert func({"a": 1}) == '{"a": 1}'
+    def test_non_import_error_at_module_top_level_is_wrapped(self, tmp_path, monkeypatch):
+        """M33: a module whose top-level code raises a non-ImportError is wrapped
+        as UserFunctionError instead of escaping as a raw traceback."""
+        (tmp_path / "boom_module.py").write_text("raise RuntimeError('top-level boom')\n")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        with pytest.raises(UserFunctionError, match="Failed to import module") as exc_info:
+            import_function("boom_module:whatever")
+        assert "top-level boom" in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, RuntimeError)

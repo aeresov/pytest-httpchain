@@ -1,0 +1,33 @@
+{
+    "description": "A failing parallel stage must commit no saves (M4)",
+    "stages": [
+        {
+            "name": "parallel_save_then_fail",
+            "fixtures": ["server"],
+            "parallel": {
+                "foreach": [
+                    {"individual": {"status_path": ["/ok", "/bad", "/ok"]}}
+                ],
+                "max_concurrency": 3
+            },
+            "request": {
+                "url": "{{ server }}{{ status_path }}"
+            },
+            "response": [
+                {"verify": {"status": 200}},
+                {"save": {"substitutions": [{"vars": {"leaked": "yes"}}]}}
+            ]
+        },
+        {
+            "name": "no_partial_leak",
+            "fixtures": ["server"],
+            "always_run": true,
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {"verify": {"expressions": ["{{ not exists('leaked') }}"]}}
+            ]
+        }
+    ]
+}

@@ -48,8 +48,10 @@ This is a uv workspace monorepo with the main plugin in `src/` and supporting pa
 
 ```
 src/pytest_httpchain/          # Main pytest plugin
-├── cli.py                     # Typer CLI (validate scenarios)
+├── cli.py                     # Typer CLI (validate, schema, resolve, show, graph)
 ├── validation.py              # Shared validator (CLI + collection-time): coded Diagnostic objects (HTTPCHAINxxx) for semantic checks incl. order-aware data-flow; plus opt-in `check_scenario_deep` (imports/signatures/files) used only by `validate --deep`
+├── dataflow.py                # DataFlow model + analyze_dataflow() (stage data-flow analysis, used by show/graph)
+├── schema.py                  # build_schema() — JSON Schema generation shared by the schema command
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule)
 ├── carrier.py                 # Test execution engine (Carrier class)
 ├── utils.py                   # Marker construction, substitution processing, user function calls
@@ -66,7 +68,7 @@ packages/
 └── pytest-httpchain-userfunc/      # Dynamic function import/invocation
 ```
 
-Each package has its own CLAUDE.md with detailed API and behavior documentation.
+Most packages have their own CLAUDE.md with detailed API and behavior documentation (the `core` package, which holds only shared base types, does not).
 
 ## Test File Pattern
 

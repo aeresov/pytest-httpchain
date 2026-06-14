@@ -1,3 +1,26 @@
+"""pytest plugin entry point: discovery, collection, and reporting hooks.
+
+Registered as the ``pytest11`` entry point, this module wires HTTP-chain JSON
+scenarios into pytest:
+
+- ``pytest_addoption`` / ``pytest_configure`` register and validate the ini
+  options (``suffix``, ``ref_parent_traversal_depth``, ``max_comprehension_length``,
+  ``max_parallel_iterations``) and the ``--output-dir`` flag.
+- ``pytest_collect_file`` matches ``test_<name>.<suffix>.json`` files and hands
+  them to :class:`JsonModule`.
+- :class:`JsonModule.collect` loads the JSON (resolving ``$ref``), validates it
+  against the :class:`Scenario` model, runs the semantic validator
+  (warnings become :class:`ScenarioValidationWarning`, errors become
+  ``CollectError``), and builds the dynamic test class via
+  ``carrier.create_test_class``.
+- ``pytest_runtest_makereport`` attaches the last HTTP request/response to the
+  test report and optionally writes a HAR file.
+
+:class:`ScenarioValidationWarning` is defined here because the collection hook
+and the ``pytest11`` entry point reference it directly; it is re-exported from
+the package ``__init__`` as the user-facing name.
+"""
+
 import logging
 import re
 import types
@@ -9,10 +32,8 @@ from typing import Any
 import pytest
 import pytest_httpchain_jsonref
 import simpleeval
-from _pytest import config, nodes, python, reports, runner
-from _pytest.config import argparsing
 from pydantic import ValidationError
-from pytest_httpchain_models.entities import Scenario
+from pytest_httpchain_models import Scenario
 
 from pytest_httpchain.constants import ConfigOptions
 
@@ -29,7 +50,7 @@ class ScenarioValidationWarning(pytest.PytestWarning):
     """A collected scenario has a non-fatal validation issue (e.g. an undefined variable)."""
 
 
-class JsonModule(python.Module):
+class JsonModule(pytest.Module):
     """JSON test module that collects and executes HTTP chain tests.
 
     This class extends pytest's Module to handle JSON test files containing
@@ -37,9 +58,9 @@ class JsonModule(python.Module):
     definitions into executable pytest test classes.
     """
 
-    def collect(self) -> Iterable[nodes.Item | nodes.Collector]:
+    def collect(self) -> Iterable[pytest.Item | pytest.Collector]:
         # read JSON and apply references
-        ref_parent_traversal_depth = int(self.config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH))
+        ref_parent_traversal_depth = self.config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
         root_path = Path(self.config.rootpath)
         try:
             test_data = pytest_httpchain_jsonref.load_json(
@@ -48,9 +69,9 @@ class JsonModule(python.Module):
                 root_path=root_path,
             )
         except pytest_httpchain_jsonref.ReferenceResolverError as e:
-            raise nodes.Collector.CollectError(f"Cannot load JSON file {self.path}: {e}") from None
+            raise pytest.Collector.CollectError(f"Cannot load JSON file {self.path}: {e}") from None
         except Exception as e:
-            raise nodes.Collector.CollectError(f"Failed to parse JSON file {self.path}: {e}") from None
+            raise pytest.Collector.CollectError(f"Failed to parse JSON file {self.path}: {e}") from None
 
         # validate general scenario structure
         try:
@@ -63,7 +84,7 @@ class JsonModule(python.Module):
                 error_details.append(f"  - {loc}: {msg}")
 
             full_error_msg = f"Cannot parse test scenario in {self.path}:\n" + "\n".join(error_details)
-            raise nodes.Collector.CollectError(full_error_msg) from None
+            raise pytest.Collector.CollectError(full_error_msg) from None
 
         # semantic validation: cross-cutting checks the schema cannot express
         # (duplicate stage names, fixture/variable conflicts, undefined/forward-referenced
@@ -75,15 +96,25 @@ class JsonModule(python.Module):
         error_diagnostics = [d for d in diagnostics if d.severity == "error"]
         if error_diagnostics:
             detail = "\n".join(f"  - [{d.code}] {d.message}" for d in error_diagnostics)
-            raise nodes.Collector.CollectError(f"Invalid test scenario in {self.path}:\n{detail}")
+            raise pytest.Collector.CollectError(f"Invalid test scenario in {self.path}:\n{detail}")
 
         # generate python test class
-        max_parallel_iterations = int(self.config.getini(ConfigOptions.MAX_PARALLEL_ITERATIONS))
-        CarrierClass = create_test_class(scenario, self.name, max_parallel_iterations=max_parallel_iterations)
+        max_parallel_iterations = self.config.getini(ConfigOptions.MAX_PARALLEL_ITERATIONS)
+        try:
+            CarrierClass = create_test_class(scenario, self.name, max_parallel_iterations=max_parallel_iterations)
+        except Exception as e:
+            # create_test_class resolves scenario-level substitutions/ssl and may call
+            # the scenario auth user function and build the httpx client at collection
+            # time; surface any failure as a clean collection error, like the sibling
+            # load/validate paths above, instead of a raw internal traceback.
+            raise pytest.Collector.CollectError(f"Cannot build test class for {self.path}: {e}") from None
+        # Module._getobj() defaults to importtestmodule(self.path), which would try
+        # to import this .json file as a Python module and fail. Bypass it by handing
+        # pytest an in-memory module that already carries the generated test class.
         dummy_module = types.ModuleType("generated")
         setattr(dummy_module, self.name, CarrierClass)
         self._getobj = lambda: dummy_module  # ty: ignore[invalid-assignment]
-        json_class = python.Class.from_parent(
+        json_class = pytest.Class.from_parent(
             self,
             path=self.path,
             name=self.name,
@@ -95,12 +126,12 @@ class JsonModule(python.Module):
             try:
                 json_class.add_marker(make_marker(mark_str))
             except Exception as e:
-                raise nodes.Collector.CollectError(f"Invalid marker '{mark_str}' in {self.path}: {e}") from None
+                raise pytest.Collector.CollectError(f"Invalid marker '{mark_str}' in {self.path}: {e}") from None
 
         yield json_class
 
 
-def pytest_addoption(parser: argparsing.Parser) -> None:
+def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini(
         name=ConfigOptions.SUFFIX,
         help="File suffix for HTTP test files.",
@@ -110,20 +141,20 @@ def pytest_addoption(parser: argparsing.Parser) -> None:
     parser.addini(
         name=ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH,
         help="Maximum number of parent directory traversals allowed in $ref paths.",
-        type="string",
-        default="3",
+        type="int",
+        default=3,
     )
     parser.addini(
         name=ConfigOptions.MAX_COMPREHENSION_LENGTH,
         help="Maximum length for list/dict comprehensions in template expressions.",
-        type="string",
-        default="50000",
+        type="int",
+        default=50000,
     )
     parser.addini(
         name=ConfigOptions.MAX_PARALLEL_ITERATIONS,
         help="Maximum number of parallel iterations allowed per stage.",
-        type="string",
-        default="10000",
+        type="int",
+        default=10000,
     )
     parser.addoption(
         "--output-dir",
@@ -133,30 +164,34 @@ def pytest_addoption(parser: argparsing.Parser) -> None:
     )
 
 
-def pytest_configure(config: config.Config) -> None:
+def pytest_configure(config: pytest.Config) -> None:
+    # Numeric options are registered with type="int", so getini returns an int and a
+    # non-int value in the ini is reported by pytest as a clean usage error. Range
+    # checks below raise pytest.UsageError (not bare ValueError, which pytest renders
+    # as an INTERNALERROR with traceback).
     suffix = str(config.getini(ConfigOptions.SUFFIX))
     if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", suffix):
-        raise ValueError("suffix must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
+        raise pytest.UsageError("suffix must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
 
-    ref_parent_traversal_depth = int(config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH))
+    ref_parent_traversal_depth = config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
     if ref_parent_traversal_depth < 0:
-        raise ValueError("Maximum number of parent directory traversals must be non-negative")
+        raise pytest.UsageError("ref_parent_traversal_depth must be non-negative")
 
-    max_comprehension_length = int(config.getini(ConfigOptions.MAX_COMPREHENSION_LENGTH))
+    max_comprehension_length = config.getini(ConfigOptions.MAX_COMPREHENSION_LENGTH)
     if max_comprehension_length < 1:
-        raise ValueError("Maximum comprehension length must be a positive integer")
+        raise pytest.UsageError("max_comprehension_length must be a positive integer")
     if max_comprehension_length > 1_000_000:
-        raise ValueError("Maximum comprehension length must not exceed 1,000,000")
+        raise pytest.UsageError("max_comprehension_length must not exceed 1,000,000")
     simpleeval.MAX_COMPREHENSION_LENGTH = max_comprehension_length  # ty: ignore[invalid-assignment]
 
-    max_parallel_iterations = int(config.getini(ConfigOptions.MAX_PARALLEL_ITERATIONS))
+    max_parallel_iterations = config.getini(ConfigOptions.MAX_PARALLEL_ITERATIONS)
     if max_parallel_iterations < 1:
-        raise ValueError("Maximum parallel iterations must be a positive integer")
+        raise pytest.UsageError("max_parallel_iterations must be a positive integer")
     if max_parallel_iterations > 1_000_000:
-        raise ValueError("Maximum parallel iterations must not exceed 1,000,000")
+        raise pytest.UsageError("max_parallel_iterations must not exceed 1,000,000")
 
 
-def pytest_collect_file(file_path: Path, parent: nodes.Collector) -> nodes.Collector | None:
+def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> pytest.Collector | None:
     suffix: str = parent.config.getini(ConfigOptions.SUFFIX)
     pattern = re.compile(rf"^test_(?P<name>.+)\.{re.escape(suffix)}\.json$")
     file_match = pattern.match(file_path.name)
@@ -165,10 +200,12 @@ def pytest_collect_file(file_path: Path, parent: nodes.Collector) -> nodes.Colle
     return None
 
 
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_makereport(item: nodes.Item, call: runner.CallInfo[Any]) -> Any:
-    outcome = yield
-    report: reports.TestReport = outcome.get_result()
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> Any:
+    # pytest 8+ wrapper protocol: `yield` returns the inner hook's result directly
+    # (no Outcome wrapper). We augment the report's sections in place and must
+    # return the (same) result so it propagates to outer wrappers.
+    report: pytest.TestReport = yield
 
     if call.when == "call":
         if hasattr(item, "instance") and isinstance(item.instance, Carrier):
@@ -198,3 +235,5 @@ def pytest_runtest_makereport(item: nodes.Item, call: runner.CallInfo[Any]) -> A
                     report.sections.append(("HAR File", str(har_path)))
                 except Exception as e:
                     logger.warning(f"Failed to write HAR file for {item.nodeid}: {e}")
+
+    return report

@@ -23,6 +23,7 @@ Configuration options can be set in `pytest.ini` or `pyproject.toml` under `[too
 | `suffix` | `http` | File suffix for test discovery. Files must match `test_<name>.<suffix>.json` |
 | `ref_parent_traversal_depth` | `3` | Maximum parent directory traversals allowed in `$include`/`$merge`/`$ref` paths |
 | `max_comprehension_length` | `50000` | Maximum length for list/dict comprehensions in template expressions |
+| `max_parallel_iterations` | `10000` | Maximum number of parallel iterations (`repeat`/`foreach`) allowed per stage |
 
 Example `pyproject.toml`:
 
@@ -31,7 +32,21 @@ Example `pyproject.toml`:
 suffix = "http"
 ref_parent_traversal_depth = 3
 max_comprehension_length = 50000
+max_parallel_iterations = 10000
 ```
+
+### HAR export
+
+Pass `--output-dir DIR` on the pytest command line to write an [HAR](http://www.softwareishard.com/blog/har-12-spec/) file capturing the HTTP request/response of each test's last stage:
+
+```bash
+pytest --output-dir ./har-output
+```
+
+Each test that performs a request writes a `.har` file under `DIR` (named from the test node id) and a "HAR File" section is added to that test's report.
+
+!!! warning
+    HAR files (and INFO logs and report sections) contain full requests and responses, **including credential headers and saved tokens** — nothing is redacted. Scrub or avoid uploading them as CI artifacts. See [Secrets and sensitive output](advanced/context-layering.md#secrets-and-sensitive-output).
 
 ## IDE Support
 

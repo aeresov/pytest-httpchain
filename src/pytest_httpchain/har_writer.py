@@ -122,11 +122,25 @@ def _calculate_headers_size(headers: httpx.Headers) -> int:
     return size
 
 
+def _response_elapsed_ms(response: httpx.Response) -> float:
+    """Return the response's elapsed time in milliseconds, or 0 if unavailable.
+
+    httpx populates ``response.elapsed`` (a timedelta) once the response has been
+    read; accessing it before then raises RuntimeError. Guard against that and
+    against the attribute being absent on mock/synthetic responses.
+    """
+    try:
+        elapsed = response.elapsed
+    except (RuntimeError, AttributeError):
+        return 0
+    return elapsed.total_seconds() * 1000
+
+
 def request_response_to_har_entry(
     request: httpx.Request,
     response: httpx.Response,
     started_datetime: datetime | None = None,
-    elapsed_ms: float = 0,
+    elapsed_ms: float | None = None,
 ) -> dict[str, Any]:
     """Convert an httpx Request/Response pair to a HAR entry.
 
@@ -134,13 +148,17 @@ def request_response_to_har_entry(
         request: The httpx Request object.
         response: The httpx Response object.
         started_datetime: When the request started (defaults to now).
-        elapsed_ms: Total elapsed time in milliseconds.
+        elapsed_ms: Total elapsed time in milliseconds. When ``None`` (the
+            default), the value is derived from ``response.elapsed``.
 
     Returns:
         A dictionary representing a HAR entry.
     """
     if started_datetime is None:
         started_datetime = datetime.now(UTC)
+
+    if elapsed_ms is None:
+        elapsed_ms = _response_elapsed_ms(response)
 
     entry: dict[str, Any] = {
         "startedDateTime": started_datetime.isoformat(),
@@ -214,7 +232,7 @@ def write_har_file(
     request: httpx.Request,
     response: httpx.Response,
     started_datetime: datetime | None = None,
-    elapsed_ms: float = 0,
+    elapsed_ms: float | None = None,
 ) -> Path:
     """Write a HAR file for a single test.
 
@@ -224,7 +242,8 @@ def write_har_file(
         request: The httpx Request object.
         response: The httpx Response object.
         started_datetime: When the request started.
-        elapsed_ms: Total elapsed time in milliseconds.
+        elapsed_ms: Total elapsed time in milliseconds. When ``None`` (the
+            default), the value is derived from ``response.elapsed``.
 
     Returns:
         Path to the written HAR file.

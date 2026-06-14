@@ -1,4 +1,5 @@
 import base64
+import socket
 import threading
 import time
 from http import HTTPStatus
@@ -224,11 +225,33 @@ def search():
 # ============ Fixtures ============
 
 
+def _free_port() -> int:
+    """Ask the OS for an unused TCP port, then release it for the mock server."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
 @pytest.fixture
 def server():
     reset_counter()  # Reset counter before each test
-    with app.run("localhost", 5000):
-        yield "http://localhost:5000"
+    port = _free_port()
+    with app.run("localhost", port):
+        yield f"http://localhost:{port}"
+
+
+@pytest.fixture
+def server_keep():
+    """Like ``server`` but does NOT reset the shared counter at setup.
+
+    The counter is a process-global, so a later stage using ``server_keep`` can
+    observe the running total accumulated by an earlier stage that used
+    ``server`` — even though each stage gets its own function-scoped fixture and
+    its own ephemeral port (M50).
+    """
+    port = _free_port()
+    with app.run("localhost", port):
+        yield f"http://localhost:{port}"
 
 
 @pytest.fixture

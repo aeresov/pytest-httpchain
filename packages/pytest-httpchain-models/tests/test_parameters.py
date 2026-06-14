@@ -58,6 +58,11 @@ class TestIndividualParameter:
         )
         assert param.ids == ["one", "two"]
 
+    def test_individual_multi_key_rejected(self):
+        """M22: more than one parameter per step is rejected, not silently truncated."""
+        with pytest.raises(ValidationError, match="at most 1"):
+            IndividualParameter(individual={"x": [1, 2], "y": [3, 4]})
+
 
 class TestCombinationsParameter:
     """Tests for CombinationsParameter model."""

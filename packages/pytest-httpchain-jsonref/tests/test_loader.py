@@ -292,95 +292,96 @@ class TestArrayReferences:
         assert result["first_user_name"] == "Alice"
 
 
-class TestIncludeDirective:
-    """Tests for $include as an alternative to $ref (avoids VS Code JSON Schema conflicts)."""
+@pytest.mark.parametrize("directive", ["$ref", "$include", "$merge"])
+class TestDirectiveAliases:
+    """All three spellings ($ref/$include/$merge) must behave identically.
 
-    def test_include_resolves_internal_reference(self, create_json_file):
-        """$include works the same as $ref for internal references."""
+    $include/$merge are preferred (they avoid VS Code JSON Schema conflicts);
+    $ref is the legacy spelling. Parametrizing here keeps their coverage even.
+    """
+
+    def test_resolves_internal_reference(self, create_json_file, directive):
+        """Directive works for internal references."""
         file = create_json_file(
             "test.json",
-            {"source": {"value": 42}, "target": {"$include": "#/source"}},
+            {"source": {"value": 42}, "target": {directive: "#/source"}},
         )
         result = load_json(file)
         assert result["target"]["value"] == 42
-        assert "$include" not in result["target"]
+        assert directive not in result["target"]
 
-    def test_include_resolves_external_reference(self, create_json_file):
-        """$include works for external file references."""
+    def test_resolves_external_reference(self, create_json_file, directive):
+        """Directive works for external file references."""
         create_json_file("external.json", {"data": "from external"})
         file = create_json_file(
             "test.json",
-            {"imported": {"$include": "external.json"}},
+            {"imported": {directive: "external.json"}},
         )
         result = load_json(file)
         assert result["imported"]["data"] == "from external"
 
-    def test_include_with_pointer(self, create_json_file):
-        """$include works with JSON pointers."""
+    def test_with_pointer(self, create_json_file, directive):
+        """Directive works with JSON pointers into an external file."""
         create_json_file("external.json", {"nested": {"value": 99}})
         file = create_json_file(
             "test.json",
-            {"target": {"$include": "external.json#/nested/value"}},
+            {"target": {directive: "external.json#/nested/value"}},
         )
         result = load_json(file)
         assert result["target"] == 99
 
-    def test_include_with_sibling_merge(self, create_json_file):
-        """$include supports deep merging with sibling properties."""
+    def test_with_sibling_merge(self, create_json_file, directive):
+        """Directive supports deep merging with sibling properties."""
         file = create_json_file(
             "test.json",
             {
                 "base": {"a": 1, "b": 2},
-                "extended": {"$include": "#/base", "c": 3},
+                "extended": {directive: "#/base", "c": 3},
             },
         )
         result = load_json(file)
         assert result["extended"] == {"a": 1, "b": 2, "c": 3}
 
-    def test_include_in_array(self, create_json_file):
-        """$include works inside arrays."""
+    def test_in_array(self, create_json_file, directive):
+        """Directive works inside arrays."""
         file = create_json_file(
             "test.json",
             {
                 "template": {"type": "item"},
-                "items": [{"$include": "#/template"}, {"$include": "#/template"}],
+                "items": [{directive: "#/template"}, {directive: "#/template"}],
             },
         )
         result = load_json(file)
         assert result["items"] == [{"type": "item"}, {"type": "item"}]
 
-
-class TestMergeDirective:
-    """Tests for $merge as an alternative to $ref (avoids VS Code JSON Schema conflicts)."""
-
-    def test_merge_resolves_internal_reference(self, create_json_file):
-        """$merge works the same as $ref for internal references."""
+    def test_non_string_value_raises(self, create_json_file, directive):
+        """A non-string directive value must raise (M38)."""
         file = create_json_file(
             "test.json",
-            {"source": {"value": 42}, "target": {"$merge": "#/source"}},
+            {"target": {directive: ["#/source"]}},
         )
-        result = load_json(file)
-        assert result["target"]["value"] == 42
-        assert "$merge" not in result["target"]
+        with pytest.raises(ReferenceResolverError, match="must be a string"):
+            load_json(file)
 
-    def test_merge_resolves_external_reference(self, create_json_file):
-        """$merge works for external file references."""
-        create_json_file("external.json", {"data": "from external"})
+
+class TestMultipleDirectives:
+    """An object may carry at most one reference directive (M37)."""
+
+    @pytest.mark.parametrize(
+        "directives",
+        [
+            ("$ref", "$include"),
+            ("$ref", "$merge"),
+            ("$include", "$merge"),
+            ("$ref", "$include", "$merge"),
+        ],
+    )
+    def test_multiple_directives_raise(self, create_json_file, directives):
+        """More than one directive key in one object must raise, not silently drop."""
+        create_json_file("external.json", {"value": 42})
         file = create_json_file(
             "test.json",
-            {"imported": {"$merge": "external.json"}},
+            {"target": dict.fromkeys(directives, "external.json")},
         )
-        result = load_json(file)
-        assert result["imported"]["data"] == "from external"
-
-    def test_merge_with_sibling_properties(self, create_json_file):
-        """$merge supports deep merging with sibling properties."""
-        file = create_json_file(
-            "test.json",
-            {
-                "base": {"a": 1, "b": 2},
-                "extended": {"$merge": "#/base", "c": 3},
-            },
-        )
-        result = load_json(file)
-        assert result["extended"] == {"a": 1, "b": 2, "c": 3}
+        with pytest.raises(ReferenceResolverError, match="Multiple reference directives"):
+            load_json(file)

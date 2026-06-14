@@ -82,15 +82,14 @@ class TestSecurity:
         assert result["data"] == 42
 
     def test_absolute_path_injection(self, tmp_path):
-        """Test that absolute paths in references are handled securely"""
-        # This test verifies the package doesn't blindly follow absolute paths
-        # Note: The current implementation uses relative paths only,
-        # so absolute paths would be treated as filenames relative to the base
+        """Absolute $ref file paths must be rejected outright.
 
+        An absolute path has no ".." parts, so the parent-traversal limit never
+        fires, and `base / "/abs"` collapses to "/abs" — escaping the sandbox.
+        The resolver must reject it before any filesystem access.
+        """
         test_file = tmp_path / "test.json"
-        # Trying to use an absolute path (will be treated as relative)
         test_file.write_text('{"data": {"$ref": "/etc/passwd"}}')
 
-        # Should fail to find the file (not try to access /etc/passwd)
-        with pytest.raises(ReferenceResolverError, match="not found"):
+        with pytest.raises(ReferenceResolverError, match="Absolute .* not allowed"):
             load_json(test_file)

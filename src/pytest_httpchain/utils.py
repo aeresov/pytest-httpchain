@@ -1,3 +1,20 @@
+"""Shared helpers for building pytest markers, resolving substitutions, and
+invoking user functions.
+
+These helpers are used from both the collection path (``carrier.create_test_class``
+and ``plugin.JsonModule.collect`` resolve scenario-level substitutions and markers
+while building the test class) and the runtime path (``Carrier.execute_stage``
+resolves stage-level substitutions and calls user functions during a request).
+
+Naming oddity: ``process_substitutions`` and ``call_user_function`` raise
+``StageExecutionError`` on a malformed function definition/call, but
+``process_substitutions(scenario.substitutions)`` is invoked at *collection* time
+by ``create_test_class``. So a ``StageExecutionError`` can surface before any
+stage runs; the collection caller catches it and re-wraps it into a pytest
+``CollectError``. The exception name is kept for consistency with the runtime
+path rather than introducing a second error type for the same malformed input.
+"""
+
 import ast
 import logging
 from collections.abc import Mapping, Sequence
@@ -33,6 +50,18 @@ def process_substitutions(
     substitutions: Sequence[Substitution],
     context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Resolve a list of substitution steps into a flat ``{name: value}`` dict.
+
+    Steps are processed in order and each step sees the values produced by the
+    earlier steps layered over ``context`` (later steps may reference earlier
+    ones). ``FunctionsSubstitution`` seeds callable aliases (wrapped user
+    functions, optionally with default kwargs); ``VarsSubstitution`` seeds plain
+    values, rendering any ``{{ }}`` templates against the running context.
+
+    Raises ``StageExecutionError`` on a malformed function definition — note this
+    runs at collection time when resolving scenario-level substitutions (see the
+    module docstring).
+    """
     result: dict[str, Any] = {}
     for step in substitutions:
         current_context = {**(context or {}), **result}
@@ -58,6 +87,15 @@ def process_substitutions(
 
 
 def call_user_function(func_call: UserFunctionCall, **extra_kwargs) -> object:
+    """Import and call a user function described by a ``UserFunctionCall`` model.
+
+    A bare ``UserFunctionName`` is called with only ``extra_kwargs``; a
+    ``UserFunctionKwargs`` merges its declared kwargs under ``extra_kwargs``
+    (caller-supplied values win on conflict). Used both for request/scenario auth
+    callables and for verify/save user functions, where ``extra_kwargs`` carries
+    the ``response``. Raises ``StageExecutionError`` if ``func_call`` is neither
+    supported shape.
+    """
     match func_call:
         case UserFunctionName():
             return call_function(func_call.root, **extra_kwargs)

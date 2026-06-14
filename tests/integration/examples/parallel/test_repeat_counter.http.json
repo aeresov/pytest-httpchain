@@ -1,0 +1,55 @@
+{
+    "description": "M50: a parallel repeat:N stage must fire exactly N requests",
+    "stages": [
+        {
+            "name": "repeat_counter",
+            "description": "POST to the thread-safe /counter endpoint N times in parallel",
+            "fixtures": ["server"],
+            "parallel": {
+                "repeat": 5,
+                "max_concurrency": 3
+            },
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/counter"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "assert_count",
+            "description": "One more POST returns the running total; must equal N+1",
+            "fixtures": ["server_keep"],
+            "request": {
+                "method": "POST",
+                "url": "{{ server_keep }}/counter"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "final_count": "count"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ final_count == 6 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

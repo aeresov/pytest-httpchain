@@ -1,3 +1,25 @@
+"""Test execution engine for pytest-httpchain scenarios.
+
+``create_test_class`` turns a validated :class:`Scenario` into a dynamic pytest
+test class (a subclass of :class:`Carrier`), one ``test_NN - <stage name>``
+method per stage, ordered by the ``order(i)`` marker so the stages run as a
+chain. Each scenario gets its own subclass; the per-scenario mutable state
+(``client``, ``global_context``, ``aborted``, ``last_request``/``last_response``,
+``active_context_managers``) lives at the *class* level and is overridden in the
+subclass dict, so the stage methods — which are classmethods operating on
+``cls`` — share one running context across the chain while different scenarios
+stay isolated from each other.
+
+Per stage, :meth:`Carrier.execute_stage` gates on the abort/``always_run`` flow,
+layers fixtures and substitutions over the global context, expands any
+``parallel`` config into iterations (sequential or thread-pooled, optionally
+rate limited), executes the HTTP request via httpx, runs the response
+verify/save steps, and on full success commits the collected saves as a new
+global-context layer for later stages. Expected failures (bad scenario, failed
+verification, unreachable server) are surfaced via ``pytest.fail(pytrace=False)``
+so the report stays clean rather than dumping an internal traceback.
+"""
+
 import base64
 import inspect
 import json
@@ -17,7 +39,7 @@ import jmespath
 import jmespath.exceptions
 import jsonschema
 import pytest
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 from pyrate_limiter import Duration, Limiter, Rate
 from pytest_httpchain_models import (
     Base64Body,
@@ -52,6 +74,12 @@ from .exceptions import RequestError, SaveError, StageExecutionError, Verificati
 from .utils import call_user_function, make_marker, process_substitutions
 
 logger = logging.getLogger(__name__)
+
+# Exceptions that represent an expected stage failure (a bad scenario, a failed
+# verification, an unreachable server) rather than a bug in the plugin. Both the
+# sequential and the parallel execution paths catch these and turn them into a
+# clean pytest failure instead of a raw traceback.
+_STAGE_FAILURE_EXCEPTIONS = (StageExecutionError, TemplatesError, ValidationError)
 
 
 @dataclass
@@ -94,15 +122,22 @@ class Carrier:
 
     @classmethod
     def execute_stage(cls, stage: Stage, fixture_kwargs: dict[str, Any]) -> None:
+        """Execute one stage end to end.
+
+        Gates on the abort/``always_run`` flow, layers the stage context
+        (fixtures + substitutions over the global context), builds the iteration
+        matrix (``_build_iteration_substitutions``), runs the iterations
+        sequentially or across a thread pool (``_run_iterations``), and on full
+        success commits the collected saves as a new global-context layer.
+
+        Any expected failure is reported via ``pytest.fail`` (clean, no
+        traceback) and marks the chain aborted so later stages skip unless they
+        opt into ``always_run``. A failing stage commits **no** saves, so the
+        global context is left unchanged (deterministic) rather than carrying a
+        thread-timing-dependent subset of a parallel run.
+        """
         try:
-            # prepare stage context (before the abort check, so an always_run
-            # template sees the same fixture layer as stage templates)
-            stage_fixtures: dict[str, Any] = {}
-            for name, value in fixture_kwargs.items():
-                if callable(value) and not inspect.isclass(value):
-                    stage_fixtures[name] = cls._wrap_factory_fixture(value)
-                else:
-                    stage_fixtures[name] = value
+            stage_fixtures = cls._build_stage_fixtures(fixture_kwargs)
 
             if cls.aborted and not cls._resolve_always_run(stage, stage_fixtures):
                 pytest.skip(reason="Flow aborted")
@@ -115,98 +150,144 @@ class Carrier:
             logger.info(f"global context on start: {json.dumps(dict(cls.global_context), indent=2, default=str)}")
             logger.info(f"local context on start: {json.dumps(dict(local_context), indent=2, default=str)}")
 
-            # build iterations
-            iteration_substitutions: list[dict[str, Any]] = [{}]
             parallel_config = walk(stage.parallel, local_context) if stage.parallel else None
-            match parallel_config:
-                case None:
-                    pass
-                case ParallelRepeatConfig(repeat=repeat_count):
-                    iteration_substitutions = [{} for _ in range(repeat_count)]
-                case ParallelForeachConfig(foreach=foreach_steps):
-                    # same algorithm like what pytest does for parametrize marker
-                    for step in foreach_steps:
-                        match step:
-                            case IndividualParameter(individual=individual):
-                                param_name = next(iter(individual.keys()))
-                                values = individual[param_name]
-                                iteration_substitutions = [{**existing, param_name: val} for val in values for existing in iteration_substitutions]
-                            case CombinationsParameter(combinations=combinations):
-                                combos: list[dict[str, Any] | SimpleNamespace] = [vars(item) if isinstance(item, SimpleNamespace) else item for item in combinations]
-                                iteration_substitutions = [{**existing, **combo} for combo in combos for existing in iteration_substitutions]
-
-            if len(iteration_substitutions) > cls.max_parallel_iterations:
-                raise StageExecutionError(
-                    f"Parallel iteration count ({len(iteration_substitutions)}) exceeds maximum ({cls.max_parallel_iterations}). "
-                    f"Set 'max_parallel_iterations' in pytest.ini to increase the limit."
-                )
-
-            # execute iterations
-            max_concurrency = parallel_config.max_concurrency if parallel_config else 1
-            calls_per_sec = parallel_config.calls_per_sec if parallel_config else None
-            max_rate_limit_delay = parallel_config.max_rate_limit_delay if parallel_config else 60
+            iteration_substitutions = cls._build_iteration_substitutions(parallel_config)
 
             total = len(iteration_substitutions)
-            results: list[ParallelIterationResult | None] = [None] * total
-            first_error: tuple[int, Exception] | None = None
-            limiter = Limiter(Rate(calls_per_sec, Duration.SECOND), max_delay=Duration.SECOND * max_rate_limit_delay) if calls_per_sec else None
+            if total == 0:
+                # Unreachable via validated models (foreach values have min_length=1,
+                # repeat is PositiveInt), but guard so a future gap fails loudly
+                # instead of passing a stage that never sent a request.
+                raise StageExecutionError("Parallel configuration produced zero iterations; foreach/repeat must yield at least one item")
+            if total > cls.max_parallel_iterations:
+                raise StageExecutionError(
+                    f"Parallel iteration count ({total}) exceeds maximum ({cls.max_parallel_iterations}). Set 'max_parallel_iterations' in pytest.ini to increase the limit."
+                )
 
-            if total == 1:
-                try:
-                    results[0] = cls._execute_single_iteration(stage, local_context, iteration_substitutions[0], limiter)
-                except (StageExecutionError, TemplatesError, ValidationError) as e:
-                    first_error = (0, e)
+            results, first_error = cls._run_iterations(stage, local_context, iteration_substitutions, parallel_config)
+
+            if first_error is None:
+                # Commit saves only on full success. A failed (parallel) stage must
+                # leave the global context untouched, not commit a non-deterministic
+                # subset of iterations whose saves happened to land before the error.
+                all_saves: dict[str, Any] = {}
+                for iter_result in results:
+                    if iter_result is not None:
+                        all_saves.update(iter_result.saved_context)
+                        cls.last_request = iter_result.request
+                        cls.last_response = iter_result.response
+                logger.info(f"updates for global context: {json.dumps(all_saves, indent=2, default=str)}")
+                cls.global_context = cls.global_context.new_child(all_saves)
             else:
-                workers = min(max_concurrency, total) if total > 0 else 1
-                with ThreadPoolExecutor(max_workers=workers) as executor:
-                    futures: dict[Future[ParallelIterationResult], int] = {}
-                    for idx, iter_vars in enumerate(iteration_substitutions):
-                        future = executor.submit(cls._execute_single_iteration, stage, local_context, iter_vars, limiter)
-                        futures[future] = idx
-
-                    for future in as_completed(futures):
-                        idx = futures[future]
-                        try:
-                            results[idx] = future.result()
-                        except (StageExecutionError, TemplatesError, ValidationError) as e:
-                            first_error = (idx, e)
-                            executor.shutdown(wait=False, cancel_futures=True)
-                            break
-
-            # Apply results in index order - collect all saves for new layer
-            all_saves: dict[str, Any] = {}
-            for iter_result in results:
-                if iter_result is not None:
-                    all_saves.update(iter_result.saved_context)
-                    cls.last_request = iter_result.request
-                    cls.last_response = iter_result.response
-
-            logger.info(f"updates for global context: {json.dumps(all_saves, indent=2, default=str)}")
-
-            # Add response saves as new layer
-            cls.global_context = cls.global_context.new_child(all_saves)
-
-            # Handle error
-            if first_error:
                 idx, exc = first_error
-                # Extract request/response from failed iteration for debugging
+                # Surface the failed iteration's request/response in the report.
                 if isinstance(exc, StageExecutionError):
                     if exc.request is not None:
                         cls.last_request = exc.request
                     if exc.response is not None:
                         cls.last_response = exc.response
-                raise StageExecutionError(f"Parallel execution failed at iteration {idx}: {exc}") from exc
+                # Only label the failure as parallel when the user configured
+                # `parallel`; otherwise re-raise the original error unchanged so a
+                # plain stage failure isn't misreported as "Parallel execution failed".
+                if parallel_config is not None:
+                    raise StageExecutionError(f"Parallel execution failed at iteration {idx}: {exc}") from exc
+                raise exc
 
-        except (
-            TemplatesError,
-            StageExecutionError,
-            ValidationError,
-        ) as e:
-            is_xfail = any("xfail" in mark for mark in stage.marks)
+        except _STAGE_FAILURE_EXCEPTIONS as e:
+            # Detect xfail structurally (marker name == "xfail") rather than by a
+            # substring scan of the raw mark string, so e.g. `skip(reason="...xfail...")`
+            # or a custom `my_xfail` marker is not misclassified. Every mark already
+            # round-tripped through make_marker() at collection time (create_test_class),
+            # so parsing here cannot raise on a previously-validated scenario.
+            is_xfail = any(make_marker(mark).name == "xfail" for mark in stage.marks)
             if not is_xfail:
                 logger.error(str(e))
                 cls.aborted = True
             pytest.fail(reason=str(e), pytrace=False)
+
+    @classmethod
+    def _build_stage_fixtures(cls, fixture_kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Resolve injected fixtures, wrapping callable (factory) fixtures so they
+        can be invoked from template expressions while plain values pass through."""
+        stage_fixtures: dict[str, Any] = {}
+        for name, value in fixture_kwargs.items():
+            if callable(value) and not inspect.isclass(value):
+                stage_fixtures[name] = cls._wrap_factory_fixture(value)
+            else:
+                stage_fixtures[name] = value
+        return stage_fixtures
+
+    @staticmethod
+    def _build_iteration_substitutions(parallel_config: Any) -> list[dict[str, Any]]:
+        """Expand the (already template-resolved) parallel config into per-iteration
+        substitution dicts: non-parallel -> a single empty dict; ``repeat`` -> N
+        empties; ``foreach`` -> the cross-product of its parameter steps (the same
+        algorithm pytest uses for the ``parametrize`` marker)."""
+        iteration_substitutions: list[dict[str, Any]] = [{}]
+        match parallel_config:
+            case None:
+                pass
+            case ParallelRepeatConfig(repeat=repeat_count):
+                iteration_substitutions = [{} for _ in range(repeat_count)]
+            case ParallelForeachConfig(foreach=foreach_steps):
+                for step in foreach_steps:
+                    match step:
+                        case IndividualParameter(individual=individual):
+                            param_name = next(iter(individual.keys()))
+                            values = individual[param_name]
+                            iteration_substitutions = [{**existing, param_name: val} for val in values for existing in iteration_substitutions]
+                        case CombinationsParameter(combinations=combinations):
+                            combos: list[dict[str, Any] | SimpleNamespace] = [vars(item) if isinstance(item, SimpleNamespace) else item for item in combinations]
+                            iteration_substitutions = [{**existing, **combo} for combo in combos for existing in iteration_substitutions]
+        return iteration_substitutions
+
+    @classmethod
+    def _run_iterations(
+        cls,
+        stage: Stage,
+        local_context: ChainMap[str, Any],
+        iteration_substitutions: list[dict[str, Any]],
+        parallel_config: Any,
+    ) -> tuple[list[ParallelIterationResult | None], tuple[int, Exception] | None]:
+        """Run the iterations and return ``(results_by_index, first_error)``.
+
+        A single iteration runs inline; multiple iterations run in a
+        ``ThreadPoolExecutor`` capped at ``max_concurrency``, with an optional
+        global rate limiter. On the first expected failure the pool is cancelled
+        and ``(index, exception)`` is returned; otherwise ``first_error`` is None.
+        """
+        max_concurrency = parallel_config.max_concurrency if parallel_config else 1
+        calls_per_sec = parallel_config.calls_per_sec if parallel_config else None
+        max_rate_limit_delay = parallel_config.max_rate_limit_delay if parallel_config else 60
+
+        total = len(iteration_substitutions)
+        results: list[ParallelIterationResult | None] = [None] * total
+        first_error: tuple[int, Exception] | None = None
+        limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec else None
+
+        if total == 1:
+            try:
+                results[0] = cls._execute_single_iteration(stage, local_context, iteration_substitutions[0], limiter, max_rate_limit_delay)
+            except _STAGE_FAILURE_EXCEPTIONS as e:
+                first_error = (0, e)
+        else:
+            workers = min(max_concurrency, total)
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures: dict[Future[ParallelIterationResult], int] = {}
+                for idx, iter_vars in enumerate(iteration_substitutions):
+                    future = executor.submit(cls._execute_single_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay)
+                    futures[future] = idx
+
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        results[idx] = future.result()
+                    except _STAGE_FAILURE_EXCEPTIONS as e:
+                        first_error = (idx, e)
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
+
+        return results, first_error
 
     @staticmethod
     def _build_request_kwargs(request_model: Request) -> dict[str, Any]:
@@ -224,7 +305,7 @@ class Carrier:
                 auth_result = call_user_function(request_model.auth)
                 request_kwargs["auth"] = auth_result
             except UserFunctionError as e:
-                raise RequestError(f"Failed to configure authentication: {e}") from None
+                raise RequestError(f"Failed to configure authentication: {e}") from e
 
         match request_model.body:
             case None:
@@ -249,8 +330,10 @@ class Carrier:
             case BinaryBody(binary=file_path):
                 try:
                     request_kwargs["content"] = Path(file_path).read_bytes()
-                except FileNotFoundError:
-                    raise RequestError(f"Binary file not found: {file_path}") from None
+                except FileNotFoundError as e:
+                    raise RequestError(f"Binary file not found: {file_path}") from e
+                except OSError as e:
+                    raise RequestError(f"Cannot read binary file '{file_path}': {e}") from e
 
             case FilesBody(files=file_paths):
                 files_list = []
@@ -258,8 +341,10 @@ class Carrier:
                     path = Path(file_path)
                     try:
                         files_list.append((field_name, (path.name, path.read_bytes())))
-                    except FileNotFoundError:
-                        raise RequestError(f"File not found for upload: {file_path}") from None
+                    except FileNotFoundError as e:
+                        raise RequestError(f"File not found for upload: {file_path}") from e
+                    except OSError as e:
+                        raise RequestError(f"Cannot read file for upload '{file_path}': {e}") from e
                 request_kwargs["files"] = files_list
 
         return request_kwargs
@@ -269,13 +354,13 @@ class Carrier:
         try:
             return cls.client.request(**request_kwargs)
         except httpx.TimeoutException as e:
-            raise RequestError(f"HTTP request timed out: {e}") from None
+            raise RequestError(f"HTTP request timed out: {e}") from e
         except httpx.ConnectError as e:
-            raise RequestError(f"HTTP connection error: {e}") from None
+            raise RequestError(f"HTTP connection error: {e}") from e
         except httpx.HTTPError as e:
-            raise RequestError(f"HTTP request failed: {e}") from None
+            raise RequestError(f"HTTP request failed: {e}") from e
         except Exception as e:
-            raise RequestError(f"Unexpected error: {e}") from None
+            raise RequestError(f"Unexpected error: {e}") from e
 
     @staticmethod
     def _process_save_step(save_model: Save, response: httpx.Response, context: ChainMap[str, Any]) -> dict[str, Any]:
@@ -286,21 +371,21 @@ class Carrier:
                 try:
                     response_json = response.json()
                 except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                    raise SaveError(f"Cannot extract variables, response is not valid JSON: {e}") from None
+                    raise SaveError(f"Cannot extract variables, response is not valid JSON: {e}") from e
 
                 for var_name, jmespath_expr in save_model.jmespath.items():
                     try:
                         saved_value = jmespath.search(jmespath_expr, response_json)
                         step_saved[var_name] = saved_value
                     except jmespath.exceptions.JMESPathError as e:
-                        raise SaveError(f"Error saving variable {var_name}: {e}") from None
+                        raise SaveError(f"Error saving variable {var_name}: {e}") from e
 
             case SubstitutionsSave():
                 try:
                     substitution_result = process_substitutions(save_model.substitutions, context)
                     step_saved.update(substitution_result)
                 except TemplatesError as e:
-                    raise SaveError(f"Error processing substitutions: {e}") from None
+                    raise SaveError(f"Error processing substitutions: {e}") from e
 
             case UserFunctionsSave():
                 for func_item in save_model.user_functions:
@@ -314,7 +399,7 @@ class Carrier:
                     except SaveError:
                         raise
                     except UserFunctionError as e:
-                        raise SaveError(f"Error calling user function '{func_item}': {e}") from None
+                        raise SaveError(f"Error calling user function '{func_item}': {e}") from e
 
         return step_saved
 
@@ -344,7 +429,7 @@ class Carrier:
             except VerificationError:
                 raise
             except UserFunctionError as e:
-                raise VerificationError(f"Error calling user function '{func_item}': {e}") from None
+                raise VerificationError(f"Error calling user function '{func_item}': {e}") from e
 
         if verify_model.body.schema:
             schema = verify_model.body.schema
@@ -354,21 +439,21 @@ class Carrier:
                     schema = json.loads(schema_path.read_text())
                     check_json_schema(schema)
                 except (OSError, json.JSONDecodeError) as e:
-                    raise VerificationError(f"Error reading body schema file '{schema_path}': {e}") from None
+                    raise VerificationError(f"Error reading body schema file '{schema_path}': {e}") from e
                 except jsonschema.SchemaError as e:
-                    raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e}") from None
+                    raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e}") from e
 
             try:
                 response_json = response.json()
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                raise VerificationError(f"Cannot validate schema, response is not valid JSON: {e}") from None
+                raise VerificationError(f"Cannot validate schema, response is not valid JSON: {e}") from e
 
             try:
                 jsonschema.validate(instance=response_json, schema=schema)
             except jsonschema.ValidationError as e:
-                raise VerificationError(f"Body schema validation failed: {e}") from None
+                raise VerificationError(f"Body schema validation failed: {e}") from e
             except jsonschema.SchemaError as e:
-                raise VerificationError(f"Invalid body validation schema: {e}") from None
+                raise VerificationError(f"Invalid body validation schema: {e}") from e
 
         for substring in verify_model.body.contains:
             if substring not in response.text:
@@ -387,16 +472,20 @@ class Carrier:
                 raise VerificationError(f"Body matches '{pattern}' while it shouldn't")
 
     @classmethod
-    def _execute_single_iteration(cls, stage: Stage, local_context: ChainMap[str, Any], iter_vars: Mapping[str, Any], limiter: Limiter | None = None) -> ParallelIterationResult:
+    def _execute_single_iteration(
+        cls, stage: Stage, local_context: ChainMap[str, Any], iter_vars: Mapping[str, Any], limiter: Limiter | None = None, rate_limit_delay: float = 60
+    ) -> ParallelIterationResult:
         """Execute a single iteration of a stage."""
         iter_context = local_context.new_child(dict(iter_vars))
 
-        request_dict = walk(stage.request, iter_context)
-        request_model = Request.model_validate(request_dict)
+        # walk() already returns a re-validated model (it dumps, substitutes, and
+        # model_validates when templates are present, else returns the model as-is),
+        # so a further model_validate would be a no-op (revalidate_instances='never').
+        request_model = walk(stage.request, iter_context)
         request_kwargs = cls._build_request_kwargs(request_model)
 
-        if limiter:
-            limiter.try_acquire("api")
+        if limiter is not None and not limiter.try_acquire("api", blocking=True, timeout=rate_limit_delay):
+            raise RequestError(f"Rate limit exceeded: could not acquire a request slot within {rate_limit_delay}s")
 
         response = cls._execute_http_request(request_kwargs)
 
@@ -405,15 +494,13 @@ class Carrier:
             for step in stage.response:
                 match step:
                     case SaveStep():
-                        save_dict = walk(step.save, iter_context)
-                        save_model = TypeAdapter(Save).validate_python(save_dict)
+                        save_model = walk(step.save, iter_context)
                         step_saved = cls._process_save_step(save_model, response, iter_context)
                         iter_context = iter_context.new_child(step_saved)
                         saved_context.update(step_saved)
 
                     case VerifyStep():
-                        verify_dict = walk(step.verify, iter_context)
-                        verify_model = Verify.model_validate(verify_dict)
+                        verify_model = walk(step.verify, iter_context)
                         cls._process_verify_step(verify_model, response)
         except StageExecutionError as e:
             e.request = response.request
@@ -542,7 +629,11 @@ def create_test_class(scenario: Scenario, class_name: str, max_parallel_iteratio
             try:
                 stage_method = make_marker(mark_str)(stage_method)
             except Exception as e:
-                logger.warning(f"Failed to create marker '{mark_str}': {e}")
+                # A malformed stage marker is an author error: fail collection (the
+                # caller wraps this into a CollectError) instead of silently dropping
+                # the marker and running the stage — matching how scenario-level
+                # markers are handled in plugin.py.
+                raise StageExecutionError(f"Invalid marker '{mark_str}' on stage '{stage.name}': {e}") from e
 
         method_name = f"test {str(i).zfill(padding_width)} - {stage.name}"
         setattr(CustomCarrier, method_name, stage_method)

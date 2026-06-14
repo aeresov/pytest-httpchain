@@ -390,6 +390,8 @@
                 ]
               },
               "description": "Parameter name mapped to list of values (single parameter per step, non-empty values) or template expression",
+              "maxProperties": 1,
+              "minProperties": 1,
               "title": "Individual",
               "type": "object"
             },
@@ -676,6 +678,7 @@
                   "type": "string"
                 }
               ],
+              "description": "Request URL (may be a template expression).",
               "title": "Url"
             },
             "method": {
@@ -688,10 +691,12 @@
                 }
               ],
               "default": "GET",
+              "description": "HTTP method.",
               "title": "Method"
             },
             "params": {
               "additionalProperties": true,
+              "description": "URL query parameters.",
               "title": "Params",
               "type": "object"
             },
@@ -699,6 +704,7 @@
               "additionalProperties": {
                 "type": "string"
               },
+              "description": "HTTP request headers.",
               "title": "Headers",
               "type": "object"
             },
@@ -810,6 +816,7 @@
               "title": "Schema"
             },
             "contains": {
+              "description": "Substrings the response body must contain.",
               "items": {
                 "type": "string"
               },
@@ -817,6 +824,7 @@
               "type": "array"
             },
             "not_contains": {
+              "description": "Substrings the response body must NOT contain.",
               "items": {
                 "type": "string"
               },
@@ -824,6 +832,7 @@
               "type": "array"
             },
             "matches": {
+              "description": "Regex patterns the response body must match.",
               "items": {
                 "type": "string"
               },
@@ -831,6 +840,7 @@
               "type": "array"
             },
             "not_matches": {
+              "description": "Regex patterns the response body must NOT match.",
               "items": {
                 "type": "string"
               },
@@ -1006,8 +1016,13 @@
             "marks": {
               "description": "pytest markers",
               "examples": [
-                "xfail",
-                "skip"
+                [
+                  "xfail"
+                ],
+                [
+                  "skip",
+                  "slow"
+                ]
               ],
               "items": {
                 "type": "string"
@@ -1457,12 +1472,14 @@
                 }
               ],
               "default": null,
+              "description": "Expected HTTP status code.",
               "title": "Status"
             },
             "headers": {
               "additionalProperties": {
                 "type": "string"
               },
+              "description": "Expected response headers (exact match per key).",
               "title": "Headers",
               "type": "object"
             },
@@ -1475,14 +1492,7 @@
                   "{{ 'admin' in user_roles }}"
                 ]
               ],
-              "items": {
-                "anyOf": [
-                  {},
-                  {
-                    "type": "string"
-                  }
-                ]
-              },
+              "items": {},
               "title": "Expressions",
               "type": "array"
             },
@@ -1665,8 +1675,13 @@
         {
           "description": "pytest markers",
           "examples": [
-            "xfail",
-            "skip"
+            [
+              "xfail"
+            ],
+            [
+              "skip",
+              "slow"
+            ]
           ],
           "items": {
             "type": "string"
@@ -1711,10 +1726,12 @@
               "type": "object"
             }
           ],
+          "description": "Ordered list (or name-keyed mapping) of stages to execute.",
           "title": "Stages"
         }
       ],
-      "title": "Stages"
+      "title": "Stages",
+      "description": "Ordered list (or name-keyed mapping) of stages to execute."
     },
     "substitutions": {
       "anyOf": [

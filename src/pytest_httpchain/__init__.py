@@ -21,3 +21,10 @@ Example test file (test_api.http.json):
         ]
     }
 """
+
+# Re-export the user-facing warning so consumers can filter it without reaching
+# into the plugin module. The definition stays in plugin.py because the pytest11
+# entry point and the collection hook reference it there directly.
+from pytest_httpchain.plugin import ScenarioValidationWarning
+
+__all__ = ["ScenarioValidationWarning"]

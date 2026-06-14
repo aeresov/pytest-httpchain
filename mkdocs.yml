@@ -1,7 +1,7 @@
 site_name: pytest-httpchain
 site_description: A pytest plugin for testing HTTP endpoints.
 site_author: Alexander Eresov
-site_url: https://github.com/aeresov/pytest-httpchain
+site_url: https://aeresov.github.io/pytest-httpchain/
 
 repo_name: aeresov/pytest-httpchain
 repo_url: https://github.com/aeresov/pytest-httpchain
@@ -79,8 +79,3 @@ extra:
 
 plugins:
     - search
-    - mkdocstrings:
-          handlers:
-              python:
-                  options:
-                      show_source: true

@@ -1,9 +1,8 @@
+from tests.integration.conftest import run_scenario
+
+
 def test_primer(pytester):
-    pytester.copy_example("auth.py")
-    pytester.copy_example("conftest.py")
-    pytester.copy_example("primer/common.json")
-    pytester.copy_example("primer/test_primer.http.json")
-    result = pytester.runpytest("-s")
+    result = run_scenario(pytester, "primer/test_primer.http.json", "primer/common.json")
     print(result.stdout.str())
     print(result.stderr.str())
     result.assert_outcomes(

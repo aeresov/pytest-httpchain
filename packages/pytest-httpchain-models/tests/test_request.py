@@ -77,57 +77,32 @@ class TestRequestMethod:
             Request(url="https://example.com", method="INVALID")
 
 
-class TestRequestParams:
-    """Tests for Request.params field."""
+class TestRequestPassThroughDicts:
+    """params and headers are plain pass-through dict fields (no coercion or
+    normalization), so one construction test covers their round-trip; only the
+    default-empty behavior is asserted separately."""
 
     def test_params_default_empty(self):
         """Test default params is empty dict."""
         request = Request(url="https://example.com")
         assert request.params == {}
 
-    def test_params_simple(self):
-        """Test simple query params."""
-        request = Request(
-            url="https://example.com",
-            params={"page": 1, "limit": 10},
-        )
-        assert request.params == {"page": 1, "limit": 10}
-
-    def test_params_with_strings(self):
-        """Test params with string values."""
-        request = Request(
-            url="https://example.com",
-            params={"q": "search term", "sort": "asc"},
-        )
-        assert request.params["q"] == "search term"
-
-
-class TestRequestHeaders:
-    """Tests for Request.headers field."""
-
     def test_headers_default_empty(self):
         """Test default headers is empty dict."""
         request = Request(url="https://example.com")
         assert request.headers == {}
 
-    def test_headers_simple(self):
-        """Test simple headers."""
-        request = Request(
-            url="https://example.com",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": "Bearer token123",
-            },
-        )
-        assert request.headers["Content-Type"] == "application/json"
-
-    def test_headers_custom(self):
-        """Test custom headers."""
-        request = Request(
-            url="https://example.com",
-            headers={"X-Custom-Header": "custom-value"},
-        )
-        assert request.headers["X-Custom-Header"] == "custom-value"
+    @pytest.mark.parametrize(
+        "params,headers",
+        [
+            ({"page": 1, "limit": 10}, {"Content-Type": "application/json"}),
+            ({"q": "search term", "sort": "asc"}, {"X-Custom-Header": "custom-value"}),
+        ],
+    )
+    def test_params_and_headers_round_trip(self, params, headers):
+        request = Request(url="https://example.com", params=params, headers=headers)
+        assert request.params == params
+        assert request.headers == headers
 
 
 class TestRequestTimeout:

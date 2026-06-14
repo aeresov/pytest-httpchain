@@ -32,9 +32,9 @@ func = import_function("module.path:function_name")
 # Import and call in one step
 result = call_function("mymodule:my_func", arg1, arg2, kwarg=value)
 
-# Create a wrapped callable with default arguments
-wrapped = wrap_function("mymodule:my_func", default_args=[arg1], default_kwargs={"key": "value"})
-result = wrapped(extra_arg)  # default_args prepended, default_kwargs merged
+# Create a wrapped callable with default keyword arguments
+wrapped = wrap_function("mymodule:my_func", default_kwargs={"key": "value"})
+result = wrapped(arg1)  # default_kwargs merged with call-time kwargs (call-time wins)
 ```
 
 ## Function Name Format
@@ -47,7 +47,6 @@ Functions are referenced using the pattern: `module.path:function_name`
 ## Key Behaviors
 
 ### wrap_function Argument Merging
-- `default_args` are prepended to call-time args
 - `default_kwargs` are merged with call-time kwargs (call-time wins)
 
 ### Error Handling

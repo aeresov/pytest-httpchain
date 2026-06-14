@@ -21,11 +21,12 @@ class ConfigOptions(StrEnum):
             in template expressions (default: "50000").
         MAX_PARALLEL_ITERATIONS: Maximum number of parallel iterations allowed
             per stage (default: "10000").
-        OUTPUT_DIR: Directory path for test output files (HAR, etc).
+
+    Note: the HAR output directory is a CLI flag (``--output-dir``), not an ini
+    option, so it is intentionally not listed here.
     """
 
     SUFFIX = "suffix"
     REF_PARENT_TRAVERSAL_DEPTH = "ref_parent_traversal_depth"
     MAX_COMPREHENSION_LENGTH = "max_comprehension_length"
     MAX_PARALLEL_ITERATIONS = "max_parallel_iterations"
-    OUTPUT_DIR = "output_dir"

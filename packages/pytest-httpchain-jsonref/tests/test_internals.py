@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
 from pytest_httpchain_jsonref.plumbing.circular import CircularDependencyTracker
-from pytest_httpchain_jsonref.plumbing.path import PathValidator
+from pytest_httpchain_jsonref.plumbing.path import RefPathHelper
 
 
 class TestCircularDependencyTracker:
@@ -112,52 +112,52 @@ class TestCircularDependencyTracker:
         tracker.clear_internal_ref("/nonexistent")
 
 
-class TestPathValidator:
-    """Tests for PathValidator class."""
+class TestRefPathHelper:
+    """Tests for RefPathHelper class."""
 
     def test_parse_empty_pointer(self):
         """Empty pointer should return empty list."""
-        result = PathValidator.parse_json_pointer("")
+        result = RefPathHelper.parse_json_pointer("")
         assert result == []
 
     def test_parse_root_slash(self):
         """Single slash should return list with empty string."""
-        result = PathValidator.parse_json_pointer("/")
+        result = RefPathHelper.parse_json_pointer("/")
         assert result == [""]
 
     def test_parse_simple_pointer(self):
         """Simple pointer should be split correctly."""
-        result = PathValidator.parse_json_pointer("/a/b/c")
+        result = RefPathHelper.parse_json_pointer("/a/b/c")
         assert result == ["a", "b", "c"]
 
     def test_parse_pointer_with_tilde_escape(self):
         """~0 should be unescaped to ~."""
-        result = PathValidator.parse_json_pointer("/key~0with~0tilde")
+        result = RefPathHelper.parse_json_pointer("/key~0with~0tilde")
         assert result == ["key~with~tilde"]
 
     def test_parse_pointer_with_slash_escape(self):
         """~1 should be unescaped to /."""
-        result = PathValidator.parse_json_pointer("/key~1with~1slash")
+        result = RefPathHelper.parse_json_pointer("/key~1with~1slash")
         assert result == ["key/with/slash"]
 
     def test_parse_pointer_with_both_escapes(self):
         """Both escape sequences in one pointer."""
-        result = PathValidator.parse_json_pointer("/a~0b~1c")
+        result = RefPathHelper.parse_json_pointer("/a~0b~1c")
         assert result == ["a~b/c"]
 
     def test_parse_pointer_escape_order(self):
         """~1 replaced before ~0, so ~01 becomes ~1."""
-        result = PathValidator.parse_json_pointer("/~01")
+        result = RefPathHelper.parse_json_pointer("/~01")
         assert result == ["~1"]
 
     def test_parse_pointer_without_leading_slash_raises(self):
         """Pointer without leading slash should raise."""
         with pytest.raises(ReferenceResolverError, match="must start with"):
-            PathValidator.parse_json_pointer("no/leading/slash")
+            RefPathHelper.parse_json_pointer("no/leading/slash")
 
     def test_parse_pointer_with_numeric_parts(self):
         """Numeric parts should be returned as strings."""
-        result = PathValidator.parse_json_pointer("/0/1/2")
+        result = RefPathHelper.parse_json_pointer("/0/1/2")
         assert result == ["0", "1", "2"]
         assert all(isinstance(p, str) for p in result)
 
@@ -169,7 +169,7 @@ class TestPathValidator:
         target = tmp_path / "a" / "target.json"
         target.write_text("{}")
 
-        result = PathValidator.validate_ref_path(
+        result = RefPathHelper.validate_ref_path(
             "../target.json",
             subdir,
             tmp_path,
@@ -183,7 +183,7 @@ class TestPathValidator:
         subdir.mkdir(parents=True)
 
         with pytest.raises(ReferenceResolverError, match="exceeds maximum parent traversal depth"):
-            PathValidator.validate_ref_path(
+            RefPathHelper.validate_ref_path(
                 "../../../target.json",
                 subdir,
                 tmp_path,
@@ -193,7 +193,7 @@ class TestPathValidator:
     def test_validate_ref_path_file_not_found(self, tmp_path):
         """Non-existent file should raise."""
         with pytest.raises(ReferenceResolverError, match="not found"):
-            PathValidator.validate_ref_path(
+            RefPathHelper.validate_ref_path(
                 "nonexistent.json",
                 tmp_path,
                 tmp_path,
@@ -208,7 +208,7 @@ class TestPathValidator:
         outside.write_text("{}")
 
         with pytest.raises(ReferenceResolverError, match="not found"):
-            PathValidator.validate_ref_path(
+            RefPathHelper.validate_ref_path(
                 "../outside.json",
                 root,
                 root,

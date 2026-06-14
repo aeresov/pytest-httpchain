@@ -3,22 +3,21 @@
 import pytest
 from pytest_httpchain_userfunc import NAME_PATTERN, UserFunctionError, import_function
 
+# Bare (module-less) function names that the regex accepts but import_function
+# rejects with "Module path is required". Shared by the two tests below so the
+# list stays in sync.
+BARE_NAMES = ["simple", "_", "_private", "__dunder", "name_", "func123", "camelCase", "ALLCAPS", "x"]
+
 
 class TestValidNamePatterns:
     """Tests for valid function name patterns (regex acceptance)."""
 
-    @pytest.mark.parametrize(
-        "name",
-        ["simple", "_", "_private", "__dunder", "name_", "func123", "camelCase", "ALLCAPS", "x"],
-    )
+    @pytest.mark.parametrize("name", BARE_NAMES)
     def test_bare_name_matches_pattern(self, name: str):
         """Bare function names are accepted by the regex pattern."""
         assert NAME_PATTERN.match(name) is not None
 
-    @pytest.mark.parametrize(
-        "name",
-        ["simple", "_", "_private", "__dunder", "name_", "func123", "camelCase", "ALLCAPS", "x"],
-    )
+    @pytest.mark.parametrize("name", BARE_NAMES)
     def test_bare_name_requires_module(self, name: str):
         """Bare function names raise an error requiring module path."""
         with pytest.raises(UserFunctionError, match="Module path is required"):
@@ -52,9 +51,10 @@ class TestValidModulePatterns:
 class TestInvalidNamePatterns:
     """Tests for invalid function name patterns that should be rejected.
 
-    Note: The regex pattern allows dots anywhere in the module name (including
-    consecutive dots and trailing dots), so patterns like 'a..b:func' are valid
-    per the regex but may fail at import time.
+    The module path (when present) must be a well-formed dotted path: identifier
+    segments separated by single dots, with no leading, trailing, or doubled dots.
+    Malformed module paths like 'a..b:func' and 'mod.:func' are rejected by the
+    regex (not deferred to import time).
     """
 
     @pytest.mark.parametrize(
@@ -78,19 +78,15 @@ class TestInvalidNamePatterns:
             (":", "just colon"),
             ("mod::func", "double colon"),
             (".mod:func", "leading dot in module"),
+            ("a..b:func", "doubled dot in module"),
+            ("mod.:func", "trailing dot in module"),
+            ("a.123.b:func", "leading digit in module segment"),
+            ("a.-b:func", "hyphen in module segment"),
         ],
     )
     def test_invalid_pattern_rejected(self, name: str, description: str):
         with pytest.raises(UserFunctionError, match="Invalid function name format"):
             import_function(name)
-
-    def test_double_dot_valid_but_import_fails(self):
-        with pytest.raises(UserFunctionError, match="Failed to import module"):
-            import_function("a..b:func")
-
-    def test_trailing_dot_valid_but_import_fails(self):
-        with pytest.raises(UserFunctionError, match="Failed to import module"):
-            import_function("mod.:func")
 
 
 class TestEdgeCases:

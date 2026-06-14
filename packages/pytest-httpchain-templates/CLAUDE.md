@@ -42,6 +42,25 @@ extract_template_expression("{{ value }}")  # "value"
 - Single expressions preserve type: `walk("{{ 42 }}", {})` returns `42` (int)
 - Surrounding whitespace still counts as a single expression: `walk(" {{ 42 }} ", {})` returns `42` (int), not `" 42 "`. The whole-string check (`_sub_string`) uses the same whitespace-tolerant predicate (`extract_template_expression`) as `is_complete_template`, which the models use to type a field as `TemplateExpression` — so schema validation and runtime evaluation agree. The padding (spaces, tabs, newlines) is dropped.
 - Mixed content returns string: `walk("Value: {{ 42 }}", {})` returns `"Value: 42"`
+- Single-line only: the pattern is not compiled with `re.DOTALL`, so an expression spanning newlines is not recognised as a template. Keep each `{{ ... }}` on one line (move multi-line logic into a user function).
+
+### Trailing `}}` in dict/set literals (gotcha)
+The template delimiter is `}}`, and the matcher stops at the first `}}`. So a dict or set literal whose own closing brace sits immediately before the template's closing braces produces three consecutive `}` (`...}}}`), and the expression is truncated at the wrong place — the result is a broken or wrong evaluation, not an error you can easily spot.
+
+Always put a space between a literal's closing `}` and the template's closing `}}`:
+
+```python
+# WRONG — `{'key': value}}}` truncates: the matcher closes the template early
+walk("{{ {'key': value}}}", {"value": 1})
+
+# RIGHT — space before the closing }} keeps the dict literal intact
+walk("{{ {'key': value} }}", {"value": 1})  # {"key": 1}
+
+# Same rule for nested literals: space before the outer }}
+walk("{{ {'outer': {'inner': id} } }}", {"id": "x"})  # {"outer": {"inner": "x"}}
+```
+
+This only affects a literal `}` that is adjacent to the template close; a single `}` elsewhere in the expression (including inside a string, e.g. `{{ '} ' + msg }}`) is fine.
 
 ### Supported Object Types
 - `str`: Substitutes template expressions
@@ -53,7 +72,7 @@ extract_template_expression("{{ value }}")  # "value"
 ### Built-in Functions
 Safe functions available in expressions:
 - Type conversion: `bool`, `int`, `float`, `str`, `dict`, `list`, `tuple`, `set`
-- Math: `min`, `max`, `sum`, `abs`, `round`, `rand()`, `randint(a, b)`
+- Math: `min`, `max`, `sum`, `abs`, `round`, `rand()`, `randint(top)`
 - Collections: `len`, `sorted`, `enumerate`, `zip`, `range`
 - Utilities: `uuid4()`, `env(var, default)`
 - Context helpers: `get(var, default)`, `exists(var)`
@@ -80,10 +99,11 @@ walk("{{ exists('var') }}", {"var": 1})  # True
 walk("{{ env('HOME', '/tmp') }}", {})  # value of $HOME or "/tmp"
 ```
 
-### Security
-- Uses `simpleeval` for safe expression evaluation
-- Blocks dangerous operations (`__import__`, `open`, etc.)
-- Raises `TemplatesError` for evaluation errors
+### Trust model
+- Scenario files are **trusted** input: treat them like code, not like untrusted data. Anyone who can author or edit a scenario can run arbitrary Python via templates.
+- `simpleeval` reduces accidental footguns (it rejects `__import__`, `open`, dunder/attribute access, etc.), but it is **not** a hardened sandbox. Upstream explicitly disclaims sandboxing, so do **not** rely on it as a security boundary against hostile expressions.
+- `env()` exposes the entire process environment, and context callables (user functions, factory fixtures) execute arbitrary Python by design.
+- Evaluation errors are raised as `TemplatesError`.
 
 ## Running Tests
 

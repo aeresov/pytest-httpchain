@@ -3,7 +3,9 @@
 Shared by the ``pytest-httpchain schema`` CLI command and
 ``scripts/generate_schema.py``. The schema is derived from the Pydantic
 ``Scenario`` model and augmented so editors accept pytest-httpchain's
-``$ref``/``$include``/``$merge`` reference directives at any object level.
+``$ref``/``$include``/``$merge`` reference directives wherever a named type
+(a ``$defs`` entry) or a root-level scenario property is expected. Inline,
+anonymous nested schemas are not wrapped.
 """
 
 from typing import Any
@@ -27,12 +29,16 @@ def _one_of_to_any_of(node: Any) -> None:
 
 
 def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
-    """Allow ``$include``/``$merge``/``$ref`` objects as alternatives anywhere.
+    """Allow ``$include``/``$merge``/``$ref`` objects as alternatives at named
+    type and root-property sites.
 
-    pytest-httpchain-jsonref can substitute any element at runtime, so each
-    definition and root property is wrapped in an ``anyOf`` that also accepts a
-    reference object — otherwise editors flag missing required properties when a
-    reference is used.
+    pytest-httpchain-jsonref can substitute any element at runtime, but wrapping
+    *every* inline subschema would balloon the schema, so only each ``$defs``
+    definition and each root-level scenario property is wrapped in an ``anyOf``
+    that also accepts a reference object — otherwise editors flag missing
+    required properties when a reference is used at one of those sites. Inline,
+    anonymous nested schemas are left untouched; a reference used there is still
+    resolved at runtime but is not described to the editor.
     """
     if "$defs" not in schema:
         schema["$defs"] = {}

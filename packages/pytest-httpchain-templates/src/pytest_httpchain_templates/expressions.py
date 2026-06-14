@@ -5,6 +5,14 @@ import re
 # that is not followed by }}, allowing single } in dict literals
 # Note: If a dict literal ends with }}, add a space before the closing }}
 # Example: {{ {'key': value} }} instead of {{ {'key': value}}}
+#
+# Single-line only: `.` does not match newlines and the pattern is compiled
+# without re.DOTALL, so an expression that spans newlines (e.g. a multi-line
+# comprehension) is NOT recognised as a template. This is intentional —
+# template values come from individual JSON string scalars, which are
+# single-line in practice, and every consumer (substitution.py, models/types.py,
+# the validator) shares this one pattern, so keeping it single-line keeps their
+# behaviour aligned. Write multi-line logic in a user function instead.
 TEMPLATE_PATTERN = r"\{\{(?P<expr>(?:(?!\}\}).)+)\}\}"
 
 

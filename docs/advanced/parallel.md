@@ -66,6 +66,13 @@ Execute a request for each parameter combination in parallel:
 | `foreach` | array | - | Parameter sets to iterate over |
 | `max_concurrency` | integer | 10 | Maximum concurrent requests |
 | `calls_per_sec` | integer | null | Rate limit (requests per second) |
+| `max_rate_limit_delay` | integer | 60 | Max seconds a request waits for a rate-limit slot before failing |
+
+> The total number of iterations a single stage may run (`repeat`, or the
+> product of its `foreach` parameter sets) is capped by the `max_parallel_iterations`
+> ini option (default `10000`); a stage that exceeds it fails collection. This is
+> a project-wide setting, not a `parallel` block field — set it in `pytest.ini` or
+> `pyproject.toml` (see Getting Started).
 
 ## Rate Limiting
 
@@ -84,6 +91,8 @@ Control request rate to avoid overwhelming the target server:
 This sends 1000 requests with:
 - Up to 50 concurrent connections
 - Maximum 100 requests per second
+
+The limit is global across all workers. When a request cannot get a slot, it waits up to `max_rate_limit_delay` seconds (default 60); if none frees up in that window the request fails with a `Rate limit exceeded` error.
 
 ## Foreach with Combinations
 
@@ -127,6 +136,7 @@ This sends 1000 requests with:
     "stages": [
         {
             "name": "parallel_updates",
+            "fixtures": ["now_utc"],
             "parallel": {
                 "foreach": [
                     {
@@ -142,7 +152,7 @@ This sends 1000 requests with:
                 "method": "PATCH",
                 "body": {
                     "json": {
-                        "last_accessed": "{{ str(datetime.now()) }}"
+                        "last_accessed": "{{ str(now_utc) }}"
                     }
                 }
             }
@@ -150,6 +160,8 @@ This sends 1000 requests with:
     ]
 }
 ```
+
+> `datetime` is not available inside `{{ }}` expressions. For a timestamp, expose a fixture (e.g. `now_utc` returning `datetime.now()` from a `conftest.py`) and reference it with `fixtures: ["now_utc"]`, as shown above.
 
 ## Load Testing Example
 

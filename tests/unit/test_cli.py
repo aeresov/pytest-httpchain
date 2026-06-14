@@ -28,6 +28,15 @@ def test_validate_ok_exit_zero(tmp_path):
     assert "OK" in result.output
 
 
+def test_schema_output_write_error_exits_clean(tmp_path):
+    """M21: a failed --output write reports a clean error and exits non-zero,
+    instead of surfacing a raw OSError traceback."""
+    bad = tmp_path / "missing_dir" / "schema.json"  # parent directory does not exist
+    result = runner.invoke(app, ["schema", "--output", str(bad)])
+    assert result.exit_code == 1, result.output
+    assert "cannot write" in result.output
+
+
 def test_validate_invalid_exit_one(tmp_path):
     f = _write(
         tmp_path / "bad.json",
