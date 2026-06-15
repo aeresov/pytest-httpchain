@@ -28,23 +28,6 @@ class GraphDirection(enum.StrEnum):
 RefParentTraversalDepth = Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")]
 
 
-def _emit(text: str, output: Path | None, label: str) -> None:
-    """Write text to a file (with a confirmation) or echo it to stdout.
-
-    A failed write reports a clean ``error: ...`` and exits non-zero, matching
-    the load-error handling elsewhere in this module instead of a raw traceback.
-    """
-    if output is None:
-        typer.echo(text)
-        return
-    try:
-        output.write_text(text + "\n")
-    except OSError as e:
-        typer.echo(f"error: cannot write {output}: {e}", err=True)
-        raise typer.Exit(1) from e
-    typer.echo(f"Wrote {label} to {output}")
-
-
 @app.callback()
 def main() -> None:
     """pytest-httpchain command-line tools."""
@@ -99,24 +82,23 @@ def validate(
 
 
 @app.command()
-def schema(
-    output: Annotated[Path | None, typer.Option("--output", "-o", help="Write schema to PATH instead of stdout.")] = None,
-) -> None:
-    """Emit the JSON Schema for scenario files (editor autocomplete/validation)."""
+def schema() -> None:
+    """Emit the JSON Schema for scenario files (editor autocomplete/validation).
+
+    Writes to stdout; redirect to a file (``pytest-httpchain schema > scenario.schema.json``).
+    """
     from pytest_httpchain.schema import build_schema
 
-    text = json.dumps(build_schema(), indent=2, default=str)
-    _emit(text, output, "schema")
+    typer.echo(json.dumps(build_schema(), indent=2, default=str))
 
 
 @app.command()
 def resolve(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to resolve.")],
-    output: Annotated[Path | None, typer.Option("--output", "-o", help="Write resolved JSON to PATH instead of stdout.")] = None,
     ref_parent_traversal_depth: RefParentTraversalDepth = 3,
     root_path: Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: nearest tests/ ancestor).")] = None,
 ) -> None:
-    """Resolve $ref/$include/$merge and print the merged scenario JSON."""
+    """Resolve $ref/$include/$merge and print the merged scenario JSON to stdout."""
     from pytest_httpchain_jsonref import ReferenceResolverError, load_json
 
     from pytest_httpchain.validation import resolve_root_path
@@ -131,8 +113,7 @@ def resolve(
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(1) from e
 
-    text = json.dumps(data, indent=2, default=str)
-    _emit(text, output, "resolved scenario")
+    typer.echo(json.dumps(data, indent=2, default=str))
 
 
 def _load_for_inspection(path: Path, depth: int, root_path: Path | None = None) -> tuple["Scenario", dict]:

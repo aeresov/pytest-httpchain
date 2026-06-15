@@ -164,10 +164,20 @@ pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
 
 -   Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`.
     The `suffix` is configurable as pytest ini option, default value is **http**.
--   `$ref` instructions can point to other files; absolute and relative paths are supported.
+-   `$ref` instructions can point to other files using relative paths; absolute paths are rejected for security.
     You can limit the depth of relative path traversal using `ref_parent_traversal_depth` ini option, default value is **3**.
 -   Template expressions support list/dict comprehensions. You can limit the maximum comprehension length using `max_comprehension_length` ini option, default value is **50000**.
 -   Parallel stage iterations (repeat/foreach) have a safety limit configurable via `max_parallel_iterations` ini option, default value is **10000**.
+
+### HAR export
+
+Pass `--output-dir DIR` on the pytest command line to write an [HAR](http://www.softwareishard.com/blog/har-12-spec/) file (and a "HAR File" report section) capturing each test's HTTP traffic:
+
+```bash
+pytest --output-dir ./har-output
+```
+
+HAR files contain full requests/responses **including credential headers and saved tokens** — nothing is redacted, so scrub them before sharing. See the [HAR export docs](https://aeresov.github.io/pytest-httpchain/getting-started/#har-export).
 
 ## AI agent support
 
@@ -208,7 +218,7 @@ A JSON Schema is published for as-you-type validation and autocomplete. Referenc
 The hosted schema tracks the latest release; to pin the schema matching your installed version (e.g. for CI), emit it locally:
 
 ```bash
-uvx pytest-httpchain schema --output scenario.schema.json
+uvx pytest-httpchain schema > scenario.schema.json
 ```
 
 ### Inspecting scenarios

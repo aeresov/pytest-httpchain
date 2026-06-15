@@ -70,7 +70,8 @@ Execute a request for each parameter combination in parallel:
 
 > The total number of iterations a single stage may run (`repeat`, or the
 > product of its `foreach` parameter sets) is capped by the `max_parallel_iterations`
-> ini option (default `10000`); a stage that exceeds it fails collection. This is
+> ini option (default `10000`); a stage that exceeds it fails at runtime (the
+> stage errors before any request is sent). This is
 > a project-wide setting, not a `parallel` block field — set it in `pytest.ini` or
 > `pyproject.toml` (see Getting Started).
 

@@ -99,7 +99,7 @@ Define static values:
 
 ## Function Substitutions
 
-Call Python functions to compute values:
+Bind a name to a Python function so it can be **called** from templates:
 
 ```json
 {
@@ -125,6 +125,25 @@ def get_timestamp() -> str:
 def load_config() -> dict:
     return {"environment": "test", "debug": True}
 ```
+
+A function substitution seeds a **callable** under its alias — it is not invoked
+when the substitution is processed. Call it with `()` in a template to get a
+value; referencing it bare renders the function object itself:
+
+```json
+{
+    "headers": {
+        "X-Request-Id": "{{ uuid() }}",
+        "X-Timestamp": "{{ timestamp() }}"
+    },
+    "body": {
+        "json": {"environment": "{{ config()['environment'] }}"}
+    }
+}
+```
+
+Each call is re-evaluated per use (a fresh `uuid()` every time). A function that
+returns a dict is accessed with subscript (`config()['environment']`).
 
 ## Template Expressions
 
@@ -187,12 +206,16 @@ Available functions in expressions:
 
 ### List/Dict Comprehensions
 
+When `items` comes from scenario `vars`, each element is a namespace, so use
+attribute access (`item.id`). Subscript (`item['id']`) is for plain dicts coming
+from fixtures or `combinations` parameters.
+
 ```json
 {
     "body": {
         "json": {
-            "ids": "{{ [item['id'] for item in items] }}",
-            "names": "{{ {item['id']: item['name'] for item in items} }}"
+            "ids": "{{ [item.id for item in items] }}",
+            "names": "{{ {item.id: item.name for item in items} }}"
         }
     }
 }

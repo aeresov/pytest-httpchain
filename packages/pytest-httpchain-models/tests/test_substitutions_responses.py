@@ -401,7 +401,7 @@ class TestInvalidInputs:
 
     def test_substitutions_invalid_item_structure(self):
         """Test that items with invalid structure are rejected."""
-        with pytest.raises(ValueError, match="Unable to determine substitution type"):
+        with pytest.raises(ValidationError, match="does not match any of the expected tags"):
             Stage.model_validate(
                 {
                     "name": "test",
@@ -421,7 +421,7 @@ class TestInvalidInputs:
 
     def test_responses_invalid_item_structure(self):
         """Test that response items with invalid structure are rejected."""
-        with pytest.raises(ValueError, match="Unable to determine step type"):
+        with pytest.raises(ValidationError, match="does not match any of the expected tags"):
             Stage.model_validate(
                 {
                     "name": "test",

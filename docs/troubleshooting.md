@@ -28,11 +28,16 @@ VS Code treats `$ref` as a JSON Schema keyword and may show spurious errors. Use
 ```json
 // Use these - no IDE conflicts
 { "$include": "common/auth.json#/login_stage" }
-{ "$merge": "base.json", "override": "value" }
+{ "$merge": "base.json", "extra_key": "value" }
 
 // Instead of this - may show VS Code errors
 { "$ref": "common/auth.json#/login_stage" }
 ```
+
+Sibling keys next to `$merge` are merged **additively** — they can add new keys,
+but they do not override existing ones. Supplying a key that already exists in the
+merged document with a different scalar value raises a `Merge conflict`, not a
+silent override.
 
 ### Path Issues
 

@@ -201,7 +201,7 @@ class TestSaveDiscriminator:
 
     def test_discriminator_invalid_rejected(self):
         """Test that invalid save type is rejected."""
-        with pytest.raises(ValueError, match="Unable to determine save type"):
+        with pytest.raises(ValidationError, match="does not match any of the expected tags"):
             SaveStep(save={"invalid": "value"})  # type: ignore[arg-type]
 
 

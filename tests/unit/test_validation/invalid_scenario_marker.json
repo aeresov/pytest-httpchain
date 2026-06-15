@@ -1,0 +1,4 @@
+{
+    "marks": ["skip("],
+    "stages": {"s": {"request": {"url": "https://example.com"}, "response": [{"verify": {"status": 200}}]}}
+}

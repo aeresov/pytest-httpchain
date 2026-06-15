@@ -23,7 +23,7 @@ from typing import Annotated, Any
 import graphql
 import jmespath
 import jsonschema
-from pydantic import AfterValidator, BeforeValidator, JsonValue, PlainSerializer
+from pydantic import AfterValidator, BeforeValidator, JsonValue, PlainSerializer, WithJsonSchema
 from pytest_httpchain_templates import TEMPLATE_PATTERN, is_complete_template
 from pytest_httpchain_userfunc import NAME_PATTERN
 
@@ -182,6 +182,33 @@ XMLString = Annotated[str, AfterValidator(validate_xml)]
 GraphQLQuery = Annotated[str, AfterValidator(validate_graphql_query)]
 TemplateExpression = Annotated[str, AfterValidator(validate_template_expression)]
 PartialTemplateStr = Annotated[str, AfterValidator(validate_partial_template_str)]
+
+# JSON-schema patterns for the published editor schema. Runtime validation is
+# unchanged (still `validate_template_expression`); these only tighten the
+# `string` branch the schema emits for `concrete | template` fields, so an
+# editor flags a non-template string that is also not a valid value for the
+# concrete type (e.g. timeout "abc"), without rejecting templates, concrete
+# values, or the stringified concretes the runtime coerces.
+_COMPLETE_TEMPLATE_PATTERN = rf"^\s*{TEMPLATE_PATTERN}\s*$"
+_NUMBER_OR_TEMPLATE_PATTERN = rf"(?:{_COMPLETE_TEMPLATE_PATTERN})|(?:^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)$)"
+
+# Whole-value template where the concrete type's valid strings are already
+# covered by the union's other (enum/bool) branch — so the string branch may be
+# template-only (used for `method`, `allow_redirects`, `always_run`).
+TemplateExpressionOnly = Annotated[
+    str,
+    AfterValidator(validate_template_expression),
+    WithJsonSchema({"type": "string", "pattern": _COMPLETE_TEMPLATE_PATTERN}),
+]
+# Whole-value template for a numeric concrete type, whose stringified form the
+# runtime coerces (e.g. "30" -> 30.0, "200" -> 200) — so the string branch
+# accepts a template OR a numeric literal (used for timeout, status, repeat,
+# max_concurrency, calls_per_sec, max_rate_limit_delay).
+NumberOrTemplate = Annotated[
+    str,
+    AfterValidator(validate_template_expression),
+    WithJsonSchema({"type": "string", "pattern": _NUMBER_OR_TEMPLATE_PATTERN}),
+]
 Base64String = Annotated[str, AfterValidator(validate_base64)]
 NamespaceFromDict = Annotated[Any, AfterValidator(convert_dict_to_namespace)]
 # NamespaceOrDict ACCEPTS a SimpleNamespace or a dict on input and always yields a dict.

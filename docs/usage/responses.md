@@ -50,11 +50,17 @@ Use template expressions:
 
 ### Headers
 
+Header values are matched by **exact, full-string equality** — not substring. A
+response with `Content-Type: application/json; charset=utf-8` does **not** match
+`"application/json"`. Assert the exact value your API returns, or save the header
+and check it with an expression (e.g. a `startswith`/`in` test) for partial
+matches.
+
 ```json
 {
     "verify": {
         "headers": {
-            "Content-Type": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
             "X-Request-Id": "{{ request_id }}"
         }
     }
@@ -328,7 +334,7 @@ def extract_with_args(response: httpx.Response, key: str) -> dict[str, Any]:
                     "verify": {
                         "status": 201,
                         "headers": {
-                            "Content-Type": "application/json"
+                            "Content-Type": "application/json; charset=utf-8"
                         }
                     }
                 },
@@ -362,7 +368,7 @@ def extract_with_args(response: httpx.Response, key: str) -> dict[str, Any]:
                     "verify": {
                         "status": 200,
                         "expressions": [
-                            "{{ created_at is not none }}"
+                            "{{ created_at is not None }}"
                         ]
                     }
                 }

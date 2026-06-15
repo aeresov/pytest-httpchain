@@ -171,7 +171,12 @@ Supported marker formats:
 -   `"skip"` - simple marker
 -   `"skip(reason='message')"` - marker with arguments
 -   `"xfail"` - expected failure
--   `"usefixtures('fixture_name')"` - use fixtures
+-   `"usefixtures('fixture_name')"` - trigger a fixture's setup/teardown for the stage
+
+!!! note
+    `usefixtures` only runs the fixture (for its side effects/setup); it does **not**
+    make the fixture's value available to `{{ }}` templates. To use a fixture value
+    in templates, list it in the stage or scenario [`fixtures`](#fixtures) array.
 
 ### Fixtures
 
@@ -213,6 +218,7 @@ Scenario-level fixtures are requested by every stage. A few consequences to keep
 -   Fixture values take precedence over previously saved variables of the same name, so don't save under a scenario fixture's name (the validator warns with `HTTPCHAIN009`).
 -   pytest scoping still applies: a function-scoped fixture is set up again for each stage. Use `class`- or `session`-scoped fixtures for state that must survive across stages.
 -   Fixtures can be referenced in *stage* templates only. Scenario-level `substitutions`, `auth`, and `ssl` resolve once at collection time, before any fixture exists; the validator rejects such references (`HTTPCHAIN016`).
+-   A fixture whose value is itself **callable** is treated as a factory: it is wrapped so `{{ my_fixture(...) }}` invokes it (with context-manager fixtures entered on use and cleaned up afterwards). The wrapper is a different object than the original callable, so attribute access on it (`{{ my_fixture.some_attr }}`) is not available — call it instead.
 
 ## SSL Configuration
 

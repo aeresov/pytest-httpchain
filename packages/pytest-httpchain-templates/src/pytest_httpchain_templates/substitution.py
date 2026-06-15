@@ -153,7 +153,7 @@ def _contains_template(obj: Any) -> bool:
             return bool(re.search(TEMPLATE_PATTERN, obj))
         case dict():
             return any(_contains_template(value) for value in obj.values())
-        case list():
+        case list() | tuple():
             return any(_contains_template(item) for item in obj)
         case BaseModel():
             return _contains_template(obj.model_dump(mode="python"))
@@ -180,6 +180,8 @@ def walk(obj: Any, context: Mapping[str, Any]) -> Any:
             return {key: walk(value, context) for key, value in obj.items()}
         case list():
             return [walk(item, context) for item in obj]
+        case tuple():
+            return tuple(walk(item, context) for item in obj)
         case BaseModel():
             if not _contains_template(obj):
                 return obj

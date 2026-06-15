@@ -60,6 +60,35 @@ class TestPytestConfigure:
         with pytest.raises(pytest.UsageError, match=match):
             pytest_configure(make_config(**kwargs))
 
+    @pytest.mark.parametrize(
+        "bad_option",
+        [
+            ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH,
+            ConfigOptions.MAX_COMPREHENSION_LENGTH,
+            ConfigOptions.MAX_PARALLEL_ITERATIONS,
+        ],
+    )
+    def test_non_integer_ini_value_raises_usage_error(self, bad_option):
+        """M9: pytest's type="int" handling does a bare int(value) that raises
+        ValueError for a non-integer ini value, which pytest renders as an
+        INTERNALERROR traceback. The plugin must turn it into a clean UsageError."""
+        config = MagicMock()
+        defaults = {
+            ConfigOptions.SUFFIX: "http",
+            ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH: 3,
+            ConfigOptions.MAX_COMPREHENSION_LENGTH: 50000,
+            ConfigOptions.MAX_PARALLEL_ITERATIONS: 10000,
+        }
+
+        def getini(name):
+            if name == bad_option:
+                raise ValueError("invalid literal for int() with base 10: 'notanumber'")
+            return defaults[name]
+
+        config.getini.side_effect = getini
+        with pytest.raises(pytest.UsageError, match="must be an integer"):
+            pytest_configure(config)
+
 
 class TestPytestCollectFile:
     def make_parent(self, suffix="http"):

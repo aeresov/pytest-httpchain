@@ -124,6 +124,12 @@ class TestParallelForeachConfig:
                 extra="field",  # type: ignore[call-arg]
             )
 
+    def test_empty_foreach_rejected(self):
+        """An empty foreach is meaningless: at runtime it would silently run the
+        request once, unparameterized. Reject it at the model layer."""
+        with pytest.raises(ValidationError):
+            ParallelForeachConfig(foreach=[])
+
 
 class TestParallelConfigDiscriminator:
     """Tests for ParallelConfig discriminated union."""
@@ -149,7 +155,7 @@ class TestParallelConfigDiscriminator:
 
     def test_discriminator_invalid_rejected(self):
         """Test that invalid parallel config type is rejected."""
-        with pytest.raises(ValueError, match="Unable to determine parallel config type"):
+        with pytest.raises(ValidationError, match="does not match any of the expected tags"):
             Stage(
                 name="test",
                 request=Request(url="https://example.com"),

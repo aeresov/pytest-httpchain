@@ -28,13 +28,23 @@ def test_validate_ok_exit_zero(tmp_path):
     assert "OK" in result.output
 
 
-def test_schema_output_write_error_exits_clean(tmp_path):
-    """M21: a failed --output write reports a clean error and exits non-zero,
-    instead of surfacing a raw OSError traceback."""
-    bad = tmp_path / "missing_dir" / "schema.json"  # parent directory does not exist
-    result = runner.invoke(app, ["schema", "--output", str(bad)])
-    assert result.exit_code == 1, result.output
-    assert "cannot write" in result.output
+def test_schema_has_no_output_option(tmp_path):
+    """The CLI follows the UNIX convention: data goes to stdout and the user
+    redirects. The --output/-o option (and its 'Wrote ... to' chatter) is gone."""
+    for flag in ("--output", "-o"):
+        result = runner.invoke(app, ["schema", flag, str(tmp_path / "x.json")])
+        assert result.exit_code == 2, result.output
+        assert "No such option" in result.output
+
+
+def test_resolve_has_no_output_option(tmp_path):
+    (tmp_path / "common.json").write_text(json.dumps({"url": "https://x.test/shared"}))
+    scenario = tmp_path / "test_x.http.json"
+    scenario.write_text(json.dumps({"stages": [{"name": "s", "request": {"$include": "common.json"}, "response": [{"verify": {"status": 200}}]}]}))
+    for flag in ("--output", "-o"):
+        result = runner.invoke(app, ["resolve", flag, str(tmp_path / "out.json"), str(scenario)])
+        assert result.exit_code == 2, result.output
+        assert "No such option" in result.output
 
 
 def test_validate_invalid_exit_one(tmp_path):
@@ -170,6 +180,43 @@ def test_schema_rejects_typos_accepts_documented_keys():
     assert not validator.is_valid({"stages": [{**stage, "alwaysrun": True}]})
     assert not validator.is_valid({"stages": [{**stage, "response": [{"save": {"jmespth": {"x": "y"}}}]}]})
     assert not validator.is_valid({"stagez": []})
+
+
+def test_schema_rejects_type_typos_in_template_fields():
+    """L7: fields that accept a template should not accept arbitrary strings.
+    A non-template string that is also not a valid value for the field's concrete
+    type is rejected, while templates, concrete values, and the stringified
+    concretes the runtime coerces are all still accepted (no false positives)."""
+    import jsonschema
+
+    from pytest_httpchain.schema import build_schema
+
+    v = jsonschema.Draft202012Validator(build_schema())
+
+    def req(**kw):
+        return {"stages": [{"name": "s", "request": {"url": "https://x.test/", **kw}}]}
+
+    def verify(**kw):
+        return {"stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": kw}]}]}
+
+    # type-mismatched non-template strings are now flagged
+    assert not v.is_valid(req(timeout="abc"))
+    assert not v.is_valid(req(method="FOOBAR"))
+    assert not v.is_valid(verify(status="not-a-status"))
+
+    # templates remain valid
+    assert v.is_valid(req(timeout="{{ t }}"))
+    assert v.is_valid(req(method="{{ m }}"))
+    assert v.is_valid(verify(status="{{ s }}"))
+
+    # concrete values remain valid
+    assert v.is_valid(req(timeout=30))
+    assert v.is_valid(req(method="GET"))
+    assert v.is_valid(verify(status=200))
+
+    # stringified concretes the runtime coerces must NOT become false positives
+    assert v.is_valid(req(timeout="30"))
+    assert v.is_valid(verify(status="200"))
 
 
 def test_resolve_inlines_include(tmp_path):

@@ -68,13 +68,14 @@
                     "minProperties": 1,
                     "type": "object"
                   },
+                  "minItems": 1,
                   "type": "array"
                 },
                 {
                   "type": "string"
                 }
               ],
-              "description": "List of parameter combinations (each dict must have at least one parameter) or template expression",
+              "description": "Non-empty list of parameter combinations (each dict must have at least one parameter) or template expression",
               "title": "Combinations"
             },
             "ids": {
@@ -503,6 +504,7 @@
                   "type": "integer"
                 },
                 {
+                  "pattern": "(?:^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
                   "type": "string"
                 }
               ],
@@ -517,6 +519,7 @@
                   "type": "integer"
                 },
                 {
+                  "pattern": "(?:^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
                   "type": "string"
                 },
                 {
@@ -534,6 +537,7 @@
                   "type": "integer"
                 },
                 {
+                  "pattern": "(?:^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
                   "type": "string"
                 }
               ],
@@ -553,6 +557,7 @@
                   }
                 ]
               },
+              "minItems": 1,
               "title": "Foreach",
               "type": "array"
             }
@@ -581,6 +586,7 @@
                   "type": "integer"
                 },
                 {
+                  "pattern": "(?:^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
                   "type": "string"
                 }
               ],
@@ -595,6 +601,7 @@
                   "type": "integer"
                 },
                 {
+                  "pattern": "(?:^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
                   "type": "string"
                 },
                 {
@@ -612,6 +619,7 @@
                   "type": "integer"
                 },
                 {
+                  "pattern": "(?:^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
                   "type": "string"
                 }
               ],
@@ -626,6 +634,7 @@
                   "type": "integer"
                 },
                 {
+                  "pattern": "(?:^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
                   "type": "string"
                 }
               ],
@@ -687,6 +696,7 @@
                   "$ref": "#/$defs/HTTPMethod"
                 },
                 {
+                  "pattern": "^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$",
                   "type": "string"
                 }
               ],
@@ -753,6 +763,7 @@
                   "type": "number"
                 },
                 {
+                  "pattern": "(?:^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
                   "type": "string"
                 }
               ],
@@ -770,6 +781,7 @@
                   "type": "boolean"
                 },
                 {
+                  "pattern": "^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$",
                   "type": "string"
                 }
               ],
@@ -1095,6 +1107,7 @@
                   "type": "boolean"
                 },
                 {
+                  "pattern": "^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$",
                   "type": "string"
                 }
               ],
@@ -1465,6 +1478,7 @@
                   "$ref": "#/$defs/HTTPStatus"
                 },
                 {
+                  "pattern": "(?:^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
                   "type": "string"
                 },
                 {

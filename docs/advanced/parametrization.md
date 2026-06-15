@@ -141,15 +141,19 @@ Parameter values can use template expressions:
                 }
             ],
             "request": {
-                "url": "https://api.example.com/users/{{ user['id'] }}",
+                "url": "https://api.example.com/users/{{ user.id }}",
                 "headers": {
-                    "X-User-Name": "{{ user['name'] }}"
+                    "X-User-Name": "{{ user.name }}"
                 }
             }
         }
     ]
 }
 ```
+
+Values that come from scenario `vars` are exposed as namespaces, so use attribute
+access (`{{ user.id }}`), not subscript (`{{ user['id'] }}`). Plain dicts from
+fixtures or `combinations` parameters keep subscript access.
 
 ## Complete Example
 

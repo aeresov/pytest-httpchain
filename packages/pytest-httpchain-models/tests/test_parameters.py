@@ -120,6 +120,13 @@ class TestCombinationsParameter:
         with pytest.raises(ValidationError, match="at least 1"):
             CombinationsParameter(combinations=[{}])
 
+    def test_combinations_empty_list_rejected(self):
+        """An empty combinations list expands to zero iterations at runtime
+        (a hard 'produced zero iterations' failure). Reject it at the model layer
+        so it is caught at validation/collection instead, matching the runtime."""
+        with pytest.raises(ValidationError):
+            CombinationsParameter(combinations=[])
+
     def test_combinations_with_template_expression(self):
         """Test CombinationsParameter with template expression."""
         param = CombinationsParameter(combinations="{{ test_combinations }}")
@@ -176,7 +183,7 @@ class TestParameterDiscriminator:
 
     def test_discriminator_invalid_type_rejected(self):
         """Test that invalid parameter type is rejected."""
-        with pytest.raises(ValueError, match="Unable to determine parameter step type"):
+        with pytest.raises(ValidationError, match="does not match any of the expected tags"):
             Stage(
                 name="test",
                 request=Request(url="https://example.com"),

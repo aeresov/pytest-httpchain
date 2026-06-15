@@ -32,6 +32,9 @@ Code     Severity Meaning
 014      error    Invalid JSON syntax
 015      error    Failed to parse JSON file
 016      error    Fixture referenced in a scenario-level template
+017      error    Scenario-level template references an undefined name
+018      warning  Verify expression is not a template (``{{ }}``) — asserts nothing
+019      error    Invalid pytest marker expression (scenario or stage ``marks``)
 020      warning  Referenced file does not exist (deep, opt-in)
 021      warning  Schema file is not valid JSON / not a valid schema (deep)
 022      warning  User function cannot be imported (deep)
@@ -64,7 +67,7 @@ from pytest_httpchain_models import (
     Verify,
     VerifyStep,
 )
-from pytest_httpchain_templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN
+from pytest_httpchain_templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN, is_complete_template
 
 Severity = Literal["error", "warning"]
 
@@ -90,6 +93,8 @@ class DiagnosticCode:
     PARSE_ERROR = "HTTPCHAIN015"
     FIXTURE_IN_SCENARIO_TEMPLATE = "HTTPCHAIN016"
     SCENARIO_UNDEFINED_VAR = "HTTPCHAIN017"
+    NONTEMPLATE_EXPRESSION = "HTTPCHAIN018"
+    INVALID_MARKER = "HTTPCHAIN019"
     # Deep (opt-in) checks: imports, signatures, referenced files.
     REFERENCED_FILE_NOT_FOUND = "HTTPCHAIN020"
     SCHEMA_FILE_INVALID = "HTTPCHAIN021"
@@ -453,6 +458,21 @@ def _verify_diagnostics(scenario: Scenario) -> list[Diagnostic]:
                     )
                 )
 
+            # A verify expression is meant to be a complete ``{{ }}`` template that
+            # evaluates to a truthy/falsy value. A plain string (e.g. a forgotten
+            # ``{{ }}``) is non-empty and therefore always truthy at runtime, so the
+            # assertion silently passes — it tests nothing.
+            for expr in verify.expressions:
+                if isinstance(expr, str) and not is_complete_template(expr):
+                    diagnostics.append(
+                        _diag(
+                            DiagnosticCode.NONTEMPLATE_EXPRESSION,
+                            "warning",
+                            f"Stage '{stage.name}': verify expression {expr!r} is not a template ({{{{ }}}}); it is always truthy and asserts nothing",
+                            location=location,
+                        )
+                    )
+
             # Overlap is compared on the raw (unrendered) strings: identical
             # entries — including identical templates — are caught. A contradiction
             # that only emerges after rendering (e.g. a template that resolves to a
@@ -479,6 +499,47 @@ def _verify_diagnostics(scenario: Scenario) -> list[Diagnostic]:
                         location=f"{location}.body",
                     )
                 )
+
+    return diagnostics
+
+
+def _marker_diagnostics(scenario: Scenario) -> list[Diagnostic]:
+    """Validate scenario- and stage-level pytest marker expressions.
+
+    Markers are parsed by ``make_marker`` only at collection time, so a malformed
+    marker (``skip(``) or an unsupported form (``foo.bar``) would pass ``validate``
+    yet crash collection. Run the same parser here so the validator catches it as
+    an error, keeping ``validate`` a faithful pre-flight check of what collection
+    will accept.
+    """
+    import warnings
+
+    from pytest_httpchain.utils import make_marker
+
+    diagnostics: list[Diagnostic] = []
+
+    def _check(marks: list[str], location: str) -> None:
+        for mark in marks:
+            try:
+                # We only care whether the marker parses; constructing it would
+                # otherwise emit PytestUnknownMarkWarning for custom (unregistered)
+                # marks, which is noise during validation.
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    make_marker(mark)
+            except (ValueError, SyntaxError) as e:
+                diagnostics.append(
+                    _diag(
+                        DiagnosticCode.INVALID_MARKER,
+                        "error",
+                        f"Invalid marker {mark!r}: {e}",
+                        location=location,
+                    )
+                )
+
+    _check(scenario.marks, "marks")
+    for i, stage in enumerate(scenario.stages):
+        _check(stage.marks, f"stages[{i}].marks")
 
     return diagnostics
 
@@ -829,6 +890,8 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
 
     diagnostics.extend(_verify_diagnostics(scenario))
 
+    diagnostics.extend(_marker_diagnostics(scenario))
+
     scenario_info = ScenarioInfo(
         num_stages=len(scenario.stages),
         stage_names=stage_names,
@@ -919,7 +982,14 @@ def validate_scenario(
             root_path=root_path,
         )
     except ReferenceResolverError as e:
-        diagnostics.append(_diag(DiagnosticCode.REF_ERROR, "error", f"JSON reference resolution error: {e}"))
+        # The resolver wraps a plain JSON syntax error as a ReferenceResolverError
+        # (chaining the JSONDecodeError as __cause__). Report those under the
+        # accurate "Invalid JSON syntax" code rather than the $ref-flavored one,
+        # which would mislead when no reference is involved.
+        if isinstance(e.__cause__, json.JSONDecodeError):
+            diagnostics.append(_diag(DiagnosticCode.INVALID_JSON, "error", f"Invalid JSON syntax: {e.__cause__}"))
+        else:
+            diagnostics.append(_diag(DiagnosticCode.REF_ERROR, "error", f"JSON reference resolution error: {e}"))
         return _result(diagnostics)
     except json.JSONDecodeError as e:
         diagnostics.append(_diag(DiagnosticCode.INVALID_JSON, "error", f"Invalid JSON syntax: {e}"))

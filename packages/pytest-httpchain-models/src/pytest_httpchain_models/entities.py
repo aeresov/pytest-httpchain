@@ -41,25 +41,34 @@ from pytest_httpchain_models.types import (
     JSONSchemaInline,
     NamespaceFromDict,
     NamespaceOrDict,
+    NumberOrTemplate,
     PartialTemplateStr,
     RegexPattern,
     SerializablePath,
     TemplateExpression,
+    TemplateExpressionOnly,
     VariableName,
     XMLString,
     convert_namespace_to_dict,
 )
 
 
-def _create_discriminator(class_to_tag: dict[str, str], error_message: str) -> Callable[[Any], str]:
+def _create_discriminator(class_to_tag: dict[str, str]) -> Callable[[Any], str]:
     """Factory function to create Pydantic discriminator functions.
 
     Args:
         class_to_tag: Mapping from class names to discriminator tags.
-        error_message: Error message to raise when type cannot be determined.
 
     Returns:
         A discriminator function that can be used with Pydantic's Discriminator.
+
+    When the input matches no known variant, the function returns an
+    *unrecognized* tag (the offending key, or a marker for empty/non-object
+    input) rather than raising. Pydantic then raises a clean, field-located
+    ``union_tag_invalid`` ``ValidationError`` that lists the valid tags — which
+    the ``except ValidationError`` handlers in the validator CLI, pytest
+    collection, and the show/graph inspection commands all catch. Raising a bare
+    ``ValueError`` here would instead escape those handlers as a raw traceback.
     """
     tag_fields = set(class_to_tag.values())
 
@@ -73,11 +82,15 @@ def _create_discriminator(class_to_tag: dict[str, str], error_message: str) -> C
                 # extra="forbid", surfacing the ambiguity as a validation error.
                 return min(found)
 
+            # No recognized type key: surface the first (offending) key as an
+            # invalid tag so the validation error names it.
+            return next(iter(v), "(empty object)")
+
         tag = class_to_tag.get(v.__class__.__name__)
         if tag:
             return tag
 
-        raise ValueError(error_message)
+        return f"(non-object: {type(v).__name__})"
 
     return discriminator
 
@@ -290,7 +303,6 @@ get_request_body_discriminator = _create_discriminator(
         "FilesBody": "files",
         "GraphQLBody": "graphql",
     },
-    "Unable to determine body type",
 )
 
 
@@ -309,12 +321,12 @@ RequestBody = Annotated[
 
 class Request(Authenticated):
     url: HttpUrl | PartialTemplateStr = Field(description="Request URL (may be a template expression).")
-    method: HTTPMethod | TemplateExpression = Field(default=HTTPMethod.GET, description="HTTP method.")
+    method: HTTPMethod | TemplateExpressionOnly = Field(default=HTTPMethod.GET, description="HTTP method.")
     params: dict[str, Any] = Field(default_factory=dict, description="URL query parameters.")
     headers: dict[str, str] = Field(default_factory=dict, description="HTTP request headers.")
     body: RequestBody | None = Field(default=None, description="Request body configuration.")
-    timeout: PositiveFloat | TemplateExpression = Field(default=30.0, description="Request timeout in seconds.")
-    allow_redirects: Literal[True, False] | TemplateExpression = Field(default=True, description="Whether to follow redirects.")
+    timeout: PositiveFloat | NumberOrTemplate = Field(default=30.0, description="Request timeout in seconds.")
+    allow_redirects: Literal[True, False] | TemplateExpressionOnly = Field(default=True, description="Whether to follow redirects.")
 
 
 class VarsSubstitution(Descripted):
@@ -330,7 +342,6 @@ get_substitution_discriminator = _create_discriminator(
         "VarsSubstitution": "vars",
         "FunctionsSubstitution": "functions",
     },
-    "Unable to determine substitution type",
 )
 
 
@@ -372,7 +383,6 @@ get_save_discriminator = _create_discriminator(
         "SubstitutionsSave": "substitutions",
         "UserFunctionsSave": "user_functions",
     },
-    "Unable to determine save type: must have 'jmespath', 'substitutions', or 'user_functions'",
 )
 
 
@@ -393,7 +403,7 @@ with _suppress_field_shadow_warning("schema"):
 
 
 class Verify(Descripted):
-    status: HTTPStatus | None | TemplateExpression = Field(default=None, description="Expected HTTP status code.")
+    status: HTTPStatus | None | NumberOrTemplate = Field(default=None, description="Expected HTTP status code.")
     headers: dict[str, str] = Field(default_factory=dict, description="Expected response headers (exact match per key).")
     expressions: list[Any] = Field(
         default_factory=list,
@@ -423,7 +433,6 @@ class VerifyStep(StrictModel):
 
 get_response_step_discriminator = _create_discriminator(
     {"SaveStep": "save", "VerifyStep": "verify"},
-    "Unable to determine step type",
 )
 
 
@@ -461,8 +470,8 @@ class IndividualParameter(StrictModel):
 
 
 class CombinationsParameter(StrictModel):
-    combinations: list[Annotated[dict[str, Any], Field(min_length=1)]] | PartialTemplateStr = Field(
-        description="List of parameter combinations (each dict must have at least one parameter) or template expression"
+    combinations: Annotated[list[Annotated[dict[str, Any], Field(min_length=1)]], Field(min_length=1)] | PartialTemplateStr = Field(
+        description="Non-empty list of parameter combinations (each dict must have at least one parameter) or template expression"
     )
     ids: list[str] | None = Field(default=None, description="Optional IDs for each combination")
 
@@ -488,7 +497,6 @@ class CombinationsParameter(StrictModel):
 
 get_parameter_step_discriminator = _create_discriminator(
     {"IndividualParameter": "individual", "CombinationsParameter": "combinations"},
-    "Unable to determine parameter step type",
 )
 
 
@@ -504,15 +512,15 @@ Parameters = list[Parameter]
 class ParallelConfigBase(StrictModel):
     """Base configuration for parallel HTTP request execution."""
 
-    max_concurrency: PositiveInt | TemplateExpression = Field(
+    max_concurrency: PositiveInt | NumberOrTemplate = Field(
         default=10,
         description="Maximum number of concurrent requests.",
     )
-    calls_per_sec: PositiveInt | TemplateExpression | None = Field(
+    calls_per_sec: PositiveInt | NumberOrTemplate | None = Field(
         default=None,
         description="Maximum number of API calls per second. When set, requests are rate-limited globally across all workers.",
     )
-    max_rate_limit_delay: PositiveInt | TemplateExpression = Field(
+    max_rate_limit_delay: PositiveInt | NumberOrTemplate = Field(
         default=60,
         description="Maximum seconds to wait when rate-limited before giving up. Defaults to 60 seconds.",
     )
@@ -521,7 +529,7 @@ class ParallelConfigBase(StrictModel):
 class ParallelRepeatConfig(ParallelConfigBase):
     """Execute the same request N times in parallel."""
 
-    repeat: PositiveInt | TemplateExpression = Field(
+    repeat: PositiveInt | NumberOrTemplate = Field(
         description="Execute the same request N times in parallel.",
     )
 
@@ -529,7 +537,7 @@ class ParallelRepeatConfig(ParallelConfigBase):
 class ParallelForeachConfig(ParallelConfigBase):
     """Execute request once for each parameter set in parallel."""
 
-    foreach: Parameters = Field(
+    foreach: Annotated[Parameters, Field(min_length=1)] = Field(
         description="Execute request once for each parameter set in parallel.",
     )
 
@@ -539,7 +547,6 @@ get_parallel_config_discriminator = _create_discriminator(
         "ParallelRepeatConfig": "repeat",
         "ParallelForeachConfig": "foreach",
     },
-    "Unable to determine parallel config type: must have 'repeat' or 'foreach'",
 )
 
 
@@ -552,7 +559,7 @@ ParallelConfig = Annotated[
 class Stage(Marked, Fixtured, Descripted):
     name: str = Field(default="", description="Stage name (human-readable).")
     substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")
-    always_run: Literal[True, False] | TemplateExpression = Field(
+    always_run: Literal[True, False] | TemplateExpressionOnly = Field(
         default=False,
         description="Execute even if a previous stage failed. A template expression is evaluated (truthiness) when the chain is aborted, "
         "against fixtures, parametrize parameters, scenario substitutions, and previously saved variables.",

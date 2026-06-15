@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-15
+
+### Added
+
+- New validation diagnostic `HTTPCHAIN019` (error): a scenario- or stage-level `marks` entry that is not a parseable pytest marker (e.g. `skip(` or an unsupported form like `foo.bar`). Markers were previously only parsed at collection time, so `validate` reported such a scenario as OK while `pytest` then aborted collection — `validate` now catches it up front, restoring it as a faithful pre-flight check.
+- New validation diagnostic `HTTPCHAIN018` (warning): a `verify.expressions` entry that is a plain string with no `{{ }}` template. Such a value is always truthy at runtime, so the assertion silently passes — the validator now flags the likely forgotten braces.
+
+### Fixed
+
+- A malformed `request.body` shape (an unknown body-type key like `{"jsonn": …}`, an empty `{}`, or a non-object) — and the equivalent for the `save`, `substitution`, response-step, `parametrize`, and `parallel` discriminated unions — now raises a clean, located Pydantic `ValidationError` instead of a bare `ValueError`. The bare error was not a `ValidationError`, so it escaped every `except ValidationError` handler: `validate` aborted with a raw traceback (and emitted a crash dump on `--format json`), `pytest --collect-only` reported the error without naming the offending key, and `show`/`graph` dumped a traceback. All four now produce a coded diagnostic / clean message that names the bad key and lists the valid tags.
+- A single-path SSL client certificate (`ssl.cert: "/path/to/client.pem"`) no longer crashes collection. The path was stored as a `pathlib.Path` and handed straight to httpx, which unpacks a non-tuple cert via `load_cert_chain(*cert)` and raised `TypeError`. Cert paths are now stringified for httpx, fixing both the single-path and `[cert, key]` tuple forms.
+- A template inside an `ssl.cert` tuple (e.g. `["/certs/{{ name }}", "/certs/key.pem"]`) is now rendered. The template walker had no `tuple` case (and `cert` is the only tuple-typed field), so the `{{ }}` was passed to httpx verbatim. Tuples are now walked like lists.
+- An empty `parallel.foreach` (`[]`) or empty `combinations` (`[]`) is now rejected at validation/collection time (`min_length=1`) instead of silently running the request once unparameterized (`foreach`) or failing with a runtime "produced zero iterations" error (`combinations`).
+- A non-integer value for a numeric ini option (`ref_parent_traversal_depth`, `max_comprehension_length`, `max_parallel_iterations`) now produces a clean `pytest.UsageError` instead of an `INTERNALERROR` traceback. pytest's `type="int"` handling does a bare `int(value)` that raises `ValueError` before the plugin's range checks run; the reads are now wrapped to report a usage error.
+- A plain JSON syntax error in a scenario file is now reported as `HTTPCHAIN014` ("Invalid JSON syntax") instead of the misleading `HTTPCHAIN012` ("JSON reference resolution error"), since no reference is involved. `HTTPCHAIN014` was previously unreachable because the resolver wraps syntax errors as `ReferenceResolverError`; the wrapped cause is now unwrapped to report the accurate code.
+- `HTTPCHAIN017` is now listed in the validator module's diagnostic-code table (it was a live, firing code missing from the "full" table).
+- The published editor JSON Schema now constrains the string branch of template-accepting fields, so an editor flags a non-template string that is also not a valid value for the field's concrete type — e.g. `timeout: "abc"`, `status: "not-a-status"`, `method: "FOOBAR"`. Templates, concrete values, and the stringified concretes the runtime coerces (`"30"`, `"200"`) remain valid, so no valid scenario is rejected. Runtime validation is unchanged.
+
+### Changed
+
+- PyPI keywords updated: dropped the stale `requests` (the project migrated to httpx in 0.2.0), added `httpx`, `http`, `api`, `integration-testing`.
+
+### Removed
+
+- The `--output`/`-o` option on the `schema` and `resolve` CLI commands. Both commands already default to stdout, so the option (and its `Wrote … to PATH` confirmation) only duplicated shell redirection. Redirect instead — `pytest-httpchain schema > scenario.schema.json` — which makes every command uniformly emit data to stdout.
+
+### Documentation
+
+- Corrected several copy-pasteable examples that failed at runtime: `{{ created_at is not none }}` → `is not None` (responses); subscript access on scenario `vars` (`{{ user['id'] }}`) → attribute access (`{{ user.id }}`) in the parametrization and comprehension examples, with a note that `vars` values are namespaces while fixture/`combinations` dicts use subscript.
+- Documented that `verify.headers` are matched by exact, full-string equality (so `Content-Type: application/json` will not match `application/json; charset=utf-8`).
+- Documented that the `usefixtures(...)` marker only triggers a fixture's setup/teardown and does **not** inject its value into the template context (use the `fixtures` array for that).
+- Documented that `functions` substitutions seed a **callable** that must be invoked with `()` in templates, with usage examples.
+- README: corrected the `$ref` paths note (absolute paths are rejected for security) and added a section documenting HAR export via `--output-dir`.
+- Documented that `$merge` sibling keys are merged additively (they add keys; overriding an existing scalar is a conflict, not a silent override).
+- Documented that a callable fixture value is wrapped as a factory and loses attribute access on the original object.
+- Corrected the `max_parallel_iterations` cap docs: an over-cap stage fails at runtime, not at collection.
+
 ## [0.7.0] - 2026-06-14
 
 ### Added
@@ -251,7 +288,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.4.0...v0.5.0

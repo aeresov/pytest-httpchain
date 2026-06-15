@@ -1,0 +1,8 @@
+{
+    "stages": {
+        "s": {
+            "request": {"url": "https://example.com"},
+            "response": [{"verify": {"expressions": ["this is not a template"]}}]
+        }
+    }
+}

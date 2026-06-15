@@ -124,7 +124,7 @@ Editors get as-you-type validation and autocomplete via the published [JSON Sche
 Several read-only commands help inspect scenarios offline — emit the schema matching your installed version, resolve references, summarize the variable data-flow, or render it as a Mermaid diagram:
 
 ```bash
-uvx pytest-httpchain schema --output scenario.schema.json
+uvx pytest-httpchain schema > scenario.schema.json
 uvx pytest-httpchain resolve tests/test_login.http.json
 uvx pytest-httpchain show tests/test_login.http.json
 uvx pytest-httpchain graph tests/test_login.http.json

@@ -67,6 +67,38 @@ def test_no_verify_warns(datadir):
     assert any("no response validation" in w for w in r.warnings)
 
 
+def test_nontemplate_verify_expression_warns(datadir):
+    """M2: a verify expression that is a plain string (no {{ }}) is always truthy
+    and asserts nothing — the validator must warn."""
+    r = validate_scenario(datadir / "verify_nontemplate_expression.json")
+    assert DiagnosticCode.NONTEMPLATE_EXPRESSION in _codes(r)
+
+
+def test_template_verify_expression_no_warn(datadir):
+    """A proper {{ }} verify expression does not trigger the no-op-expression warning."""
+    r = validate_scenario(datadir / "verify_template_expression_ok.json")
+    assert DiagnosticCode.NONTEMPLATE_EXPRESSION not in _codes(r)
+
+
+def test_invalid_scenario_marker_is_error(datadir):
+    """M6: a malformed scenario-level marker crashes collection at runtime, so the
+    validator (the pre-flight CI gate) must report it as an error too."""
+    r = validate_scenario(datadir / "invalid_scenario_marker.json")
+    assert r.valid is False
+    assert DiagnosticCode.INVALID_MARKER in _codes(r)
+
+
+def test_invalid_stage_marker_is_error(datadir):
+    r = validate_scenario(datadir / "invalid_stage_marker.json")
+    assert r.valid is False
+    assert DiagnosticCode.INVALID_MARKER in _codes(r)
+
+
+def test_valid_markers_no_error(datadir):
+    r = validate_scenario(datadir / "valid_markers.json")
+    assert DiagnosticCode.INVALID_MARKER not in _codes(r)
+
+
 # --- Tier 0 regression tests: drift fixes (false positives / false negatives) ---
 
 

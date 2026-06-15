@@ -155,9 +155,10 @@ class Carrier:
 
             total = len(iteration_substitutions)
             if total == 0:
-                # Unreachable via validated models (foreach values have min_length=1,
-                # repeat is PositiveInt), but guard so a future gap fails loudly
-                # instead of passing a stage that never sent a request.
+                # The models reject the static empty cases (foreach/combinations
+                # have min_length=1, repeat is PositiveInt), but a template- or
+                # $ref-sourced parallel config can still resolve to empty at
+                # runtime, so guard rather than silently send zero requests.
                 raise StageExecutionError("Parallel configuration produced zero iterations; foreach/repeat must yield at least one item")
             if total > cls.max_parallel_iterations:
                 raise StageExecutionError(
@@ -543,6 +544,19 @@ class Carrier:
             cls.client = None
 
 
+def _normalize_cert(cert: Any) -> str | tuple[str, ...]:
+    """Stringify SSL client-cert paths for httpx.
+
+    The model stores ``cert`` as ``pathlib.Path`` (single) or a tuple of Paths.
+    httpx builds the SSL context via ``load_cert_chain(*cert)`` for a non-tuple
+    cert, so a bare ``Path`` is unpacked and raises ``TypeError``. Passing string
+    paths avoids that for both the single-path and (cert, key) tuple forms.
+    """
+    if isinstance(cert, list | tuple):
+        return tuple(str(p) for p in cert)
+    return str(cert)
+
+
 def create_test_class(scenario: Scenario, class_name: str, max_parallel_iterations: int = 10_000) -> type[Carrier]:
     """Create a dynamic test class from a scenario definition."""
     scenario_context = process_substitutions(scenario.substitutions)
@@ -553,7 +567,7 @@ def create_test_class(scenario: Scenario, class_name: str, max_parallel_iteratio
         "http2": True,
     }
     if scenario.ssl.cert is not None:
-        client_kwargs["cert"] = resolved_ssl.cert
+        client_kwargs["cert"] = _normalize_cert(resolved_ssl.cert)
     if scenario.auth:
         resolved_auth = walk(scenario.auth, scenario_context)
         auth_result = call_user_function(resolved_auth)

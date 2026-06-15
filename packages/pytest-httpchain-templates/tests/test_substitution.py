@@ -42,6 +42,12 @@ class TestWalk:
         result = walk(input_list, {"a": 1, "b": 2, "c": 3})
         assert result == [1, "Value: 2", 3]
 
+    def test_tuple(self):
+        # Tuples must be walked like lists. SSLConfig.cert is the one tuple-typed
+        # model field; without this a templated cert path is passed verbatim.
+        result = walk(("{{ a }}", "Value: {{ b }}", "{{ c }}"), {"a": 1, "b": 2, "c": 3})
+        assert result == (1, "Value: 2", 3)
+
     def test_pydantic_model(self):
         model = TestWalk.SampleModel(name="User {{ id }}", value=100)
         result = walk(model, {"id": "123"})

@@ -165,26 +165,33 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    # Numeric options are registered with type="int", so getini returns an int and a
-    # non-int value in the ini is reported by pytest as a clean usage error. Range
-    # checks below raise pytest.UsageError (not bare ValueError, which pytest renders
-    # as an INTERNALERROR with traceback).
+    # Numeric options are registered with type="int", but pytest performs the
+    # int() conversion with a bare int(value) that raises ValueError for a
+    # non-integer ini value — which pytest renders as an INTERNALERROR traceback.
+    # Wrap the read so a garbage value becomes a clean usage error; the range
+    # checks below likewise raise pytest.UsageError.
+    def _getint(name: str) -> int:
+        try:
+            return config.getini(name)
+        except ValueError as e:
+            raise pytest.UsageError(f"{name} must be an integer: {e}") from None
+
     suffix = str(config.getini(ConfigOptions.SUFFIX))
     if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", suffix):
         raise pytest.UsageError("suffix must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
 
-    ref_parent_traversal_depth = config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
+    ref_parent_traversal_depth = _getint(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
     if ref_parent_traversal_depth < 0:
         raise pytest.UsageError("ref_parent_traversal_depth must be non-negative")
 
-    max_comprehension_length = config.getini(ConfigOptions.MAX_COMPREHENSION_LENGTH)
+    max_comprehension_length = _getint(ConfigOptions.MAX_COMPREHENSION_LENGTH)
     if max_comprehension_length < 1:
         raise pytest.UsageError("max_comprehension_length must be a positive integer")
     if max_comprehension_length > 1_000_000:
         raise pytest.UsageError("max_comprehension_length must not exceed 1,000,000")
     simpleeval.MAX_COMPREHENSION_LENGTH = max_comprehension_length  # ty: ignore[invalid-assignment]
 
-    max_parallel_iterations = config.getini(ConfigOptions.MAX_PARALLEL_ITERATIONS)
+    max_parallel_iterations = _getint(ConfigOptions.MAX_PARALLEL_ITERATIONS)
     if max_parallel_iterations < 1:
         raise pytest.UsageError("max_parallel_iterations must be a positive integer")
     if max_parallel_iterations > 1_000_000:

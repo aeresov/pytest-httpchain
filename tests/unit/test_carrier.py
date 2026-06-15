@@ -26,8 +26,23 @@ from pytest_httpchain_models import (
 )
 from pytest_httpchain_models.entities import ResponseBody
 
-from pytest_httpchain.carrier import Carrier
+from pytest_httpchain.carrier import Carrier, _normalize_cert
 from pytest_httpchain.exceptions import RequestError, SaveError, VerificationError
+
+
+class TestNormalizeCert:
+    """httpx needs string cert paths; the model stores pathlib.Path. A single
+    Path passed straight to httpx.Client(cert=...) crashes with TypeError."""
+
+    def test_single_path_becomes_str(self):
+        from pathlib import Path
+
+        assert _normalize_cert(Path("/p/client.pem")) == "/p/client.pem"
+
+    def test_tuple_of_paths_becomes_tuple_of_str(self):
+        from pathlib import Path
+
+        assert _normalize_cert((Path("/p/c.pem"), Path("/p/k.pem"))) == ("/p/c.pem", "/p/k.pem")
 
 
 class TestBuildRequestKwargsErrors:
