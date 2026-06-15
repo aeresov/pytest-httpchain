@@ -1,14 +1,16 @@
 import enum
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 import typer
+from pydantic import ValidationError
+from pytest_httpchain_jsonref import ReferenceResolverError, load_json
+from pytest_httpchain_models import Scenario
 
-if TYPE_CHECKING:
-    from pytest_httpchain_models import Scenario
-
-    from pytest_httpchain.dataflow import DataFlow
+from pytest_httpchain.dataflow import DataFlow, analyze_dataflow
+from pytest_httpchain.schema import build_schema
+from pytest_httpchain.validation import ValidateResult, load_scenario, resolve_root_path, validate_scenario
 
 app = typer.Typer()
 
@@ -49,8 +51,6 @@ def validate(
     per file and exits non-zero if any file is invalid (or, with --strict, has any
     warnings).
     """
-    from pytest_httpchain.validation import ValidateResult, validate_scenario
-
     results = [
         (path, validate_scenario(path, ref_parent_traversal_depth=ref_parent_traversal_depth, root_path=root_path, deep=deep, syspaths=list(syspath or []))) for path in paths
     ]
@@ -87,8 +87,6 @@ def schema() -> None:
 
     Writes to stdout; redirect to a file (``pytest-httpchain schema > scenario.schema.json``).
     """
-    from pytest_httpchain.schema import build_schema
-
     typer.echo(json.dumps(build_schema(), indent=2, default=str))
 
 
@@ -99,10 +97,6 @@ def resolve(
     root_path: Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: nearest tests/ ancestor).")] = None,
 ) -> None:
     """Resolve $ref/$include/$merge and print the merged scenario JSON to stdout."""
-    from pytest_httpchain_jsonref import ReferenceResolverError, load_json
-
-    from pytest_httpchain.validation import resolve_root_path
-
     try:
         data = load_json(
             scenario,
@@ -116,13 +110,8 @@ def resolve(
     typer.echo(json.dumps(data, indent=2, default=str))
 
 
-def _load_for_inspection(path: Path, depth: int, root_path: Path | None = None) -> tuple["Scenario", dict]:
+def _load_for_inspection(path: Path, depth: int, root_path: Path | None = None) -> tuple[Scenario, dict]:
     """Load + validate a scenario for show/graph, mapping failures to Exit(1)."""
-    from pydantic import ValidationError
-    from pytest_httpchain_jsonref import ReferenceResolverError
-
-    from pytest_httpchain.validation import load_scenario
-
     try:
         return load_scenario(path, root_path=root_path, ref_parent_traversal_depth=depth)
     except (ReferenceResolverError, json.JSONDecodeError, OSError) as e:
@@ -133,7 +122,7 @@ def _load_for_inspection(path: Path, depth: int, root_path: Path | None = None) 
         raise typer.Exit(1) from None
 
 
-def _render_show_text(path: Path, scenario: "Scenario", flow: "DataFlow") -> list[str]:
+def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[str]:
     producer_of: dict[tuple[int, str], int] = {}
     for edge in flow.edges:
         for var_name in edge.vars:
@@ -177,8 +166,6 @@ def show(
     root_path: Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: nearest tests/ ancestor).")] = None,
 ) -> None:
     """Summarize a scenario's stages and variable data-flow."""
-    from pytest_httpchain.dataflow import analyze_dataflow
-
     sc, test_data = _load_for_inspection(scenario, ref_parent_traversal_depth, root_path)
     flow = analyze_dataflow(sc, test_data)
 
@@ -195,7 +182,7 @@ def _mermaid_label(text: str) -> str:
     return text.replace('"', "'").replace("\n", " ")
 
 
-def _to_mermaid(flow: "DataFlow", direction: str = "TD") -> str:
+def _to_mermaid(flow: DataFlow, direction: str = "TD") -> str:
     lines = [f"flowchart {direction}"]
     if not flow.stages:
         lines.append("    %% (no stages)")
@@ -216,8 +203,6 @@ def graph(
     root_path: Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: nearest tests/ ancestor).")] = None,
 ) -> None:
     """Emit a Mermaid flowchart of the stage data-flow."""
-    from pytest_httpchain.dataflow import analyze_dataflow
-
     sc, test_data = _load_for_inspection(scenario, ref_parent_traversal_depth, root_path)
     flow = analyze_dataflow(sc, test_data)
     typer.echo(_to_mermaid(flow, direction.value))

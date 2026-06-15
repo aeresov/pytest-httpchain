@@ -48,8 +48,11 @@ runs at collection time. Deep findings are always warnings.
 """
 
 import ast
+import inspect
 import json
 import re
+import sys
+import warnings
 from pathlib import Path
 from typing import Any, Literal
 
@@ -66,8 +69,12 @@ from pytest_httpchain_models import (
     VarsSubstitution,
     Verify,
     VerifyStep,
+    check_json_schema,
 )
 from pytest_httpchain_templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN, is_complete_template
+from pytest_httpchain_userfunc import UserFunctionError, import_function
+
+from pytest_httpchain.utils import make_marker
 
 Severity = Literal["error", "warning"]
 
@@ -512,10 +519,6 @@ def _marker_diagnostics(scenario: Scenario) -> list[Diagnostic]:
     an error, keeping ``validate`` a faithful pre-flight check of what collection
     will accept.
     """
-    import warnings
-
-    from pytest_httpchain.utils import make_marker
-
     diagnostics: list[Diagnostic] = []
 
     def _check(marks: list[str], location: str) -> None:
@@ -590,8 +593,6 @@ def _check_schema_path(schema: Any, location: str) -> list[Diagnostic]:
     except (OSError, json.JSONDecodeError) as e:
         return [_diag(DiagnosticCode.SCHEMA_FILE_INVALID, "warning", f"Schema file is not valid JSON: {path}: {e}", location)]
     try:
-        from pytest_httpchain_models import check_json_schema
-
         check_json_schema(data)
     except Exception as e:
         return [_diag(DiagnosticCode.SCHEMA_FILE_INVALID, "warning", f"Schema file is not a valid JSON Schema: {path}: {e}", location)]
@@ -641,8 +642,6 @@ def _signature_problems(func: Any, provided: set[str]) -> list[tuple[str, str]]:
     kwargs plus framework-injected names such as ``response``). All arguments are
     passed by keyword at the call sites, so positional-only parameters are not
     considered fillable here. Returns ``(code, message)`` tuples."""
-    import inspect
-
     try:
         signature = inspect.signature(func)
     except (TypeError, ValueError):
@@ -669,8 +668,6 @@ def _signature_problems(func: Any, provided: set[str]) -> list[tuple[str, str]]:
 def _function_diagnostics(scenario: Scenario) -> list[Diagnostic]:
     """Resolve every literal user-function reference and (where the call
     arguments are statically known) check them against the signature."""
-    from pytest_httpchain_userfunc import UserFunctionError, import_function
-
     diagnostics: list[Diagnostic] = []
 
     # (call, injected-arg-names, check_signature, location). Substitution
@@ -730,8 +727,6 @@ def check_scenario_deep(scenario: Scenario, syspaths: list[Path] | None = None) 
     ``validate --deep`` — never at collection time. ``syspaths`` (and the current
     working directory) are temporarily prepended to ``sys.path`` so user modules
     resolve the same way they would under pytest."""
-    import sys
-
     diagnostics = _file_diagnostics(scenario)
 
     saved_path = list(sys.path)

@@ -4,8 +4,10 @@ This module converts httpx Request/Response objects to HAR 1.2 format
 and writes them to files for external analysis.
 """
 
+import base64
 import json
 from datetime import UTC, datetime
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -16,8 +18,6 @@ import httpx
 def _get_version() -> str:
     """Get pytest-httpchain version for HAR creator info."""
     try:
-        from importlib.metadata import version
-
         return version("pytest-httpchain")
     except Exception:
         return "unknown"
@@ -71,8 +71,6 @@ def _format_post_data(request: httpx.Request) -> dict[str, Any] | None:
     try:
         text = request.content.decode("utf-8")
     except UnicodeDecodeError:
-        import base64
-
         text = base64.b64encode(request.content).decode("ascii")
         return {
             "mimeType": mime_type,
@@ -106,8 +104,6 @@ def _format_response_content(response: httpx.Response) -> dict[str, Any]:
         try:
             content["text"] = response.content.decode("utf-8")
         except UnicodeDecodeError:
-            import base64
-
             content["text"] = base64.b64encode(response.content).decode("ascii")
             content["encoding"] = "base64"
 
