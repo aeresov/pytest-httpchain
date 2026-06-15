@@ -215,6 +215,10 @@ class ReferenceResolver:
 
         resolved_siblings = self._resolve_refs(siblings, current_path, root_data, root_path)
 
+        # Two-call contract: conflict detection MUST run before always_merger.merge,
+        # and _detect_merge_conflicts deliberately mirrors the merger's per-type policy
+        # (recurse into dicts, allow list concatenation, reject conflicting scalars). If
+        # you change the merge strategy, change _detect_merge_conflicts to match.
         self._detect_merge_conflicts(referenced_data, resolved_siblings)
 
         return always_merger.merge(referenced_data, resolved_siblings)

@@ -12,8 +12,8 @@ from pydantic import BaseModel
 from pytest_httpchain_models import Scenario
 
 from pytest_httpchain.validation import (
-    _parameter_names,
     extract_template_variables,
+    parameter_names,
     raw_stages,
     saved_in_stage,
     stage_defined_names,
@@ -90,7 +90,7 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         # always_run resolves before stage substitutions exist, so only fixtures
         # and parametrize parameters shadow an earlier save there.
         always_run_refs = extract_template_variables(raw.get("always_run"))
-        always_run_local = set(stage.fixtures) | _parameter_names(stage.parametrize) | scenario_fixture_names
+        always_run_local = set(stage.fixtures) | parameter_names(stage.parametrize) | scenario_fixture_names
         consumes |= {name for name in always_run_refs if name in cumulative_saves and name not in always_run_local}
 
         by_producer: dict[int, list[str]] = {}

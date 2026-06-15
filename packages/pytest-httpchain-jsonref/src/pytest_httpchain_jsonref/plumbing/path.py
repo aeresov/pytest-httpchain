@@ -32,7 +32,7 @@ class RefPathHelper:
         # Reject absolute ref file paths: they bypass the traversal limit (no "..")
         # and `base / "/abs"` collapses to "/abs", escaping the sandbox.
         if Path(ref_path).is_absolute():
-            raise ReferenceResolverError(f"Absolute $ref paths are not allowed: {ref_path}")
+            raise ReferenceResolverError(f"Absolute reference paths are not allowed: {ref_path}")
 
         # Count parent traversals before resolution
         parent_traversals = sum(1 for part in Path(ref_path).parts if part == "..")
@@ -107,7 +107,3 @@ class RefPathHelper:
             parts.append(part)
 
         return parts
-
-
-# Backwards-compatible alias for the previous (misleading) class name.
-PathValidator = RefPathHelper

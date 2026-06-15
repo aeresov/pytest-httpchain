@@ -68,6 +68,9 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
     Raises:
         TemplatesError: If variable is not found or expression is invalid
     """
+    # simpleeval keeps callables and data in two separate maps (functions= vs
+    # names=), so the context is partitioned by callable(): a callable (user
+    # function / factory fixture) goes to functions=, everything else to names=.
     callables = {}
     names = {}
 
@@ -77,7 +80,8 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
         else:
             names[key] = value
 
-    # Add helper functions with access to the context
+    # exists()/get() must see the WHOLE context (callables included), not just the
+    # `names` half — so they close over a full copy, kept in sync with the split above.
     context_dict = dict(context)
 
     # Helper function to check if a variable exists
@@ -90,6 +94,11 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
         """Get a variable from context with optional default."""
         return context_dict.get(var_name, default_value)
 
+    # Merge order is load-bearing: on a name collision the LAST mapping wins, so
+    # user-supplied `callables` can shadow SAFE_FUNCTIONS/DEFAULT_FUNCTIONS, but the
+    # engine's own `exists`/`get` are merged last and therefore cannot be overridden
+    # by a context value named "exists"/"get". Likewise user `names` override the
+    # JSON literals. Reordering these `|` operands changes which value wins.
     eval_instance = EvalWithCompoundTypes(
         functions=SAFE_FUNCTIONS
         | DEFAULT_FUNCTIONS

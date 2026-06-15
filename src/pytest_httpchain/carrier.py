@@ -1,7 +1,7 @@
 """Test execution engine for pytest-httpchain scenarios.
 
-``create_test_class`` turns a validated :class:`Scenario` into a dynamic pytest
-test class (a subclass of :class:`Carrier`), one ``test_NN - <stage name>``
+``create_test_class`` turns a validated `Scenario` into a dynamic pytest
+test class (a subclass of `Carrier`), one ``test_NN - <stage name>``
 method per stage, ordered by the ``order(i)`` marker so the stages run as a
 chain. Each scenario gets its own subclass; the per-scenario mutable state
 (``client``, ``global_context``, ``aborted``, ``last_request``/``last_response``,
@@ -10,7 +10,7 @@ subclass dict, so the stage methods — which are classmethods operating on
 ``cls`` — share one running context across the chain while different scenarios
 stay isolated from each other.
 
-Per stage, :meth:`Carrier.execute_stage` gates on the abort/``always_run`` flow,
+Per stage, `Carrier.execute_stage` gates on the abort/``always_run`` flow,
 layers fixtures and substitutions over the global context, expands any
 ``parallel`` config into iterations (sequential or thread-pooled, optionally
 rate limited), executes the HTTP request via httpx, runs the response
@@ -98,6 +98,13 @@ class Carrier:
     It manages the shared state, context, and execution flow for all stages in a test scenario.
     """
 
+    # These ClassVars are placeholders: create_test_class() overrides every one of
+    # them in each per-scenario subclass dict (see the bottom of this module), so
+    # the values here are never the ones used at runtime — do NOT rely on the
+    # ChainMap()/None/[] defaults, and do NOT move this state to instance
+    # attributes: the stage methods are classmethods that share one running context
+    # across the chain via `cls`, while distinct scenarios stay isolated because
+    # each gets its own subclass.
     client: ClassVar[httpx.Client | None] = None
     aborted: ClassVar[bool] = False
     last_request: ClassVar[httpx.Request | None] = None
@@ -222,8 +229,11 @@ class Carrier:
     def _build_iteration_substitutions(parallel_config: Any) -> list[dict[str, Any]]:
         """Expand the (already template-resolved) parallel config into per-iteration
         substitution dicts: non-parallel -> a single empty dict; ``repeat`` -> N
-        empties; ``foreach`` -> the cross-product of its parameter steps (the same
-        algorithm pytest uses for the ``parametrize`` marker)."""
+        empties; ``foreach`` -> the cross-product of its parameter steps.
+
+        Like pytest's stacked ``parametrize`` marker this is a cross-product, but the
+        resulting iteration ORDER is the *reverse* of pytest's — do not assume the
+        two orders match."""
         iteration_substitutions: list[dict[str, Any]] = [{}]
         match parallel_config:
             case None:
@@ -232,13 +242,17 @@ class Carrier:
                 iteration_substitutions = [{} for _ in range(repeat_count)]
             case ParallelForeachConfig(foreach=foreach_steps):
                 for step in foreach_steps:
+                    # Comprehension clause order is load-bearing: the new values are the
+                    # OUTER loop and the accumulated dicts the INNER loop, which is what
+                    # produces the (reverse-of-pytest) ordering noted above. Swapping the
+                    # two `for` clauses silently changes the iteration order.
                     match step:
                         case IndividualParameter(individual=individual):
                             param_name = next(iter(individual.keys()))
                             values = individual[param_name]
                             iteration_substitutions = [{**existing, param_name: val} for val in values for existing in iteration_substitutions]
                         case CombinationsParameter(combinations=combinations):
-                            combos: list[dict[str, Any] | SimpleNamespace] = [vars(item) if isinstance(item, SimpleNamespace) else item for item in combinations]
+                            combos: list[dict[str, Any]] = [vars(item) if isinstance(item, SimpleNamespace) else item for item in combinations]
                             iteration_substitutions = [{**existing, **combo} for combo in combos for existing in iteration_substitutions]
         return iteration_substitutions
 
@@ -353,7 +367,7 @@ class Carrier:
     @classmethod
     def _execute_http_request(cls, request_kwargs: dict[str, Any]) -> httpx.Response:
         try:
-            return cls.client.request(**request_kwargs)
+            return cls.client.request(**request_kwargs)  # ty: ignore[unresolved-attribute]
         except httpx.TimeoutException as e:
             raise RequestError(f"HTTP request timed out: {e}") from e
         except httpx.ConnectError as e:
@@ -396,7 +410,7 @@ class Carrier:
                         if not isinstance(func_result, dict):
                             raise SaveError(f"Save function must return dict, got {type(func_result).__name__}")
 
-                        step_saved.update(func_result)
+                        step_saved.update(func_result)  # ty: ignore[no-matching-overload]
                     except SaveError:
                         raise
                     except UserFunctionError as e:
@@ -518,6 +532,15 @@ class Carrier:
 
     @classmethod
     def _wrap_factory_fixture(cls, fixture: Callable) -> Callable:
+        """Wrap a callable fixture so context-manager results are entered and tracked.
+
+        Not a pure pass-through: each call invokes ``fixture`` and, if the result is
+        a context manager, calls ``__enter__()`` and registers it on
+        ``cls.active_context_managers`` for LIFO teardown in ``teardown_class``.
+        Consequence: calling the wrapped value twice opens two resources (two
+        ``__enter__`` calls, two teardowns) — invoke it once per needed instance.
+        """
+
         def wrapped(*args, **kwargs):
             result = fixture(*args, **kwargs)
 
@@ -594,7 +617,9 @@ def create_test_class(scenario: Scenario, class_name: str, max_parallel_iteratio
     padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
 
     for i, stage in enumerate(scenario.stages):
-
+        # Factory captures `stage` by value (as stage_template) per iteration. Do NOT
+        # inline this into a closure over the loop variable `stage`: Python closes over
+        # the variable, not its value, so every stage method would run the LAST stage.
         def make_stage_method(stage_template: Stage) -> Callable:
             def call_execute_stage(self, **kwargs):
                 type(self).execute_stage(stage_template, kwargs)
@@ -636,7 +661,7 @@ def create_test_class(scenario: Scenario, class_name: str, max_parallel_iteratio
                         stage_method = parametrize_marker(stage_method)
 
         all_fixtures = ["self"] + list(dict.fromkeys(all_param_names + stage.fixtures + scenario.fixtures))
-        stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # type: ignore[assignment]
+        stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # ty: ignore[unresolved-attribute]
 
         all_marks = [f"order({i})"] + stage.marks
         for mark_str in all_marks:

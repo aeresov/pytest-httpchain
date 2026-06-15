@@ -66,7 +66,7 @@ class TestJMESPathSave:
     def test_jmespath_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            JMESPathSave(jmespath={"x": "y"}, extra="field")  # type: ignore[call-arg]
+            JMESPathSave(jmespath={"x": "y"}, extra="field")
 
     @pytest.mark.parametrize("bad_key", ["my-var", "with space", "1leading", "class"])
     def test_jmespath_non_identifier_key_rejected(self, bad_key: str):
@@ -103,7 +103,7 @@ class TestSubstitutionsSave:
     def test_substitutions_dict_format(self):
         """Test SubstitutionsSave with dict format."""
         save = SubstitutionsSave(
-            substitutions={  # type: ignore[arg-type]
+            substitutions={
                 "constants": {"vars": {"x": 1}},
                 "computed": {"functions": {"y": "mod:func"}},
             }
@@ -121,7 +121,7 @@ class TestSubstitutionsSave:
     def test_substitutions_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            SubstitutionsSave(substitutions=[], extra="field")  # type: ignore[call-arg]
+            SubstitutionsSave(substitutions=[], extra="field")
 
 
 class TestUserFunctionsSave:
@@ -178,7 +178,7 @@ class TestUserFunctionsSave:
     def test_user_functions_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            UserFunctionsSave(user_functions=[], extra="field")  # type: ignore[call-arg]
+            UserFunctionsSave(user_functions=[], extra="field")
 
 
 class TestSaveDiscriminator:
@@ -202,7 +202,7 @@ class TestSaveDiscriminator:
     def test_discriminator_invalid_rejected(self):
         """Test that invalid save type is rejected."""
         with pytest.raises(ValidationError, match="does not match any of the expected tags"):
-            SaveStep(save={"invalid": "value"})  # type: ignore[arg-type]
+            SaveStep(save={"invalid": "value"})
 
 
 class TestSaveStepInStage:

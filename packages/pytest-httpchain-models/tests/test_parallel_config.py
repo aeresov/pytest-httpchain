@@ -75,7 +75,7 @@ class TestParallelRepeatConfig:
     def test_repeat_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            ParallelRepeatConfig(repeat=10, extra="field")  # type: ignore[call-arg]
+            ParallelRepeatConfig(repeat=10, extra="field")
 
 
 class TestParallelForeachConfig:
@@ -121,7 +121,7 @@ class TestParallelForeachConfig:
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
             ParallelForeachConfig(
                 foreach=[IndividualParameter(individual={"x": [1]})],
-                extra="field",  # type: ignore[call-arg]
+                extra="field",
             )
 
     def test_empty_foreach_rejected(self):
@@ -159,7 +159,7 @@ class TestParallelConfigDiscriminator:
             Stage(
                 name="test",
                 request=Request(url="https://example.com"),
-                parallel={"invalid": "value"},  # type: ignore[arg-type]
+                parallel={"invalid": "value"},
             )
 
 

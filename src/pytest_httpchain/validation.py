@@ -6,7 +6,7 @@ pytest plugin, and available for editor/CI integrations. It performs structural
 validation via the Pydantic ``Scenario`` model plus cross-cutting *semantic*
 checks that a JSON Schema cannot express.
 
-Every finding is reported as a :class:`Diagnostic` carrying a stable code
+Every finding is reported as a `Diagnostic` carrying a stable code
 (``HTTPCHAINxxx``), a severity, a human-readable message and (where meaningful)
 a location, so tooling can filter/sort/route diagnostics deterministically.
 
@@ -61,10 +61,14 @@ from pytest_httpchain_jsonref import ReferenceResolverError, load_json
 from pytest_httpchain_models import (
     FunctionsSubstitution,
     JMESPathSave,
+    Parameters,
     SaveStep,
     Scenario,
     Stage,
     SubstitutionsSave,
+    UserFunctionCall,
+    UserFunctionKwargs,
+    UserFunctionName,
     UserFunctionsSave,
     VarsSubstitution,
     Verify,
@@ -206,7 +210,7 @@ def extract_saved_variables(scenario: Scenario) -> set[str]:
     return saved_vars
 
 
-def _parameter_names(params: Any) -> set[str]:
+def parameter_names(params: Parameters | None) -> set[str]:
     """Names injected by a list of parametrize/foreach Parameter entries.
 
     Covers both ``individual`` (one name -> list of values) and ``combinations``
@@ -230,9 +234,9 @@ def stage_defined_names(stage: Stage) -> set[str]:
     """Names available *within a single stage*: its substitutions, parametrize /
     foreach parameters, and its declared fixtures."""
     names = substitution_names(stage.substitutions)
-    names |= _parameter_names(stage.parametrize)
+    names |= parameter_names(stage.parametrize)
     if stage.parallel is not None:
-        names |= _parameter_names(getattr(stage.parallel, "foreach", None))
+        names |= parameter_names(getattr(stage.parallel, "foreach", None))
     names |= set(stage.fixtures)
     return names
 
@@ -244,7 +248,7 @@ def extract_defined_variables(scenario: Scenario) -> set[str]:
     plus parameter names injected by ``parametrize`` and ``parallel.foreach``. This
     is the *union* across the whole scenario, used for the fixture-conflict check
     and informational output; the order-aware data-flow check
-    (:func:`_dataflow_diagnostics`) computes availability per stage instead.
+    (`_dataflow_diagnostics`) computes availability per stage instead.
     """
     defined_vars: set[str] = set()
 
@@ -252,9 +256,9 @@ def extract_defined_variables(scenario: Scenario) -> set[str]:
 
     for stage in scenario.stages:
         defined_vars |= substitution_names(stage.substitutions)
-        defined_vars |= _parameter_names(stage.parametrize)
+        defined_vars |= parameter_names(stage.parametrize)
         if stage.parallel is not None:
-            defined_vars |= _parameter_names(getattr(stage.parallel, "foreach", None))
+            defined_vars |= parameter_names(getattr(stage.parallel, "foreach", None))
 
     return defined_vars
 
@@ -312,9 +316,9 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
       processed and before any iteration runs: only fixtures, parametrize
       parameters, scenario substitutions and earlier saves are in scope.
 
-    A reference that is unavailable is reported as :data:`DiagnosticCode.FORWARD_REF`
+    A reference that is unavailable is reported as `DiagnosticCode.FORWARD_REF`
     if the name is saved somewhere later (an ordering bug) or
-    :data:`DiagnosticCode.UNDEFINED_VAR` otherwise (likely a typo).
+    `DiagnosticCode.UNDEFINED_VAR` otherwise (likely a typo).
     """
     diagnostics: list[Diagnostic] = []
 
@@ -334,6 +338,8 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
 
     scenario_available = scenario_scope | set(scenario.fixtures)
 
+    # raws[i] is the unvalidated dict for scenario.stages[i]: both come from the same
+    # order-preserving normalization (_normalize_stages_input), so they pair by index.
     raws = raw_stages(test_data)
     cumulative_saves: set[str] = set()
 
@@ -345,8 +351,8 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
         # parametrize parameters, scenario substitutions and earlier saves — but not
         # foreach parameters. The request/response are resolved per iteration, so
         # they additionally see the foreach parameters.
-        foreach_params = _parameter_names(getattr(stage.parallel, "foreach", None)) if stage.parallel is not None else set()
-        pre_iteration_available = scenario_available | set(stage.fixtures) | _parameter_names(stage.parametrize) | substitution_names(stage.substitutions) | cumulative_saves
+        foreach_params = parameter_names(getattr(stage.parallel, "foreach", None)) if stage.parallel is not None else set()
+        pre_iteration_available = scenario_available | set(stage.fixtures) | parameter_names(stage.parametrize) | substitution_names(stage.substitutions) | cumulative_saves
         request_available = pre_iteration_available | foreach_params
         response_available = request_available | saves_by_stage[i]
 
@@ -371,7 +377,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
         # ``always_run`` resolves at stage start (carrier.execute_stage) against
         # fixtures + parametrize parameters + global context — stage substitutions
         # and foreach parameters don't exist yet, and neither do this stage's saves.
-        always_run_available = scenario_available | set(stage.fixtures) | _parameter_names(stage.parametrize) | cumulative_saves
+        always_run_available = scenario_available | set(stage.fixtures) | parameter_names(stage.parametrize) | cumulative_saves
         for name in sorted(extract_template_variables(raw.get("always_run"))):
             if name in always_run_available:
                 continue
@@ -432,8 +438,8 @@ def _verify_diagnostics(scenario: Scenario) -> list[Diagnostic]:
     """Per-stage verify-step checks: missing validation, no-op verifies, and
     contradictory body ``contains``/``matches`` declarations.
 
-    Extracted from :func:`check_scenario` so each check family has its own
-    helper, mirroring :func:`_dataflow_diagnostics` and the deep-check helpers.
+    Extracted from `check_scenario` so each check family has its own
+    helper, mirroring `_dataflow_diagnostics` and the deep-check helpers.
     Behavior, codes and messages are unchanged.
     """
     diagnostics: list[Diagnostic] = []
@@ -621,18 +627,19 @@ def _file_diagnostics(scenario: Scenario) -> list[Diagnostic]:
     return diagnostics
 
 
-def _func_name_and_kwargs(call: Any) -> tuple[str | None, dict[str, Any] | None]:
+def _func_name_and_kwargs(call: UserFunctionCall) -> tuple[str | None, dict[str, Any] | None]:
     """Extract ``(import_name, explicit_kwargs)`` from a UserFunctionCall.
 
     ``kwargs`` is None for the bare ``UserFunctionName`` form (no explicit
-    keyword arguments)."""
-    root = getattr(call, "root", None)
-    if root is not None:  # UserFunctionName
-        return str(root), None
-    name_obj = getattr(call, "name", None)  # UserFunctionKwargs
-    if name_obj is not None:
-        return str(getattr(name_obj, "root", name_obj)), dict(getattr(call, "kwargs", {}) or {})
-    return None, None
+    keyword arguments). Mirrors the structural dispatch in ``carrier``/``utils`` so
+    a new union variant is caught by a class-name search."""
+    match call:
+        case UserFunctionName():
+            return str(call.root), None
+        case UserFunctionKwargs():
+            return str(call.name.root), dict(call.kwargs or {})
+        case _:
+            return None, None
 
 
 def _signature_problems(func: Any, provided: set[str]) -> list[tuple[str, str]]:
@@ -778,7 +785,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
     """Semantic checks on an already-loaded, schema-valid scenario.
 
     Operates on the parsed ``test_data`` dict together with the validated ``Scenario``
-    so it can be shared by :func:`validate_scenario` (file-based) and by the pytest
+    so it can be shared by `validate_scenario` (file-based) and by the pytest
     collector. Returns ``(diagnostics, scenario_info)``.
     """
     diagnostics: list[Diagnostic] = []
@@ -819,9 +826,9 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
     var_conflicts: set[str] = set()
     for stage in scenario.stages:
         stage_fixtures = scenario_fixture_set | set(stage.fixtures)
-        stage_params = _parameter_names(stage.parametrize)
+        stage_params = parameter_names(stage.parametrize)
         if stage.parallel is not None:
-            stage_params |= _parameter_names(getattr(stage.parallel, "foreach", None))
+            stage_params |= parameter_names(getattr(stage.parallel, "foreach", None))
         stage_vars = scenario_sub_names | substitution_names(stage.substitutions) | stage_params
         var_conflicts |= stage_fixtures & stage_vars
     if var_conflicts:
@@ -915,12 +922,12 @@ def load_scenario(path: Path, *, root_path: Path | None = None, ref_parent_trave
 
     The single load+resolve+validate path shared by the CLI inspection commands
     (``show``/``graph``) and the data-flow loader. ``root_path`` constrains ``$ref``
-    resolution; when omitted it defaults to :func:`resolve_root_path` (the nearest
+    resolution; when omitted it defaults to `resolve_root_path` (the nearest
     ``tests/`` ancestor).
 
     NOTE on the root-path divergence: pytest collection (``plugin.py``) constrains
     ``$ref`` resolution to ``config.rootpath`` (the repo root), while every CLI path
-    defaults to :func:`resolve_root_path`. A ``$ref`` reaching above ``tests/`` but
+    defaults to `resolve_root_path`. A ``$ref`` reaching above ``tests/`` but
     inside the repo therefore resolves under collection yet may need an explicit
     ``--root-path`` to resolve the same way from the CLI. Raises
     ``ReferenceResolverError`` / ``json.JSONDecodeError`` / ``pydantic.ValidationError``
@@ -942,10 +949,10 @@ def validate_scenario(
     """Validate a pytest-httpchain test scenario file.
 
     Performs file/JSON/$ref/schema validation plus the semantic checks in
-    :func:`check_scenario`, returning a :class:`ValidateResult` whose
+    `check_scenario`, returning a `ValidateResult` whose
     ``diagnostics`` carry stable codes.
 
-    When ``deep`` is true, additionally runs :func:`check_scenario_deep`
+    When ``deep`` is true, additionally runs `check_scenario_deep`
     (referenced-file, import, and signature checks). This imports user modules,
     so it is opt-in; ``syspaths`` are added to ``sys.path`` for resolution.
     """

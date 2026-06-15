@@ -138,6 +138,23 @@ class TestWalk:
         result = walk("{{ 'found' if exists('var') else 'not found' }}", {})
         assert result == "not found"
 
+    def test_context_cannot_override_builtin_helpers(self):
+        """A context value named get/exists must not shadow the engine builtins.
+
+        The functions= merge order puts exists/get last, so they win over any
+        same-named context entry."""
+        # A non-callable context value named "exists"/"get" goes into names= and
+        # must not replace the builtin functions used here.
+        assert walk("{{ exists('x') }}", {"exists": "not a function", "x": 1}) is True
+        assert walk("{{ get('missing', 'default') }}", {"get": 123}) == "default"
+
+    def test_helpers_see_callables_in_context(self):
+        """exists()/get() report on the whole context, including callables.
+
+        Callables are partitioned into simpleeval's functions= map, but the
+        helpers close over a full copy of the context, so they still find them."""
+        assert walk("{{ exists('fn') }}", {"fn": lambda: 1}) is True
+
     def test_get_with_complex_expressions(self):
         """Test get() with complex expressions."""
 

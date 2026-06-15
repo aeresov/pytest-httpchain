@@ -7,16 +7,16 @@ scenarios into pytest:
   options (``suffix``, ``ref_parent_traversal_depth``, ``max_comprehension_length``,
   ``max_parallel_iterations``) and the ``--output-dir`` flag.
 - ``pytest_collect_file`` matches ``test_<name>.<suffix>.json`` files and hands
-  them to :class:`JsonModule`.
-- :class:`JsonModule.collect` loads the JSON (resolving ``$ref``), validates it
-  against the :class:`Scenario` model, runs the semantic validator
-  (warnings become :class:`ScenarioValidationWarning`, errors become
+  them to `JsonModule`.
+- `JsonModule.collect` loads the JSON (resolving ``$ref``), validates it
+  against the `Scenario` model, runs the semantic validator
+  (warnings become `ScenarioValidationWarning`, errors become
   ``CollectError``), and builds the dynamic test class via
   ``carrier.create_test_class``.
 - ``pytest_runtest_makereport`` attaches the last HTTP request/response to the
   test report and optionally writes a HAR file.
 
-:class:`ScenarioValidationWarning` is defined here because the collection hook
+`ScenarioValidationWarning` is defined here because the collection hook
 and the ``pytest11`` entry point reference it directly; it is re-exported from
 the package ``__init__`` as the user-facing name.
 """

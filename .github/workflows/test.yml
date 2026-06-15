@@ -33,6 +33,9 @@ jobs:
             - name: Check linting
               run: uv run ruff check .
 
+            - name: Check types
+              run: uvx ty@0.0.49 check
+
     test:
         name: Test (Python ${{ matrix.python-version }})
         runs-on: ubuntu-latest

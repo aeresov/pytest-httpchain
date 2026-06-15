@@ -77,6 +77,10 @@ def call_function(name: str, /, *args, **kwargs) -> Any:
 
     try:
         return func(*args, **kwargs)
+    except UserFunctionError:
+        # Already curated (e.g. the user function called another httpchain helper);
+        # propagate as-is instead of double-wrapping. Mirrors wrap_function.
+        raise
     except Exception as e:
         raise UserFunctionError(f"Error calling function '{name}': {e}") from e
 

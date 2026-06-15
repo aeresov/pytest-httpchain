@@ -86,7 +86,7 @@ def process_substitutions(
     return result
 
 
-def call_user_function(func_call: UserFunctionCall, **extra_kwargs) -> object:
+def call_user_function(func_call: UserFunctionCall, **extra_kwargs: Any) -> object:
     """Import and call a user function described by a ``UserFunctionCall`` model.
 
     A bare ``UserFunctionName`` is called with only ``extra_kwargs``; a

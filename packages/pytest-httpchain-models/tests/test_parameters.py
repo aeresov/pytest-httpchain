@@ -187,7 +187,7 @@ class TestParameterDiscriminator:
             Stage(
                 name="test",
                 request=Request(url="https://example.com"),
-                parametrize=[{"invalid": "value"}],  # type: ignore[list-item]
+                parametrize=[{"invalid": "value"}],
             )
 
 

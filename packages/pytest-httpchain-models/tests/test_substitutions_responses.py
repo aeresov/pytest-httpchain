@@ -396,7 +396,7 @@ class TestInvalidInputs:
             Stage(
                 name="test",
                 request=Request(url="https://example.com"),
-                substitutions="invalid",  # type: ignore[arg-type]
+                substitutions="invalid",
             )
 
     def test_substitutions_invalid_item_structure(self):
@@ -416,7 +416,7 @@ class TestInvalidInputs:
             Stage(
                 name="test",
                 request=Request(url="https://example.com"),
-                response="invalid",  # type: ignore[arg-type]
+                response="invalid",
             )
 
     def test_responses_invalid_item_structure(self):

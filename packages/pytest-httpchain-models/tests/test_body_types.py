@@ -125,24 +125,24 @@ class TestBodyTypeDiscriminator:
 
     def test_discriminator_chooses_text_body(self):
         """Test discriminator correctly identifies TextBody."""
-        request = Request(url="https://example.com", body={"text": "content"})  # type: ignore[arg-type]
+        request = Request(url="https://example.com", body={"text": "content"})
         assert isinstance(request.body, TextBody)
 
     def test_discriminator_chooses_base64_body(self):
         """Test discriminator correctly identifies Base64Body."""
         encoded = base64.b64encode(b"test").decode()
-        request = Request(url="https://example.com", body={"base64": encoded})  # type: ignore[arg-type]
+        request = Request(url="https://example.com", body={"base64": encoded})
         assert isinstance(request.body, Base64Body)
 
     def test_discriminator_chooses_binary_body(self):
         """Test discriminator correctly identifies BinaryBody."""
-        request = Request(url="https://example.com", body={"binary": "file.bin"})  # type: ignore[arg-type]
+        request = Request(url="https://example.com", body={"binary": "file.bin"})
         assert isinstance(request.body, BinaryBody)
 
     def test_multiple_body_types_not_allowed(self):
         """Test that only one body type can be specified."""
         with pytest.raises(ValidationError):
-            Request(url="https://example.com", body={"text": "content", "base64": "encoded"})  # type: ignore[arg-type]
+            Request(url="https://example.com", body={"text": "content", "base64": "encoded"})
 
 
 class TestJsonBody:
@@ -354,27 +354,27 @@ class TestBodyTypeDiscriminatorExtended:
 
     def test_discriminator_chooses_json_body(self):
         """Test discriminator correctly identifies JsonBody."""
-        request = Request(url="https://example.com", body={"json": {"data": "test"}})  # type: ignore[arg-type]
+        request = Request(url="https://example.com", body={"json": {"data": "test"}})
         assert isinstance(request.body, JsonBody)
 
     def test_discriminator_chooses_xml_body(self):
         """Test discriminator correctly identifies XmlBody."""
-        request = Request(url="https://example.com", body={"xml": "<root/>"})  # type: ignore[arg-type]
+        request = Request(url="https://example.com", body={"xml": "<root/>"})
         assert isinstance(request.body, XmlBody)
 
     def test_discriminator_chooses_form_body(self):
         """Test discriminator correctly identifies FormBody."""
-        request = Request(url="https://example.com", body={"form": {"key": "value"}})  # type: ignore[arg-type]
+        request = Request(url="https://example.com", body={"form": {"key": "value"}})
         assert isinstance(request.body, FormBody)
 
     def test_discriminator_chooses_files_body(self):
         """Test discriminator correctly identifies FilesBody."""
-        request = Request(url="https://example.com", body={"files": {"f": "file.txt"}})  # type: ignore[arg-type]
+        request = Request(url="https://example.com", body={"files": {"f": "file.txt"}})
         assert isinstance(request.body, FilesBody)
 
     def test_discriminator_chooses_graphql_body(self):
         """Test discriminator correctly identifies GraphQLBody."""
-        request = Request(url="https://example.com", body={"graphql": {"query": "{ test }"}})  # type: ignore[arg-type]
+        request = Request(url="https://example.com", body={"graphql": {"query": "{ test }"}})
         assert isinstance(request.body, GraphQLBody)
 
 

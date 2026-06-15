@@ -64,3 +64,12 @@ class TestCallFunctionErrors:
             call_function("_helpers:raises_key_error")
 
         assert isinstance(exc_info.value.__cause__, KeyError)
+
+    def test_user_function_error_preserved(self):
+        # A UserFunctionError raised by the user function must propagate unwrapped,
+        # not be double-wrapped in another "Error calling function" UserFunctionError
+        # (mirrors wrap_function's behavior).
+        with pytest.raises(UserFunctionError, match="custom error") as exc_info:
+            call_function("_helpers:raises_user_error")
+
+        assert "Error calling function" not in str(exc_info.value)

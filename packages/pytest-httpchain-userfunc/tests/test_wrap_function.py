@@ -57,15 +57,15 @@ class TestWrapFunctionName:
 
     def test_wrapped_name_with_module(self):
         wrapped = wrap_function("json:loads")
-        assert "json" in wrapped.__name__  # type: ignore[attr-defined]
-        assert "loads" in wrapped.__name__  # type: ignore[attr-defined]
-        assert wrapped.__name__.startswith("wrapped_")  # type: ignore[attr-defined]
+        assert "json" in wrapped.__name__
+        assert "loads" in wrapped.__name__
+        assert wrapped.__name__.startswith("wrapped_")
 
     def test_wrapped_name_nested_module(self):
         wrapped = wrap_function("os.path:join")
-        assert "os" in wrapped.__name__  # type: ignore[attr-defined]
-        assert "path" in wrapped.__name__  # type: ignore[attr-defined]
-        assert "join" in wrapped.__name__  # type: ignore[attr-defined]
+        assert "os" in wrapped.__name__
+        assert "path" in wrapped.__name__
+        assert "join" in wrapped.__name__
 
 
 class TestWrapFunctionErrors:

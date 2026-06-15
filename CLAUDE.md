@@ -58,7 +58,7 @@ src/pytest_httpchain/          # Main pytest plugin
 ├── report_formatter.py        # HTTP request/response formatting for test reports
 ├── har_writer.py              # HAR file export for HTTP request/response logging
 ├── constants.py               # ConfigOptions enum for pytest.ini settings
-└── exceptions.py              # Stage execution exception classes (RequestError, SaveError, VerificationError)
+└── exceptions.py              # StageExecutionError (base, carries request/response) + subclasses RequestError, SaveError, VerificationError
 
 packages/
 ├── pytest-httpchain-core/          # Shared base types (HttpChainError)

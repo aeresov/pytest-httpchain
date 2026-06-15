@@ -165,8 +165,8 @@ class TestCallUserFunction:
     def test_invalid_function_call_format(self):
         # Pass something that's neither UserFunctionName nor UserFunctionKwargs
         with pytest.raises(StageExecutionError, match="Invalid function call format"):
-            call_user_function("invalid_string")  # type: ignore
+            call_user_function("invalid_string")
 
     def test_invalid_function_call_none(self):
         with pytest.raises(StageExecutionError, match="Invalid function call format"):
-            call_user_function(None)  # type: ignore
+            call_user_function(None)

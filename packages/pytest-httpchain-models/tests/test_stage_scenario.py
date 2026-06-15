@@ -361,7 +361,7 @@ class TestStageRequest:
     def test_stage_request_required(self):
         """Test that request is required."""
         with pytest.raises(ValidationError):
-            Stage(name="test")  # type: ignore
+            Stage(name="test")
 
     def test_stage_request_minimal(self):
         """Test stage with minimal request."""

@@ -13,7 +13,7 @@ This package provides safe template expression evaluation with recursive substit
 
 ```
 src/pytest_httpchain_templates/
-├── __init__.py          # Public API: walk, is_complete_template, extract_template_expression, TemplatesError
+├── __init__.py          # Public API: walk, is_complete_template, extract_template_expression, TEMPLATE_PATTERN, TEMPLATE_BUILTINS, TemplatesError
 ├── substitution.py      # Main walk() function for recursive substitution
 ├── expressions.py       # Template pattern matching utilities
 └── exceptions.py        # TemplatesError exception
@@ -22,7 +22,14 @@ src/pytest_httpchain_templates/
 ## Public API
 
 ```python
-from pytest_httpchain_templates import walk, is_complete_template, extract_template_expression, TemplatesError
+from pytest_httpchain_templates import (
+    walk,
+    is_complete_template,
+    extract_template_expression,
+    TEMPLATE_PATTERN,
+    TEMPLATE_BUILTINS,
+    TemplatesError,
+)
 
 # Recursively substitute template expressions
 result = walk(obj, context)
@@ -34,6 +41,17 @@ is_complete_template("Hello {{ name }}")  # False
 # Extract expression from template
 extract_template_expression("{{ value }}")  # "value"
 ```
+
+Two more exports are part of the public surface (the main plugin's models and
+validator depend on them, so treat them as API, not internals):
+
+- `TEMPLATE_PATTERN` — the compiled-ready regex (with named `expr` group) that
+  defines `{{ ... }}` syntax. The single source of truth shared by the engine,
+  the models (to type a field as a template), and the validator.
+- `TEMPLATE_BUILTINS` — the set of names available inside an expression without
+  the user defining them (safe functions, JSON literals, `exists`/`get`, and
+  simpleeval defaults). The validator uses it to tell a genuine typo from an
+  engine-provided name.
 
 ## Key Behaviors
 

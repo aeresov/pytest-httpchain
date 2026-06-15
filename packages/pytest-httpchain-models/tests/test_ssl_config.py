@@ -135,9 +135,9 @@ class TestSSLConfigValidation:
     def test_cert_invalid_tuple_length(self):
         """Test that cert tuple must have exactly 2 elements."""
         with pytest.raises(ValidationError):
-            SSLConfig(cert=["/path/cert.crt", "/path/key.key", "/extra.pem"])  # type: ignore[arg-type]
+            SSLConfig(cert=["/path/cert.crt", "/path/key.key", "/extra.pem"])
 
     def test_cert_single_element_list_treated_as_tuple(self):
         """Test that single-element list for cert is invalid tuple."""
         with pytest.raises(ValidationError):
-            SSLConfig(cert=["/path/only.pem"])  # type: ignore[arg-type]
+            SSLConfig(cert=["/path/only.pem"])

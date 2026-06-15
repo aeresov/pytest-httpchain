@@ -84,7 +84,7 @@ def _create_discriminator(class_to_tag: dict[str, str]) -> Callable[[Any], str]:
 
             # No recognized type key: surface the first (offending) key as an
             # invalid tag so the validation error names it.
-            return next(iter(v), "(empty object)")
+            return next(iter(v), "(empty object)")  # ty: ignore[invalid-return-type]
 
         tag = class_to_tag.get(v.__class__.__name__)
         if tag:

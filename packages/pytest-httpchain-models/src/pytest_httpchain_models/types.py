@@ -17,6 +17,7 @@ import logging
 import re
 import types
 import xml.etree.ElementTree
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -28,7 +29,7 @@ from pytest_httpchain_templates import TEMPLATE_PATTERN, is_complete_template
 from pytest_httpchain_userfunc import NAME_PATTERN
 
 
-def create_string_validator(validation_func, error_message: str):
+def create_string_validator(validation_func: Callable[[str], Any], error_message: str) -> Callable[[str], str]:
     """Factory for creating string validators."""
 
     def validator(v: str) -> str:

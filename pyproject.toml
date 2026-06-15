@@ -1,6 +1,6 @@
 [project]
 name = "pytest-httpchain"
-version = "0.8.0"
+version = "0.8.1"
 description = "pytest plugin for HTTP testing using JSON files"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -93,6 +93,26 @@ ignore = []
 
 [tool.ruff.lint.isort]
 known-first-party = ["tests", "utils"]
+
+[tool.ty.environment]
+python-version = "3.13"
+
+[tool.ty.terminal]
+error-on-warning = true
+
+# Test suites (especially the models package) deliberately construct models with
+# invalid types to assert ValidationError, and access attributes on unions/mocks
+# the checker can't narrow. Relax those specific rules for test code only; src/
+# stays strict and uses pinpoint `# ty: ignore[...]` comments instead.
+[[tool.ty.overrides]]
+include = ["tests/**", "packages/*/tests/**"]
+
+[tool.ty.overrides.rules]
+invalid-argument-type = "ignore"
+unknown-argument = "ignore"
+unresolved-attribute = "ignore"
+not-subscriptable = "ignore"
+missing-argument = "ignore"
 
 [tool.pytest]
 minversion = "9.0"

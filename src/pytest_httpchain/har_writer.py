@@ -23,7 +23,7 @@ def _get_version() -> str:
         return "unknown"
 
 
-def _format_cookies(cookies: httpx.Cookies) -> list[dict[str, Any]]:
+def _format_cookies(cookies: httpx.Cookies) -> list[dict[str, str]]:
     """Convert httpx Cookies to HAR cookie format."""
     result = []
     for name, value in cookies.items():
@@ -114,7 +114,7 @@ def _calculate_headers_size(headers: httpx.Headers) -> int:
     """Calculate approximate size of headers in bytes."""
     size = 0
     for name, value in headers.items():
-        size += len(name) + len(value) + 4
+        size += len(name) + len(value) + 4  # ": " (2) + CRLF (2) per header line
     return size
 
 
@@ -190,7 +190,7 @@ def request_response_to_har_entry(
 
     post_data = _format_post_data(request)
     if post_data:
-        entry["request"]["postData"] = post_data
+        entry["request"]["postData"] = post_data  # ty: ignore[invalid-assignment]
 
     return entry
 
