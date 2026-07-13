@@ -10,7 +10,7 @@ anonymous nested schemas are not wrapped.
 
 from typing import Any
 
-from pytest_httpchain_models import Scenario
+from pytest_httpchain.models import Scenario
 
 SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 SCHEMA_ID = "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json"

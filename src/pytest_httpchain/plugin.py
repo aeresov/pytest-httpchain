@@ -33,9 +33,9 @@ import pytest
 import pytest_httpchain_jsonref
 import simpleeval
 from pydantic import ValidationError
-from pytest_httpchain_models import Scenario
 
 from pytest_httpchain.constants import ConfigOptions
+from pytest_httpchain.models import Scenario
 
 from .carrier import Carrier, create_test_class
 from .har_writer import write_har_file

@@ -11,7 +11,6 @@ members = [
     "pytest-httpchain",
     "pytest-httpchain-core",
     "pytest-httpchain-jsonref",
-    "pytest-httpchain-models",
     "pytest-httpchain-templates",
     "pytest-httpchain-userfunc",
 ]
@@ -813,6 +812,7 @@ name = "pytest-httpchain"
 version = "0.8.1"
 source = { editable = "." }
 dependencies = [
+    { name = "graphql-core" },
     { name = "httpx", extra = ["http2"] },
     { name = "jmespath" },
     { name = "jsonschema" },
@@ -821,7 +821,6 @@ dependencies = [
     { name = "pytest" },
     { name = "pytest-httpchain-core" },
     { name = "pytest-httpchain-jsonref" },
-    { name = "pytest-httpchain-models" },
     { name = "pytest-httpchain-templates" },
     { name = "pytest-httpchain-userfunc" },
     { name = "pytest-order" },
@@ -845,6 +844,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "graphql-core", specifier = ">=3.0.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.27.0" },
     { name = "jmespath", specifier = ">=1.0.0" },
     { name = "jsonschema", specifier = ">=4.0.0" },
@@ -853,7 +853,6 @@ requires-dist = [
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-httpchain-core", editable = "packages/pytest-httpchain-core" },
     { name = "pytest-httpchain-jsonref", editable = "packages/pytest-httpchain-jsonref" },
-    { name = "pytest-httpchain-models", editable = "packages/pytest-httpchain-models" },
     { name = "pytest-httpchain-templates", editable = "packages/pytest-httpchain-templates" },
     { name = "pytest-httpchain-userfunc", editable = "packages/pytest-httpchain-userfunc" },
     { name = "pytest-order", specifier = ">=1.3.0" },
@@ -893,27 +892,6 @@ dependencies = [
 requires-dist = [
     { name = "deepmerge", specifier = ">=2.0" },
     { name = "pytest-httpchain-core", editable = "packages/pytest-httpchain-core" },
-]
-
-[[package]]
-name = "pytest-httpchain-models"
-version = "0.8.1"
-source = { editable = "packages/pytest-httpchain-models" }
-dependencies = [
-    { name = "graphql-core" },
-    { name = "jmespath" },
-    { name = "jsonschema" },
-    { name = "pytest-httpchain-templates" },
-    { name = "pytest-httpchain-userfunc" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "graphql-core", specifier = ">=3.0.0" },
-    { name = "jmespath", specifier = ">=1.0.0" },
-    { name = "jsonschema", specifier = ">=4.0.0" },
-    { name = "pytest-httpchain-templates", editable = "packages/pytest-httpchain-templates" },
-    { name = "pytest-httpchain-userfunc", editable = "packages/pytest-httpchain-userfunc" },
 ]
 
 [[package]]

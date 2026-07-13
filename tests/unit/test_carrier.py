@@ -15,7 +15,10 @@ from http import HTTPMethod
 import httpx
 import pytest
 from pyrate_limiter import Duration, Limiter, Rate
-from pytest_httpchain_models import (
+
+from pytest_httpchain.carrier import Carrier, _normalize_cert
+from pytest_httpchain.errors import RequestError, SaveError, VerificationError
+from pytest_httpchain.models import (
     BinaryBody,
     FilesBody,
     JMESPathSave,
@@ -24,10 +27,7 @@ from pytest_httpchain_models import (
     Stage,
     Verify,
 )
-from pytest_httpchain_models.entities import ResponseBody
-
-from pytest_httpchain.carrier import Carrier, _normalize_cert
-from pytest_httpchain.errors import RequestError, SaveError, VerificationError
+from pytest_httpchain.models.entities import ResponseBody
 
 
 class TestNormalizeCert:

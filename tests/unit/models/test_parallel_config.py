@@ -2,7 +2,8 @@
 
 import pytest
 from pydantic import ValidationError
-from pytest_httpchain_models.entities import (
+
+from pytest_httpchain.models.entities import (
     CombinationsParameter,
     IndividualParameter,
     ParallelForeachConfig,

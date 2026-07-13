@@ -14,7 +14,7 @@ This package provides strongly-typed Pydantic models for defining HTTP test scen
 ## Package Structure
 
 ```
-src/pytest_httpchain_models/
+src/pytest_httpchain/models/
 ├── __init__.py     # Public API exports
 ├── entities.py     # Pydantic models (Scenario, Stage, Request, etc.)
 └── types.py        # Custom type validators and type aliases
@@ -23,7 +23,7 @@ src/pytest_httpchain_models/
 ## Public API
 
 ```python
-from pytest_httpchain_models import (
+from pytest_httpchain.models import (
     # Core models
     Scenario, Stage, Request,
     # Body types
@@ -44,12 +44,7 @@ from pytest_httpchain_models import (
 ## Running Tests
 
 ```bash
-# From monorepo root
-uv run pytest packages/pytest-httpchain-models/tests -v
-
-# Or from package directory
-cd packages/pytest-httpchain-models
-uv run pytest tests -v
+uv run pytest tests/unit/models -v
 ```
 
 ## Common Patterns

@@ -33,7 +33,7 @@ from typing import Annotated, Any, Literal, Self
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, JsonValue, PositiveFloat, PositiveInt, RootModel, Tag, model_validator
 from pydantic.networks import HttpUrl
 
-from pytest_httpchain_models.types import (
+from pytest_httpchain.models.types import (
     Base64String,
     FunctionImportName,
     GraphQLQuery,

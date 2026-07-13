@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from pytest_httpchain_models.entities import (
+
+from pytest_httpchain.models.entities import (
     Base64Body,
     BinaryBody,
     FilesBody,

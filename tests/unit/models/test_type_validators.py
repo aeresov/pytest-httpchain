@@ -5,7 +5,8 @@ import warnings
 
 import pytest
 from pydantic import BaseModel, ValidationError
-from pytest_httpchain_models.types import (
+
+from pytest_httpchain.models.types import (
     Base64String,
     FunctionImportName,
     GraphQLQuery,

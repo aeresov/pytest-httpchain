@@ -1,8 +1,7 @@
 """Unit tests for analyze_dataflow (and the closely related check_scenario flow)."""
 
-from pytest_httpchain_models import Scenario
-
 from pytest_httpchain.dataflow import analyze_dataflow
+from pytest_httpchain.models import Scenario
 from pytest_httpchain.validation import DiagnosticCode, check_scenario
 
 

@@ -9,8 +9,8 @@ stages, and the producer -> consumer edges between stages.
 from typing import Any
 
 from pydantic import BaseModel
-from pytest_httpchain_models import Scenario
 
+from pytest_httpchain.models import Scenario
 from pytest_httpchain.validation import (
     extract_template_variables,
     parameter_names,

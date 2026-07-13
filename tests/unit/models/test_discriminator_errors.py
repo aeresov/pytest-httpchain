@@ -9,7 +9,8 @@ Returning an unrecognized tag makes Pydantic raise a clean, located
 
 import pytest
 from pydantic import ValidationError
-from pytest_httpchain_models.entities import Request, SaveStep, Stage
+
+from pytest_httpchain.models.entities import Request, SaveStep, Stage
 
 
 def _req() -> Request:

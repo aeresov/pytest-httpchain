@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from pytest_httpchain_models.entities import Scenario, SSLConfig
+
+from pytest_httpchain.models.entities import Scenario, SSLConfig
 
 
 class TestSSLConfigVerify:
