@@ -10,7 +10,6 @@ resolution-markers = [
 members = [
     "pytest-httpchain",
     "pytest-httpchain-core",
-    "pytest-httpchain-templates",
     "pytest-httpchain-userfunc",
 ]
 
@@ -820,7 +819,6 @@ dependencies = [
     { name = "pyrate-limiter" },
     { name = "pytest" },
     { name = "pytest-httpchain-core" },
-    { name = "pytest-httpchain-templates" },
     { name = "pytest-httpchain-userfunc" },
     { name = "pytest-order" },
     { name = "simpleeval" },
@@ -852,7 +850,6 @@ requires-dist = [
     { name = "pyrate-limiter", specifier = ">=4.0.0" },
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-httpchain-core", editable = "packages/pytest-httpchain-core" },
-    { name = "pytest-httpchain-templates", editable = "packages/pytest-httpchain-templates" },
     { name = "pytest-httpchain-userfunc", editable = "packages/pytest-httpchain-userfunc" },
     { name = "pytest-order", specifier = ">=1.3.0" },
     { name = "simpleeval", specifier = ">=1.0.3" },
@@ -877,21 +874,6 @@ docs = [
 name = "pytest-httpchain-core"
 version = "0.8.1"
 source = { editable = "packages/pytest-httpchain-core" }
-
-[[package]]
-name = "pytest-httpchain-templates"
-version = "0.8.1"
-source = { editable = "packages/pytest-httpchain-templates" }
-dependencies = [
-    { name = "pytest-httpchain-core" },
-    { name = "simpleeval" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "pytest-httpchain-core", editable = "packages/pytest-httpchain-core" },
-    { name = "simpleeval", specifier = ">=1.0.3" },
-]
 
 [[package]]
 name = "pytest-httpchain-userfunc"

@@ -1,6 +1,6 @@
 """Tests for expressions.py - template pattern matching utilities."""
 
-from pytest_httpchain_templates import extract_template_expression, is_complete_template
+from pytest_httpchain.templates import extract_template_expression, is_complete_template
 
 
 class TestIsCompleteTemplate:

@@ -5,7 +5,7 @@ process dynamic values in test scenarios. Expressions are evaluated safely
 using simpleeval with support for variables, functions, and comprehensions.
 
 Example:
-    >>> from pytest_httpchain_templates import walk
+    >>> from pytest_httpchain.templates import walk
     >>> data = {"url": "https://api.example.com/users/{{ user_id }}"}
     >>> result = walk(data, {"user_id": 123})
     >>> result["url"]

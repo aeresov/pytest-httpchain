@@ -2,7 +2,8 @@
 
 import pytest
 import simpleeval
-from pytest_httpchain_templates import TemplatesError, walk
+
+from pytest_httpchain.templates import TemplatesError, walk
 
 
 def test_dict_literal_in_list_comprehension():

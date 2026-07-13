@@ -18,8 +18,8 @@ from simpleeval import (
     OperatorNotDefined,
 )
 
-from pytest_httpchain_templates.exceptions import TemplatesError
-from pytest_httpchain_templates.expressions import TEMPLATE_PATTERN, extract_template_expression
+from pytest_httpchain.templates.exceptions import TemplatesError
+from pytest_httpchain.templates.expressions import TEMPLATE_PATTERN, extract_template_expression
 
 SAFE_FUNCTIONS = {
     "bool": bool,

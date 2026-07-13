@@ -2,7 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
-from pytest_httpchain_templates import TemplatesError, walk
+
+from pytest_httpchain.templates import TemplatesError, walk
 
 
 class TestWalk:

@@ -25,8 +25,9 @@ import graphql
 import jmespath
 import jsonschema
 from pydantic import AfterValidator, BeforeValidator, JsonValue, PlainSerializer, WithJsonSchema
-from pytest_httpchain_templates import TEMPLATE_PATTERN, is_complete_template
 from pytest_httpchain_userfunc import NAME_PATTERN
+
+from pytest_httpchain.templates import TEMPLATE_PATTERN, is_complete_template
 
 
 def create_string_validator(validation_func: Callable[[str], Any], error_message: str) -> Callable[[str], str]:

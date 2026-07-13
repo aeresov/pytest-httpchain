@@ -12,7 +12,7 @@ This package provides safe template expression evaluation with recursive substit
 ## Package Structure
 
 ```
-src/pytest_httpchain_templates/
+src/pytest_httpchain/templates/
 ├── __init__.py          # Public API: walk, is_complete_template, extract_template_expression, TEMPLATE_PATTERN, TEMPLATE_BUILTINS, TemplatesError
 ├── substitution.py      # Main walk() function for recursive substitution
 ├── expressions.py       # Template pattern matching utilities
@@ -22,7 +22,7 @@ src/pytest_httpchain_templates/
 ## Public API
 
 ```python
-from pytest_httpchain_templates import (
+from pytest_httpchain.templates import (
     walk,
     is_complete_template,
     extract_template_expression,
@@ -126,12 +126,7 @@ walk("{{ env('HOME', '/tmp') }}", {})  # value of $HOME or "/tmp"
 ## Running Tests
 
 ```bash
-# From monorepo root
-uv run pytest packages/pytest-httpchain-templates/tests -v
-
-# Or from package directory
-cd packages/pytest-httpchain-templates
-uv run pytest tests -v
+uv run pytest tests/unit/templates -v
 ```
 
 ## Error Handling

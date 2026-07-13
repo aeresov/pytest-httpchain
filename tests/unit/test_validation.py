@@ -15,8 +15,7 @@ def _codes(result):
 def test_template_builtins_is_single_source():
     """M14: the validator consumes the canonical TEMPLATE_BUILTINS from the templates
     package, not a private copy that could drift out of sync with the engine."""
-    from pytest_httpchain_templates import TEMPLATE_BUILTINS as t
-
+    from pytest_httpchain.templates import TEMPLATE_BUILTINS as t
     from pytest_httpchain.validation import TEMPLATE_BUILTINS as v
 
     assert v is t

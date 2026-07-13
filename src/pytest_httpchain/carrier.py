@@ -41,7 +41,6 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 from pyrate_limiter import Duration, Limiter, Rate
-from pytest_httpchain_templates import TemplatesError, walk
 from pytest_httpchain_userfunc import UserFunctionError
 
 from pytest_httpchain.models import (
@@ -70,6 +69,7 @@ from pytest_httpchain.models import (
     XmlBody,
     check_json_schema,
 )
+from pytest_httpchain.templates import TemplatesError, walk
 
 from .errors import RequestError, SaveError, StageExecutionError, VerificationError
 from .utils import call_user_function, make_marker, process_substitutions

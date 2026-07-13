@@ -57,7 +57,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
-from pytest_httpchain_templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN, is_complete_template
 from pytest_httpchain_userfunc import UserFunctionError, import_function
 
 from pytest_httpchain.jsonref import ReferenceResolverError, load_json
@@ -78,6 +77,7 @@ from pytest_httpchain.models import (
     VerifyStep,
     check_json_schema,
 )
+from pytest_httpchain.templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN, is_complete_template
 from pytest_httpchain.utils import make_marker
 
 Severity = Literal["error", "warning"]
