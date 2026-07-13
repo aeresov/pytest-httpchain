@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Self
 
-from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
+from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
 
 
 class CircularDependencyTracker:

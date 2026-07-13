@@ -7,9 +7,10 @@ These tests ensure correct behavior of the building blocks.
 from pathlib import Path
 
 import pytest
-from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
-from pytest_httpchain_jsonref.plumbing.circular import CircularDependencyTracker
-from pytest_httpchain_jsonref.plumbing.path import RefPathHelper
+
+from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
+from pytest_httpchain.jsonref.plumbing.circular import CircularDependencyTracker
+from pytest_httpchain.jsonref.plumbing.path import RefPathHelper
 
 
 class TestCircularDependencyTracker:

@@ -19,7 +19,7 @@ Features:
 ## Package Structure
 
 ```
-src/pytest_httpchain_jsonref/
+src/pytest_httpchain/jsonref/
 ├── __init__.py          # Public API: load_json, ReferenceResolverError
 ├── loader.py            # Main entry point: load_json()
 ├── exceptions.py        # ReferenceResolverError exception
@@ -29,7 +29,7 @@ src/pytest_httpchain_jsonref/
 ## Public API
 
 ```python
-from pytest_httpchain_jsonref import load_json, ReferenceResolverError
+from pytest_httpchain.jsonref import load_json, ReferenceResolverError
 
 # Load JSON with $ref resolution
 data = load_json(path, max_parent_traversal_depth=3, root_path=None)
@@ -64,12 +64,7 @@ When `$include` (or `$ref`) has sibling properties, they are merged **additively
 ## Running Tests
 
 ```bash
-# From monorepo root
-uv run pytest packages/pytest-httpchain-jsonref/tests -v
-
-# Or from package directory
-cd packages/pytest-httpchain-jsonref
-uv run pytest tests -v
+uv run pytest tests/unit/jsonref -v
 ```
 
 ## Common Patterns

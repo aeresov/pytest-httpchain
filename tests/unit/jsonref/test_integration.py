@@ -1,6 +1,6 @@
 """Integration tests combining multiple features."""
 
-from pytest_httpchain_jsonref.loader import load_json
+from pytest_httpchain.jsonref.loader import load_json
 
 
 class TestIntegration:

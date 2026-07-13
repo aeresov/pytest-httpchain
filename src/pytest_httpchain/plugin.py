@@ -30,10 +30,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import pytest_httpchain_jsonref
 import simpleeval
 from pydantic import ValidationError
 
+import pytest_httpchain.jsonref
 from pytest_httpchain.constants import ConfigOptions
 from pytest_httpchain.models import Scenario
 
@@ -63,12 +63,12 @@ class JsonModule(pytest.Module):
         ref_parent_traversal_depth = self.config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
         root_path = Path(self.config.rootpath)
         try:
-            test_data = pytest_httpchain_jsonref.load_json(
+            test_data = pytest_httpchain.jsonref.load_json(
                 self.path,
                 max_parent_traversal_depth=ref_parent_traversal_depth,
                 root_path=root_path,
             )
-        except pytest_httpchain_jsonref.ReferenceResolverError as e:
+        except pytest_httpchain.jsonref.ReferenceResolverError as e:
             raise pytest.Collector.CollectError(f"Cannot load JSON file {self.path}: {e}") from None
         except Exception as e:
             raise pytest.Collector.CollectError(f"Failed to parse JSON file {self.path}: {e}") from None

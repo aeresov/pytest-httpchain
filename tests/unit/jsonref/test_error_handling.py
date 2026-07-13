@@ -1,8 +1,9 @@
 import os
 
 import pytest
-from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
-from pytest_httpchain_jsonref.loader import load_json
+
+from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
+from pytest_httpchain.jsonref.loader import load_json
 
 
 class TestErrorHandling:

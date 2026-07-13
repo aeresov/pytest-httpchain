@@ -9,7 +9,7 @@ directory traversal.
 
 Example:
     >>> from pathlib import Path
-    >>> from pytest_httpchain_jsonref import load_json
+    >>> from pytest_httpchain.jsonref import load_json
     >>> # base.json contains {"timeout": 30}; the scenario merges it in:
     >>> #   {"$include": "base.json", "url": "https://example.com"}
     >>> data = load_json(Path("test_scenario.http.json"))

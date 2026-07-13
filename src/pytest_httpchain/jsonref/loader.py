@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any
 
-from pytest_httpchain_jsonref.plumbing.reference import ReferenceResolver
+from pytest_httpchain.jsonref.plumbing.reference import ReferenceResolver
 
 
 def load_json(path: Path, max_parent_traversal_depth: int = 3, root_path: Path | None = None) -> dict[str, Any]:

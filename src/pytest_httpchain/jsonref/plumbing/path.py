@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pytest_httpchain_jsonref.exceptions import ReferenceResolverError
+from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
 
 
 class RefPathHelper:

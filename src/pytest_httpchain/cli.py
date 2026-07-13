@@ -5,9 +5,9 @@ from typing import Annotated
 
 import typer
 from pydantic import ValidationError
-from pytest_httpchain_jsonref import ReferenceResolverError, load_json
 
 from pytest_httpchain.dataflow import DataFlow, analyze_dataflow
+from pytest_httpchain.jsonref import ReferenceResolverError, load_json
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.schema import build_schema
 from pytest_httpchain.validation import ValidateResult, load_scenario, resolve_root_path, validate_scenario
