@@ -35,6 +35,7 @@ classifiers = [
 dev = [
     "flask-httpauth>=4.8.0",
     "http-server-mock>=1.7",
+    "import-linter>=2.0",
     "ruff>=0.12.1",
     "pytest-cov>=6.0.0",
     "coverage[toml]>=7.0",
@@ -121,3 +122,38 @@ branch = true
 precision = 2
 show_missing = true
 skip_covered = false
+
+[tool.importlinter]
+root_package = "pytest_httpchain"
+
+[[tool.importlinter.contracts]]
+name = "domain subpackages do not import plugin modules"
+type = "forbidden"
+source_modules = [
+    "pytest_httpchain.models",
+    "pytest_httpchain.templates",
+    "pytest_httpchain.jsonref",
+    "pytest_httpchain.userfunc",
+]
+forbidden_modules = [
+    "pytest_httpchain.plugin",
+    "pytest_httpchain.carrier",
+    "pytest_httpchain.cli",
+    "pytest_httpchain.validation",
+    "pytest_httpchain.dataflow",
+    "pytest_httpchain.schema",
+    "pytest_httpchain.utils",
+    "pytest_httpchain.har_writer",
+    "pytest_httpchain.report_formatter",
+    "pytest_httpchain.constants",
+]
+
+[[tool.importlinter.contracts]]
+name = "lower domain layers do not import models"
+type = "forbidden"
+source_modules = [
+    "pytest_httpchain.templates",
+    "pytest_httpchain.jsonref",
+    "pytest_httpchain.userfunc",
+]
+forbidden_modules = ["pytest_httpchain.models"]

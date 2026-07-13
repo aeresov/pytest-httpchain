@@ -36,6 +36,9 @@ jobs:
             - name: Check types
               run: uvx ty@0.0.49 check
 
+            - name: Check import layering
+              run: uv run lint-imports
+
     test:
         name: Test (Python ${{ matrix.python-version }})
         runs-on: ubuntu-latest
