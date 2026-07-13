@@ -58,6 +58,9 @@ default-groups = ["dev", "docs"]
 requires = ["uv_build>=0.7.21,<0.8.0"]
 build-backend = "uv_build"
 
+[tool.uv.build-backend]
+source-exclude = ["src/pytest_httpchain/**/CLAUDE.md"]
+
 [project.scripts]
 pytest-httpchain = "pytest_httpchain.cli:app"
 
@@ -162,3 +165,18 @@ source_modules = [
     "pytest_httpchain.userfunc",
 ]
 forbidden_modules = ["pytest_httpchain.models"]
+
+[[tool.importlinter.contracts]]
+name = "models does not import jsonref"
+type = "forbidden"
+source_modules = ["pytest_httpchain.models"]
+forbidden_modules = ["pytest_httpchain.jsonref"]
+
+[[tool.importlinter.contracts]]
+name = "templates, jsonref, and userfunc are independent"
+type = "independence"
+modules = [
+    "pytest_httpchain.templates",
+    "pytest_httpchain.jsonref",
+    "pytest_httpchain.userfunc",
+]
