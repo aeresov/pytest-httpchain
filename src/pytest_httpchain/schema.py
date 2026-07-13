@@ -32,7 +32,7 @@ def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
     """Allow ``$include``/``$merge``/``$ref`` objects as alternatives at named
     type and root-property sites.
 
-    pytest-httpchain-jsonref can substitute any element at runtime, but wrapping
+    pytest_httpchain.jsonref can substitute any element at runtime, but wrapping
     *every* inline subschema would balloon the schema, so only each ``$defs``
     definition and each root-level scenario property is wrapped in an ``anyOf``
     that also accepts a reference object — otherwise editors flag missing

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.9.0
+
+### Changed (breaking)
+
+- Consolidated the six-distribution uv workspace into the single `pytest-httpchain` distribution. The former sub-packages are now subpackages/modules: `pytest_httpchain.models`, `pytest_httpchain.templates`, `pytest_httpchain.jsonref`, `pytest_httpchain.userfunc`; the shared exception base lives in `pytest_httpchain.errors`. Migration: install `pytest-httpchain>=0.9` only (drop any explicit `pytest-httpchain-*` requirements) and rename imports `pytest_httpchain_X` → `pytest_httpchain.X`. Scenario JSON files, user-function references, ini options, and CLI usage are unaffected.
+- Distribution now ships a `py.typed` marker and `[project.urls]` metadata.
+- Import layering between domain subpackages and plugin modules is enforced by import-linter in CI.
+
 ## [0.8.0] - 2026-06-15
 
 ### Added

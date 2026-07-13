@@ -1,4 +1,4 @@
-"""Test fixtures for pytest-httpchain-userfunc tests."""
+"""Test fixtures for the userfunc tests."""
 
 import sys
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for pytest-httpchain-jsonref tests.
+"""Shared pytest fixtures for the jsonref tests.
 
 Note: the ``datadir`` fixture used throughout these tests is NOT defined here.
 It is provided by the third-party ``pytest-datadir`` plugin (a dev dependency),
