@@ -1,4 +1,4 @@
-from pytest_httpchain_core import HttpChainError
+from pytest_httpchain.errors import HttpChainError
 
 
 class TemplatesError(HttpChainError):

@@ -6,4 +6,4 @@ tidyup:
 .PHONY: update
 update:
 	uv lock --upgrade
-	uv sync --all-extras --all-packages
+	uv sync --all-extras

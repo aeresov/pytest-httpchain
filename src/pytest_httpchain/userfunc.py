@@ -26,7 +26,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from pytest_httpchain_core import HttpChainError
+from pytest_httpchain.errors import HttpChainError
 
 
 class UserFunctionError(HttpChainError):

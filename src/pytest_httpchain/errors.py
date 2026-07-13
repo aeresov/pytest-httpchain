@@ -1,5 +1,8 @@
 import httpx
-from pytest_httpchain_core import HttpChainError
+
+
+class HttpChainError(Exception):
+    """Base exception for all pytest-httpchain errors."""
 
 
 class StageExecutionError(HttpChainError):
