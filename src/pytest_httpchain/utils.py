@@ -25,7 +25,7 @@ from pytest_httpchain_models import FunctionsSubstitution, Substitution, UserFun
 from pytest_httpchain_templates import walk
 from pytest_httpchain_userfunc import call_function, wrap_function
 
-from .exceptions import StageExecutionError
+from .errors import StageExecutionError
 
 logger = logging.getLogger(__name__)
 

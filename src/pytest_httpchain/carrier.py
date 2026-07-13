@@ -70,7 +70,7 @@ from pytest_httpchain_models import (
 from pytest_httpchain_templates import TemplatesError, walk
 from pytest_httpchain_userfunc import UserFunctionError
 
-from .exceptions import RequestError, SaveError, StageExecutionError, VerificationError
+from .errors import RequestError, SaveError, StageExecutionError, VerificationError
 from .utils import call_user_function, make_marker, process_substitutions
 
 logger = logging.getLogger(__name__)

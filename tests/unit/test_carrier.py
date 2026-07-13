@@ -27,7 +27,7 @@ from pytest_httpchain_models import (
 from pytest_httpchain_models.entities import ResponseBody
 
 from pytest_httpchain.carrier import Carrier, _normalize_cert
-from pytest_httpchain.exceptions import RequestError, SaveError, VerificationError
+from pytest_httpchain.errors import RequestError, SaveError, VerificationError
 
 
 class TestNormalizeCert:

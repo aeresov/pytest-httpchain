@@ -1,7 +1,7 @@
 import pytest
 from pytest_httpchain_models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 
-from pytest_httpchain.exceptions import StageExecutionError
+from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.utils import call_user_function, process_substitutions
 
 
