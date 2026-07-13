@@ -1,17 +1,17 @@
-# pytest-httpchain-models
+# pytest_httpchain.models
 
 Pydantic models for pytest-httpchain HTTP test scenarios.
 
 ## Purpose
 
-This package provides strongly-typed Pydantic models for defining HTTP test scenarios, including:
+This subpackage provides strongly-typed Pydantic models for defining HTTP test scenarios, including:
 - Request/response structure validation
 - Multiple body types (JSON, XML, Form, GraphQL, etc.)
 - Variable substitutions and user functions
 - Response verification and data extraction
 - Test parameterization and parallel execution
 
-## Package Structure
+## Subpackage Structure
 
 ```
 src/pytest_httpchain/models/

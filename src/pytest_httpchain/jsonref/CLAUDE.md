@@ -1,10 +1,10 @@
-# pytest-httpchain-jsonref
+# pytest_httpchain.jsonref
 
-JSON reference resolution library for pytest-httpchain.
+JSON reference resolution engine for pytest-httpchain.
 
 ## Purpose
 
-This package provides JSON file loading with reference resolution support. Three directives are supported:
+This subpackage provides JSON file loading with reference resolution support. Three directives are supported:
 
 - **`$include`** (preferred): Avoids conflicts with VS Code's JSON Schema validation
 - **`$merge`** (preferred): Alias for `$include`, semantically clearer when merging
@@ -16,7 +16,7 @@ Features:
 - Combined references (`"$include": "other.json#/definitions/foo"`)
 - Deep merging of sibling properties with referenced content
 
-## Package Structure
+## Subpackage Structure
 
 ```
 src/pytest_httpchain/jsonref/

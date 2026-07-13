@@ -1,15 +1,15 @@
-# pytest-httpchain-templates
+# pytest_httpchain.templates
 
-Template substitution library using `{{ expression }}` syntax for pytest-httpchain.
+Template substitution engine using `{{ expression }}` syntax for pytest-httpchain.
 
 ## Purpose
 
-This package provides safe template expression evaluation with recursive substitution support for:
+This subpackage provides safe template expression evaluation with recursive substitution support for:
 - Strings with embedded expressions (`"Hello {{ name }}"`)
 - Dictionaries, lists, Pydantic models, and SimpleNamespace objects
 - Python expressions including list/dict comprehensions
 
-## Package Structure
+## Subpackage Structure
 
 ```
 src/pytest_httpchain/templates/

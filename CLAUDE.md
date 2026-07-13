@@ -12,12 +12,6 @@ pytest-httpchain is a pytest plugin for declarative HTTP API integration testing
 # Run all tests
 uv run pytest
 
-# Run tests for a specific package (core has no tests)
-uv run pytest packages/pytest-httpchain-jsonref/tests -v
-uv run pytest packages/pytest-httpchain-models/tests -v
-uv run pytest packages/pytest-httpchain-templates/tests -v
-uv run pytest packages/pytest-httpchain-userfunc/tests -v
-
 # Run a single test file or test
 uv run pytest tests/integration/test_primer.py -v
 uv run pytest tests/unit/test_foo.py::test_specific -v
@@ -35,19 +29,16 @@ uv run pytest-httpchain validate tests/integration/examples/save/test_save_jmesp
 # Deep validation (opt-in): import user functions + check signatures + referenced files
 uv run pytest-httpchain validate --deep --syspath tests/integration/examples tests/integration/examples/save/test_save_user_function.http.json
 
-# Run unit tests with coverage report (main package only)
+# Run unit tests with coverage report
 uv run pytest tests/unit --cov=src --cov-report=term-missing
-
-# Run all tests (may have conftest conflicts, use specific paths)
-uv run pytest tests/unit tests/integration -v
 ```
 
 ## Architecture
 
-This is a uv workspace monorepo with the main plugin in `src/` and supporting packages in `packages/`:
+The plugin is a single distribution; domain subpackages (models, templates, jsonref, userfunc) live under `src/pytest_httpchain/` and must not import plugin modules (enforced by import-linter).
 
 ```
-src/pytest_httpchain/          # Main pytest plugin
+src/pytest_httpchain/
 ├── cli.py                     # Typer CLI (validate, schema, resolve, show, graph)
 ├── validation.py              # Shared validator (CLI + collection-time): coded Diagnostic objects (HTTPCHAINxxx) for semantic checks incl. order-aware data-flow; plus opt-in `check_scenario_deep` (imports/signatures/files) used only by `validate --deep`
 ├── dataflow.py                # DataFlow model + analyze_dataflow() (stage data-flow analysis, used by show/graph)
@@ -58,17 +49,14 @@ src/pytest_httpchain/          # Main pytest plugin
 ├── report_formatter.py        # HTTP request/response formatting for test reports
 ├── har_writer.py              # HAR file export for HTTP request/response logging
 ├── constants.py               # ConfigOptions enum for pytest.ini settings
-└── exceptions.py              # StageExecutionError (base, carries request/response) + subclasses RequestError, SaveError, VerificationError
-
-packages/
-├── pytest-httpchain-core/          # Shared base types (HttpChainError)
-├── pytest-httpchain-jsonref/       # $ref resolution with deep merging
-├── pytest-httpchain-models/        # Pydantic models (Scenario, Stage, Request, etc.)
-├── pytest-httpchain-templates/     # {{ expression }} substitution engine
-└── pytest-httpchain-userfunc/      # Dynamic function import/invocation
+├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response) + subclasses RequestError, SaveError, VerificationError
+├── userfunc.py                # Dynamic function import/invocation
+├── models/                    # Pydantic models (Scenario, Stage, Request, etc.)
+├── templates/                 # {{ expression }} substitution engine
+└── jsonref/                   # $ref resolution with deep merging
 ```
 
-Most packages have their own CLAUDE.md with detailed API and behavior documentation (the `core` package, which holds only shared base types, does not).
+The models, templates, and jsonref subpackages carry their own CLAUDE.md next to their code.
 
 ## Test File Pattern
 
