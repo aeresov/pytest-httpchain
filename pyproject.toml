@@ -31,6 +31,11 @@ classifiers = [
     "Topic :: Software Development :: Testing",
 ]
 
+[project.urls]
+Repository = "https://github.com/aeresov/pytest-httpchain"
+Documentation = "https://aeresov.github.io/pytest-httpchain/"
+Changelog = "https://github.com/aeresov/pytest-httpchain/blob/main/CHANGELOG.md"
+
 [dependency-groups]
 dev = [
     "flask-httpauth>=4.8.0",
