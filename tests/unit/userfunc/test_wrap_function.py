@@ -1,7 +1,8 @@
 """Tests for wrap_function functionality."""
 
 import pytest
-from pytest_httpchain_userfunc import UserFunctionError, wrap_function
+
+from pytest_httpchain.userfunc import UserFunctionError, wrap_function
 
 
 class TestWrapFunctionBasic:

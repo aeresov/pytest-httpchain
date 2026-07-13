@@ -1,7 +1,24 @@
 """User function handling for pytest-httpchain.
 
-This module handles importing and wrapping user-defined functions
-from explicit module paths (module.submodule:func).
+This module provides utilities for importing and invoking user-defined functions
+from test scenarios. Functions must be specified as explicit module paths in
+"module.submodule:func" format. Bare function names (without a module path) are
+rejected with UserFunctionError.
+
+Example:
+    >>> from pytest_httpchain.userfunc import call_function
+    >>> result = call_function("mymodule:my_auth_handler")
+
+Key Behaviors
+-------------
+``wrap_function``'s ``default_kwargs`` are merged with call-time kwargs, with
+call-time kwargs winning on conflicts.
+
+Import failures and runtime call failures append the underlying exception to
+the message (``...: {cause}``) and also chain it as ``__cause__``. Consumers in
+the main plugin render only the message text (stage failures use
+``pytrace=False``; the validator embeds ``str(e)``), so the cause must live in
+the message -- not just the chain -- to be visible.
 """
 
 import importlib
@@ -9,7 +26,12 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from .exceptions import UserFunctionError
+from pytest_httpchain_core import HttpChainError
+
+
+class UserFunctionError(HttpChainError):
+    """Error importing or calling a user-supplied function."""
+
 
 # Matches "[module.path:]function_name". The module path, when present, must be a
 # well-formed dotted path: identifier segments joined by single dots, with no
@@ -115,3 +137,12 @@ def wrap_function(name: str, /, default_kwargs: dict[str, Any] | None = None) ->
     # Set a meaningful name for debugging
     wrapped.__name__ = f"wrapped_{name.replace(':', '_').replace('.', '_')}"
     return wrapped
+
+
+__all__ = [
+    "NAME_PATTERN",
+    "import_function",
+    "call_function",
+    "wrap_function",
+    "UserFunctionError",
+]

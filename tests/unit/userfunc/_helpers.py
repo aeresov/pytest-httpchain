@@ -1,6 +1,6 @@
 """Helper functions for userfunc tests, imported via '_helpers:func_name'."""
 
-from pytest_httpchain_userfunc import UserFunctionError
+from pytest_httpchain.userfunc import UserFunctionError
 
 
 def helper_add(x: int, y: int) -> int:

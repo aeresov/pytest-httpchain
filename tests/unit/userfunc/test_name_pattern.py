@@ -1,7 +1,8 @@
 """Tests for function name pattern validation."""
 
 import pytest
-from pytest_httpchain_userfunc import NAME_PATTERN, UserFunctionError, import_function
+
+from pytest_httpchain.userfunc import NAME_PATTERN, UserFunctionError, import_function
 
 # Bare (module-less) function names that the regex accepts but import_function
 # rejects with "Module path is required". Shared by the two tests below so the

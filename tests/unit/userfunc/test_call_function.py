@@ -1,7 +1,8 @@
 """Tests for call_function functionality."""
 
 import pytest
-from pytest_httpchain_userfunc import UserFunctionError, call_function
+
+from pytest_httpchain.userfunc import UserFunctionError, call_function
 
 
 class TestCallFunctionBasic:

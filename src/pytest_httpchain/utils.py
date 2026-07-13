@@ -21,10 +21,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pytest
-from pytest_httpchain_userfunc import call_function, wrap_function
 
 from pytest_httpchain.models import FunctionsSubstitution, Substitution, UserFunctionCall, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain.templates import walk
+from pytest_httpchain.userfunc import call_function, wrap_function
 
 from .errors import StageExecutionError
 

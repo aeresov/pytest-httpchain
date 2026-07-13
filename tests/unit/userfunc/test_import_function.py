@@ -1,7 +1,8 @@
 """Tests for import_function functionality."""
 
 import pytest
-from pytest_httpchain_userfunc import UserFunctionError, import_function
+
+from pytest_httpchain.userfunc import UserFunctionError, import_function
 
 
 class TestImportFromExplicitModule:

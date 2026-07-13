@@ -15,7 +15,6 @@ dependencies = [
     "pyrate-limiter>=4.0.0",
     "pytest>=8.4",
     "pytest-httpchain-core",
-    "pytest-httpchain-userfunc",
     "pytest-order>=1.3.0",
     "simpleeval>=1.0.3",
     "typer>=0.16.0",
@@ -55,7 +54,6 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 pytest-httpchain-core = { workspace = true }
-pytest-httpchain-userfunc = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.7.21,<0.8.0"]
@@ -120,7 +118,6 @@ addopts = ["--log-disable=werkzeug", "--import-mode=importlib"]
 pythonpath = [
     ".",
     "packages/pytest-httpchain-core/src",
-    "packages/pytest-httpchain-userfunc/src",
 ]
 testpaths = ["tests", "packages/*/tests"]
 
