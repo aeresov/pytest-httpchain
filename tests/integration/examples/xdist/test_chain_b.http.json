@@ -1,0 +1,181 @@
+{
+    "stages": [
+        {
+            "name": "s0",
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "x": 100
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "s1",
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ x == 100 }}"
+                        ]
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "x": "{{ x + 1 }}"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "s2",
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ x == 101 }}"
+                        ]
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "x": "{{ x + 1 }}"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "s3",
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ x == 102 }}"
+                        ]
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "x": "{{ x + 1 }}"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "s4",
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ x == 103 }}"
+                        ]
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "x": "{{ x + 1 }}"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "s5",
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ x == 104 }}"
+                        ]
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "x": "{{ x + 1 }}"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

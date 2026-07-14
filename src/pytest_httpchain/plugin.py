@@ -51,6 +51,37 @@ class JsonModule(pytest.Module):
     definitions into executable pytest test classes.
     """
 
+    def _reject_chain_splitting_dist_mode(self, scenario: Scenario) -> None:
+        """Fail collection when pytest-xdist would scatter a stage chain.
+
+        A multi-stage scenario forms one ordered chain over shared class state
+        (Carrier ClassVars), and pytest-order is a no-op across xdist workers —
+        so dist modes that distribute tests individually (load/each/worksteal)
+        would break the chain silently. Class-preserving modes work: loadscope
+        groups by class, loadfile by file, loadgroup by the xdist_group marker
+        added in `collect`. Single-stage scenarios have no chain and are safe
+        under any mode (a parametrized single stage never consumes its own
+        saves), so they are exempt.
+
+        Inside a worker the real mode is only available via workerinput
+        (seeded by `pytest_configure_node` below): xdist resets the worker's
+        own ``dist`` option to "no" so workers don't recursively spawn.
+        """
+        if len(scenario.stages) <= 1:
+            return
+        workerinput = getattr(self.config, "workerinput", None)
+        if workerinput is not None:
+            dist_mode = workerinput.get("httpchain_dist", "no")
+        else:
+            dist_mode = self.config.getoption("dist", default="no")
+        if dist_mode in {"load", "each", "worksteal"}:
+            raise pytest.Collector.CollectError(
+                f"pytest-httpchain scenarios cannot run under pytest-xdist --dist={dist_mode}: "
+                f"a multi-stage scenario's stages must run in order on a single worker. "
+                f"Use --dist loadscope, loadfile, or loadgroup (scenario classes are grouped automatically), "
+                f"or deselect scenario files when running with -n."
+            )
+
     def collect(self) -> Iterable[pytest.Item | pytest.Collector]:
         # read JSON and apply references
         ref_parent_traversal_depth = self.config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
@@ -78,6 +109,8 @@ class JsonModule(pytest.Module):
 
             full_error_msg = f"Cannot parse test scenario in {self.path}:\n" + "\n".join(error_details)
             raise pytest.Collector.CollectError(full_error_msg) from None
+
+        self._reject_chain_splitting_dist_mode(scenario)
 
         # semantic validation: cross-cutting checks the schema cannot express
         # (duplicate stage names, fixture/variable conflicts, undefined/forward-referenced
@@ -114,6 +147,12 @@ class JsonModule(pytest.Module):
             obj=CarrierClass,
         )
 
+        # Keep all stages of this scenario on one xdist worker under
+        # --dist loadgroup. Guarded by plugin presence: without xdist the
+        # marker is unregistered and would fail --strict-markers.
+        if self.config.pluginmanager.hasplugin("xdist"):
+            json_class.add_marker(pytest.mark.xdist_group(name=self.nodeid))
+
         # apply class-level markers
         for mark_str in scenario.marks:
             try:
@@ -122,6 +161,17 @@ class JsonModule(pytest.Module):
                 raise pytest.Collector.CollectError(f"Invalid marker '{mark_str}' in {self.path}: {e}") from None
 
         yield json_class
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_configure_node(node) -> None:
+    """xdist controller-side hook: pass the real dist mode to workers.
+
+    Workers cannot see it themselves — xdist resets ``config.option.dist`` to
+    "no" inside workers — so `JsonModule.collect` reads this key instead. The
+    hook only exists when pytest-xdist is installed (hence ``optionalhook``).
+    """
+    node.workerinput["httpchain_dist"] = node.config.getoption("dist", default="no")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

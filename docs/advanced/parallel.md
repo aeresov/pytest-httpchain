@@ -223,3 +223,22 @@ The limit is global across all workers. When a request cannot get a slot, it wai
 - Save operations may behave differently in parallel mode (last write wins)
 - Use rate limiting to avoid overwhelming servers or hitting rate limits
 - Monitor memory usage with very high concurrency values
+
+## Running scenarios in parallel with pytest-xdist
+
+The `parallel` config above parallelizes iterations *within* one stage. To run
+whole **scenarios** in parallel, use [pytest-xdist](https://pytest-xdist.readthedocs.io/)
+with a distribution mode that keeps each scenario's stages together on one worker:
+
+```bash
+pytest -n 4 --dist loadscope   # groups by class — one scenario per group
+pytest -n 4 --dist loadfile    # groups by file — one scenario per file
+pytest -n 4 --dist loadgroup   # scenario classes are auto-grouped by the plugin
+```
+
+A scenario's stages form an ordered chain over shared state, so they must all
+run on the same worker, in order. Modes that distribute tests individually —
+`--dist load` (the default when only `-n` is given), `--dist each`, and
+`--dist worksteal` — would scatter the chain across workers and are rejected
+at collection time with an error pointing here. Different scenarios never share
+state, so scenario-level distribution is safe under the supported modes.

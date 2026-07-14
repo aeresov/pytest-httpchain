@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-14
+
+### Added
+
+- pytest-xdist support policy. Scenarios run in parallel correctly under the class-preserving distribution modes: `--dist loadscope`, `--dist loadfile`, and `--dist loadgroup` (every scenario class now gets an automatic `xdist_group` marker). Modes that distribute tests individually and would silently scatter a multi-stage scenario's stage chain across workers — `--dist load` (the `-n` default), `--dist each`, `--dist worksteal` — now fail collection with guidance instead. Single-stage scenarios have no chain and keep working under every mode.
+
 ## [0.9.0] - 2026-07-14
 
 ### Added
@@ -299,7 +305,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.8.1...v0.9.0
 [0.8.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.6.0...v0.7.0
