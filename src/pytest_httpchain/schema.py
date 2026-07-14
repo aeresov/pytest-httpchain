@@ -45,7 +45,7 @@ def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
 
     schema["$defs"]["JsonRef"] = {
         "type": "object",
-        "description": "Reference to external JSON file or JSON pointer. Use $include or $merge (preferred) or $ref. Resolved at runtime by pytest-httpchain-jsonref.",
+        "description": "Reference to external JSON file or JSON pointer. Use $include or $merge (preferred) or $ref. Resolved when the scenario file is loaded.",
         "properties": {
             "$include": {
                 "type": "string",

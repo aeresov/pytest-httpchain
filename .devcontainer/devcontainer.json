@@ -13,7 +13,7 @@
         "uv": "curl -LsSf https://astral.sh/uv/install.sh | sh"
     },
     "postAttachCommand": {
-        "uv": "uv venv --clear --seed; uv sync --dev --all-packages --all-extras"
+        "uv": "uv venv --clear --seed; uv sync --dev --all-extras"
     },
     "customizations": {
         "vscode": {

@@ -3,22 +3,22 @@ name: Publish to PyPI
 on:
     release:
         types: [published]
-    workflow_dispatch:
 
 jobs:
+    test:
+        name: Test
+        uses: ./.github/workflows/test.yml
+
     build-and-publish:
         name: Build and publish to PyPI
         runs-on: ubuntu-latest
+        needs: test
+        environment: pypi
         permissions:
             id-token: write # IMPORTANT: mandatory for trusted publishing
 
         steps:
             - uses: actions/checkout@v4
-
-            - name: Set up Python
-              uses: actions/setup-python@v5
-              with:
-                  python-version: "3.13"
 
             - name: Install uv
               uses: astral-sh/setup-uv@v6
@@ -26,7 +26,20 @@ jobs:
                   enable-cache: true
                   cache-dependency-glob: "uv.lock"
 
-            - name: Build all packages
+            - name: Set up Python
+              run: uv python install 3.13
+
+            - name: Check release tag matches project version
+              env:
+                  TAG: ${{ github.ref_name }}
+              run: |
+                  version="$(uv version --short)"
+                  if [ "$TAG" != "v${version}" ]; then
+                      echo "Release tag '$TAG' does not match project version 'v${version}' from pyproject.toml" >&2
+                      exit 1
+                  fi
+
+            - name: Build distribution
               run: |
                   uv build
                   echo "Built packages:"

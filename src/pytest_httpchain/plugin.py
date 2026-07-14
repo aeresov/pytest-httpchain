@@ -15,10 +15,6 @@ scenarios into pytest:
   ``carrier.create_test_class``.
 - ``pytest_runtest_makereport`` attaches the last HTTP request/response to the
   test report and optionally writes a HAR file.
-
-`ScenarioValidationWarning` is defined here because the collection hook
-and the ``pytest11`` entry point reference it directly; it is re-exported from
-the package ``__init__`` as the user-facing name.
 """
 
 import logging
@@ -42,12 +38,9 @@ from .har_writer import write_har_file
 from .report_formatter import format_request, format_response
 from .utils import make_marker
 from .validation import check_scenario
+from .warnings import ScenarioValidationWarning
 
 logger = logging.getLogger(__name__)
-
-
-class ScenarioValidationWarning(pytest.PytestWarning):
-    """A collected scenario has a non-fatal validation issue (e.g. an undefined variable)."""
 
 
 class JsonModule(pytest.Module):

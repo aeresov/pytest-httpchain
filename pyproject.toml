@@ -134,49 +134,28 @@ skip_covered = false
 [tool.importlinter]
 root_package = "pytest_httpchain"
 
+# Exhaustive vertical layering: every top-level module must appear in exactly one
+# layer; a new module fails lint-imports until it is placed. Modules on the same
+# layer (separated by ":") are additionally kept mutually independent.
 [[tool.importlinter.contracts]]
-name = "domain subpackages do not import plugin modules"
-type = "forbidden"
-source_modules = [
-    "pytest_httpchain.models",
-    "pytest_httpchain.templates",
-    "pytest_httpchain.jsonref",
-    "pytest_httpchain.userfunc",
-]
-forbidden_modules = [
-    "pytest_httpchain.plugin",
-    "pytest_httpchain.carrier",
-    "pytest_httpchain.cli",
-    "pytest_httpchain.validation",
-    "pytest_httpchain.dataflow",
-    "pytest_httpchain.schema",
-    "pytest_httpchain.utils",
-    "pytest_httpchain.har_writer",
-    "pytest_httpchain.report_formatter",
-    "pytest_httpchain.constants",
+name = "package layering"
+type = "layers"
+containers = ["pytest_httpchain"]
+exhaustive = true
+layers = [
+    "plugin : cli",
+    "carrier : dataflow : schema",
+    "validation : har_writer : report_formatter",
+    "utils",
+    "models",
+    "templates : jsonref : userfunc",
+    "errors : constants : warnings",
 ]
 
-[[tool.importlinter.contracts]]
-name = "lower domain layers do not import models"
-type = "forbidden"
-source_modules = [
-    "pytest_httpchain.templates",
-    "pytest_httpchain.jsonref",
-    "pytest_httpchain.userfunc",
-]
-forbidden_modules = ["pytest_httpchain.models"]
-
+# Horizontal refinement the layers contract cannot express: models sits above the
+# domain trio and may import templates/userfunc, but must never import jsonref.
 [[tool.importlinter.contracts]]
 name = "models does not import jsonref"
 type = "forbidden"
 source_modules = ["pytest_httpchain.models"]
 forbidden_modules = ["pytest_httpchain.jsonref"]
-
-[[tool.importlinter.contracts]]
-name = "templates, jsonref, and userfunc are independent"
-type = "independence"
-modules = [
-    "pytest_httpchain.templates",
-    "pytest_httpchain.jsonref",
-    "pytest_httpchain.userfunc",
-]

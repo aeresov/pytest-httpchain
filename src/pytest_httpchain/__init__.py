@@ -22,9 +22,9 @@ Example test file (test_api.http.json):
     }
 """
 
-# Re-export the user-facing warning so consumers can filter it without reaching
-# into the plugin module. The definition stays in plugin.py because the pytest11
-# entry point and the collection hook reference it there directly.
-from pytest_httpchain.plugin import ScenarioValidationWarning
+# Re-export the user-facing warning so consumers can filter it from the package
+# root. It lives in the leaf module ``warnings`` so this import (which runs on
+# any subpackage import) does not load the plugin/execution machinery.
+from pytest_httpchain.warnings import ScenarioValidationWarning
 
 __all__ = ["ScenarioValidationWarning"]
