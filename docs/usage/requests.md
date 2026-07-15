@@ -171,6 +171,11 @@
 }
 ```
 
+Relative paths in `binary` and `files` resolve against the **scenario file's
+directory** — the same rule as `$ref`/`$include` — so data files can live next
+to the test that uses them, independent of where pytest is launched from.
+Absolute paths pass through unchanged.
+
 ### GraphQL
 
 ```json

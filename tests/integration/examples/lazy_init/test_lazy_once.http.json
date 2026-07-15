@@ -1,0 +1,46 @@
+{
+    "auth": "sentinel:broken_auth",
+    "substitutions": [
+        {
+            "functions": {
+                "count": "sentinel:count"
+            }
+        },
+        {
+            "vars": {
+                "c": "{{ count() }}"
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "first",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "cleanup",
+            "always_run": true,
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

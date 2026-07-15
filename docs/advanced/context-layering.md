@@ -46,6 +46,22 @@ context["url"]      # "https://api.example.com" (from base)
 context["timeout"]  # 10 (from stage, shadows base)
 ```
 
+## Resolution Phases
+
+Every `{{ }}` template is a placeholder that resolves in a specific phase, against
+the context that phase has. Knowing the three phases explains both what a template
+may reference and where an error for it will surface:
+
+| Phase | When | What resolves | Context available | Failures surface as |
+|---|---|---|---|---|
+| **Collection** | `pytest` discovers tests (`--collect-only`, IDE discovery) | Nothing, by default. Exception: stage `parametrize` **values** containing templates (pytest needs concrete parameter values to generate test items) — this also forces scenario substitutions to resolve now, reported by the `HTTPCHAIN025` info diagnostic. Templates in parametrize `ids` are never substituted and don't count. | Scenario substitutions only | Collection error |
+| **Scenario initialization** | The scenario's first stage executes | Scenario `substitutions`, `auth`, `ssl`; the shared HTTP client is built. Runs **at most once** per scenario — side-effectful user functions are never re-invoked. | Scenario substitutions only — never fixtures (`HTTPCHAIN016`) or saved values (`HTTPCHAIN017`) | Clean `Failed to initialize scenario` failure of the first stage; all later stages (including `always_run`) skip with the root cause |
+| **Stage execution** | Each stage runs | Everything else: request fields, verify/save steps, stage substitutions, `always_run` templates | Full layered context: fixtures + parametrize params + stage substitutions + global context (scenario vars and earlier saves) | Clean stage failure; chain aborts unless `always_run` |
+
+Collection stays free of user code and HTTP clients so that test discovery is
+safe and cheap; the validator's coded diagnostics (`HTTPCHAIN016/017/025`) make
+phase mismatches visible before anything runs.
+
 ## Execution Flow
 
 ### 1. Scenario Initialization

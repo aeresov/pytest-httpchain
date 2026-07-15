@@ -25,6 +25,7 @@ import inspect
 import json
 import logging
 import re
+import threading
 from collections import ChainMap
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -67,6 +68,7 @@ from pytest_httpchain.models import (
     VerifyStep,
     XmlBody,
     check_json_schema,
+    parametrize_values_contain_template,
 )
 from pytest_httpchain.templates import TemplatesError, walk
 from pytest_httpchain.userfunc import UserFunctionError
@@ -81,6 +83,12 @@ logger = logging.getLogger(__name__)
 # sequential and the parallel execution paths catch these and turn them into a
 # clean pytest failure instead of a raw traceback.
 _STAGE_FAILURE_EXCEPTIONS = (StageExecutionError, TemplatesError, ValidationError)
+
+# Guards Carrier._ensure_initialized's check-then-act so scenario initialization
+# (side-effectful user functions, client construction) runs at most once per
+# scenario class even under thread-based runners. A single module-level lock is
+# enough: init is short and contention across scenario classes is negligible.
+_INIT_LOCK = threading.Lock()
 
 
 @dataclass
@@ -106,6 +114,8 @@ class Carrier:
     # attributes: the stage methods are classmethods that share one running context
     # across the chain via `cls`, while distinct scenarios stay isolated because
     # each gets its own subclass.
+    scenario: ClassVar[Scenario | None] = None
+    scenario_dir: ClassVar[Path | None] = None
     client: ClassVar[httpx.Client | None] = None
     aborted: ClassVar[bool] = False
     last_request: ClassVar[httpx.Request | None] = None
@@ -113,6 +123,89 @@ class Carrier:
     global_context: ClassVar[ChainMap[str, Any]] = ChainMap()
     active_context_managers: ClassVar[list[AbstractContextManager]] = []
     max_parallel_iterations: ClassVar[int] = 10_000
+    # Lazy-initialization state (see _ensure_initialized): _initialized flips
+    # once the client is built; _init_failed records the first init failure so
+    # every later stage skips instead of retrying; _context_resolved_at_collection
+    # records that create_test_class already resolved the scenario substitutions
+    # (forced by template-bearing stage parametrize values) so init must not
+    # re-run them.
+    _initialized: ClassVar[bool] = False
+    _init_failed: ClassVar[str | None] = None
+    _context_resolved_at_collection: ClassVar[bool] = False
+
+    @classmethod
+    def _resolve_scenario_path(cls, value: str | Path) -> Path:
+        """Resolve a dialect file path against the scenario file's directory.
+
+        Relative paths in scenario fields (``body.binary``, ``body.files``
+        values, ``verify.body.schema``, ``ssl.cert``/``ssl.verify``) resolve
+        against the scenario file's directory — matching ``$ref`` — not the
+        pytest invocation CWD. Absolute paths pass through. Falls back to
+        CWD-relative when no ``scenario_dir`` was seeded (hand-built
+        subclasses in unit tests).
+        """
+        path = Path(value)
+        if path.is_absolute() or cls.scenario_dir is None:
+            return path
+        return cls.scenario_dir / path
+
+    @classmethod
+    def _ensure_initialized(cls) -> None:
+        """Resolve scenario substitutions and build the shared httpx client on first use.
+
+        Deferred from collection time so that ``--collect-only`` and IDE test
+        discovery neither execute user code (scenario substitutions may call
+        user functions via templates; ``auth`` always does) nor allocate an
+        ``httpx.Client`` per collected scenario. When stage parametrize values
+        contain templates, create_test_class already resolved the scenario
+        context (pytest needs concrete parameter values at collection) and it
+        is reused here as-is.
+
+        Initialization runs AT MOST ONCE per scenario — success or failure —
+        so side-effectful user functions in substitutions/auth are never
+        re-invoked. On failure, ``_init_failed`` records the root cause and the
+        raised ``StageExecutionError`` fails the current stage cleanly; every
+        later stage of the scenario (``always_run`` included) skips via the
+        gate at the top of ``execute_stage``, mirroring the pre-lazy behavior
+        where an initialization problem meant no stage ran at all. The lock
+        makes the once-only guarantee hold even under thread-based runners.
+        """
+        with _INIT_LOCK:
+            if cls._initialized:
+                return
+            if cls._init_failed is not None:
+                raise StageExecutionError(f"Failed to initialize scenario: {cls._init_failed}")
+            scenario = cls.scenario
+            assert scenario is not None, "create_test_class() seeds cls.scenario"
+            try:
+                if not cls._context_resolved_at_collection:
+                    cls.global_context = ChainMap(process_substitutions(scenario.substitutions))
+
+                resolved_ssl: SSLConfig = walk(scenario.ssl, cls.global_context)
+                # A Path-valued `verify` is a CA bundle file: scenario-relative.
+                ssl_verify = resolved_ssl.verify
+                if isinstance(ssl_verify, Path):
+                    ssl_verify = str(cls._resolve_scenario_path(ssl_verify))
+                client_kwargs: dict[str, Any] = {
+                    "verify": ssl_verify,
+                    "http2": True,
+                }
+                if resolved_ssl.cert is not None:
+                    cert = resolved_ssl.cert
+                    if isinstance(cert, list | tuple):
+                        cert = tuple(cls._resolve_scenario_path(p) for p in cert)
+                    else:
+                        cert = cls._resolve_scenario_path(cert)
+                    client_kwargs["cert"] = _normalize_cert(cert)
+                if scenario.auth:
+                    resolved_auth = walk(scenario.auth, cls.global_context)
+                    client_kwargs["auth"] = call_user_function(resolved_auth)
+
+                cls.client = httpx.Client(**client_kwargs)
+            except Exception as e:
+                cls._init_failed = str(e)
+                raise StageExecutionError(f"Failed to initialize scenario: {e}") from e
+            cls._initialized = True
 
     @classmethod
     def _resolve_always_run(cls, stage: Stage, stage_fixtures: dict[str, Any]) -> bool:
@@ -144,11 +237,22 @@ class Carrier:
         global context is left unchanged (deterministic) rather than carrying a
         thread-timing-dependent subset of a parallel run.
         """
+        # Hard gate, ahead of the always_run machinery: a failed initialization
+        # makes the whole scenario unusable (no context, no client), so even
+        # always_run stages skip — matching the previous eager behavior where an
+        # init problem failed collection and no stage ran at all. This also
+        # keeps template-form always_run from being evaluated against the empty
+        # context that an init failure leaves behind.
+        if cls._init_failed is not None:
+            pytest.skip(reason=f"Scenario initialization failed: {cls._init_failed}")
+
         try:
             stage_fixtures = cls._build_stage_fixtures(fixture_kwargs)
 
             if cls.aborted and not cls._resolve_always_run(stage, stage_fixtures):
                 pytest.skip(reason="Flow aborted")
+
+            cls._ensure_initialized()
 
             # Build base context for iterations (substitutions + fixtures + global)
             local_context = ChainMap(stage_fixtures, cls.global_context)
@@ -170,7 +274,8 @@ class Carrier:
                 raise StageExecutionError("Parallel configuration produced zero iterations; foreach/repeat must yield at least one item")
             if total > cls.max_parallel_iterations:
                 raise StageExecutionError(
-                    f"Parallel iteration count ({total}) exceeds maximum ({cls.max_parallel_iterations}). Set 'max_parallel_iterations' in pytest.ini to increase the limit."
+                    f"Parallel iteration count ({total}) exceeds maximum ({cls.max_parallel_iterations}). "
+                    f"Set 'httpchain_max_parallel_iterations' in pytest.ini to increase the limit."
                 )
 
             results, first_error = cls._run_iterations(stage, local_context, iteration_substitutions, parallel_config)
@@ -255,6 +360,10 @@ class Carrier:
                         case CombinationsParameter(combinations=combinations):
                             combos: list[dict[str, Any]] = [vars(item) if isinstance(item, SimpleNamespace) else item for item in combinations]
                             iteration_substitutions = [{**existing, **combo} for combo in combos for existing in iteration_substitutions]
+                        case _:
+                            raise RuntimeError(f"Unhandled foreach step: {type(step).__name__}")
+            case _:
+                raise RuntimeError(f"Unhandled parallel config: {type(parallel_config).__name__}")
         return iteration_substitutions
 
     @classmethod
@@ -305,8 +414,8 @@ class Carrier:
 
         return results, first_error
 
-    @staticmethod
-    def _build_request_kwargs(request_model: Request) -> dict[str, Any]:
+    @classmethod
+    def _build_request_kwargs(cls, request_model: Request) -> dict[str, Any]:
         request_kwargs: dict[str, Any] = {
             "method": request_model.method,
             "url": str(request_model.url),
@@ -345,7 +454,7 @@ class Carrier:
 
             case BinaryBody(binary=file_path):
                 try:
-                    request_kwargs["content"] = Path(file_path).read_bytes()
+                    request_kwargs["content"] = cls._resolve_scenario_path(file_path).read_bytes()
                 except FileNotFoundError as e:
                     raise RequestError(f"Binary file not found: {file_path}") from e
                 except OSError as e:
@@ -354,7 +463,7 @@ class Carrier:
             case FilesBody(files=file_paths):
                 files_list = []
                 for field_name, file_path in file_paths.items():
-                    path = Path(file_path)
+                    path = cls._resolve_scenario_path(file_path)
                     try:
                         files_list.append((field_name, (path.name, path.read_bytes())))
                     except FileNotFoundError as e:
@@ -363,10 +472,21 @@ class Carrier:
                         raise RequestError(f"Cannot read file for upload '{file_path}': {e}") from e
                 request_kwargs["files"] = files_list
 
+            case _:
+                # New body-type variant not handled here: a plugin bug — fail
+                # loudly instead of silently sending a request with NO body.
+                raise RuntimeError(f"Unhandled request body type: {type(request_model.body).__name__}")
+
         return request_kwargs
 
     @classmethod
     def _execute_http_request(cls, request_kwargs: dict[str, Any]) -> httpx.Response:
+        # The terminal catch-all is deliberate: client.request() executes USER
+        # code (a scenario `auth` httpx.Auth flow can raise anything) and httpx
+        # raises non-HTTPError types like InvalidURL. Letting those propagate
+        # raw would bypass the chain-abort machinery (aborted never set, a
+        # parallel pool never cancelled), so every failure here becomes a
+        # RequestError stage failure.
         try:
             return cls.client.request(**request_kwargs)  # ty: ignore[unresolved-attribute]
         except httpx.TimeoutException as e:
@@ -376,7 +496,7 @@ class Carrier:
         except httpx.HTTPError as e:
             raise RequestError(f"HTTP request failed: {e}") from e
         except Exception as e:
-            raise RequestError(f"Unexpected error: {e}") from e
+            raise RequestError(f"Unexpected error during HTTP request: {e}") from e
 
     @staticmethod
     def _process_save_step(save_model: Save, response: httpx.Response, context: ChainMap[str, Any]) -> dict[str, Any]:
@@ -417,10 +537,15 @@ class Carrier:
                     except UserFunctionError as e:
                         raise SaveError(f"Error calling user function '{func_item}': {e}") from e
 
+            case _:
+                # New save variant not handled here: a plugin bug — fail loudly
+                # instead of silently saving nothing.
+                raise RuntimeError(f"Unhandled save type: {type(save_model).__name__}")
+
         return step_saved
 
-    @staticmethod
-    def _process_verify_step(verify_model: Verify, response: httpx.Response) -> None:
+    @classmethod
+    def _process_verify_step(cls, verify_model: Verify, response: httpx.Response) -> None:
         if verify_model.status and response.status_code != verify_model.status:
             raise VerificationError(f"Status code doesn't match: expected {verify_model.status}, got {response.status_code}")
 
@@ -450,7 +575,7 @@ class Carrier:
         if verify_model.body.schema:
             schema = verify_model.body.schema
             if isinstance(schema, str | Path):
-                schema_path = Path(schema)
+                schema_path = cls._resolve_scenario_path(schema)
                 try:
                     schema = json.loads(schema_path.read_text())
                     check_json_schema(schema)
@@ -518,6 +643,11 @@ class Carrier:
                     case VerifyStep():
                         verify_model = walk(step.verify, iter_context)
                         cls._process_verify_step(verify_model, response)
+
+                    case _:
+                        # New response-step variant not handled here: a plugin bug —
+                        # fail loudly rather than silently skipping the step.
+                        raise RuntimeError(f"Unhandled response step: {type(step).__name__}")
         except StageExecutionError as e:
             e.request = response.request
             e.response = response
@@ -566,6 +696,18 @@ class Carrier:
         if cls.client is not None:
             cls.client.close()
             cls.client = None
+        # Reset ALL per-run chain state so a re-run of this class after teardown
+        # (e.g. a rerun plugin) actually re-executes: rebuild the client lazily
+        # ("_initialized implies client is built"), clear the abort flag (else
+        # every rerun stage would skip "Flow aborted"), and drop saved-context
+        # layers back to the pristine base (maps[-1] is the original scenario
+        # context from create_test_class; saves only ever prepend new layers).
+        cls._initialized = False
+        cls._init_failed = None
+        cls.aborted = False
+        cls.last_request = None
+        cls.last_response = None
+        cls.global_context = ChainMap(cls.global_context.maps[-1])
 
 
 def _normalize_cert(cert: Any) -> str | tuple[str, ...]:
@@ -581,34 +723,36 @@ def _normalize_cert(cert: Any) -> str | tuple[str, ...]:
     return str(cert)
 
 
-def create_test_class(scenario: Scenario, class_name: str, max_parallel_iterations: int = 10_000) -> type[Carrier]:
-    """Create a dynamic test class from a scenario definition."""
-    scenario_context = process_substitutions(scenario.substitutions)
+def create_test_class(scenario: Scenario, class_name: str, max_parallel_iterations: int = 10_000, scenario_dir: Path | None = None) -> type[Carrier]:
+    """Create a dynamic test class from a scenario definition.
 
-    resolved_ssl: SSLConfig = walk(scenario.ssl, scenario_context)
-    client_kwargs: dict[str, Any] = {
-        "verify": resolved_ssl.verify,
-        "http2": True,
-    }
-    if scenario.ssl.cert is not None:
-        client_kwargs["cert"] = _normalize_cert(resolved_ssl.cert)
-    if scenario.auth:
-        resolved_auth = walk(scenario.auth, scenario_context)
-        auth_result = call_user_function(resolved_auth)
-        client_kwargs["auth"] = auth_result
-
-    client = httpx.Client(**client_kwargs)
+    Runs at collection time and stays free of side effects: scenario
+    substitutions, ``ssl``/``auth`` resolution, and httpx client construction
+    are deferred to ``Carrier._ensure_initialized`` on first stage execution —
+    with one exception. Template-bearing stage ``parametrize`` values must be
+    resolved NOW (pytest needs concrete parameter values to generate items),
+    and they may reference scenario substitutions, so in that case — and only
+    that case — the scenario context is resolved at collection and marked as
+    such for ``_ensure_initialized`` to reuse.
+    """
+    needs_collection_context = any(parametrize_values_contain_template(stage.parametrize) for stage in scenario.stages)
+    scenario_context = process_substitutions(scenario.substitutions) if needs_collection_context else {}
 
     CustomCarrier = type(
         class_name,
         (Carrier,),
         {
             "__doc__": scenario.description,
-            "client": client,
+            "scenario": scenario,
+            "scenario_dir": scenario_dir,
+            "client": None,
             "aborted": False,
             "last_request": None,
             "last_response": None,
             "global_context": ChainMap(scenario_context),
+            "_initialized": False,
+            "_init_failed": None,
+            "_context_resolved_at_collection": needs_collection_context,
             "active_context_managers": [],
             "max_parallel_iterations": max_parallel_iterations,
         },
@@ -660,6 +804,12 @@ def create_test_class(scenario: Scenario, class_name: str, max_parallel_iteratio
                         all_param_names.extend(param_names)
                         parametrize_marker = pytest.mark.parametrize(",".join(param_names), param_values, ids=param_ids)
                         stage_method = parametrize_marker(stage_method)
+
+                    case _:
+                        # New union variant (or a model that no longer satisfies the
+                        # guards): fail loudly instead of silently dropping the
+                        # parametrization. A plugin bug, so no clean-fail wrapping.
+                        raise RuntimeError(f"Unhandled parametrize step: {type(step).__name__}")
 
         all_fixtures = ["self"] + list(dict.fromkeys(all_param_names + stage.fixtures + scenario.fixtures))
         stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # ty: ignore[unresolved-attribute]

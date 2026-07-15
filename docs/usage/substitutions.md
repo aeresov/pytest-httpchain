@@ -221,7 +221,7 @@ from fixtures or `combinations` parameters.
 }
 ```
 
-Note: Comprehension length is limited by `max_comprehension_length` config.
+Note: Comprehension length is limited by `httpchain_max_comprehension_length` config.
 
 ## Stage-Level Substitutions
 

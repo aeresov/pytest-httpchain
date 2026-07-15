@@ -33,12 +33,14 @@ class UserFunctionError(HttpChainError):
     """Error importing or calling a user-supplied function."""
 
 
-# Matches "[module.path:]function_name". The module path, when present, must be a
+# Matches "module.path:function_name". The module path is REQUIRED and must be a
 # well-formed dotted path: identifier segments joined by single dots, with no
 # leading, trailing, or doubled dots (so "a..b:f" and "mod.:f" are rejected at
 # validation instead of failing later at import time). The function part is a
-# single identifier.
-NAME_PATTERN = re.compile(r"^(?:(?P<module>[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*):)?(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$")
+# single identifier. This is the single grammar shared with the models'
+# FunctionImportName validator, so a bare name (no module) now fails at
+# validation/collection instead of only at runtime import.
+NAME_PATTERN = re.compile(r"^(?P<module>[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*):(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$")
 
 
 def import_function(name: str) -> Callable[..., Any]:
@@ -55,13 +57,14 @@ def import_function(name: str) -> Callable[..., Any]:
     """
     match = NAME_PATTERN.match(name)
     if not match:
+        # Keep the actionable hint for the most common mistake — a bare
+        # function name without its module path.
+        if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", name):
+            raise UserFunctionError(f"Module path is required: use 'module:{name}' format instead of '{name}'")
         raise UserFunctionError(f"Invalid function name format: {name}")
 
     module_path = match.group("module")
     function_name = match.group("function")
-
-    if not module_path:
-        raise UserFunctionError(f"Module path is required: use 'module:{function_name}' format instead of '{function_name}'")
 
     try:
         module = importlib.import_module(module_path)

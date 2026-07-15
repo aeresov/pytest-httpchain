@@ -26,10 +26,22 @@ class TestVerifyStatus:
         assert verify.status is None
 
     def test_status_integer(self):
-        """Test status with a plain integer value (coerced to HTTPStatus)."""
+        """Test status with a plain integer value (compares equal to the enum)."""
         verify = Verify(status=200)
         assert verify.status == 200
-        assert verify.status is HTTPStatus.OK
+        assert verify.status == HTTPStatus.OK
+
+    def test_status_nonstandard_codes_accepted(self):
+        """Any int in 100-599 is a valid assertion target (nginx 499, 599, vendor codes)."""
+        for code in [499, 599, 418, 425]:
+            verify = Verify(status=code)
+            assert verify.status == code
+
+    def test_status_out_of_range_rejected(self):
+        """Ints outside the HTTP status range are rejected."""
+        for bad in [99, 600, 0, -200]:
+            with pytest.raises(ValidationError):
+                Verify(status=bad)
 
     def test_status_http_status(self):
         """Test status with HTTPStatus enum."""

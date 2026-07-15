@@ -25,6 +25,13 @@ class TestErrorHandling:
         with pytest.raises(ReferenceResolverError, match="Failed to load JSON"):
             load_json(json_file)
 
+    def test_duplicate_key_rejected(self, datadir):
+        """A duplicate JSON object key errors instead of silently keeping the
+        last value (which in scenario terms silently deletes a step)."""
+        json_file = datadir / "case_duplicate_key.json"
+        with pytest.raises(ReferenceResolverError, match="Duplicate key 'a'"):
+            load_json(json_file)
+
     def test_invalid_json_pointer(self, datadir):
         """Test error when JSON pointer points to non-existent path"""
         json_file = datadir / "case_invalid_pointer.json"

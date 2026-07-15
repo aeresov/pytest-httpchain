@@ -40,11 +40,16 @@ Code     Severity Meaning
 022      warning  User function cannot be imported (deep)
 023      warning  Unexpected argument passed to a user function (deep)
 024      warning  Missing required argument for a user function (deep)
+025      info     Template parametrize values force collection-time resolution
 ======== ======== ==========================================================
 
-The ``02x`` codes come from *deep* validation, which is opt-in (``validate
---deep``) because it imports user modules and touches the filesystem; it never
-runs at collection time. Deep findings are always warnings.
+The ``020``–``024`` codes come from *deep* validation, which is opt-in
+(``validate --deep``) because it imports user modules and touches the
+filesystem; it never runs at collection time. Deep findings are always
+warnings.
+
+``info`` diagnostics are purely informational: they never affect validity,
+are exempt from ``--strict``, and are not warned about at collection.
 """
 
 import ast
@@ -58,7 +63,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from pytest_httpchain.jsonref import ReferenceResolverError, load_json
+from pytest_httpchain.jsonref import DuplicateKeyError, ReferenceResolverError, load_json
 from pytest_httpchain.models import (
     FunctionsSubstitution,
     JMESPathSave,
@@ -75,12 +80,13 @@ from pytest_httpchain.models import (
     Verify,
     VerifyStep,
     check_json_schema,
+    parametrize_values_contain_template,
 )
 from pytest_httpchain.templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN, is_complete_template
 from pytest_httpchain.userfunc import UserFunctionError, import_function
 from pytest_httpchain.utils import make_marker
 
-Severity = Literal["error", "warning"]
+Severity = Literal["error", "warning", "info"]
 
 
 class DiagnosticCode:
@@ -112,6 +118,7 @@ class DiagnosticCode:
     IMPORT_FAILED = "HTTPCHAIN022"
     UNKNOWN_ARG = "HTTPCHAIN023"
     MISSING_ARG = "HTTPCHAIN024"
+    PARAMETRIZE_COLLECTION_RESOLUTION = "HTTPCHAIN025"
 
 
 class Diagnostic(BaseModel):
@@ -574,24 +581,37 @@ def _literal_path(value: Any) -> Path | None:
     return None
 
 
-def _check_path_value(value: Any, location: str) -> list[Diagnostic]:
+def _resolve_against(path: Path, base_dir: Path | None) -> Path:
+    """Resolve a relative dialect path against the scenario file's directory.
+
+    Mirrors the runtime rule (``Carrier._resolve_scenario_path``): relative
+    paths are scenario-file-relative — matching ``$ref`` — not CWD-relative.
+    ``base_dir=None`` (no scenario file context) falls back to CWD behavior.
+    """
+    if path.is_absolute() or base_dir is None:
+        return path
+    return base_dir / path
+
+
+def _check_path_value(value: Any, location: str, base_dir: Path | None = None) -> list[Diagnostic]:
     """Existence check for a literal path (or tuple/list of them)."""
     if isinstance(value, tuple | list):
         out: list[Diagnostic] = []
         for idx, item in enumerate(value):
-            out += _check_path_value(item, f"{location}[{idx}]")
+            out += _check_path_value(item, f"{location}[{idx}]", base_dir)
         return out
     path = _literal_path(value)
-    if path is not None and not path.exists():
+    if path is not None and not _resolve_against(path, base_dir).exists():
         return [_diag(DiagnosticCode.REFERENCED_FILE_NOT_FOUND, "warning", f"Referenced file not found: {path}", location)]
     return []
 
 
-def _check_schema_path(schema: Any, location: str) -> list[Diagnostic]:
+def _check_schema_path(schema: Any, location: str, base_dir: Path | None = None) -> list[Diagnostic]:
     """Existence + validity check for a literal JSON-schema file path."""
     path = _literal_path(schema)
     if path is None:
         return []
+    path = _resolve_against(path, base_dir)
     if not path.exists():
         return [_diag(DiagnosticCode.REFERENCED_FILE_NOT_FOUND, "warning", f"Schema file not found: {path}", location)]
     try:
@@ -605,24 +625,28 @@ def _check_schema_path(schema: Any, location: str) -> list[Diagnostic]:
     return []
 
 
-def _file_diagnostics(scenario: Scenario) -> list[Diagnostic]:
-    """Check every literal filesystem path referenced by the scenario."""
+def _file_diagnostics(scenario: Scenario, base_dir: Path | None = None) -> list[Diagnostic]:
+    """Check every literal filesystem path referenced by the scenario.
+
+    ``base_dir`` is the scenario file's directory: relative paths resolve
+    against it, matching the runtime behavior."""
     diagnostics: list[Diagnostic] = []
-    diagnostics += _check_path_value(getattr(scenario.ssl, "cert", None), "ssl.cert")
+    diagnostics += _check_path_value(getattr(scenario.ssl, "cert", None), "ssl.cert", base_dir)
+    diagnostics += _check_path_value(getattr(scenario.ssl, "verify", None), "ssl.verify", base_dir)
 
     for i, stage in enumerate(scenario.stages):
         body = stage.request.body
         if body is not None:
-            diagnostics += _check_path_value(getattr(body, "binary", None), f"stages[{i}].request.body.binary")
+            diagnostics += _check_path_value(getattr(body, "binary", None), f"stages[{i}].request.body.binary", base_dir)
             files = getattr(body, "files", None)
             if isinstance(files, dict):
                 for field, file_path in files.items():
-                    diagnostics += _check_path_value(file_path, f"stages[{i}].request.body.files.{field}")
+                    diagnostics += _check_path_value(file_path, f"stages[{i}].request.body.files.{field}", base_dir)
 
         for k, step in enumerate(stage.response):
             verify = getattr(step, "verify", None)
             if verify is not None:
-                diagnostics += _check_schema_path(verify.body.schema, f"stages[{i}].response[{k}].verify.body.schema")
+                diagnostics += _check_schema_path(verify.body.schema, f"stages[{i}].response[{k}].verify.body.schema", base_dir)
 
     return diagnostics
 
@@ -726,15 +750,16 @@ def _function_diagnostics(scenario: Scenario) -> list[Diagnostic]:
     return diagnostics
 
 
-def check_scenario_deep(scenario: Scenario, syspaths: list[Path] | None = None) -> list[Diagnostic]:
+def check_scenario_deep(scenario: Scenario, syspaths: list[Path] | None = None, scenario_dir: Path | None = None) -> list[Diagnostic]:
     """Opt-in deep checks: referenced-file existence, user-function import
     resolution, and call-signature compatibility.
 
     Imports user modules (their top-level code runs), so this is only invoked by
     ``validate --deep`` — never at collection time. ``syspaths`` (and the current
     working directory) are temporarily prepended to ``sys.path`` so user modules
-    resolve the same way they would under pytest."""
-    diagnostics = _file_diagnostics(scenario)
+    resolve the same way they would under pytest. ``scenario_dir`` is the base
+    for relative referenced-file paths, matching the runtime rule."""
+    diagnostics = _file_diagnostics(scenario, scenario_dir)
 
     saved_path = list(sys.path)
     try:
@@ -853,9 +878,10 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
             )
         )
 
-    # Scenario-level templates (substitutions/auth/ssl) resolve once at class
-    # creation (carrier.create_test_class), before any fixture exists — a fixture
-    # reference there is a guaranteed collection-time crash.
+    # Scenario-level templates (substitutions/auth/ssl) resolve once per
+    # scenario (carrier's lazy initialization, or at collection when stage
+    # parametrize values reference them) against a context that deliberately
+    # excludes fixture values — a fixture reference there is a guaranteed crash.
     for key in ("substitutions", "auth", "ssl"):
         scenario_level_refs = extract_template_variables(test_data.get(key))
         fixture_refs = scenario_level_refs & set(fixtures)
@@ -864,21 +890,21 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
                 _diag(
                     DiagnosticCode.FIXTURE_IN_SCENARIO_TEMPLATE,
                     "error",
-                    f"Fixtures referenced in scenario-level '{key}' templates: {sorted(fixture_refs)} (scenario-level templates resolve at collection time, before fixtures exist)",
+                    f"Fixtures referenced in scenario-level '{key}' templates: {sorted(fixture_refs)} (the scenario-level context never includes fixture values)",
                     location=key,
                 )
             )
-        # Beyond fixtures, scenario-level templates resolve at collection against
-        # only the scenario substitutions (no stage vars, no saved values). A
-        # reference to anything else is a guaranteed collection-time crash, so flag
-        # it as an error (fixtures are reported separately above).
+        # Beyond fixtures, scenario-level templates resolve against only the
+        # scenario substitutions (no stage vars, no saved values). A reference
+        # to anything else is a guaranteed crash at scenario initialization, so
+        # flag it as an error (fixtures are reported separately above).
         undefined_refs = scenario_level_refs - set(fixtures) - scenario_sub_names
         if undefined_refs:
             diagnostics.append(
                 _diag(
                     DiagnosticCode.SCENARIO_UNDEFINED_VAR,
                     "error",
-                    f"Undefined variable(s) in scenario-level '{key}' templates: {sorted(undefined_refs)} (these resolve at collection time against only scenario substitutions)",
+                    f"Undefined variable(s) in scenario-level '{key}' templates: {sorted(undefined_refs)} (resolved against only scenario substitutions, before any stage runs)",
                     location=key,
                 )
             )
@@ -893,6 +919,24 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
     diagnostics.extend(_verify_diagnostics(scenario))
 
     diagnostics.extend(_marker_diagnostics(scenario))
+
+    # Phase visibility: template-bearing parametrize VALUES opt the scenario into
+    # collection-time resolution of scenario substitutions (pytest needs concrete
+    # parameter values to generate test items) — the one exception to lazy,
+    # execution-time scenario initialization. Surface that as an info diagnostic
+    # so the timing is discoverable exactly when a scenario triggers it. Uses the
+    # same predicate as the carrier, so validator and runtime agree by construction.
+    for i, stage in enumerate(scenario.stages):
+        if parametrize_values_contain_template(stage.parametrize):
+            diagnostics.append(
+                _diag(
+                    DiagnosticCode.PARAMETRIZE_COLLECTION_RESOLUTION,
+                    "info",
+                    f"Stage '{stage.name}' has template parametrize values: scenario-level substitutions for this scenario "
+                    f"resolve at collection time (pytest needs concrete parameter values), including any user functions they call",
+                    location=f"stages[{i}].parametrize",
+                )
+            )
 
     scenario_info = ScenarioInfo(
         num_stages=len(scenario.stages),
@@ -985,10 +1029,13 @@ def validate_scenario(
         )
     except ReferenceResolverError as e:
         # The resolver wraps a plain JSON syntax error as a ReferenceResolverError
-        # (chaining the JSONDecodeError as __cause__). Report those under the
-        # accurate "Invalid JSON syntax" code rather than the $ref-flavored one,
-        # which would mislead when no reference is involved.
-        if isinstance(e.__cause__, json.JSONDecodeError):
+        # (chaining the JSONDecodeError as __cause__), and raises DuplicateKeyError
+        # for a duplicated object key. Both are JSON *content* problems — report
+        # them under the accurate "Invalid JSON syntax" code rather than the
+        # $ref-flavored one, which would mislead when no reference is involved.
+        if isinstance(e, DuplicateKeyError):
+            diagnostics.append(_diag(DiagnosticCode.INVALID_JSON, "error", f"Invalid JSON: {e}"))
+        elif isinstance(e.__cause__, json.JSONDecodeError):
             diagnostics.append(_diag(DiagnosticCode.INVALID_JSON, "error", f"Invalid JSON syntax: {e.__cause__}"))
         else:
             diagnostics.append(_diag(DiagnosticCode.REF_ERROR, "error", f"JSON reference resolution error: {e}"))
@@ -1012,6 +1059,6 @@ def validate_scenario(
     diagnostics.extend(semantic_diagnostics)
 
     if deep:
-        diagnostics.extend(check_scenario_deep(scenario, syspaths=syspaths))
+        diagnostics.extend(check_scenario_deep(scenario, syspaths=syspaths, scenario_dir=path.parent))
 
     return _result(diagnostics, scenario_info)

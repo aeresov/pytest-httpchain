@@ -53,6 +53,7 @@ from .entities import (
     Verify,
     VerifyStep,
     XmlBody,
+    parametrize_values_contain_template,
 )
 from .types import check_json_schema
 
@@ -98,4 +99,5 @@ __all__ = [
     "UserFunctionKwargs",
     "SSLConfig",
     "check_json_schema",
+    "parametrize_values_contain_template",
 ]

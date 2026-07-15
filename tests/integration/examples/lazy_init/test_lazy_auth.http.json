@@ -1,0 +1,19 @@
+{
+    "auth": "sentinel:auth",
+    "stages": [
+        {
+            "name": "only_stage",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

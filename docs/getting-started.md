@@ -20,24 +20,28 @@ Configuration options can be set in `pytest.ini` or `pyproject.toml` under `[too
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `suffix` | `http` | File suffix for test discovery. Files must match `test_<name>.<suffix>.json` |
-| `ref_parent_traversal_depth` | `3` | Maximum parent directory traversals allowed in `$include`/`$merge`/`$ref` paths |
-| `max_comprehension_length` | `50000` | Maximum length for list/dict comprehensions in template expressions |
-| `max_parallel_iterations` | `10000` | Maximum number of parallel iterations (`repeat`/`foreach`) allowed per stage |
+| `httpchain_suffix` | `http` | File suffix for test discovery. Files must match `test_<name>.<suffix>.json` |
+| `httpchain_ref_parent_traversal_depth` | `3` | Maximum parent directory traversals allowed in `$include`/`$merge`/`$ref` paths |
+| `httpchain_max_comprehension_length` | `50000` | Maximum length for list/dict comprehensions in template expressions |
+| `httpchain_max_parallel_iterations` | `10000` | Maximum number of parallel iterations (`repeat`/`foreach`) allowed per stage |
+
+The pre-0.10 un-prefixed names (`suffix`, `ref_parent_traversal_depth`, ...) are
+still accepted as deprecated aliases and will be removed in 0.11; when both
+spellings are set, the `httpchain_`-prefixed one wins.
 
 Example `pyproject.toml`:
 
 ```toml
 [tool.pytest.ini_options]
-suffix = "http"
-ref_parent_traversal_depth = 3
-max_comprehension_length = 50000
-max_parallel_iterations = 10000
+httpchain_suffix = "http"
+httpchain_ref_parent_traversal_depth = 3
+httpchain_max_comprehension_length = 50000
+httpchain_max_parallel_iterations = 10000
 ```
 
 ### HAR export
 
-Pass `--output-dir DIR` on the pytest command line to write an [HAR](http://www.softwareishard.com/blog/har-12-spec/) file capturing the HTTP request/response of each test's last stage:
+Pass `--httpchain-output-dir DIR` (deprecated alias: `--output-dir`) on the pytest command line to write an [HAR](http://www.softwareishard.com/blog/har-12-spec/) file capturing the HTTP request/response of each test's last stage:
 
 ```bash
 pytest --output-dir ./har-output

@@ -14,10 +14,12 @@ Example:
 
 from .exceptions import TemplatesError
 from .expressions import TEMPLATE_PATTERN, extract_template_expression, is_complete_template
-from .substitution import TEMPLATE_BUILTINS, walk
+from .substitution import TEMPLATE_BUILTINS, contains_template, set_max_comprehension_length, walk
 
 __all__ = [
     "walk",
+    "contains_template",
+    "set_max_comprehension_length",
     "is_complete_template",
     "extract_template_expression",
     "TEMPLATE_PATTERN",

@@ -1,4 +1,4 @@
-"""Helper functions for userfunc tests, imported via '_helpers:func_name'."""
+"""Helper functions for userfunc tests, imported via 'userfunc_test_helpers:func_name'."""
 
 from pytest_httpchain.userfunc import UserFunctionError
 

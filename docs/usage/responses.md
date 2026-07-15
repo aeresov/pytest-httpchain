@@ -188,12 +188,12 @@ External schema file:
 }
 ```
 
-A relative schema path is **not** resolved against the scenario file's location.
-It is resolved against the current working directory — the directory pytest was
-launched from — so `"./schemas/user.json"` looks for `schemas/user.json` under
-that directory, regardless of where the test file lives. To avoid surprises when
-tests are run from a different directory, use an absolute path (for example one
-built from a fixture) or run pytest from a consistent project root.
+A relative schema path is resolved against the **scenario file's directory** —
+the same rule as `$ref`/`$include` — so `"./schemas/user.json"` looks for
+`schemas/user.json` next to the test file, regardless of where pytest was
+launched from. The same rule applies to every file path in the dialect:
+`body.binary`, `body.files` values, and `ssl.cert`/`ssl.verify`. Absolute paths
+pass through unchanged.
 
 ### User Function Verification
 

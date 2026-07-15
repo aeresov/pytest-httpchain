@@ -22,15 +22,15 @@ class TestCallFunctionBasic:
         assert result == '{"c": 3}'
 
     def test_call_no_args(self):
-        result = call_function("_helpers:helper_no_args")
+        result = call_function("userfunc_test_helpers:helper_no_args")
         assert result == "helper_result"
 
     def test_call_helper_function(self):
-        result = call_function("_helpers:helper_add", 10, 20)
+        result = call_function("userfunc_test_helpers:helper_add", 10, 20)
         assert result == 30
 
     def test_call_helper_with_kwargs(self):
-        result = call_function("_helpers:helper_with_kwargs", name="pytest")
+        result = call_function("userfunc_test_helpers:helper_with_kwargs", name="pytest")
         assert result == "hello, pytest"
 
 
@@ -47,7 +47,7 @@ class TestCallFunctionErrors:
 
     def test_wraps_runtime_error(self):
         with pytest.raises(UserFunctionError, match="Error calling function") as exc_info:
-            call_function("_helpers:failing_function")
+            call_function("userfunc_test_helpers:failing_function")
 
         assert exc_info.value.__cause__ is not None
         assert isinstance(exc_info.value.__cause__, ValueError)
@@ -58,11 +58,11 @@ class TestCallFunctionErrors:
 
     def test_wraps_type_error_wrong_args(self):
         with pytest.raises(UserFunctionError, match="Error calling function"):
-            call_function("_helpers:needs_two_args", 1)
+            call_function("userfunc_test_helpers:needs_two_args", 1)
 
     def test_preserves_exception_chain(self):
         with pytest.raises(UserFunctionError) as exc_info:
-            call_function("_helpers:raises_key_error")
+            call_function("userfunc_test_helpers:raises_key_error")
 
         assert isinstance(exc_info.value.__cause__, KeyError)
 
@@ -71,6 +71,6 @@ class TestCallFunctionErrors:
         # not be double-wrapped in another "Error calling function" UserFunctionError
         # (mirrors wrap_function's behavior).
         with pytest.raises(UserFunctionError, match="custom error") as exc_info:
-            call_function("_helpers:raises_user_error")
+            call_function("userfunc_test_helpers:raises_user_error")
 
         assert "Error calling function" not in str(exc_info.value)

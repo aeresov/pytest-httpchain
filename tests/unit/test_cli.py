@@ -201,7 +201,10 @@ def test_schema_rejects_type_typos_in_template_fields():
 
     # type-mismatched non-template strings are now flagged
     assert not v.is_valid(req(timeout="abc"))
-    assert not v.is_valid(req(method="FOOBAR"))
+    # any RFC 9110 token is a legal method since the widening, so "FOOBAR" is
+    # valid; only non-token strings (spaces, separators) are flagged
+    assert v.is_valid(req(method="FOOBAR"))
+    assert not v.is_valid(req(method="FOO BAR"))
     assert not v.is_valid(verify(status="not-a-status"))
 
     # templates remain valid

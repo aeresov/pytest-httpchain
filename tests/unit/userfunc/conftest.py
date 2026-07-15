@@ -1,10 +1,17 @@
 """Test fixtures for the userfunc tests."""
 
-import sys
 from pathlib import Path
 
-# Add tests directory to sys.path so test helper modules can be imported
-# via importlib.import_module (e.g., "_helpers:func_name")
-_tests_dir = Path(__file__).parent
-if str(_tests_dir) not in sys.path:
-    sys.path.insert(0, str(_tests_dir))
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _helpers_on_syspath(monkeypatch):
+    """Make this directory importable so tests can load helper modules via
+    ``import_function("userfunc_test_helpers:func_name")``.
+
+    An autouse fixture with ``monkeypatch.syspath_prepend`` (scoped, auto-undone)
+    instead of a module-level ``sys.path.insert``, so the path does not leak
+    into the rest of a full-suite run.
+    """
+    monkeypatch.syspath_prepend(str(Path(__file__).parent))

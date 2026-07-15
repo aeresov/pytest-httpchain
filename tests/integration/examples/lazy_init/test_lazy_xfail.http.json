@@ -1,0 +1,35 @@
+{
+    "auth": "sentinel:broken_auth",
+    "stages": [
+        {
+            "name": "first",
+            "marks": ["xfail"],
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "second",
+            "marks": ["xfail"],
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -180,8 +180,9 @@ def test_scenario_fixture_shadows_save_warns(datadir):
 
 
 def test_fixture_in_scenario_level_template_is_error(datadir):
-    # Scenario-level substitutions/auth/ssl resolve at collection time, before
-    # any fixture exists — referencing one there would crash collection.
+    # Scenario-level substitutions/auth/ssl resolve against a context that never
+    # includes fixture values — referencing one there is a guaranteed crash at
+    # scenario initialization.
     r = validate_scenario(datadir / "scenario_template_fixture_ref.json")
     assert r.valid is False
     assert DiagnosticCode.FIXTURE_IN_SCENARIO_TEMPLATE in _codes(r)
@@ -318,9 +319,10 @@ def test_comprehension_loop_vars_not_flagged(datadir):
 
 
 def test_parametrize_value_referencing_stage_scope_warns(datadir):
-    """parametrize VALUE expressions are resolved at collection time against
-    scenario-level substitutions ONLY (carrier.create_test_class). Referencing a
-    stage-level substitution there fails at runtime, so it must be flagged."""
+    """parametrize VALUE expressions are resolved at collection time (pytest
+    needs concrete parameter values) against scenario-level substitutions ONLY
+    (carrier.create_test_class). Referencing a stage-level substitution there
+    fails, so it must be flagged."""
     r = validate_scenario(datadir / "parametrize_value_stage_scope.json")
     assert any(d.code == DiagnosticCode.UNDEFINED_VAR and "stage_var" in d.message for d in r.diagnostics), r.diagnostics
 
@@ -329,6 +331,37 @@ def test_parametrize_value_referencing_scenario_scope_ok(datadir):
     """A parametrize value referencing a scenario-level substitution is valid."""
     r = validate_scenario(datadir / "parametrize_value_scenario_scope.json")
     assert not any("sv" in w for w in r.warnings), r.warnings
+
+
+def test_parametrize_template_values_emit_phase_info(datadir):
+    """Template parametrize VALUES opt the scenario into collection-time
+    substitution resolution — surfaced as the HTTPCHAIN025 info diagnostic,
+    which must not affect validity or the warning list (exempt from --strict)."""
+    r = validate_scenario(datadir / "parametrize_template_values_info.json")
+    infos = [d for d in r.diagnostics if d.code == DiagnosticCode.PARAMETRIZE_COLLECTION_RESOLUTION]
+    assert len(infos) == 1, r.diagnostics
+    assert infos[0].severity == "info"
+    assert infos[0].location == "stages[0].parametrize"
+    assert r.valid is True
+    assert r.warnings == []
+
+
+def test_duplicate_json_key_fails_validation(datadir):
+    """A duplicated organizational key (dict-form response steps) is an error
+    at load, not a silent last-wins that deletes the first verify step. It is
+    reported as a JSON-content problem (HTTPCHAIN014), not a $ref error."""
+    r = validate_scenario(datadir / "duplicate_json_key.json")
+    assert r.valid is False
+    assert any("Duplicate key 'check'" in e for e in r.errors), r.errors
+    assert any(d.code == DiagnosticCode.INVALID_JSON for d in r.diagnostics), r.diagnostics
+    assert not any(d.code == DiagnosticCode.REF_ERROR for d in r.diagnostics), r.diagnostics
+
+
+def test_parametrize_template_ids_do_not_emit_phase_info(datadir):
+    """`ids` are never substituted, so a template-looking string there must not
+    trigger the HTTPCHAIN025 collection-time-resolution info."""
+    r = validate_scenario(datadir / "parametrize_ids_template_no_info.json")
+    assert not any(d.code == DiagnosticCode.PARAMETRIZE_COLLECTION_RESOLUTION for d in r.diagnostics), r.diagnostics
 
 
 def test_foreach_value_referencing_stage_scope_ok(datadir):
@@ -401,6 +434,14 @@ def test_deep_binary_file_exists_ok(datadir):
 
 def test_deep_binary_file_missing_warns(datadir):
     r = validate_scenario(datadir / "deep_binary_missing.json", deep=True)
+    assert r.valid is True
+    assert DiagnosticCode.REFERENCED_FILE_NOT_FOUND in _codes(r)
+
+
+def test_deep_ssl_verify_ca_bundle_missing_warns(datadir):
+    """A Path-valued ssl.verify (CA bundle) gets the same deep existence check
+    as ssl.cert — the runtime resolves it scenario-relatively too."""
+    r = validate_scenario(datadir / "deep_ssl_verify_missing.json", deep=True)
     assert r.valid is True
     assert DiagnosticCode.REFERENCED_FILE_NOT_FOUND in _codes(r)
 

@@ -24,6 +24,7 @@ src/pytest_httpchain/templates/
 ```python
 from pytest_httpchain.templates import (
     walk,
+    contains_template,
     is_complete_template,
     extract_template_expression,
     TEMPLATE_PATTERN,
@@ -33,6 +34,12 @@ from pytest_httpchain.templates import (
 
 # Recursively substitute template expressions
 result = walk(obj, context)
+
+# Check whether any {{ }} occurs anywhere in a nested structure
+# (str/dict/list/tuple/BaseModel/SimpleNamespace) — carrier uses this to decide
+# whether stage parametrization forces scenario substitutions to resolve at
+# collection time
+contains_template({"a": ["{{ x }}"]})  # True
 
 # Check if string is a complete template
 is_complete_template("{{ value }}")  # True

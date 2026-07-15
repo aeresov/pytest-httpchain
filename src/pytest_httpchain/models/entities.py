@@ -37,6 +37,7 @@ from pytest_httpchain.models.types import (
     Base64String,
     FunctionImportName,
     GraphQLQuery,
+    HttpMethodToken,
     JMESPathExpression,
     JSONSchemaInline,
     NamespaceFromDict,
@@ -45,19 +46,23 @@ from pytest_httpchain.models.types import (
     PartialTemplateStr,
     RegexPattern,
     SerializablePath,
+    StatusCode,
     TemplateExpression,
     TemplateExpressionOnly,
     VariableName,
     XMLString,
     convert_namespace_to_dict,
 )
+from pytest_httpchain.templates import contains_template
 
 
-def _create_discriminator(class_to_tag: dict[str, str]) -> Callable[[Any], str]:
+def _create_discriminator(class_to_tag: dict[type, str]) -> Callable[[Any], str]:
     """Factory function to create Pydantic discriminator functions.
 
     Args:
-        class_to_tag: Mapping from class names to discriminator tags.
+        class_to_tag: Mapping from model classes to discriminator tags. Keyed
+            by the class OBJECTS (not name strings) so a model rename is caught
+            statically instead of breaking re-validation at runtime.
 
     Returns:
         A discriminator function that can be used with Pydantic's Discriminator.
@@ -86,7 +91,7 @@ def _create_discriminator(class_to_tag: dict[str, str]) -> Callable[[Any], str]:
             # invalid tag so the validation error names it.
             return next(iter(v), "(empty object)")  # ty: ignore[invalid-return-type]
 
-        tag = class_to_tag.get(v.__class__.__name__)
+        tag = class_to_tag.get(type(v))
         if tag:
             return tag
 
@@ -294,14 +299,14 @@ class GraphQLBody(StrictModel):
 
 get_request_body_discriminator = _create_discriminator(
     {
-        "JsonBody": "json",
-        "XmlBody": "xml",
-        "FormBody": "form",
-        "TextBody": "text",
-        "Base64Body": "base64",
-        "BinaryBody": "binary",
-        "FilesBody": "files",
-        "GraphQLBody": "graphql",
+        JsonBody: "json",
+        XmlBody: "xml",
+        FormBody: "form",
+        TextBody: "text",
+        Base64Body: "base64",
+        BinaryBody: "binary",
+        FilesBody: "files",
+        GraphQLBody: "graphql",
     },
 )
 
@@ -321,7 +326,10 @@ RequestBody = Annotated[
 
 class Request(Authenticated):
     url: HttpUrl | PartialTemplateStr = Field(description="Request URL (may be a template expression).")
-    method: HTTPMethod | TemplateExpressionOnly = Field(default=HTTPMethod.GET, description="HTTP method.")
+    method: HTTPMethod | HttpMethodToken | TemplateExpressionOnly = Field(
+        default=HTTPMethod.GET,
+        description="HTTP method: a standard verb (autocompleted) or any RFC 9110 token (e.g. PROPFIND, PURGE).",
+    )
     params: dict[str, Any] = Field(default_factory=dict, description="URL query parameters.")
     headers: dict[str, str] = Field(default_factory=dict, description="HTTP request headers.")
     body: RequestBody | None = Field(default=None, description="Request body configuration.")
@@ -339,8 +347,8 @@ class FunctionsSubstitution(Descripted):
 
 get_substitution_discriminator = _create_discriminator(
     {
-        "VarsSubstitution": "vars",
-        "FunctionsSubstitution": "functions",
+        VarsSubstitution: "vars",
+        FunctionsSubstitution: "functions",
     },
 )
 
@@ -379,9 +387,9 @@ class UserFunctionsSave(Descripted):
 
 get_save_discriminator = _create_discriminator(
     {
-        "JMESPathSave": "jmespath",
-        "SubstitutionsSave": "substitutions",
-        "UserFunctionsSave": "user_functions",
+        JMESPathSave: "jmespath",
+        SubstitutionsSave: "substitutions",
+        UserFunctionsSave: "user_functions",
     },
 )
 
@@ -403,7 +411,10 @@ with _suppress_field_shadow_warning("schema"):
 
 
 class Verify(Descripted):
-    status: HTTPStatus | None | NumberOrTemplate = Field(default=None, description="Expected HTTP status code.")
+    status: HTTPStatus | StatusCode | None | NumberOrTemplate = Field(
+        default=None,
+        description="Expected HTTP status code: a standard code (autocompleted) or any integer 100-599 (e.g. 499).",
+    )
     headers: dict[str, str] = Field(default_factory=dict, description="Expected response headers (exact match per key).")
     expressions: list[Any] = Field(
         default_factory=list,
@@ -432,7 +443,7 @@ class VerifyStep(StrictModel):
 
 
 get_response_step_discriminator = _create_discriminator(
-    {"SaveStep": "save", "VerifyStep": "verify"},
+    {SaveStep: "save", VerifyStep: "verify"},
 )
 
 
@@ -496,7 +507,7 @@ class CombinationsParameter(StrictModel):
 
 
 get_parameter_step_discriminator = _create_discriminator(
-    {"IndividualParameter": "individual", "CombinationsParameter": "combinations"},
+    {IndividualParameter: "individual", CombinationsParameter: "combinations"},
 )
 
 
@@ -507,6 +518,29 @@ Parameter = Annotated[
 
 
 Parameters = list[Parameter]
+
+
+def parametrize_values_contain_template(parametrize: Parameters | None) -> bool:
+    """True if any parametrize VALUE contains a ``{{ }}`` template.
+
+    Only the values are inspected — ``ids`` are never walked through the
+    template engine, so a template-looking string there must not count.
+
+    Single source of truth shared by the carrier (to decide whether scenario
+    substitutions must resolve at collection time, since pytest needs concrete
+    parameter values to generate test items) and the validator (which surfaces
+    that decision as the HTTPCHAIN025 info diagnostic) — keeping the runtime
+    behavior and the static analysis in agreement by construction.
+    """
+    for step in parametrize or []:
+        match step:
+            case IndividualParameter(individual=individual):
+                if contains_template(individual):
+                    return True
+            case CombinationsParameter(combinations=combinations):
+                if contains_template(combinations):
+                    return True
+    return False
 
 
 class ParallelConfigBase(StrictModel):
@@ -544,8 +578,8 @@ class ParallelForeachConfig(ParallelConfigBase):
 
 get_parallel_config_discriminator = _create_discriminator(
     {
-        "ParallelRepeatConfig": "repeat",
-        "ParallelForeachConfig": "foreach",
+        ParallelRepeatConfig: "repeat",
+        ParallelForeachConfig: "foreach",
     },
 )
 

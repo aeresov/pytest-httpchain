@@ -24,7 +24,7 @@ from typing import Annotated, Any
 import graphql
 import jmespath
 import jsonschema
-from pydantic import AfterValidator, BeforeValidator, JsonValue, PlainSerializer, WithJsonSchema
+from pydantic import AfterValidator, BeforeValidator, Field, JsonValue, PlainSerializer, WithJsonSchema
 
 from pytest_httpchain.templates import TEMPLATE_PATTERN, is_complete_template
 from pytest_httpchain.userfunc import NAME_PATTERN
@@ -136,9 +136,13 @@ def validate_partial_template_str(v: str) -> str:
 def validate_function_import_name(v: str) -> str:
     """Validate function import name format.
 
-    Format: [module.path:]function_name
+    Format: module.path:function_name — the module path is required, matching
+    the grammar the importer accepts, so a bare name fails here (at
+    validation/collection) instead of only at runtime import.
     """
     if not NAME_PATTERN.match(v):
+        if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", v):
+            raise ValueError(f"Module path is required: use 'module:{v}' format instead of '{v}'")
         raise ValueError(f"Invalid function name format: {v}")
     return v
 
@@ -211,6 +215,32 @@ NumberOrTemplate = Annotated[
     AfterValidator(validate_template_expression),
     WithJsonSchema({"type": "string", "pattern": _NUMBER_OR_TEMPLATE_PATTERN}),
 ]
+
+# Any RFC 9110 token is a legal HTTP method (httpx sends arbitrary methods), so
+# non-enum verbs — WebDAV's PROPFIND/REPORT, cache PURGE, vendor methods — are
+# representable. Sits AFTER the stdlib ``HTTPMethod`` branch in unions so the
+# common verbs still normalize to the enum (and editors keep its autocomplete).
+_HTTP_METHOD_TOKEN_PATTERN = r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$"
+
+
+def validate_http_method_token(v: str) -> str:
+    """Validate an HTTP method as an RFC 9110 token."""
+    if not re.fullmatch(_HTTP_METHOD_TOKEN_PATTERN, v):
+        raise ValueError(f"Invalid HTTP method token: {v!r}")
+    return v
+
+
+HttpMethodToken = Annotated[
+    str,
+    AfterValidator(validate_http_method_token),
+    WithJsonSchema({"type": "string", "pattern": _HTTP_METHOD_TOKEN_PATTERN}),
+]
+
+# Any int in the registered HTTP status range, so nonstandard codes (nginx 499,
+# 599, vendor codes) can be asserted. Sits AFTER the stdlib ``HTTPStatus``
+# branch in unions so standard codes still normalize to the enum.
+StatusCode = Annotated[int, Field(ge=100, le=599)]
+
 Base64String = Annotated[str, AfterValidator(validate_base64)]
 NamespaceFromDict = Annotated[Any, AfterValidator(convert_dict_to_namespace)]
 # NamespaceOrDict ACCEPTS a SimpleNamespace or a dict on input and always yields a dict.

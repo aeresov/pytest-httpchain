@@ -1,0 +1,38 @@
+{
+    "substitutions": [
+        {
+            "functions": {
+                "tok": "sentinel:token"
+            }
+        },
+        {
+            "vars": {
+                "t": "{{ tok() }}"
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "per_case",
+            "fixtures": ["server"],
+            "parametrize": [
+                {
+                    "individual": {
+                        "case_name": ["one", "two"]
+                    },
+                    "ids": ["{{ looks-like-a-template }}", "plain"]
+                }
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

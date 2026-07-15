@@ -24,16 +24,16 @@ class TestImportFromExplicitModule:
         assert func({"a": "1", "b": "2"}) in ["a=1&b=2", "b=2&a=1"]
 
     def test_import_from_test_helper(self):
-        func = import_function("_helpers:helper_add")
+        func = import_function("userfunc_test_helpers:helper_add")
         assert callable(func)
         assert func(2, 3) == 5
 
     def test_import_no_args_function(self):
-        func = import_function("_helpers:helper_no_args")
+        func = import_function("userfunc_test_helpers:helper_no_args")
         assert func() == "helper_result"
 
     def test_import_kwargs_function(self):
-        func = import_function("_helpers:helper_with_kwargs")
+        func = import_function("userfunc_test_helpers:helper_with_kwargs")
         assert func(name="world") == "hello, world"
 
 
@@ -57,7 +57,7 @@ class TestImportErrors:
 
     def test_non_callable_in_helper_raises(self):
         with pytest.raises(UserFunctionError, match="is not callable"):
-            import_function("_helpers:not_callable")
+            import_function("userfunc_test_helpers:not_callable")
 
     def test_bare_name_raises(self):
         with pytest.raises(UserFunctionError, match="Module path is required"):

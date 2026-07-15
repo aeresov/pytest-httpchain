@@ -202,13 +202,16 @@ def _make_stage(**kwargs) -> Stage:
 
 def _make_carrier_subclass(**attrs) -> type[Carrier]:
     """Fresh Carrier subclass with its own mutable state, so a test never mutates
-    the shared base-class defaults. `client` is None: teardown_class tolerates it."""
+    the shared base-class defaults. `client` is None: teardown_class tolerates it.
+    `_initialized` is True: the subclass is hand-built (no `scenario` model), so
+    the lazy scenario initialization in execute_stage must not run."""
     defaults = {
         "client": None,
         "aborted": False,
         "last_request": None,
         "last_response": None,
         "global_context": ChainMap(),
+        "_initialized": True,
         "active_context_managers": [],
         "max_parallel_iterations": 10_000,
     }
@@ -259,7 +262,10 @@ class TestParallelIterationCap:
     def test_within_cap_does_not_trip_guard(self):
         # repeat == cap is allowed (the guard is strict '>'); this run reaches the
         # HTTP layer and fails there (client is None) — proving the cap did NOT
-        # short-circuit it with the "exceeds maximum" message.
+        # short-circuit it. The failure is a clean stage failure: the request
+        # path's terminal catch-all deliberately converts ANY exception (user
+        # auth flows raise arbitrary types) into RequestError so the
+        # chain-abort machinery engages.
         carrier = _make_carrier_subclass(max_parallel_iterations=3)
         stage = _make_stage(parallel=ParallelRepeatConfig(repeat=3))
 

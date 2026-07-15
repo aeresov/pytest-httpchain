@@ -696,12 +696,16 @@
                   "$ref": "#/$defs/HTTPMethod"
                 },
                 {
+                  "pattern": "^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$",
+                  "type": "string"
+                },
+                {
                   "pattern": "^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$",
                   "type": "string"
                 }
               ],
               "default": "GET",
-              "description": "HTTP method.",
+              "description": "HTTP method: a standard verb (autocompleted) or any RFC 9110 token (e.g. PROPFIND, PURGE).",
               "title": "Method"
             },
             "params": {
@@ -1478,6 +1482,11 @@
                   "$ref": "#/$defs/HTTPStatus"
                 },
                 {
+                  "maximum": 599,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                {
                   "pattern": "(?:^\\s*\\{\\{(?P<expr>(?:(?!\\}\\}).)+)\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
                   "type": "string"
                 },
@@ -1486,7 +1495,7 @@
                 }
               ],
               "default": null,
-              "description": "Expected HTTP status code.",
+              "description": "Expected HTTP status code: a standard code (autocompleted) or any integer 100-599 (e.g. 499).",
               "title": "Status"
             },
             "headers": {

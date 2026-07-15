@@ -5,7 +5,7 @@
             "request": {
                 "url": "https://x.test/a",
                 "method": "POST",
-                "body": { "binary": "pyproject.toml" }
+                "body": { "binary": "valid_scenario.json" }
             },
             "response": [
                 { "verify": { "status": 200 } }

@@ -72,10 +72,18 @@ class TestRequestMethod:
         request = Request(url="https://example.com", method="{{ http_method }}")
         assert request.method == "{{ http_method }}"
 
-    def test_method_invalid_rejected(self):
-        """Test that invalid method is rejected."""
-        with pytest.raises(ValidationError):
-            Request(url="https://example.com", method="INVALID")
+    def test_method_any_rfc_token_accepted(self):
+        """Non-enum verbs are legal HTTP: any RFC 9110 token is accepted
+        (WebDAV PROPFIND/REPORT, cache PURGE, vendor methods)."""
+        for method in ["PROPFIND", "REPORT", "MKCALENDAR", "PURGE", "INVALID"]:
+            request = Request(url="https://example.com", method=method)
+            assert request.method == method
+
+    def test_method_non_token_rejected(self):
+        """Strings that are not RFC 9110 tokens (spaces, separators) are rejected."""
+        for bad in ["FOO BAR", "GET/POST", "", "MÉTHODE"]:
+            with pytest.raises(ValidationError):
+                Request(url="https://example.com", method=bad)
 
 
 class TestRequestPassThroughDicts:

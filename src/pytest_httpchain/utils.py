@@ -84,6 +84,11 @@ def process_substitutions(
                     result[key] = resolved_value
                     logger.info(f"Seeded {key} = {resolved_value}")
 
+            case _:
+                # New substitution variant not handled here: a plugin bug — fail
+                # loudly instead of silently seeding nothing.
+                raise RuntimeError(f"Unhandled substitution type: {type(step).__name__}")
+
     return result
 
 

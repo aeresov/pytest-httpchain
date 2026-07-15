@@ -217,7 +217,7 @@ Scenario-level fixtures are requested by every stage. A few consequences to keep
 
 -   Fixture values take precedence over previously saved variables of the same name, so don't save under a scenario fixture's name (the validator warns with `HTTPCHAIN009`).
 -   pytest scoping still applies: a function-scoped fixture is set up again for each stage. Use `class`- or `session`-scoped fixtures for state that must survive across stages.
--   Fixtures can be referenced in *stage* templates only. Scenario-level `substitutions`, `auth`, and `ssl` resolve once at collection time, before any fixture exists; the validator rejects such references (`HTTPCHAIN016`).
+-   Fixtures can be referenced in *stage* templates only. Scenario-level `substitutions`, `auth`, and `ssl` resolve once per scenario — when its first stage runs (or already at collection when stage `parametrize` values contain templates, since pytest needs concrete parameter values to collect) — against a context that deliberately excludes fixture values; the validator rejects fixture references there (`HTTPCHAIN016`).
 -   A fixture whose value is itself **callable** is treated as a factory: it is wrapped so `{{ my_fixture(...) }}` invokes it (with context-manager fixtures entered on use and cleaned up afterwards). The wrapper is a different object than the original callable, so attribute access on it (`{{ my_fixture.some_attr }}`) is not available — call it instead.
 
 ## SSL Configuration

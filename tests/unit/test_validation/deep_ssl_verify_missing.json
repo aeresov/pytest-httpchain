@@ -1,0 +1,10 @@
+{
+    "ssl": { "verify": "ca-bundel.pem" },
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

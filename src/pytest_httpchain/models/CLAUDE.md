@@ -38,8 +38,14 @@ from pytest_httpchain.models import (
     ParallelConfig, ParallelConfigBase, ParallelRepeatConfig, ParallelForeachConfig,
     # Utilities
     check_json_schema,
+    parametrize_values_contain_template,
 )
 ```
+
+`parametrize_values_contain_template(parametrize)` — True when any parametrize
+VALUE (not `ids`) contains a `{{ }}` template. Single source of truth shared by
+the carrier (decides whether scenario substitutions must resolve at collection
+time) and the validator (reports that as the `HTTPCHAIN025` info diagnostic).
 
 ## Running Tests
 

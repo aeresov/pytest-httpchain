@@ -1,0 +1,38 @@
+{
+    "substitutions": [
+        {
+            "functions": {
+                "mk_envs": "sentinel:mk_envs"
+            }
+        },
+        {
+            "vars": {
+                "envs": "{{ mk_envs() }}"
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "per_env",
+            "fixtures": ["server"],
+            "parametrize": [
+                {
+                    "individual": {
+                        "env_name": "{{ envs }}"
+                    }
+                }
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": ["{{ env_name in ['a', 'b', 'c'] }}"]
+                    }
+                }
+            ]
+        }
+    ]
+}

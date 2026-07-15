@@ -4,7 +4,7 @@
             "name": "s",
             "request": { "url": "https://x.test/a" },
             "response": [
-                { "verify": { "status": 200, "body": { "schema": "pyproject.toml" } } }
+                { "verify": { "status": 200, "body": { "schema": "not_a_schema.txt" } } }
             ]
         }
     ]

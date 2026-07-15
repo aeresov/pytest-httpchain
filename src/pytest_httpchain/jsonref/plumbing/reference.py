@@ -8,7 +8,7 @@ from typing import Any, Self
 
 from deepmerge import always_merger
 
-from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
+from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, ReferenceResolverError
 from pytest_httpchain.jsonref.plumbing.circular import CircularDependencyTracker
 from pytest_httpchain.jsonref.plumbing.path import RefPathHelper
 
@@ -16,6 +16,30 @@ REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 
 # Supported reference keys: $include/$merge (preferred, avoids VS Code conflicts) and $ref (legacy)
 REF_KEYS = ("$include", "$merge", "$ref")
+
+
+def _parse_json_rejecting_duplicates(path: Path) -> Any:
+    """Parse a JSON file, rejecting duplicate object keys.
+
+    Plain ``json.loads`` silently keeps the LAST duplicate key — in scenario
+    terms that silently deletes a step (e.g. a duplicated response-step key
+    drops a verify) and weakens the test with no diagnostic. Scenario files
+    are code; a duplicate key is an author error worth failing on.
+
+    Raised as ``DuplicateKeyError`` (with the offending key and file) in
+    this tight scope so it propagates through the callers' narrower
+    ``except (OSError, json.JSONDecodeError)`` blocks unwrapped.
+    """
+
+    def pairs_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise DuplicateKeyError(f"Duplicate key '{key}' in JSON object in {path}")
+            result[key] = value
+        return result
+
+    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs_hook)
 
 
 class ReferenceResolver:
@@ -60,7 +84,7 @@ class ReferenceResolver:
             ReferenceResolverError: If the file cannot be loaded or references cannot be resolved
         """
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = _parse_json_rejecting_duplicates(path)
 
             # Compute the effective root locally rather than mutating self.root_path,
             # so the resolver is not single-use (a second call would otherwise be
@@ -225,7 +249,7 @@ class ReferenceResolver:
 
     def _load_json_file(self, path: Path) -> dict[str, Any]:
         """Load JSON file content."""
-        return json.loads(path.read_text(encoding="utf-8"))
+        return _parse_json_rejecting_duplicates(path)
 
     def _create_child_resolver(self, root_path: Path) -> Self:
         """Create a child resolver with inherited state."""

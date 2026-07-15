@@ -77,9 +77,11 @@ class TestFunctionImportName:
     class Model(BaseModel):
         func: FunctionImportName
 
-    def test_valid_simple_function(self):
-        """Test simple function name without module."""
-        assert self.Model(func="my_function").func == "my_function"
+    def test_bare_name_rejected_with_hint(self):
+        """A module-less name fails validation with the actionable format hint
+        (previously it validated and only failed at runtime import)."""
+        with pytest.raises(ValidationError, match="Module path is required"):
+            self.Model(func="my_function")
 
     def test_valid_with_module(self):
         """Test function with module path."""

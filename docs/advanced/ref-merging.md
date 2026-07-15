@@ -284,12 +284,12 @@ A fragment file may carry its own top-level `$schema` key for editor support —
 
 ## Security: Path Traversal Limits
 
-The `ref_parent_traversal_depth` configuration limits how many `../` segments are allowed:
+The `httpchain_ref_parent_traversal_depth` configuration limits how many `../` segments are allowed:
 
 ```ini
 # pytest.ini
 [pytest]
-ref_parent_traversal_depth = 3
+httpchain_ref_parent_traversal_depth = 3
 ```
 
 With depth 3, these are valid:

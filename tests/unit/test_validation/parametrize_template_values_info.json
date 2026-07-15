@@ -1,0 +1,11 @@
+{
+    "substitutions": [ { "vars": { "envs": ["a", "b"] } } ],
+    "stages": [
+        {
+            "name": "s1",
+            "parametrize": [ { "individual": { "env": "{{ envs }}" } } ],
+            "request": { "url": "https://x.test/{{ env }}" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

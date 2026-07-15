@@ -18,7 +18,7 @@ class TestWrapFunctionBasic:
         assert callable(wrapped)
 
     def test_wrapped_multiple_calls(self):
-        wrapped = wrap_function("_helpers:helper_add")
+        wrapped = wrap_function("userfunc_test_helpers:helper_add")
         assert wrapped(1, 2) == 3
         assert wrapped(10, 20) == 30
         assert wrapped(0, 0) == 0
@@ -33,7 +33,7 @@ class TestWrapFunctionDefaultKwargs:
         assert "\n" in result
 
     def test_call_kwargs_override_default(self):
-        wrapped = wrap_function("_helpers:helper_with_kwargs", default_kwargs={"name": "default"})
+        wrapped = wrap_function("userfunc_test_helpers:helper_with_kwargs", default_kwargs={"name": "default"})
         result = wrapped(name="override")
         assert result == "hello, override"
 
@@ -86,7 +86,7 @@ class TestWrapFunctionErrors:
             wrapped()
 
     def test_runtime_error_wrapped(self):
-        wrapped = wrap_function("_helpers:always_fails")
+        wrapped = wrap_function("userfunc_test_helpers:always_fails")
 
         with pytest.raises(UserFunctionError, match="Error calling function") as exc_info:
             wrapped()
@@ -95,13 +95,13 @@ class TestWrapFunctionErrors:
         assert isinstance(exc_info.value.__cause__, RuntimeError)
 
     def test_user_function_error_preserved(self):
-        wrapped = wrap_function("_helpers:raises_user_error")
+        wrapped = wrap_function("userfunc_test_helpers:raises_user_error")
 
         with pytest.raises(UserFunctionError, match="custom error"):
             wrapped()
 
     def test_type_error_from_bad_args(self):
-        wrapped = wrap_function("_helpers:needs_three_args")
+        wrapped = wrap_function("userfunc_test_helpers:needs_three_args")
 
         with pytest.raises(UserFunctionError, match="Error calling function"):
             wrapped("only_one")

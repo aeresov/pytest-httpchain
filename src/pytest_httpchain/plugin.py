@@ -4,8 +4,10 @@ Registered as the ``pytest11`` entry point, this module wires HTTP-chain JSON
 scenarios into pytest:
 
 - ``pytest_addoption`` / ``pytest_configure`` register and validate the ini
-  options (``suffix``, ``ref_parent_traversal_depth``, ``max_comprehension_length``,
-  ``max_parallel_iterations``) and the ``--output-dir`` flag.
+  options (``httpchain_suffix``, ``httpchain_ref_parent_traversal_depth``,
+  ``httpchain_max_comprehension_length``, ``httpchain_max_parallel_iterations``,
+  plus their deprecated un-prefixed pre-0.10 aliases) and the
+  ``--httpchain-output-dir`` flag (deprecated alias ``--output-dir``).
 - ``pytest_collect_file`` matches ``test_<name>.<suffix>.json`` files and hands
   them to `JsonModule`.
 - `JsonModule.collect` loads the JSON (resolving ``$ref``), validates it
@@ -18,6 +20,7 @@ scenarios into pytest:
 """
 
 import logging
+import os
 import re
 import types
 import warnings
@@ -26,12 +29,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import simpleeval
 from pydantic import ValidationError
 
 import pytest_httpchain.jsonref
-from pytest_httpchain.constants import ConfigOptions
+from pytest_httpchain.constants import LEGACY_INI_NAMES, ConfigOptions
 from pytest_httpchain.models import Scenario
+from pytest_httpchain.templates import set_max_comprehension_length
 
 from .carrier import Carrier, create_test_class
 from .har_writer import write_har_file
@@ -84,7 +87,7 @@ class JsonModule(pytest.Module):
 
     def collect(self) -> Iterable[pytest.Item | pytest.Collector]:
         # read JSON and apply references
-        ref_parent_traversal_depth = self.config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
+        ref_parent_traversal_depth = _get_ini(self.config, ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
         root_path = Path(self.config.rootpath)
         try:
             test_data = pytest_httpchain.jsonref.load_json(
@@ -125,14 +128,17 @@ class JsonModule(pytest.Module):
             raise pytest.Collector.CollectError(f"Invalid test scenario in {self.path}:\n{detail}")
 
         # generate python test class
-        max_parallel_iterations = self.config.getini(ConfigOptions.MAX_PARALLEL_ITERATIONS)
+        max_parallel_iterations = _get_ini(self.config, ConfigOptions.MAX_PARALLEL_ITERATIONS)
         try:
-            CarrierClass = create_test_class(scenario, self.name, max_parallel_iterations=max_parallel_iterations)
+            CarrierClass = create_test_class(scenario, self.name, max_parallel_iterations=max_parallel_iterations, scenario_dir=self.path.parent)
         except Exception as e:
-            # create_test_class resolves scenario-level substitutions/ssl and may call
-            # the scenario auth user function and build the httpx client at collection
-            # time; surface any failure as a clean collection error, like the sibling
-            # load/validate paths above, instead of a raw internal traceback.
+            # create_test_class parses stage markers and — only when stage
+            # parametrize values contain templates — resolves scenario
+            # substitutions (which can execute user functions). Client/auth/ssl
+            # initialization is deferred to first stage execution
+            # (Carrier._ensure_initialized), so collection stays free of user
+            # code otherwise. Surface any failure as a clean collection error,
+            # like the sibling load/validate paths above.
             raise pytest.Collector.CollectError(f"Cannot build test class for {self.path}: {e}") from None
         # Module._getobj() defaults to importtestmodule(self.path), which would try
         # to import this .json file as a Python module and fail. Bypass it by handing
@@ -174,33 +180,53 @@ def pytest_configure_node(node) -> None:
     node.workerinput["httpchain_dist"] = node.config.getoption("dist", default="no")
 
 
+def _explicitly_set(config: pytest.Config, name: str) -> bool:
+    """True if an ini option was explicitly set — in the ini file OR via ``-o``.
+
+    ``config.inicfg`` alone is not enough: on pytest 8.x it does not include
+    ``-o``/``--override-ini`` values (pytest 9 merges them in), so relying on it
+    silently dropped CLI overrides. ``getini()`` itself applies overrides on
+    both versions; only this explicit-set detection needs the extra scan.
+    """
+    if name in config.inicfg:
+        return True
+    for override in config.getoption("override_ini", None) or []:
+        key, sep, _ = override.partition("=")
+        if sep and key.strip() == name:
+            return True
+    return False
+
+
+def _get_ini(config: pytest.Config, option: ConfigOptions) -> Any:
+    """Read an httpchain ini option, honoring its deprecated pre-0.10 alias.
+
+    Precedence: the ``httpchain_``-prefixed name when explicitly set, else the
+    legacy un-prefixed name when explicitly set, else the registered default.
+    The deprecation warning for a set legacy name is issued once, in
+    ``pytest_configure`` — not here, since collection reads run per file.
+    """
+    if _explicitly_set(config, str(option)):
+        return config.getini(option)
+    legacy = LEGACY_INI_NAMES[option]
+    if _explicitly_set(config, legacy):
+        return config.getini(legacy)
+    return config.getini(option)
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
-    parser.addini(
-        name=ConfigOptions.SUFFIX,
-        help="File suffix for HTTP test files.",
-        type="string",
-        default="http",
-    )
-    parser.addini(
-        name=ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH,
-        help="Maximum number of parent directory traversals allowed in $ref paths.",
-        type="int",
-        default=3,
-    )
-    parser.addini(
-        name=ConfigOptions.MAX_COMPREHENSION_LENGTH,
-        help="Maximum length for list/dict comprehensions in template expressions.",
-        type="int",
-        default=50000,
-    )
-    parser.addini(
-        name=ConfigOptions.MAX_PARALLEL_ITERATIONS,
-        help="Maximum number of parallel iterations allowed per stage.",
-        type="int",
-        default=10000,
-    )
+    ini_options: list[tuple[ConfigOptions, str, str, Any]] = [
+        (ConfigOptions.SUFFIX, "File suffix for HTTP test files.", "string", "http"),
+        (ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "Maximum number of parent directory traversals allowed in $ref paths.", "int", 3),
+        (ConfigOptions.MAX_COMPREHENSION_LENGTH, "Maximum length for list/dict comprehensions in template expressions.", "int", 50000),
+        (ConfigOptions.MAX_PARALLEL_ITERATIONS, "Maximum number of parallel iterations allowed per stage.", "int", 10000),
+    ]
+    for option, help_text, ini_type, default in ini_options:
+        parser.addini(name=option, help=help_text, type=ini_type, default=default)  # ty: ignore[invalid-argument-type]
+        # Deprecated pre-0.10 alias; read via _get_ini, removal in 0.11.
+        parser.addini(name=LEGACY_INI_NAMES[option], help=f"Deprecated alias of {option}.", type=ini_type, default=default)  # ty: ignore[invalid-argument-type]
     parser.addoption(
-        "--output-dir",
+        "--httpchain-output-dir",
+        "--output-dir",  # deprecated pre-0.10 alias, removal in 0.11
         dest="output_dir",
         default=None,
         help="Directory to write test output files (HAR format for HTTP communications).",
@@ -208,41 +234,64 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    # One-time deprecation notices for the pre-0.10 option spellings.
+    for option, legacy in LEGACY_INI_NAMES.items():
+        if _explicitly_set(config, legacy):
+            if _explicitly_set(config, str(option)):
+                message = f"ini option '{legacy}' is deprecated and ignored because '{option}' is also set (removal in 0.11)"
+            else:
+                message = f"ini option '{legacy}' is deprecated, use '{option}' (removal in 0.11)"
+            config.issue_config_time_warning(pytest.PytestDeprecationWarning(message), stacklevel=2)
+    # The deprecated flag can arrive via argv, ini addopts, or PYTEST_ADDOPTS —
+    # scan all three (invocation_params.args carries only argv).
+    flag_sources = " ".join(
+        [
+            *config.invocation_params.args,
+            str(config.inicfg.get("addopts", "")),
+            os.environ.get("PYTEST_ADDOPTS", ""),
+        ]
+    )
+    if "--output-dir" in flag_sources:
+        config.issue_config_time_warning(
+            pytest.PytestDeprecationWarning("flag '--output-dir' is deprecated, use '--httpchain-output-dir' (removal in 0.11)"),
+            stacklevel=2,
+        )
+
     # Numeric options are registered with type="int", but pytest performs the
     # int() conversion with a bare int(value) that raises ValueError for a
     # non-integer ini value — which pytest renders as an INTERNALERROR traceback.
     # Wrap the read so a garbage value becomes a clean usage error; the range
     # checks below likewise raise pytest.UsageError.
-    def _getint(name: str) -> int:
+    def _getint(option: ConfigOptions) -> int:
         try:
-            return config.getini(name)
+            return _get_ini(config, option)
         except ValueError as e:
-            raise pytest.UsageError(f"{name} must be an integer: {e}") from None
+            raise pytest.UsageError(f"{option} must be an integer: {e}") from None
 
-    suffix = str(config.getini(ConfigOptions.SUFFIX))
+    suffix = str(_get_ini(config, ConfigOptions.SUFFIX))
     if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", suffix):
-        raise pytest.UsageError("suffix must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
+        raise pytest.UsageError(f"{ConfigOptions.SUFFIX} must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
 
     ref_parent_traversal_depth = _getint(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
     if ref_parent_traversal_depth < 0:
-        raise pytest.UsageError("ref_parent_traversal_depth must be non-negative")
+        raise pytest.UsageError(f"{ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH} must be non-negative")
 
     max_comprehension_length = _getint(ConfigOptions.MAX_COMPREHENSION_LENGTH)
     if max_comprehension_length < 1:
-        raise pytest.UsageError("max_comprehension_length must be a positive integer")
+        raise pytest.UsageError(f"{ConfigOptions.MAX_COMPREHENSION_LENGTH} must be a positive integer")
     if max_comprehension_length > 1_000_000:
-        raise pytest.UsageError("max_comprehension_length must not exceed 1,000,000")
-    simpleeval.MAX_COMPREHENSION_LENGTH = max_comprehension_length  # ty: ignore[invalid-assignment]
+        raise pytest.UsageError(f"{ConfigOptions.MAX_COMPREHENSION_LENGTH} must not exceed 1,000,000")
+    set_max_comprehension_length(max_comprehension_length)
 
     max_parallel_iterations = _getint(ConfigOptions.MAX_PARALLEL_ITERATIONS)
     if max_parallel_iterations < 1:
-        raise pytest.UsageError("max_parallel_iterations must be a positive integer")
+        raise pytest.UsageError(f"{ConfigOptions.MAX_PARALLEL_ITERATIONS} must be a positive integer")
     if max_parallel_iterations > 1_000_000:
-        raise pytest.UsageError("max_parallel_iterations must not exceed 1,000,000")
+        raise pytest.UsageError(f"{ConfigOptions.MAX_PARALLEL_ITERATIONS} must not exceed 1,000,000")
 
 
 def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> pytest.Collector | None:
-    suffix: str = parent.config.getini(ConfigOptions.SUFFIX)
+    suffix: str = _get_ini(parent.config, ConfigOptions.SUFFIX)
     pattern = re.compile(rf"^test_(?P<name>.+)\.{re.escape(suffix)}\.json$")
     file_match = pattern.match(file_path.name)
     if file_match:
@@ -260,6 +309,23 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
     if call.when == "call":
         if hasattr(item, "instance") and isinstance(item.instance, Carrier):
             carrier = item.instance
+
+            # A scenario-initialization failure (broken auth function, bad
+            # cert, unresolvable scenario substitutions) is scenario-level
+            # breakage, not the stage-level "expected failure" an xfail mark
+            # declares — pre-0.10 it was a hard collection error regardless of
+            # marks and must stay red. This wrapper registers after pytest's
+            # own skipping plugin, so it is OUTERMOST and its post-yield runs
+            # last:
+            # the xfail conversion has already happened by the time the report
+            # arrives here, and flipping it back is seen consistently by every
+            # downstream consumer (Session's failure counter, the terminal,
+            # xdist's worker->controller forwarding). NB: ``wasxfail`` holds
+            # the mark's REASON string (often empty) — presence, not
+            # truthiness, is the signal.
+            if type(carrier)._init_failed is not None and report.skipped and hasattr(report, "wasxfail"):
+                report.outcome = "failed"
+                del report.wasxfail
 
             if carrier.last_request is not None:
                 try:

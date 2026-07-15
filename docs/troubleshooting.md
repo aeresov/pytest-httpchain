@@ -2,7 +2,7 @@
 
 ## Test Files Not Discovered
 
-Ensure your test files follow the naming pattern `test_<name>.<suffix>.json` where `suffix` defaults to `http`.
+Ensure your test files follow the naming pattern `test_<name>.<suffix>.json` where the suffix (`httpchain_suffix` ini option) defaults to `http`.
 
 **Checklist:**
 
@@ -42,7 +42,7 @@ silent override.
 ### Path Issues
 
 -   Verify the referenced file path is correct (relative to the referencing file)
--   Check that parent directory traversal doesn't exceed `ref_parent_traversal_depth` (default: 3)
+-   Check that parent directory traversal doesn't exceed `httpchain_ref_parent_traversal_depth` (default: 3)
 -   Use forward slashes `/` even on Windows
 
 ### JSON Pointer Issues
@@ -89,7 +89,7 @@ This references the `login_stage` key in `common/auth.json` relative to the curr
 If you hit `MAX_COMPREHENSION_LENGTH` errors, either:
 
 -   Simplify your expression
--   Increase `max_comprehension_length` in pytest config
+-   Increase `httpchain_max_comprehension_length` in pytest config
 
 ## Stage Execution Stops Unexpectedly
 

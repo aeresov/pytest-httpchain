@@ -4,23 +4,23 @@ import pytest
 
 from pytest_httpchain.userfunc import NAME_PATTERN, UserFunctionError, import_function
 
-# Bare (module-less) function names that the regex accepts but import_function
-# rejects with "Module path is required". Shared by the two tests below so the
+# Bare (module-less) function names: the regex now rejects them, so validation
+# and the importer agree on one grammar. Shared by the two tests below so the
 # list stays in sync.
 BARE_NAMES = ["simple", "_", "_private", "__dunder", "name_", "func123", "camelCase", "ALLCAPS", "x"]
 
 
-class TestValidNamePatterns:
-    """Tests for valid function name patterns (regex acceptance)."""
+class TestBareNamesRejected:
+    """Bare names fail the shared grammar — at the pattern AND the importer."""
 
     @pytest.mark.parametrize("name", BARE_NAMES)
-    def test_bare_name_matches_pattern(self, name: str):
-        """Bare function names are accepted by the regex pattern."""
-        assert NAME_PATTERN.match(name) is not None
+    def test_bare_name_rejected_by_pattern(self, name: str):
+        """The regex itself rejects module-less names."""
+        assert NAME_PATTERN.match(name) is None
 
     @pytest.mark.parametrize("name", BARE_NAMES)
     def test_bare_name_requires_module(self, name: str):
-        """Bare function names raise an error requiring module path."""
+        """import_function keeps the actionable 'use module:func' hint."""
         with pytest.raises(UserFunctionError, match="Module path is required"):
             import_function(name)
 

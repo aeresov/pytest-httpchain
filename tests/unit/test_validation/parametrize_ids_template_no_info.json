@@ -1,0 +1,10 @@
+{
+    "stages": [
+        {
+            "name": "s1",
+            "parametrize": [ { "individual": { "env": ["a", "b"] }, "ids": ["{{ looks-like-template }}", "plain"] } ],
+            "request": { "url": "https://x.test/{{ env }}" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

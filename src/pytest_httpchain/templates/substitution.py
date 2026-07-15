@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+import simpleeval
 from pydantic import BaseModel
 from simpleeval import (
     DEFAULT_FUNCTIONS,
@@ -20,6 +21,18 @@ from simpleeval import (
 
 from pytest_httpchain.templates.exceptions import TemplatesError
 from pytest_httpchain.templates.expressions import TEMPLATE_PATTERN, extract_template_expression
+
+
+def set_max_comprehension_length(length: int) -> None:
+    """Configure simpleeval's comprehension-length cap.
+
+    simpleeval exposes the cap only as a module global; this is the one
+    sanctioned place that mutates it, so consumers (the plugin's ini option)
+    do not reach into a third-party module this package owns. Process-wide by
+    nature — it affects every simpleeval user in the process.
+    """
+    simpleeval.MAX_COMPREHENSION_LENGTH = length  # ty: ignore[invalid-assignment]
+
 
 SAFE_FUNCTIONS = {
     "bool": bool,
@@ -155,19 +168,19 @@ def _sub_string(line: str, context: Mapping[str, Any]) -> Any:
     return re.sub(TEMPLATE_PATTERN, _repl, line)
 
 
-def _contains_template(obj: Any) -> bool:
+def contains_template(obj: Any) -> bool:
     """Check if an object contains any template strings."""
     match obj:
         case str():
             return bool(re.search(TEMPLATE_PATTERN, obj))
         case dict():
-            return any(_contains_template(value) for value in obj.values())
+            return any(contains_template(value) for value in obj.values())
         case list() | tuple():
-            return any(_contains_template(item) for item in obj)
+            return any(contains_template(item) for item in obj)
         case BaseModel():
-            return _contains_template(obj.model_dump(mode="python"))
+            return contains_template(obj.model_dump(mode="python"))
         case SimpleNamespace():
-            return any(_contains_template(value) for value in vars(obj).values())
+            return any(contains_template(value) for value in vars(obj).values())
         case _:
             return False
 
@@ -192,14 +205,14 @@ def walk(obj: Any, context: Mapping[str, Any]) -> Any:
         case tuple():
             return tuple(walk(item, context) for item in obj)
         case BaseModel():
-            if not _contains_template(obj):
+            if not contains_template(obj):
                 return obj
 
             obj_dict = obj.model_dump(mode="python")
             processed_dict = walk(obj_dict, context)
             return obj.__class__.model_validate(processed_dict)
         case SimpleNamespace():
-            if not _contains_template(obj):
+            if not contains_template(obj):
                 return obj
 
             namespace_dict = vars(obj)

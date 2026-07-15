@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-16
+
+### Added
+
+- `request.method` accepts any RFC 9110 token, so non-enum verbs — WebDAV `PROPFIND`/`REPORT`, cache `PURGE`, vendor methods — are now representable; the standard verbs keep editor autocomplete. `verify.status` accepts any integer 100-599, so nonstandard codes (nginx 499, 599, vendor codes) can be asserted. Note: the editor schema no longer flags an unknown-but-token-shaped method (e.g. `FOOBAR`) as a typo, since it is now a legal value.
+- Namespaced pytest options: `httpchain_suffix`, `httpchain_ref_parent_traversal_depth`, `httpchain_max_comprehension_length`, `httpchain_max_parallel_iterations` ini options and the `--httpchain-output-dir` flag. pytest ini options share one global namespace across all plugins, so the generic old names risked collisions.
+- New `info` diagnostic severity: purely informational findings that never affect validity, are exempt from `--strict`, and produce no collection warnings. First code: `HTTPCHAIN025` — a stage's `parametrize` values contain `{{ }}` templates, which opts the scenario into collection-time resolution of scenario substitutions (the one exception to lazy initialization, see below).
+- Docs: a "Resolution Phases" reference (collection / scenario initialization / stage execution) in the context-layering guide, describing what resolves in each phase, against which context, and how failures surface.
+
+### Deprecated
+
+- The un-prefixed ini option names (`suffix`, `ref_parent_traversal_depth`, `max_comprehension_length`, `max_parallel_iterations`) and the `--output-dir` flag. They keep working through the 0.10 series with a config-time deprecation warning and will be removed in 0.11; when both spellings are set, the `httpchain_`-prefixed one wins.
+
+### Changed
+
+- **BREAKING**: relative file paths in scenario fields — `body.binary`, `body.files` values, `verify.body.schema`, and `ssl.cert`/`ssl.verify` — now resolve against the **scenario file's directory** (the same rule as `$ref`/`$include`) instead of the pytest invocation directory. Data files can live next to the tests that use them, independent of where pytest runs from; suites that relied on CWD-relative paths must adjust them (absolute paths are unaffected). `validate --deep` file checks follow the same rule.
+- **BREAKING**: a duplicate key in a JSON object now fails loading with `Duplicate key '...'` instead of silently keeping the last value. Plain JSON parsing made a duplicated organizational key — e.g. two `"check"` entries in dict-form `response` steps — silently delete the first one, weakening the test with no diagnostic.
+- **BREAKING**: a user-function reference without a module path (`"auth": "myfunc"`) now fails at validation/collection with `Module path is required: use 'module:myfunc'` instead of validating and then failing at runtime import. Bare names never worked at runtime; note that a scenario carrying a bare name only in stages that never executed (e.g. permanently skip-marked) previously collected fine and now fails collection — like any other statically-detectable authoring error under strict validation.
+- An unhandled model-union variant at any dispatch site (body types, save/verify steps, substitutions, parallel/parametrize steps) now raises loudly instead of being silently skipped — an "unknown body type sends an empty request" class of plugin bug can no longer pass unnoticed.
+- **BREAKING**: pytest collection is now free of runtime side effects. Scenario-level `substitutions` resolution, the `auth` user-function call, `ssl` resolution, and httpx client construction are deferred from collection time to the moment a scenario's first stage executes. `pytest --collect-only` and IDE test discovery therefore no longer execute user code (e.g. live token fetches in `auth`) or allocate HTTP clients. Initialization runs at most once per scenario — side-effectful user functions are never re-invoked. A failure in it — an unresolvable scenario template, a raising `auth` function, a bad certificate path — surfaces as a clean `Failed to initialize scenario: ...` failure of the first executed stage, and every later stage (including `always_run` stages, and regardless of `xfail` marks) is skipped with the root cause as the reason, mirroring the previous behavior where a collection error meant no stage ran at all. Exception: when a stage's `parametrize` **values** contain `{{ }}` templates, scenario substitutions still resolve at collection, because pytest needs concrete parameter values to generate test items (templates in parametrize `ids` do not trigger this — they are never substituted). An initialization failure on an `xfail`-marked stage is reported as a real failure — the mark cannot absorb scenario-level breakage into a green run.
+
 ## [0.9.1] - 2026-07-14
 
 ### Added
@@ -305,7 +326,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.8.1...v0.9.0
 [0.8.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.7.0...v0.8.0
