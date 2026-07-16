@@ -110,3 +110,38 @@ def test_valid_scenario_collects_without_warning(pytester):
     assert result.ret == 0
     assert "ghost" not in result.stdout.str()
     result.stdout.fnmatch_lines(["*test_ok*"])
+
+
+def test_ambiguous_ref_surfaces_as_diagnostic_warning_at_collection(pytester):
+    """An ambiguous $ref (file exists under both lookup bases) collects with a
+    [HTTPCHAIN026] ScenarioValidationWarning — and under `filterwarnings =
+    error` it must surface as that accurate message, not be swallowed into the
+    misleading 'Failed to parse JSON file' collection error."""
+    (pytester.path / "fragment.json").write_text(json.dumps({"url": "http://server/root"}))
+    sub = pytester.path / "sub"
+    sub.mkdir()
+    (sub / "fragment.json").write_text(json.dumps({"url": "http://server/local"}))
+    (sub / "test_amb.http.json").write_text(
+        json.dumps(
+            {
+                "stages": [
+                    {
+                        "name": "s",
+                        "request": {"$ref": "fragment.json"},
+                        "response": [{"verify": {"status": 200}}],
+                    }
+                ]
+            }
+        )
+    )
+
+    result = pytester.runpytest("--collect-only")
+    result.stdout.fnmatch_lines(["*HTTPCHAIN026*"])
+    assert result.ret == 0
+
+    pytester.makeini("[pytest]\nfilterwarnings = error\n")
+    result_strict = pytester.runpytest("--collect-only")
+    assert result_strict.ret != 0
+    output = result_strict.stdout.str()
+    assert "HTTPCHAIN026" in output
+    assert "Failed to parse JSON file" not in output

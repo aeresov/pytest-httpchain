@@ -26,8 +26,9 @@ import json
 import logging
 import re
 import threading
+import warnings
 from collections import ChainMap
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -73,6 +74,7 @@ from pytest_httpchain.models import (
     parametrize_values_contain_template,
 )
 from pytest_httpchain.scoping import (
+    RESPONSE_META_NAME,
     base_global_context,
     iteration_context,
     response_step_context,
@@ -83,6 +85,7 @@ from pytest_httpchain.scoping import (
 from pytest_httpchain.templates import TemplatesError, walk
 from pytest_httpchain.userfunc import UserFunctionError
 from pytest_httpchain.utils import call_user_function, make_marker, process_substitutions
+from pytest_httpchain.warnings import ScenarioValidationWarning
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +118,12 @@ def _response_meta(response: httpx.Response) -> SimpleNamespace:
         headers=response.headers,
         elapsed_ms=elapsed_ms,
     )
+
+
+def _optional_as_list(value: Any) -> list[Any]:
+    """None -> [], anything else -> [value]. Adapts HeaderMatcher's optional
+    single-value fields to the list-based shared matcher checks."""
+    return [] if value is None else [value]
 
 
 def _error_request(e: Exception) -> httpx.Request | None:
@@ -292,6 +301,16 @@ class Carrier:
         # init problem failed collection and no stage ran at all. This also
         # keeps template-form always_run from being evaluated against the empty
         # context that an init failure leaves behind.
+        # The exchange bookkeeping describes THIS stage only. Reset before
+        # anything can fail or skip, so a stage that never reaches
+        # _record_exchanges (skipped, or failed in substitutions/always_run/
+        # parallel-config resolution) reports nothing instead of inheriting the
+        # previous stage's exchanges, HAR entries, or iteration count.
+        cls.last_request = None
+        cls.last_response = None
+        cls.last_exchanges = []
+        cls.last_iterations_attempted = 0
+
         if cls._init_failed is not None:
             pytest.skip(reason=f"Scenario initialization failed: {cls._init_failed}")
 
@@ -414,10 +433,12 @@ class Carrier:
         """Record the executed stage's HTTP exchanges for the report and HAR.
 
         ``last_request``/``last_response`` are the ONE exchange the test
-        report shows: the failing iteration's when there is one (and it
-        carries request info — otherwise the previous values are kept, matching
-        the report's "last thing seen on the wire" semantics), else the last
-        completed iteration in iteration-index order (deterministic).
+        report shows, always a genuine pair from THIS stage (execute_stage
+        resets them at stage start): the failing iteration's when it carries
+        request info (its response may legitimately be None — a timeout got no
+        response, and showing an earlier iteration's response instead would
+        misattribute), else the last completed iteration in iteration-index
+        order (deterministic).
 
         ``last_exchanges`` feeds the HAR file: with ``record_all_exchanges``
         on (HAR output enabled) it holds every completed iteration's exchange
@@ -436,12 +457,11 @@ class Carrier:
         cls.last_exchanges = exchanges
         cls.last_iterations_attempted = attempted
 
-        if failed is not None:
-            if failed_request is not None:
-                cls.last_request = failed_request
-            if failed_response is not None:
-                cls.last_response = failed_response
+        if failed_request is not None:
+            cls.last_request, cls.last_response = failed_request, failed_response
         elif exchanges:
+            # No request info on the failure (or no failure): show the stage's
+            # own last completed exchange rather than nothing.
             cls.last_request, cls.last_response = exchanges[-1]
 
     @classmethod
@@ -635,14 +655,14 @@ class Carrier:
                     # An absent header behaves as an empty string, mirroring
                     # the body contains/matches semantics.
                     actual = response.headers.get(header_name) or ""
-                    if expected_value.contains is not None and expected_value.contains not in actual:
-                        raise VerificationError(f"Header '{header_name}' does not contain '{expected_value.contains}' (value: {actual!r})")
-                    if expected_value.not_contains is not None and expected_value.not_contains in actual:
-                        raise VerificationError(f"Header '{header_name}' contains '{expected_value.not_contains}' while it shouldn't (value: {actual!r})")
-                    if expected_value.matches is not None and not re.search(expected_value.matches, actual):
-                        raise VerificationError(f"Header '{header_name}' does not match '{expected_value.matches}' (value: {actual!r})")
-                    if expected_value.not_matches is not None and re.search(expected_value.not_matches, actual):
-                        raise VerificationError(f"Header '{header_name}' matches '{expected_value.not_matches}' while it shouldn't (value: {actual!r})")
+                    cls._verify_text_matchers(
+                        f"Header '{header_name}' (value: {actual!r})",
+                        actual,
+                        contains=_optional_as_list(expected_value.contains),
+                        not_contains=_optional_as_list(expected_value.not_contains),
+                        matches=_optional_as_list(expected_value.matches),
+                        not_matches=_optional_as_list(expected_value.not_matches),
+                    )
                 case _:
                     if response.headers.get(header_name) != expected_value:
                         raise VerificationError(f"Header '{header_name}' doesn't match: expected {expected_value}, got {response.headers.get(header_name)}")
@@ -690,21 +710,42 @@ class Carrier:
             except jsonschema.SchemaError as e:
                 raise VerificationError(f"Invalid body validation schema: {e}") from e
 
-        for substring in verify_model.body.contains:
-            if substring not in response.text:
-                raise VerificationError(f"Body doesn't contain '{substring}'")
+        cls._verify_text_matchers(
+            "Body",
+            response.text,
+            contains=verify_model.body.contains,
+            not_contains=verify_model.body.not_contains,
+            matches=verify_model.body.matches,
+            not_matches=verify_model.body.not_matches,
+        )
 
-        for substring in verify_model.body.not_contains:
-            if substring in response.text:
-                raise VerificationError(f"Body contains '{substring}' while it shouldn't")
+    @staticmethod
+    def _verify_text_matchers(
+        subject: str,
+        text: str,
+        *,
+        contains: Iterable[str],
+        not_contains: Iterable[str],
+        matches: Iterable[Any],
+        not_matches: Iterable[Any],
+    ) -> None:
+        """The single encoding of the contains/matches check semantics, shared
+        by body verification and header matchers (patterns use ``re.search``)."""
+        for substring in contains:
+            if substring not in text:
+                raise VerificationError(f"{subject} doesn't contain '{substring}'")
 
-        for pattern in verify_model.body.matches:
-            if not re.search(pattern, response.text):
-                raise VerificationError(f"Body doesn't match '{pattern}'")
+        for substring in not_contains:
+            if substring in text:
+                raise VerificationError(f"{subject} contains '{substring}' while it shouldn't")
 
-        for pattern in verify_model.body.not_matches:
-            if re.search(pattern, response.text):
-                raise VerificationError(f"Body matches '{pattern}' while it shouldn't")
+        for pattern in matches:
+            if not re.search(pattern, text):
+                raise VerificationError(f"{subject} doesn't match '{pattern}'")
+
+        for pattern in not_matches:
+            if re.search(pattern, text):
+                raise VerificationError(f"{subject} matches '{pattern}' while it shouldn't")
 
     @classmethod
     def _execute_single_iteration(
@@ -736,6 +777,19 @@ class Carrier:
                     case SaveStep():
                         save_model = walk(step.save, step_context)
                         step_saved = cls._process_save_step(save_model, response, step_context)
+                        # The static HTTPCHAIN027 check cannot see dynamically
+                        # produced keys (user_functions saves, template-form
+                        # parameters) — surface the shadowing at runtime so the
+                        # old read-your-saved-'response'-back behavior doesn't
+                        # break silently.
+                        if RESPONSE_META_NAME in step_saved:
+                            warnings.warn(
+                                ScenarioValidationWarning(
+                                    f"Save step produced the reserved name '{RESPONSE_META_NAME}': inside response steps it is "
+                                    f"shadowed by the response metadata namespace (HTTPCHAIN027)"
+                                ),
+                                stacklevel=2,
+                            )
                         iter_context = with_saves(iter_context, step_saved)
                         saved_context.update(step_saved)
 

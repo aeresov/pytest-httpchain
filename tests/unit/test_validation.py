@@ -604,3 +604,66 @@ class TestResponseMetadataNamespace:
         result = validate_scenario(path)
         assert result.valid is False
         assert DiagnosticCode.CONTAINS_CONTRADICTION in _codes(result)
+
+
+class TestReviewRegressionsBatch2:
+    """Regression guards for the 2026-07-16 batch review findings."""
+
+    def test_empty_matches_pattern_is_not_a_contradiction(self, tmp_path):
+        """An empty `matches` regex with not_matches UNSET must not trigger
+        HTTPCHAIN008 (unset used to be conflated with the empty pattern)."""
+        path = tmp_path / "test_x.http.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "stages": [
+                        {
+                            "name": "s",
+                            "request": {"url": "http://server/x"},
+                            "response": [{"verify": {"headers": {"x-h": {"matches": ""}}}}],
+                        }
+                    ]
+                }
+            )
+        )
+        result = validate_scenario(path)
+        assert result.valid is True
+        assert DiagnosticCode.MATCHES_CONTRADICTION not in _codes(result)
+
+    def test_ambiguity_diagnostic_survives_later_load_failure(self, tmp_path):
+        """A recorded HTTPCHAIN026 must not be dropped when a later $ref in the
+        same file fails to resolve."""
+        (tmp_path / "pyproject.toml").write_text("")
+        (tmp_path / "fragment.json").write_text(json.dumps({"url": "http://server/root"}))
+        suite = tmp_path / "suite"
+        suite.mkdir()
+        (suite / "fragment.json").write_text(json.dumps({"url": "http://server/local"}))
+        scenario_path = suite / "test_a.http.json"
+        scenario_path.write_text(
+            json.dumps(
+                {
+                    "stages": [
+                        {
+                            "name": "s",
+                            "request": {"$ref": "fragment.json"},
+                            "response": [{"verify": {"$ref": "missing.json"}}],
+                        }
+                    ]
+                }
+            )
+        )
+        result = validate_scenario(scenario_path)
+        assert result.valid is False  # the missing ref is still an error
+        codes = _codes(result)
+        assert DiagnosticCode.AMBIGUOUS_REF in codes
+        assert DiagnosticCode.REF_ERROR in codes
+
+    def test_markerless_tree_falls_back_to_tests_ancestor(self, tmp_path):
+        """Without any project marker, the pre-marker default (nearest tests/
+        ancestor) still applies, so exported bundles keep their sandbox."""
+        suite = tmp_path / "bundle" / "tests" / "api"
+        suite.mkdir(parents=True)
+        scenario = suite / "test_x.http.json"
+        scenario.write_text("{}")
+
+        assert resolve_root_path(scenario) == tmp_path / "bundle" / "tests"

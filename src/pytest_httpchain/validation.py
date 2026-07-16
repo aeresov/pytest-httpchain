@@ -322,55 +322,80 @@ def _verify_diagnostics(scenario: Scenario) -> list[Diagnostic]:
                         )
                     )
 
-            # Overlap is compared on the raw (unrendered) strings: identical
-            # entries — including identical templates — are caught. A contradiction
-            # that only emerges after rendering (e.g. a template that resolves to a
-            # literal listed in the opposite set) is intentionally not pursued, since
-            # rendering with a partial static context risks false-positive errors.
-            contains_overlap = {str(s) for s in verify.body.contains} & {str(s) for s in verify.body.not_contains}
-            if contains_overlap:
-                diagnostics.append(
-                    _diag(
-                        DiagnosticCode.CONTAINS_CONTRADICTION,
-                        "error",
-                        f"Stage '{stage.name}': body verification both requires and forbids substring(s): {sorted(contains_overlap)}",
-                        location=f"{location}.body",
-                    )
-                )
-
-            matches_overlap = {str(p) for p in verify.body.matches} & {str(p) for p in verify.body.not_matches}
-            if matches_overlap:
-                diagnostics.append(
-                    _diag(
-                        DiagnosticCode.MATCHES_CONTRADICTION,
-                        "error",
-                        f"Stage '{stage.name}': body verification both requires and forbids pattern(s): {sorted(matches_overlap)}",
-                        location=f"{location}.body",
-                    )
-                )
+            diagnostics += _contradiction_diagnostics(
+                stage.name,
+                "body verification",
+                f"{location}.body",
+                contains=verify.body.contains,
+                not_contains=verify.body.not_contains,
+                matches=verify.body.matches,
+                not_matches=verify.body.not_matches,
+            )
 
             # Same contradiction rule for header matchers (per header key).
             for header_name, expected in verify.headers.items():
                 if not isinstance(expected, HeaderMatcher):
                     continue
-                if expected.contains is not None and expected.contains == expected.not_contains:
-                    diagnostics.append(
-                        _diag(
-                            DiagnosticCode.CONTAINS_CONTRADICTION,
-                            "error",
-                            f"Stage '{stage.name}': header '{header_name}' verification both requires and forbids substring {expected.contains!r}",
-                            location=f"{location}.headers.{header_name}",
-                        )
-                    )
-                if expected.matches is not None and str(expected.matches) == str(expected.not_matches or ""):
-                    diagnostics.append(
-                        _diag(
-                            DiagnosticCode.MATCHES_CONTRADICTION,
-                            "error",
-                            f"Stage '{stage.name}': header '{header_name}' verification both requires and forbids pattern {str(expected.matches)!r}",
-                            location=f"{location}.headers.{header_name}",
-                        )
-                    )
+                diagnostics += _contradiction_diagnostics(
+                    stage.name,
+                    f"header '{header_name}' verification",
+                    f"{location}.headers.{header_name}",
+                    contains=_as_list(expected.contains),
+                    not_contains=_as_list(expected.not_contains),
+                    matches=_as_list(expected.matches),
+                    not_matches=_as_list(expected.not_matches),
+                )
+
+    return diagnostics
+
+
+def _as_list(value: Any) -> list[Any]:
+    """None -> [], anything else -> [value]. Adapts HeaderMatcher's optional
+    single-value fields to the list-based contradiction checks."""
+    return [] if value is None else [value]
+
+
+def _contradiction_diagnostics(
+    stage_name: str,
+    what: str,
+    location: str,
+    *,
+    contains: list[Any],
+    not_contains: list[Any],
+    matches: list[Any],
+    not_matches: list[Any],
+) -> list[Diagnostic]:
+    """The single encoding of the contains/matches contradiction rule, shared
+    by body verification and header matchers.
+
+    Overlap is compared on the raw (unrendered) strings: identical entries —
+    including identical templates — are caught. A contradiction that only
+    emerges after rendering (e.g. a template that resolves to a literal listed
+    in the opposite set) is intentionally not pursued, since rendering with a
+    partial static context risks false-positive errors."""
+    diagnostics: list[Diagnostic] = []
+
+    contains_overlap = {str(s) for s in contains} & {str(s) for s in not_contains}
+    if contains_overlap:
+        diagnostics.append(
+            _diag(
+                DiagnosticCode.CONTAINS_CONTRADICTION,
+                "error",
+                f"Stage '{stage_name}': {what} both requires and forbids substring(s): {sorted(contains_overlap)}",
+                location=location,
+            )
+        )
+
+    matches_overlap = {str(p) for p in matches} & {str(p) for p in not_matches}
+    if matches_overlap:
+        diagnostics.append(
+            _diag(
+                DiagnosticCode.MATCHES_CONTRADICTION,
+                "error",
+                f"Stage '{stage_name}': {what} both requires and forbids pattern(s): {sorted(matches_overlap)}",
+                location=location,
+            )
+        )
 
     return diagnostics
 
@@ -815,13 +840,19 @@ _ROOT_MARKERS = ("pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg", "setup.
 def resolve_root_path(path: Path) -> Path:
     """Directory that constrains ``$ref`` resolution when no explicit root is
     given: the nearest ancestor of ``path`` that looks like a project root
-    (contains one of the standard project markers), else the file's own parent.
+    (contains one of the standard project markers); in a marker-less tree
+    (e.g. an exported scenario bundle), the nearest ``tests/`` ancestor, else
+    the file's own parent.
 
-    This approximates pytest's ``rootdir``, so the CLI sandboxes ``$ref``
-    resolution the same way pytest collection does (collection passes
-    ``config.rootpath`` explicitly)."""
+    The marker walk approximates pytest's ``rootdir``, so the CLI sandboxes
+    ``$ref`` resolution the same way pytest collection does (collection passes
+    ``config.rootpath`` explicitly); the ``tests/`` fallback preserves the
+    pre-marker default so marker-less trees keep their sandbox breadth."""
     for ancestor in path.resolve().parents:
         if any((ancestor / marker).exists() for marker in _ROOT_MARKERS):
+            return ancestor
+    for ancestor in path.resolve().parents:
+        if ancestor.name == "tests":
             return ancestor
     return path.parent
 
@@ -878,43 +909,49 @@ def validate_scenario(
             )
         )
 
-    try:
-        # Record ambiguity warnings from the $ref resolver (HTTPCHAIN026)
-        # instead of letting them escape as bare Python warnings; anything
-        # else recorded is re-emitted unchanged below.
-        with warnings.catch_warnings(record=True) as caught_warnings:
-            warnings.simplefilter("always")
+    # Record ambiguity warnings from the $ref resolver (HTTPCHAIN026) instead
+    # of letting them escape as bare Python warnings; anything else recorded
+    # is re-emitted unchanged after the block. Load errors are collected, not
+    # returned from inside the block, so warnings already earned by earlier
+    # (successful) references are reported even when a later one fails.
+    load_failed = False
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always")
+        try:
             scenario, test_data = load_scenario(path, root_path=root_path, ref_parent_traversal_depth=ref_parent_traversal_depth)
-    except ReferenceResolverError as e:
-        # The resolver wraps a plain JSON syntax error as a ReferenceResolverError
-        # (chaining the JSONDecodeError as __cause__), and raises DuplicateKeyError
-        # for a duplicated object key. Both are JSON *content* problems — report
-        # them under the accurate "Invalid JSON syntax" code rather than the
-        # $ref-flavored one, which would mislead when no reference is involved.
-        if isinstance(e, DuplicateKeyError):
-            diagnostics.append(_diag(DiagnosticCode.INVALID_JSON, "error", f"Invalid JSON: {e}"))
-        elif isinstance(e.__cause__, json.JSONDecodeError):
-            diagnostics.append(_diag(DiagnosticCode.INVALID_JSON, "error", f"Invalid JSON syntax: {e.__cause__}"))
-        else:
-            diagnostics.append(_diag(DiagnosticCode.REF_ERROR, "error", f"JSON reference resolution error: {e}"))
-        return _result(diagnostics)
-    except json.JSONDecodeError as e:
-        diagnostics.append(_diag(DiagnosticCode.INVALID_JSON, "error", f"Invalid JSON syntax: {e}"))
-        return _result(diagnostics)
-    except ValidationError as e:
-        for err in e.errors():
-            loc = " -> ".join(str(x) for x in err["loc"])
-            diagnostics.append(_diag(DiagnosticCode.SCHEMA, "error", f"Schema validation failed: {loc}: {err['msg']}", location=loc))
-        return _result(diagnostics)
-    except Exception as e:
-        diagnostics.append(_diag(DiagnosticCode.PARSE_ERROR, "error", f"Failed to parse JSON file: {e}"))
-        return _result(diagnostics)
+        except ReferenceResolverError as e:
+            # The resolver wraps a plain JSON syntax error as a ReferenceResolverError
+            # (chaining the JSONDecodeError as __cause__), and raises DuplicateKeyError
+            # for a duplicated object key. Both are JSON *content* problems — report
+            # them under the accurate "Invalid JSON syntax" code rather than the
+            # $ref-flavored one, which would mislead when no reference is involved.
+            if isinstance(e, DuplicateKeyError):
+                diagnostics.append(_diag(DiagnosticCode.INVALID_JSON, "error", f"Invalid JSON: {e}"))
+            elif isinstance(e.__cause__, json.JSONDecodeError):
+                diagnostics.append(_diag(DiagnosticCode.INVALID_JSON, "error", f"Invalid JSON syntax: {e.__cause__}"))
+            else:
+                diagnostics.append(_diag(DiagnosticCode.REF_ERROR, "error", f"JSON reference resolution error: {e}"))
+            load_failed = True
+        except json.JSONDecodeError as e:
+            diagnostics.append(_diag(DiagnosticCode.INVALID_JSON, "error", f"Invalid JSON syntax: {e}"))
+            load_failed = True
+        except ValidationError as e:
+            for err in e.errors():
+                loc = " -> ".join(str(x) for x in err["loc"])
+                diagnostics.append(_diag(DiagnosticCode.SCHEMA, "error", f"Schema validation failed: {loc}: {err['msg']}", location=loc))
+            load_failed = True
+        except Exception as e:
+            diagnostics.append(_diag(DiagnosticCode.PARSE_ERROR, "error", f"Failed to parse JSON file: {e}"))
+            load_failed = True
 
     for caught in caught_warnings:
         if isinstance(caught.message, AmbiguousReferenceWarning):
             diagnostics.append(_diag(DiagnosticCode.AMBIGUOUS_REF, "warning", str(caught.message)))
         else:
             warnings.warn_explicit(caught.message, caught.category, caught.filename, caught.lineno)
+
+    if load_failed:
+        return _result(diagnostics)
 
     semantic_diagnostics, scenario_info = check_scenario(scenario, test_data)
     diagnostics.extend(semantic_diagnostics)

@@ -125,7 +125,7 @@ def test_header_matcher_failure_names_the_header(pytester):
     )
     result = pytester.runpytest("-s")
     result.assert_outcomes(failed=1)
-    result.stdout.fnmatch_lines(["*x-custom-header*does not contain*nope*"])
+    result.stdout.fnmatch_lines(["*x-custom-header*doesn't contain*nope*"])
 
 
 def test_response_namespace_not_visible_in_request(pytester):
@@ -148,3 +148,37 @@ def test_response_namespace_not_visible_in_request(pytester):
     )
     result = pytester.runpytest("-s")
     result.assert_outcomes(failed=1)
+
+
+def test_user_function_saving_reserved_name_warns_at_runtime(pytester):
+    """The static HTTPCHAIN027 check cannot see user_functions save keys, so
+    the shadowing must surface as a runtime warning instead of silently
+    changing what `response` means in later response steps."""
+    pytester.copy_example("conftest.py")
+    pytester.syspathinsert()
+    pytester.makepyfile(
+        saver="""
+        def extract(response):
+            return {"response": {"id": 5}}
+        """
+    )
+    _write_scenario(
+        pytester,
+        "test_reserved.http.json",
+        {
+            "stages": [
+                {
+                    "name": "s",
+                    "fixtures": ["server"],
+                    "request": {"url": "{{ server }}/ok"},
+                    "response": [
+                        {"save": {"user_functions": ["saver:extract"]}},
+                        {"verify": {"status": 200}},
+                    ],
+                }
+            ]
+        },
+    )
+    result = pytester.runpytest("-s")
+    result.assert_outcomes(passed=1, warnings=1)
+    result.stdout.fnmatch_lines(["*HTTPCHAIN027*"])

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.scoping import (
+    RESPONSE_META_NAME,
     extract_template_variables,
     raw_stages,
     stage_scopes,
@@ -76,8 +77,13 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
         refs: set[str] = set()
-        for key in ("request", "response", "substitutions", "parallel"):
+        for key in ("request", "substitutions", "parallel"):
             extract_template_variables(raw.get(key), refs)
+        # Inside response steps the reserved `response` metadata namespace
+        # shadows a same-named earlier save, so a `response` reference there is
+        # NOT a data dependency on the earlier stage (in request/substitutions
+        # templates it still is — no namespace exists in those scopes).
+        refs |= extract_template_variables(raw.get("response")) - {RESPONSE_META_NAME}
 
         # Scenario fixtures count as local everywhere: at runtime they sit above
         # the global context in the ChainMap, shadowing any same-named save.

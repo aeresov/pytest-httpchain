@@ -241,3 +241,35 @@ def test_m11_substitution_referencing_foreach_param_is_flagged():
     diags, _ = check_scenario(sc, data)
     undefined_msgs = [d.message for d in diags if d.code == DiagnosticCode.UNDEFINED_VAR]
     assert any("wid" in m for m in undefined_msgs), undefined_msgs
+
+
+def test_saved_response_name_not_consumed_in_response_steps():
+    """The reserved `response` metadata namespace shadows a same-named earlier
+    save inside response steps, so a `response` reference there is not a data
+    dependency; in a request template it still is."""
+    from pytest_httpchain.dataflow import analyze_dataflow
+    from pytest_httpchain.models import Scenario
+
+    data = {
+        "stages": [
+            {
+                "name": "producer",
+                "request": {"url": "http://server/a"},
+                "response": [{"save": {"jmespath": {"response": "body.data"}}}],
+            },
+            {
+                "name": "verify_meta",
+                "request": {"url": "http://server/b"},
+                "response": [{"verify": {"expressions": ["{{ response.status == 200 }}"]}}],
+            },
+            {
+                "name": "request_consumer",
+                "request": {"url": "http://server/c", "headers": {"x-d": "{{ response }}"}},
+                "response": [{"verify": {"status": 200}}],
+            },
+        ]
+    }
+    flow = analyze_dataflow(Scenario.model_validate(data), data)
+
+    assert flow.stages[1].consumes == []  # metadata namespace, not the save
+    assert flow.stages[2].consumes == ["response"]  # request scope: real dependency

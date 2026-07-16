@@ -97,3 +97,75 @@ def test_parallel_failure_report_labels_shown_iteration(pytester):
 
     result.assert_outcomes(failed=1)
     result.stdout.fnmatch_lines(["*HTTP Request (failing of 3 parallel iterations)*"])
+
+
+def test_stage_failing_before_request_inherits_nothing(pytester):
+    """A stage that fails before any request runs (bad substitution template)
+    must not inherit the previous parallel stage's exchanges: no stale
+    'parallel iterations' label, no HAR file under its nodeid."""
+    har_dir = pytester.path / "har_out"
+
+    pytester.copy_example("conftest.py")
+    (pytester.path / "test_stale.http.json").write_text(
+        json.dumps(
+            {
+                "stages": [
+                    {
+                        "name": "parallel_ok",
+                        "fixtures": ["server"],
+                        "parallel": {"repeat": 3},
+                        "request": {"url": "{{ server }}/ok"},
+                        "response": [{"verify": {"status": 200}}],
+                    },
+                    {
+                        "name": "fails_pre_request",
+                        "fixtures": ["server"],
+                        "substitutions": [{"vars": {"boom": "{{ no_such_name }}"}}],
+                        "request": {"url": "{{ server }}/ok"},
+                        "response": [{"verify": {"status": 200}}],
+                    },
+                ]
+            }
+        )
+    )
+    result = pytester.runpytest("-s", "--httpchain-output-dir", str(har_dir))
+
+    result.assert_outcomes(passed=1, failed=1)
+    result.stdout.no_fnmatch_line("*failing of 3 parallel iterations*")
+
+    har_files = sorted(p.name for p in har_dir.glob("*.har"))
+    assert len(har_files) == 1, har_files  # only the parallel stage wrote one
+    assert "parallel_ok" in har_files[0]
+
+
+def test_timeout_after_passing_stage_shows_no_stale_response(pytester):
+    """A timed-out stage's report must not pair its request with the previous
+    stage's response."""
+    pytester.copy_example("conftest.py")
+    (pytester.path / "test_pair.http.json").write_text(
+        json.dumps(
+            {
+                "stages": [
+                    {
+                        "name": "passes",
+                        "fixtures": ["server"],
+                        "request": {"url": "{{ server }}/ok"},
+                        "response": [{"verify": {"status": 200}}],
+                    },
+                    {
+                        "name": "times_out",
+                        "fixtures": ["server"],
+                        "request": {"url": "{{ server }}/delay/2", "timeout": 0.2},
+                        "response": [{"verify": {"status": 200}}],
+                    },
+                ]
+            }
+        )
+    )
+    # Subprocess for the same httpx/pytester interaction documented in
+    # test_timeout_still_produces_report_and_har.
+    result = pytester.runpytest_subprocess("-s")
+
+    result.assert_outcomes(passed=1, failed=1)
+    result.stdout.fnmatch_lines(["*HTTP Request*", "*GET*/delay/2*"])
+    result.stdout.no_fnmatch_line("*HTTP Response*")

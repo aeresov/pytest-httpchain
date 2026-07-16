@@ -40,7 +40,7 @@ from pytest_httpchain.report_formatter import format_request, format_response
 from pytest_httpchain.templates import set_max_comprehension_length
 from pytest_httpchain.utils import make_marker
 from pytest_httpchain.validation import check_scenario, load_scenario
-from pytest_httpchain.warnings import ScenarioValidationWarning
+from pytest_httpchain.warnings import AmbiguousReferenceWarning, ScenarioValidationWarning
 
 logger = logging.getLogger(__name__)
 
@@ -91,11 +91,19 @@ class JsonModule(pytest.Module):
         # CLI default (validation.resolve_root_path) approximates it.
         ref_parent_traversal_depth = _get_ini(self.config, ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
         try:
-            scenario, test_data = load_scenario(
-                self.path,
-                root_path=Path(self.config.rootpath),
-                ref_parent_traversal_depth=ref_parent_traversal_depth,
-            )
+            # Record resolver warnings instead of letting them escape raw: under
+            # `filterwarnings = error` a bare AmbiguousReferenceWarning would be
+            # promoted mid-load and land in the generic handler below as a
+            # misleading "Failed to parse JSON file". Recorded warnings are
+            # re-emitted after loading, in the same [HTTPCHAINxxx] form as the
+            # semantic diagnostics.
+            with warnings.catch_warnings(record=True) as caught_warnings:
+                warnings.simplefilter("always")
+                scenario, test_data = load_scenario(
+                    self.path,
+                    root_path=Path(self.config.rootpath),
+                    ref_parent_traversal_depth=ref_parent_traversal_depth,
+                )
         except pytest_httpchain.jsonref.ReferenceResolverError as e:
             raise pytest.Collector.CollectError(f"Cannot load JSON file {self.path}: {e}") from None
         except ValidationError as e:
@@ -109,6 +117,12 @@ class JsonModule(pytest.Module):
             raise pytest.Collector.CollectError(full_error_msg) from None
         except Exception as e:
             raise pytest.Collector.CollectError(f"Failed to parse JSON file {self.path}: {e}") from None
+
+        for caught in caught_warnings:
+            if isinstance(caught.message, AmbiguousReferenceWarning):
+                warnings.warn(ScenarioValidationWarning(f"{self.path}: [HTTPCHAIN026] {caught.message}"), stacklevel=2)
+            else:
+                warnings.warn_explicit(caught.message, caught.category, caught.filename, caught.lineno)
 
         self._reject_chain_splitting_dist_mode(scenario)
 
