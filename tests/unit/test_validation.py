@@ -502,3 +502,34 @@ class TestRootPathDefault:
 
         assert result.valid is True
         assert result.errors == []
+
+
+def test_ambiguous_ref_reported_as_diagnostic(tmp_path):
+    """HTTPCHAIN026: a $ref matching files under both lookup bases (scenario
+    dir and root path) is surfaced as a warning diagnostic, not a bare
+    Python warning."""
+    (tmp_path / "pyproject.toml").write_text("")
+    (tmp_path / "fragment.json").write_text(json.dumps({"url": "http://server/root"}))
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "fragment.json").write_text(json.dumps({"url": "http://server/local"}))
+    scenario_path = suite / "test_a.http.json"
+    scenario_path.write_text(
+        json.dumps(
+            {
+                "stages": [
+                    {
+                        "name": "s",
+                        "request": {"$ref": "fragment.json"},
+                        "response": [{"verify": {"status": 200}}],
+                    }
+                ]
+            }
+        )
+    )
+
+    result = validate_scenario(scenario_path)
+
+    assert result.valid is True  # a warning, not an error
+    assert DiagnosticCode.AMBIGUOUS_REF in {d.code for d in result.diagnostics}
+    assert any("file-relative wins" in w for w in result.warnings)

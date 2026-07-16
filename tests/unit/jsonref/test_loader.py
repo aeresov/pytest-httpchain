@@ -1,7 +1,10 @@
+import warnings
+
 import pytest
 
 from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
 from pytest_httpchain.jsonref.loader import load_json
+from pytest_httpchain.warnings import AmbiguousReferenceWarning
 
 
 class TestRefResolution:
@@ -413,3 +416,39 @@ class TestNullMergeSemantics:
         create_json_file("base.json", {"value": None})
         file = create_json_file("main.json", {"data": {"$ref": "base.json", "value": None}})
         assert load_json(file)["data"] == {"value": None}
+
+
+class TestTwoCandidateLookup:
+    """A relative reference is looked up first against the referencing file's
+    directory, then against the root path. When a file exists under both, the
+    file-relative one wins and an AmbiguousReferenceWarning is emitted."""
+
+    def test_file_relative_wins_and_warns_when_both_exist(self, tmp_path, create_json_file):
+        create_json_file("fragment.json", {"value": "root"})
+        create_json_file("sub/fragment.json", {"value": "local"})
+        main = create_json_file("sub/main.json", {"data": {"$ref": "fragment.json"}})
+
+        with pytest.warns(AmbiguousReferenceWarning, match="fragment.json"):
+            result = load_json(main, root_path=tmp_path)
+
+        assert result["data"] == {"value": "local"}
+
+    def test_root_relative_fallback_is_silent(self, tmp_path, create_json_file):
+        create_json_file("fragment.json", {"value": "root"})
+        main = create_json_file("sub/main.json", {"data": {"$ref": "fragment.json"}})
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = load_json(main, root_path=tmp_path)
+
+        assert result["data"] == {"value": "root"}
+
+    def test_file_relative_only_is_silent(self, tmp_path, create_json_file):
+        create_json_file("sub/fragment.json", {"value": "local"})
+        main = create_json_file("sub/main.json", {"data": {"$ref": "fragment.json"}})
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = load_json(main, root_path=tmp_path)
+
+        assert result["data"] == {"value": "local"}

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Ambiguous `$ref` lookups are now flagged. A relative reference path is looked up against the referencing file's directory first, then the root path; when a file exists under **both**, the file-relative one wins as before, but the resolver now emits `AmbiguousReferenceWarning` (surfaced by `pytest-httpchain validate` as the new `HTTPCHAIN026` warning diagnostic) instead of silently shadowing the root-relative file. The lookup order itself is now documented in the references guide.
+
 ### Changed
 
 - **BREAKING**: `null` no longer bypasses the `$ref`/`$include` sibling-merge conflict rules. Previously a `null` on either side of a merged path was always accepted and the sibling silently won — so a sibling `null` could blank out any referenced value, contradicting the documented no-last-wins guarantee. Now `null` is a value like any other: pairing it with a different value at the same path fails loading with `Merge conflict at <path>` (two `null`s, like any equal values, still merge fine). The whole merge policy is now a single custom `deepmerge.Merger` whose conflict strategies raise, replacing the separate pre-merge conflict detector that had to be kept in sync by hand.

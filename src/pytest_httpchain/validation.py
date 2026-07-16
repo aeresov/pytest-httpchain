@@ -41,6 +41,7 @@ Code     Severity Meaning
 023      warning  Unexpected argument passed to a user function (deep)
 024      warning  Missing required argument for a user function (deep)
 025      info     Template parametrize values force collection-time resolution
+026      warning  ``$ref`` path matches files under both lookup bases (ambiguous)
 ======== ======== ==========================================================
 
 The ``020``–``024`` codes come from *deep* validation, which is opt-in
@@ -88,6 +89,7 @@ from pytest_httpchain.scoping import (
 from pytest_httpchain.templates import is_complete_template
 from pytest_httpchain.userfunc import UserFunctionError, import_function
 from pytest_httpchain.utils import make_marker
+from pytest_httpchain.warnings import AmbiguousReferenceWarning
 
 Severity = Literal["error", "warning", "info"]
 
@@ -122,6 +124,7 @@ class DiagnosticCode:
     UNKNOWN_ARG = "HTTPCHAIN023"
     MISSING_ARG = "HTTPCHAIN024"
     PARAMETRIZE_COLLECTION_RESOLUTION = "HTTPCHAIN025"
+    AMBIGUOUS_REF = "HTTPCHAIN026"
 
 
 class Diagnostic(BaseModel):
@@ -838,7 +841,12 @@ def validate_scenario(
         )
 
     try:
-        scenario, test_data = load_scenario(path, root_path=root_path, ref_parent_traversal_depth=ref_parent_traversal_depth)
+        # Record ambiguity warnings from the $ref resolver (HTTPCHAIN026)
+        # instead of letting them escape as bare Python warnings; anything
+        # else recorded is re-emitted unchanged below.
+        with warnings.catch_warnings(record=True) as caught_warnings:
+            warnings.simplefilter("always")
+            scenario, test_data = load_scenario(path, root_path=root_path, ref_parent_traversal_depth=ref_parent_traversal_depth)
     except ReferenceResolverError as e:
         # The resolver wraps a plain JSON syntax error as a ReferenceResolverError
         # (chaining the JSONDecodeError as __cause__), and raises DuplicateKeyError
@@ -863,6 +871,12 @@ def validate_scenario(
     except Exception as e:
         diagnostics.append(_diag(DiagnosticCode.PARSE_ERROR, "error", f"Failed to parse JSON file: {e}"))
         return _result(diagnostics)
+
+    for caught in caught_warnings:
+        if isinstance(caught.message, AmbiguousReferenceWarning):
+            diagnostics.append(_diag(DiagnosticCode.AMBIGUOUS_REF, "warning", str(caught.message)))
+        else:
+            warnings.warn_explicit(caught.message, caught.category, caught.filename, caught.lineno)
 
     semantic_diagnostics, scenario_info = check_scenario(scenario, test_data)
     diagnostics.extend(semantic_diagnostics)

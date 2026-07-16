@@ -63,6 +63,24 @@ Reference a specific key within a file:
 }
 ```
 
+### Lookup Order
+
+A relative reference path is looked up against **two** bases, in order:
+
+1. the **referencing file's directory** (the file containing the `$ref`);
+2. the **root path** — pytest's rootdir when collecting, or `--root-path` /
+   the auto-detected project root when using the CLI.
+
+The first base under which the file exists wins. This lets a suite keep
+fragments next to the scenarios that use them *and* reference shared
+fragments by a root-relative path — but it also means the same string can
+name two different files. When a file exists under **both** bases, the
+file-relative one wins and an `AmbiguousReferenceWarning` is emitted
+(reported as the `HTTPCHAIN026` diagnostic by `pytest-httpchain validate`),
+because dropping a file next to a scenario silently changing what its
+references mean is exactly the kind of surprise you want flagged. Rename one
+of the files to resolve the ambiguity.
+
 ## JSON Pointer References
 
 Reference specific keys using JSON Pointer syntax:

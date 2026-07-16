@@ -1,8 +1,10 @@
 """Reference path and JSON pointer helpers for reference resolution."""
 
+import warnings
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
+from pytest_httpchain.warnings import AmbiguousReferenceWarning
 
 
 class RefPathHelper:
@@ -66,22 +68,32 @@ class RefPathHelper:
         if root_path_resolved != base_path_resolved:
             paths_to_try.append(root_path)
 
-        # Try each base path and find the first valid existing file
-        result_path = None
+        candidates = []
         for base in paths_to_try:
             resolved = (base / ref_path).resolve()
-            if is_valid_and_exists(resolved):
-                result_path = resolved
-                break
+            if is_valid_and_exists(resolved) and resolved not in candidates:
+                candidates.append(resolved)
 
-        # If no existing file found, raise an error
-        if result_path is None:
-            # Provide helpful error message showing what paths were tried
+        # If no existing file found, raise an error showing what paths were tried
+        if not candidates:
             tried_paths = [str((base / ref_path).resolve()) for base in paths_to_try]
             paths_msg = "\n  - ".join(tried_paths)
             raise ReferenceResolverError(f"Reference path '{ref_path}' not found. Tried:\n  - {paths_msg}")
 
-        return result_path
+        # Both lookup bases have a matching file: the file-relative candidate
+        # wins, but silently shadowing the root-relative one is surprising —
+        # adding a file next to a scenario could change what a reference means.
+        if len(candidates) > 1:
+            warnings.warn(
+                AmbiguousReferenceWarning(
+                    f"Reference '{ref_path}' matches an existing file under both the referencing "
+                    f"file's directory and the root path; using {candidates[0]} (file-relative wins), "
+                    f"ignoring {candidates[1]}"
+                ),
+                stacklevel=2,
+            )
+
+        return candidates[0]
 
     @staticmethod
     def parse_json_pointer(pointer: str) -> list[str]:
