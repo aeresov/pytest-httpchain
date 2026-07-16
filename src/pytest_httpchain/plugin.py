@@ -180,50 +180,49 @@ def pytest_configure_node(node) -> None:
     node.workerinput["httpchain_dist"] = node.config.getoption("dist", default="no")
 
 
-def _explicitly_set(config: pytest.Config, name: str) -> bool:
-    """True if an ini option was explicitly set — in the ini file OR via ``-o``.
-
-    ``config.inicfg`` alone is not enough: on pytest 8.x it does not include
-    ``-o``/``--override-ini`` values (pytest 9 merges them in), so relying on it
-    silently dropped CLI overrides. ``getini()`` itself applies overrides on
-    both versions; only this explicit-set detection needs the extra scan.
-    """
-    if name in config.inicfg:
-        return True
-    for override in config.getoption("override_ini", None) or []:
-        key, sep, _ = override.partition("=")
-        if sep and key.strip() == name:
-            return True
-    return False
+# Effective defaults, applied by _get_ini. The options are registered with
+# default=None so that None doubles as the "not explicitly set" sentinel —
+# both ini-file values and -o/--override-ini values surface uniformly through
+# getini(), with no reliance on config.inicfg (deprecated in pytest 9.1).
+_INI_DEFAULTS: dict[ConfigOptions, Any] = {
+    ConfigOptions.SUFFIX: "http",
+    ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH: 3,
+    ConfigOptions.MAX_COMPREHENSION_LENGTH: 50000,
+    ConfigOptions.MAX_PARALLEL_ITERATIONS: 10000,
+}
 
 
 def _get_ini(config: pytest.Config, option: ConfigOptions) -> Any:
     """Read an httpchain ini option, honoring its deprecated pre-0.10 alias.
 
     Precedence: the ``httpchain_``-prefixed name when explicitly set, else the
-    legacy un-prefixed name when explicitly set, else the registered default.
-    The deprecation warning for a set legacy name is issued once, in
-    ``pytest_configure`` — not here, since collection reads run per file.
+    legacy un-prefixed name when explicitly set, else the default from
+    ``_INI_DEFAULTS``. The deprecation warning for a set legacy name is issued
+    once, in ``pytest_configure`` — not here, since collection reads run per
+    file.
     """
-    if _explicitly_set(config, str(option)):
-        return config.getini(option)
-    legacy = LEGACY_INI_NAMES[option]
-    if _explicitly_set(config, legacy):
-        return config.getini(legacy)
-    return config.getini(option)
+    value = config.getini(option)
+    if value is not None:
+        return value
+    legacy_value = config.getini(LEGACY_INI_NAMES[option])
+    if legacy_value is not None:
+        return legacy_value
+    return _INI_DEFAULTS[option]
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    ini_options: list[tuple[ConfigOptions, str, str, Any]] = [
-        (ConfigOptions.SUFFIX, "File suffix for HTTP test files.", "string", "http"),
-        (ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "Maximum number of parent directory traversals allowed in $ref paths.", "int", 3),
-        (ConfigOptions.MAX_COMPREHENSION_LENGTH, "Maximum length for list/dict comprehensions in template expressions.", "int", 50000),
-        (ConfigOptions.MAX_PARALLEL_ITERATIONS, "Maximum number of parallel iterations allowed per stage.", "int", 10000),
+    ini_options: list[tuple[ConfigOptions, str, str]] = [
+        (ConfigOptions.SUFFIX, "File suffix for HTTP test files.", "string"),
+        (ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "Maximum number of parent directory traversals allowed in $ref paths.", "int"),
+        (ConfigOptions.MAX_COMPREHENSION_LENGTH, "Maximum length for list/dict comprehensions in template expressions.", "int"),
+        (ConfigOptions.MAX_PARALLEL_ITERATIONS, "Maximum number of parallel iterations allowed per stage.", "int"),
     ]
-    for option, help_text, ini_type, default in ini_options:
-        parser.addini(name=option, help=help_text, type=ini_type, default=default)  # ty: ignore[invalid-argument-type]
+    for option, help_text, ini_type in ini_options:
+        # default=None is the "unset" sentinel; the real default lives in
+        # _INI_DEFAULTS and is applied by _get_ini.
+        parser.addini(name=option, help=f"{help_text} Default: {_INI_DEFAULTS[option]}.", type=ini_type, default=None)  # ty: ignore[invalid-argument-type]
         # Deprecated pre-0.10 alias; read via _get_ini, removal in 0.11.
-        parser.addini(name=LEGACY_INI_NAMES[option], help=f"Deprecated alias of {option}.", type=ini_type, default=default)  # ty: ignore[invalid-argument-type]
+        parser.addini(name=LEGACY_INI_NAMES[option], help=f"Deprecated alias of {option}.", type=ini_type, default=None)  # ty: ignore[invalid-argument-type]
     parser.addoption(
         "--httpchain-output-dir",
         "--output-dir",  # deprecated pre-0.10 alias, removal in 0.11
@@ -236,8 +235,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     # One-time deprecation notices for the pre-0.10 option spellings.
     for option, legacy in LEGACY_INI_NAMES.items():
-        if _explicitly_set(config, legacy):
-            if _explicitly_set(config, str(option)):
+        if config.getini(legacy) is not None:
+            if config.getini(option) is not None:
                 message = f"ini option '{legacy}' is deprecated and ignored because '{option}' is also set (removal in 0.11)"
             else:
                 message = f"ini option '{legacy}' is deprecated, use '{option}' (removal in 0.11)"
@@ -247,7 +246,7 @@ def pytest_configure(config: pytest.Config) -> None:
     flag_sources = " ".join(
         [
             *config.invocation_params.args,
-            str(config.inicfg.get("addopts", "")),
+            *config.getini("addopts"),
             os.environ.get("PYTEST_ADDOPTS", ""),
         ]
     )

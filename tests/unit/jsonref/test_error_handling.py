@@ -1,4 +1,5 @@
 import os
+import sys
 
 import pytest
 
@@ -72,6 +73,10 @@ class TestErrorHandling:
     @pytest.mark.skipif(
         hasattr(os, "geteuid") and os.geteuid() == 0,
         reason="root bypasses filesystem permission bits, so chmod(0o000) stays readable",
+    )
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="chmod(0o000) does not block reads on Windows, the file stays readable",
     )
     def test_file_permission_error(self, tmp_path):
         """Test handling of file permission errors"""

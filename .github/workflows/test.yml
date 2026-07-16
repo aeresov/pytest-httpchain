@@ -42,12 +42,18 @@ jobs:
               run: uv run lint-imports
 
     test:
-        name: Test (Python ${{ matrix.python-version }})
-        runs-on: ubuntu-latest
+        name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+        runs-on: ${{ matrix.os }}
         strategy:
             fail-fast: false
             matrix:
+                os: [ubuntu-latest, windows-latest]
                 python-version: ["3.13", "3.14"]
+                exclude:
+                    # One Windows job (3.13) covers path semantics; the full
+                    # Python matrix runs on Linux.
+                    - os: windows-latest
+                      python-version: "3.14"
         env:
             UV_PYTHON: ${{ matrix.python-version }}
         steps:
@@ -75,9 +81,35 @@ jobs:
                   uv run coverage xml
 
             - name: Upload coverage to Codecov
-              if: matrix.python-version == '3.13'
+              if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
               uses: codecov/codecov-action@v7
               with:
                   files: ./coverage.xml
                   fail_ci_if_error: false
                   verbose: true
+
+    test-lowest:
+        name: Test (lowest dependency floors)
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@v8.3.2
+              with:
+                  enable-cache: true
+                  cache-dependency-glob: "uv.lock"
+
+            - name: Set up Python
+              run: uv python install 3.13
+
+            # Resolve every direct dependency at its declared MINIMUM version,
+            # so the floors in pyproject.toml are tested claims, not guesses.
+            - name: Resolve lowest direct versions
+              run: uv lock --resolution lowest-direct
+
+            - name: Install dependencies
+              run: uv sync --frozen --all-extras
+
+            - name: Run tests
+              run: uv run --frozen pytest tests -v
