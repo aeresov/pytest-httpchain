@@ -262,7 +262,7 @@ pytest-httpchain is built for **full visibility while debugging** — and that v
 
 - **Logs** (`--log-cli-level=INFO`, as shown above) print the entire context as JSON — fixture values, substitution variables, and saved values such as auth tokens.
 - **Report sections** attach the full HTTP request and response of a failing stage, including `Authorization` and other credential headers.
-- **HAR export** (`--output-dir`) writes complete requests and responses — headers, cookies, and bodies — to disk.
+- **HAR export** (`--httpchain-output-dir`) writes complete requests and responses — headers, cookies, and bodies — to disk.
 
 This is intentional (you usually *want* to see the real token when a chained request fails), but it means logs, JUnit/terminal reports, and `.har` files all contain whatever credentials your scenario uses. Treat them as sensitive:
 

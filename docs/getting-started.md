@@ -25,9 +25,8 @@ Configuration options can be set in `pytest.ini` or `pyproject.toml` under `[too
 | `httpchain_max_comprehension_length` | `50000` | Maximum length for list/dict comprehensions in template expressions |
 | `httpchain_max_parallel_iterations` | `10000` | Maximum number of parallel iterations (`repeat`/`foreach`) allowed per stage |
 
-The pre-0.10 un-prefixed names (`suffix`, `ref_parent_traversal_depth`, ...) are
-still accepted as deprecated aliases and will be removed in 0.11; when both
-spellings are set, the `httpchain_`-prefixed one wins.
+The pre-0.10 un-prefixed names (`suffix`, `ref_parent_traversal_depth`, ...)
+were deprecated through the 0.10 series and removed in 0.11.
 
 Example `pyproject.toml`:
 
@@ -41,10 +40,10 @@ httpchain_max_parallel_iterations = 10000
 
 ### HAR export
 
-Pass `--httpchain-output-dir DIR` (deprecated alias: `--output-dir`) on the pytest command line to write an [HAR](http://www.softwareishard.com/blog/har-12-spec/) file capturing the HTTP request/response of each test's last stage:
+Pass `--httpchain-output-dir DIR` on the pytest command line to write an [HAR](http://www.softwareishard.com/blog/har-12-spec/) file capturing the HTTP exchanges of each test stage:
 
 ```bash
-pytest --output-dir ./har-output
+pytest --httpchain-output-dir ./har-output
 ```
 
 Each test that performs a request writes a `.har` file under `DIR` (named from the test node id) and a "HAR File" section is added to that test's report.

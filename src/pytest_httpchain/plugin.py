@@ -5,9 +5,8 @@ scenarios into pytest:
 
 - ``pytest_addoption`` / ``pytest_configure`` register and validate the ini
   options (``httpchain_suffix``, ``httpchain_ref_parent_traversal_depth``,
-  ``httpchain_max_comprehension_length``, ``httpchain_max_parallel_iterations``,
-  plus their deprecated un-prefixed pre-0.10 aliases) and the
-  ``--httpchain-output-dir`` flag (deprecated alias ``--output-dir``).
+  ``httpchain_max_comprehension_length``, ``httpchain_max_parallel_iterations``)
+  and the ``--httpchain-output-dir`` flag.
 - ``pytest_collect_file`` matches ``test_<name>.<suffix>.json`` files and hands
   them to `JsonModule`.
 - `JsonModule.collect` loads the JSON (resolving ``$ref``), validates it
@@ -20,7 +19,6 @@ scenarios into pytest:
 """
 
 import logging
-import os
 import re
 import types
 import warnings
@@ -33,7 +31,7 @@ from pydantic import ValidationError
 
 import pytest_httpchain.jsonref
 from pytest_httpchain.carrier import Carrier, create_test_class
-from pytest_httpchain.constants import LEGACY_INI_NAMES, ConfigOptions
+from pytest_httpchain.constants import ConfigOptions
 from pytest_httpchain.har_writer import write_har_file
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.report_formatter import format_request, format_response
@@ -212,20 +210,15 @@ _INI_DEFAULTS: dict[ConfigOptions, Any] = {
 
 
 def _get_ini(config: pytest.Config, option: ConfigOptions) -> Any:
-    """Read an httpchain ini option, honoring its deprecated pre-0.10 alias.
+    """Read an httpchain ini option: its explicitly-set value, else the
+    default from ``_INI_DEFAULTS``.
 
-    Precedence: the ``httpchain_``-prefixed name when explicitly set, else the
-    legacy un-prefixed name when explicitly set, else the default from
-    ``_INI_DEFAULTS``. The deprecation warning for a set legacy name is issued
-    once, in ``pytest_configure`` — not here, since collection reads run per
-    file.
+    The pre-0.10 un-prefixed aliases were deprecated through the 0.10 series
+    and removed in 0.11.
     """
     value = config.getini(option)
     if value is not None:
         return value
-    legacy_value = config.getini(LEGACY_INI_NAMES[option])
-    if legacy_value is not None:
-        return legacy_value
     return _INI_DEFAULTS[option]
 
 
@@ -240,11 +233,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         # default=None is the "unset" sentinel; the real default lives in
         # _INI_DEFAULTS and is applied by _get_ini.
         parser.addini(name=option, help=f"{help_text} Default: {_INI_DEFAULTS[option]}.", type=ini_type, default=None)  # ty: ignore[invalid-argument-type]
-        # Deprecated pre-0.10 alias; read via _get_ini, removal in 0.11.
-        parser.addini(name=LEGACY_INI_NAMES[option], help=f"Deprecated alias of {option}.", type=ini_type, default=None)  # ty: ignore[invalid-argument-type]
     parser.addoption(
         "--httpchain-output-dir",
-        "--output-dir",  # deprecated pre-0.10 alias, removal in 0.11
         dest="output_dir",
         default=None,
         help="Directory to write test output files (HAR format for HTTP communications).",
@@ -252,29 +242,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    # One-time deprecation notices for the pre-0.10 option spellings.
-    for option, legacy in LEGACY_INI_NAMES.items():
-        if config.getini(legacy) is not None:
-            if config.getini(option) is not None:
-                message = f"ini option '{legacy}' is deprecated and ignored because '{option}' is also set (removal in 0.11)"
-            else:
-                message = f"ini option '{legacy}' is deprecated, use '{option}' (removal in 0.11)"
-            config.issue_config_time_warning(pytest.PytestDeprecationWarning(message), stacklevel=2)
-    # The deprecated flag can arrive via argv, ini addopts, or PYTEST_ADDOPTS —
-    # scan all three (invocation_params.args carries only argv).
-    flag_sources = " ".join(
-        [
-            *config.invocation_params.args,
-            *config.getini("addopts"),
-            os.environ.get("PYTEST_ADDOPTS", ""),
-        ]
-    )
-    if "--output-dir" in flag_sources:
-        config.issue_config_time_warning(
-            pytest.PytestDeprecationWarning("flag '--output-dir' is deprecated, use '--httpchain-output-dir' (removal in 0.11)"),
-            stacklevel=2,
-        )
-
     # Numeric options are registered with type="int", but pytest performs the
     # int() conversion with a bare int(value) that raises ValueError for a
     # non-integer ini value — which pytest renders as an INTERNALERROR traceback.

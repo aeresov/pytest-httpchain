@@ -1,7 +1,7 @@
 """End-to-end HAR export (M52).
 
 The har_writer unit tests cover the serialization shape; this exercises the
-full plugin path: running a scenario with ``--output-dir`` must drop a `.har`
+full plugin path: running a scenario with ``--httpchain-output-dir`` must drop a `.har`
 file per executed stage, and that file must parse as valid HAR JSON.
 """
 
@@ -13,7 +13,7 @@ def test_har_file_written(pytester):
 
     pytester.copy_example("conftest.py")
     pytester.copy_example("verify/test_verify_status.http.json")
-    result = pytester.runpytest("-s", "--output-dir", str(har_dir))
+    result = pytester.runpytest("-s", "--httpchain-output-dir", str(har_dir))
 
     # Sanity: the scenario itself passes (2 stages = 2 test methods).
     result.assert_outcomes(errors=0, failed=0, passed=2)

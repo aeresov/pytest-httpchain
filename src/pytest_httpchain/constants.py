@@ -14,8 +14,7 @@ class ConfigOptions(StrEnum):
     All names carry the ``httpchain_`` prefix: pytest ini options live in one
     global namespace shared by every installed plugin, so generic names like
     ``suffix`` risk hard startup collisions. The pre-0.10 un-prefixed spellings
-    are still accepted as deprecated aliases (see ``LEGACY_INI_NAMES``) and will
-    be removed in 0.11.
+    were deprecated through the 0.10 series and removed in 0.11.
 
     Attributes:
         SUFFIX: File suffix for HTTP test files (default: "http").
@@ -27,17 +26,11 @@ class ConfigOptions(StrEnum):
         MAX_PARALLEL_ITERATIONS: Maximum number of parallel iterations allowed
             per stage (default: "10000").
 
-    Note: the HAR output directory is a CLI flag (``--httpchain-output-dir``,
-    with ``--output-dir`` as a deprecated alias), not an ini option, so it is
-    intentionally not listed here.
+    Note: the HAR output directory is a CLI flag (``--httpchain-output-dir``),
+    not an ini option, so it is intentionally not listed here.
     """
 
     SUFFIX = "httpchain_suffix"
     REF_PARENT_TRAVERSAL_DEPTH = "httpchain_ref_parent_traversal_depth"
     MAX_COMPREHENSION_LENGTH = "httpchain_max_comprehension_length"
     MAX_PARALLEL_ITERATIONS = "httpchain_max_parallel_iterations"
-
-
-# Deprecated pre-0.10 spellings, accepted through the 0.10 series and removed
-# in 0.11. The read helper in plugin.py prefers the new name when both are set.
-LEGACY_INI_NAMES: dict[ConfigOptions, str] = {option: option.removeprefix("httpchain_") for option in ConfigOptions}

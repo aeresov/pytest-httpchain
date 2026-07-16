@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-16
+
 ### Added
 
 - Response metadata is now declaratively reachable in response steps via the reserved `response` namespace — `response.status`, `response.reason`, `response.headers` (case-insensitive), `response.elapsed_ms` — usable in `verify.expressions` (`{{ response.status == 200 }}`, `{{ 'json' in response.headers['content-type'] }}`) and in save templates, which makes saving a header a one-liner substitutions save. The namespace exists only inside response steps; the response **body** stays out (extract it with `save`). A user variable/save/fixture named `response` is shadowed there — the validator warns with the new `HTTPCHAIN027` diagnostic (and dynamically produced keys, e.g. from a `user_functions` save, trigger the same warning at runtime).
@@ -21,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows is now part of the CI test matrix. One portability fix came out of it: absolute `$ref` paths are judged under both POSIX and Windows path rules on every platform (previously `/etc/passwd` was not recognized as absolute when running on Windows; the root-containment check still applied, but the explicit rejection now matches on all hosts).
 - HAR output (`--httpchain-output-dir`) for a parallel stage now contains one entry per iteration, in iteration order, instead of a single arbitrary iteration presented as the stage's only exchange. The `write_har_file` helper accordingly takes a list of `(request, response)` exchanges instead of one pair. (Exchanges are only retained for the HAR when the option is on, so runs without it keep the previous memory footprint.)
 - The CLI's default `$ref` resolution root (`--root-path` unset) is now the auto-detected project root — the nearest ancestor containing a standard project marker (`pytest.ini`, `pyproject.toml`, `tox.ini`, `setup.cfg`, `setup.py`, `.git`) — matching pytest collection, which sandboxes `$ref` to pytest's `rootpath`, so `validate`/`show`/`graph` accept exactly the references that collection accepts; pytest collection itself also routes through the same load pipeline as the CLI. A `$ref` that previously needed an explicit `--root-path` to reach a shared fragment above `tests/` now resolves by default. In a tree with no project marker at all (e.g. an exported scenario bundle), the previous default — the nearest `tests/` ancestor, else the file's own directory — still applies, so marker-less layouts keep working unchanged.
+
+### Removed
+
+- **BREAKING**: the deprecated pre-0.10 option spellings, completing the deprecation window opened in 0.10.0: the un-prefixed ini options (`suffix`, `ref_parent_traversal_depth`, `max_comprehension_length`, `max_parallel_iterations`) and the `--output-dir` flag. Use the `httpchain_`-prefixed ini names and `--httpchain-output-dir`; the old ini names now get pytest's standard unknown-option warning and the old flag is rejected as an unrecognized argument.
 
 ### Fixed
 
@@ -346,7 +352,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.8.1...v0.9.0
