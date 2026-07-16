@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING**: dependency floors raised to match tested reality, now enforced by a lowest-floors CI job that installs every direct dependency at its declared minimum: `pytest>=9.0` (the `[tool.pytest]` configuration table is only read by pytest 9 — under 8.x the plugin mis-collected its own examples and `minversion` was silently unenforced), `pydantic>=2.13.4` (stable generated-schema output), `pyrate-limiter>=4.2.0` (the blocking `try_acquire` API the runner uses).
+- Windows is now part of the CI test matrix. One portability fix came out of it: absolute `$ref` paths are judged under both POSIX and Windows path rules on every platform (previously `/etc/passwd` was not recognized as absolute when running on Windows; the root-containment check still applied, but the explicit rejection now matches on all hosts).
+
 ## [0.10.0] - 2026-07-16
 
 ### Added

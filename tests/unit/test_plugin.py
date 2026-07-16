@@ -10,13 +10,19 @@ from pytest_httpchain.plugin import pytest_collect_file, pytest_configure
 def make_config(suffix="http", ref_depth=3, max_comp=50000, max_parallel=10000):
     # M17: numeric options are registered type="int", so getini returns ints and
     # range-check failures raise pytest.UsageError (not bare ValueError).
+    # getini(name) returns None for anything not explicitly modeled — matching
+    # the real registration, where default=None is the "unset" sentinel (the
+    # legacy alias names therefore read as unset here).
     config = MagicMock()
-    config.getini.side_effect = lambda name: {
-        ConfigOptions.SUFFIX: suffix,
-        ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH: ref_depth,
-        ConfigOptions.MAX_COMPREHENSION_LENGTH: max_comp,
-        ConfigOptions.MAX_PARALLEL_ITERATIONS: max_parallel,
-    }[name]
+    values = {
+        str(ConfigOptions.SUFFIX): suffix,
+        str(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH): ref_depth,
+        str(ConfigOptions.MAX_COMPREHENSION_LENGTH): max_comp,
+        str(ConfigOptions.MAX_PARALLEL_ITERATIONS): max_parallel,
+        "addopts": [],
+    }
+    config.getini.side_effect = lambda name: values.get(str(name))
+    config.invocation_params.args = []
     return config
 
 
@@ -83,9 +89,13 @@ class TestPytestConfigure:
         def getini(name):
             if name == bad_option:
                 raise ValueError("invalid literal for int() with base 10: 'notanumber'")
-            return defaults[name]
+            if str(name) == "addopts":
+                return []
+            # legacy aliases (and anything unmodeled) read as unset
+            return defaults.get(name)
 
         config.getini.side_effect = getini
+        config.invocation_params.args = []
         with pytest.raises(pytest.UsageError, match="must be an integer"):
             pytest_configure(config)
 

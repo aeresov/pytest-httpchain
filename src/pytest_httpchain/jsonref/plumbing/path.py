@@ -1,6 +1,6 @@
 """Reference path and JSON pointer helpers for reference resolution."""
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
 
@@ -30,8 +30,11 @@ class RefPathHelper:
             ReferenceResolverError: If the path is invalid or violates security constraints
         """
         # Reject absolute ref file paths: they bypass the traversal limit (no "..")
-        # and `base / "/abs"` collapses to "/abs", escaping the sandbox.
-        if Path(ref_path).is_absolute():
+        # and `base / "/abs"` collapses to "/abs", escaping the sandbox. Scenario
+        # files are portable artifacts, so judge "absolute" under BOTH path
+        # flavors — the host's Path alone would let "/etc/passwd" through on
+        # Windows (rooted but not absolute there) and "C:\\x" through on POSIX.
+        if PurePosixPath(ref_path).is_absolute() or PureWindowsPath(ref_path).is_absolute() or ref_path.startswith(("/", "\\")):
             raise ReferenceResolverError(f"Absolute reference paths are not allowed: {ref_path}")
 
         # Count parent traversals before resolution
