@@ -42,6 +42,7 @@ src/pytest_httpchain/
 ├── cli.py                     # Typer CLI (validate, schema, resolve, show, graph)
 ├── validation.py              # Shared validator (CLI + collection-time): coded Diagnostic objects (HTTPCHAINxxx) for semantic checks incl. order-aware data-flow; plus opt-in `check_scenario_deep` (imports/signatures/files) used only by `validate --deep`
 ├── dataflow.py                # DataFlow model + analyze_dataflow() (stage data-flow analysis, used by show/graph)
+├── scoping.py                 # Single encoding of the scope/visibility rules: StageScopes static name sets (used by validation + dataflow) and runtime ChainMap context builders (used by carrier)
 ├── schema.py                  # build_schema() — JSON Schema generation shared by the schema command
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule)
 ├── carrier.py                 # Test execution engine (Carrier class)

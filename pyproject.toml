@@ -151,7 +151,7 @@ layers = [
     "plugin : cli",
     "carrier : dataflow : schema",
     "validation : har_writer : report_formatter",
-    "utils",
+    "utils : scoping",
     "models",
     "templates : jsonref : userfunc",
     "errors : constants : warnings",

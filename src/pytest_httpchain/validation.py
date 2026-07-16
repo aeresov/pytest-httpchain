@@ -52,10 +52,8 @@ warnings.
 are exempt from ``--strict``, and are not warned about at collection.
 """
 
-import ast
 import inspect
 import json
-import re
 import sys
 import warnings
 from pathlib import Path
@@ -66,29 +64,28 @@ from pydantic import BaseModel, ValidationError
 from pytest_httpchain.jsonref import DuplicateKeyError, ReferenceResolverError, load_json
 from pytest_httpchain.models import (
     BinaryBody,
-    CombinationsParameter,
     FilesBody,
     FunctionsSubstitution,
-    IndividualParameter,
-    JMESPathSave,
-    ParallelConfig,
-    ParallelForeachConfig,
-    Parameters,
     SaveStep,
     Scenario,
-    Stage,
-    SubstitutionsSave,
     UserFunctionCall,
     UserFunctionKwargs,
     UserFunctionName,
     UserFunctionsSave,
-    VarsSubstitution,
     Verify,
     VerifyStep,
     check_json_schema,
     parametrize_values_contain_template,
 )
-from pytest_httpchain.templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN, is_complete_template
+from pytest_httpchain.scoping import (
+    extract_defined_variables,
+    extract_saved_variables,
+    extract_template_variables,
+    raw_stages,
+    stage_scopes,
+    substitution_names,
+)
+from pytest_httpchain.templates import is_complete_template
 from pytest_httpchain.userfunc import UserFunctionError, import_function
 from pytest_httpchain.utils import make_marker
 
@@ -140,165 +137,6 @@ def _diag(code: str, severity: Severity, message: str, location: str | None = No
     return Diagnostic(code=code, severity=severity, message=message, location=location)
 
 
-def _extract_names_from_expr(expr: str) -> set[str]:
-    """Extract free identifier names referenced by a Python expression.
-
-    Names bound *within* the expression — comprehension targets
-    (``for x in ...``) and lambda parameters — are local bindings, not context
-    references, so they are excluded. Falls back to a permissive regex if the
-    expression doesn't parse.
-    """
-    try:
-        tree = ast.parse(expr.strip(), mode="eval")
-    except SyntaxError:
-        return set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", expr))
-
-    bound: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.comprehension):
-            bound |= {n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)}
-        elif isinstance(node, ast.Lambda):
-            a = node.args
-            for arg in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg):
-                if arg is not None:
-                    bound.add(arg.arg)
-
-    loaded = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
-    return loaded - bound
-
-
-def extract_template_variables(obj: Any, variables: set[str] | None = None) -> set[str]:
-    """Recursively extract variable names from {{ expr }} template expressions."""
-    if variables is None:
-        variables = set()
-
-    if isinstance(obj, str):
-        for match in re.finditer(TEMPLATE_PATTERN, obj):
-            names = _extract_names_from_expr(match.group("expr"))
-            variables.update(names - TEMPLATE_BUILTINS)
-    elif isinstance(obj, dict):
-        for value in obj.values():
-            extract_template_variables(value, variables)
-    elif isinstance(obj, list):
-        for item in obj:
-            extract_template_variables(item, variables)
-
-    return variables
-
-
-def substitution_names(substitutions: Any) -> set[str]:
-    """Names introduced by a list of ``vars``/``functions`` substitution entries."""
-    names: set[str] = set()
-    for sub in substitutions or []:
-        match sub:
-            case VarsSubstitution():
-                names.update(sub.vars.keys())
-            case FunctionsSubstitution():
-                names.update(sub.functions.keys())
-    return names
-
-
-def saved_in_stage(stage: Stage) -> set[str]:
-    """Variable names a single stage's response steps save into the context."""
-    saved: set[str] = set()
-    for response_step in stage.response:
-        if not isinstance(response_step, SaveStep):
-            continue
-        match response_step.save:
-            case JMESPathSave(jmespath=jmespath):
-                saved.update(jmespath.keys())
-            case SubstitutionsSave(substitutions=substitutions):
-                saved |= substitution_names(substitutions)
-            case UserFunctionsSave():
-                # user_functions saves return arbitrary dict keys -> not statically known.
-                pass
-    return saved
-
-
-def extract_saved_variables(scenario: Scenario) -> set[str]:
-    """Extract variable names saved across all response steps in the scenario."""
-    saved_vars: set[str] = set()
-    for stage in scenario.stages:
-        saved_vars |= saved_in_stage(stage)
-    return saved_vars
-
-
-def parameter_names(params: Parameters | None) -> set[str]:
-    """Names injected by a list of parametrize/foreach Parameter entries.
-
-    Covers both ``individual`` (one name -> list of values) and ``combinations``
-    (list of dicts whose keys are the names). Template-string forms (deferred to
-    runtime) contribute no statically-known names.
-    """
-    names: set[str] = set()
-    for param in params or []:
-        match param:
-            case IndividualParameter(individual=individual):
-                names.update(individual)
-            case CombinationsParameter(combinations=combinations):
-                # A template-string form defers the combinations to runtime, so
-                # it contributes no statically-known names.
-                if not isinstance(combinations, str):
-                    for combo in combinations:
-                        names.update(combo)
-    return names
-
-
-def foreach_parameter_names(parallel: ParallelConfig | None) -> set[str]:
-    """Names injected per iteration by a ``parallel.foreach`` config.
-
-    Empty for ``repeat`` configs and for stages without a parallel config."""
-    match parallel:
-        case ParallelForeachConfig(foreach=foreach):
-            return parameter_names(foreach)
-        case _:
-            return set()
-
-
-def stage_defined_names(stage: Stage) -> set[str]:
-    """Names available *within a single stage*: its substitutions, parametrize /
-    foreach parameters, and its declared fixtures."""
-    names = substitution_names(stage.substitutions)
-    names |= parameter_names(stage.parametrize)
-    names |= foreach_parameter_names(stage.parallel)
-    names |= set(stage.fixtures)
-    return names
-
-
-def extract_defined_variables(scenario: Scenario) -> set[str]:
-    """Extract variable names made available before/within templates (scenario-wide).
-
-    Sources: ``vars`` and ``functions`` substitutions (scenario- and stage-level),
-    plus parameter names injected by ``parametrize`` and ``parallel.foreach``. This
-    is the *union* across the whole scenario, used for the fixture-conflict check
-    and informational output; the order-aware data-flow check
-    (`_dataflow_diagnostics`) computes availability per stage instead.
-    """
-    defined_vars: set[str] = set()
-
-    defined_vars |= substitution_names(scenario.substitutions)
-
-    for stage in scenario.stages:
-        defined_vars |= substitution_names(stage.substitutions)
-        defined_vars |= parameter_names(stage.parametrize)
-        defined_vars |= foreach_parameter_names(stage.parallel)
-
-    return defined_vars
-
-
-def raw_stages(test_data: dict[str, Any]) -> list[Any]:
-    """Raw (pre-validation) stage bodies in declaration order.
-
-    Stages may be authored as a list or as a ``{name: stage}`` mapping; both
-    preserve order, matching the normalized ``scenario.stages``."""
-    raw = test_data.get("stages")
-    if isinstance(raw, dict):
-        return list(raw.values())
-    if isinstance(raw, list):
-        return raw
-    return []
-
-
 def _is_noop_verify(verify: Verify) -> bool:
     """A verify step that asserts nothing: no status, headers, expressions,
     user functions, schema, or body substring/regex checks."""
@@ -319,25 +157,11 @@ def _is_noop_verify(verify: Verify) -> bool:
 def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagnostic]:
     """Order-aware variable data-flow analysis.
 
-    Walks stages in execution order tracking which variables are available at
-    each reference site, mirroring the runtime scoping in ``carrier.py``:
-
-    * scenario-level substitutions and scenario-level fixtures are available
-      everywhere;
-    * a stage's substitutions and ``parallel`` config resolve at stage start,
-      before any iteration: they see fixtures, parametrize parameters, scenario
-      substitutions and earlier saves — but not ``foreach`` parameters;
-    * a stage's request and response additionally see the ``foreach`` parameters
-      (resolved per iteration); intra-step ordering within a stage's response is
-      approximated (all of a stage's own saves are treated as available to its
-      response), so a verify that reads a value saved by a later save step in the
-      same stage is not flagged;
-    * a value saved in a stage's response is available to that stage's response
-      and to *later* stages — but never to the same stage's request, and never
-      to earlier stages;
-    * ``always_run`` is evaluated at stage start, before stage substitutions are
-      processed and before any iteration runs: only fixtures, parametrize
-      parameters, scenario substitutions and earlier saves are in scope.
+    Walks stages in execution order checking each template reference against
+    the phase scopes computed by ``scoping.stage_scopes`` — the single encoding
+    of the runtime visibility rules (see that module's docstring for the full
+    table). Intra-step ordering within a stage's response is approximated: all
+    of a stage's own saves are treated as available to its whole response.
 
     A reference that is unavailable is reported as `DiagnosticCode.FORWARD_REF`
     if the name is saved somewhere later (an ordering bug) or
@@ -345,39 +169,20 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
     """
     diagnostics: list[Diagnostic] = []
 
+    scopes = stage_scopes(scenario)
     all_saved = extract_saved_variables(scenario)
-    saves_by_stage: list[set[str]] = [saved_in_stage(stage) for stage in scenario.stages]
     first_save_stage: dict[str, int] = {}
-    for i, saved in enumerate(saves_by_stage):
-        for name in saved:
+    for i, scope in enumerate(scopes):
+        for name in scope.saves:
             first_save_stage.setdefault(name, i)
-
-    # ``parametrize`` parameter VALUES are resolved at collection time
-    # (carrier.create_test_class) against scenario-level substitutions only — no
-    # fixtures, no stage substitutions, no parameter names, no saved values exist
-    # yet. ``scenario_scope`` is that narrow set; ``scenario_available`` is the
-    # everywhere-available set used for ordinary request/response references.
-    scenario_scope: set[str] = set(substitution_names(scenario.substitutions))
-
-    scenario_available = scenario_scope | set(scenario.fixtures)
 
     # raws[i] is the unvalidated dict for scenario.stages[i]: both come from the same
     # order-preserving normalization (_normalize_stages_input), so they pair by index.
     raws = raw_stages(test_data)
-    cumulative_saves: set[str] = set()
 
     for i, stage in enumerate(scenario.stages):
+        scope = scopes[i]
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
-
-        # Stage substitutions and the parallel config are resolved at stage start,
-        # BEFORE any foreach iteration variable exists, so they see fixtures,
-        # parametrize parameters, scenario substitutions and earlier saves — but not
-        # foreach parameters. The request/response are resolved per iteration, so
-        # they additionally see the foreach parameters.
-        foreach_params = foreach_parameter_names(stage.parallel)
-        pre_iteration_available = scenario_available | set(stage.fixtures) | parameter_names(stage.parametrize) | substitution_names(stage.substitutions) | cumulative_saves
-        request_available = pre_iteration_available | foreach_params
-        response_available = request_available | saves_by_stage[i]
 
         pre_iteration_refs: set[str] = set()
         for key in ("substitutions", "parallel"):
@@ -385,8 +190,12 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
         request_refs = extract_template_variables(raw.get("request"))
         response_refs = extract_template_variables(raw.get("response"))
 
+        # ``parametrize`` parameter VALUES are resolved at collection time
+        # (carrier.create_test_class) against scenario-level substitutions only — no
+        # fixtures, no stage substitutions, no parameter names, no saved values
+        # exist yet.
         for name in sorted(extract_template_variables(raw.get("parametrize"))):
-            if name in scenario_scope:
+            if name in scope.scenario_substitutions:
                 continue
             diagnostics.append(
                 _diag(
@@ -400,9 +209,8 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
         # ``always_run`` resolves at stage start (carrier.execute_stage) against
         # fixtures + parametrize parameters + global context — stage substitutions
         # and foreach parameters don't exist yet, and neither do this stage's saves.
-        always_run_available = scenario_available | set(stage.fixtures) | parameter_names(stage.parametrize) | cumulative_saves
         for name in sorted(extract_template_variables(raw.get("always_run"))):
-            if name in always_run_available:
+            if name in scope.always_run:
                 continue
             if name in all_saved:
                 j = first_save_stage[name]
@@ -425,9 +233,9 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
         undefined_here: set[str] = set()
 
         for refs, available, in_request in (
-            (sorted(pre_iteration_refs), pre_iteration_available, True),
-            (sorted(request_refs), request_available, True),
-            (sorted(response_refs), response_available, False),
+            (sorted(pre_iteration_refs), scope.pre_iteration, True),
+            (sorted(request_refs), scope.request, True),
+            (sorted(response_refs), scope.response, False),
         ):
             for name in refs:
                 if name in available:
@@ -451,8 +259,6 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
                     location=stage.name,
                 )
             )
-
-        cumulative_saves |= saves_by_stage[i]
 
     return diagnostics
 
@@ -860,14 +666,12 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
     # fixture shadows the variable in that stage's generated method. Scope the check
     # per stage so a fixture used only in one stage and a same-named parameter used
     # only in another (which never coexist) are not falsely flagged.
-    scenario_fixture_set = set(scenario.fixtures)
     scenario_sub_names = set(substitution_names(scenario.substitutions))
     var_conflicts: set[str] = set()
-    for stage in scenario.stages:
-        stage_fixtures = scenario_fixture_set | set(stage.fixtures)
-        stage_params = parameter_names(stage.parametrize) | foreach_parameter_names(stage.parallel)
-        stage_vars = scenario_sub_names | substitution_names(stage.substitutions) | stage_params
-        var_conflicts |= stage_fixtures & stage_vars
+    for scope in stage_scopes(scenario):
+        fixtures_in_stage = scope.scenario_fixtures | scope.stage_fixtures
+        vars_in_stage = scope.scenario_substitutions | scope.stage_substitutions | scope.parametrize_params | scope.foreach_params
+        var_conflicts |= fixtures_in_stage & vars_in_stage
     if var_conflicts:
         diagnostics.append(
             _diag(

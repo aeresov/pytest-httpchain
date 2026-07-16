@@ -71,6 +71,7 @@ from pytest_httpchain.models import (
     check_json_schema,
     parametrize_values_contain_template,
 )
+from pytest_httpchain.scoping import base_global_context, iteration_context, stage_start_context, with_saves, with_stage_substitutions
 from pytest_httpchain.templates import TemplatesError, walk
 from pytest_httpchain.userfunc import UserFunctionError
 from pytest_httpchain.utils import call_user_function, make_marker, process_substitutions
@@ -178,7 +179,7 @@ class Carrier:
             assert scenario is not None, "create_test_class() seeds cls.scenario"
             try:
                 if not cls._context_resolved_at_collection:
-                    cls.global_context = ChainMap(process_substitutions(scenario.substitutions))
+                    cls.global_context = base_global_context(process_substitutions(scenario.substitutions))
 
                 resolved_ssl: SSLConfig = walk(scenario.ssl, cls.global_context)
                 # A Path-valued `verify` is a CA bundle file: scenario-relative.
@@ -216,7 +217,7 @@ class Carrier:
         if isinstance(stage.always_run, bool):
             return stage.always_run
         try:
-            return bool(walk(stage.always_run, ChainMap(stage_fixtures, cls.global_context)))
+            return bool(walk(stage.always_run, stage_start_context(cls.global_context, stage_fixtures)))
         except TemplatesError as e:
             raise StageExecutionError(f"Failed to evaluate always_run template: {e}") from e
 
@@ -254,9 +255,9 @@ class Carrier:
             cls._ensure_initialized()
 
             # Build base context for iterations (substitutions + fixtures + global)
-            local_context = ChainMap(stage_fixtures, cls.global_context)
-            stage_substitutions = process_substitutions(stage.substitutions, local_context)
-            local_context = local_context.new_child(stage_substitutions)
+            stage_context = stage_start_context(cls.global_context, stage_fixtures)
+            stage_substitutions = process_substitutions(stage.substitutions, stage_context)
+            local_context = with_stage_substitutions(stage_context, stage_substitutions)
 
             logger.info(f"global context on start: {json.dumps(dict(cls.global_context), indent=2, default=str)}")
             logger.info(f"local context on start: {json.dumps(dict(local_context), indent=2, default=str)}")
@@ -290,7 +291,7 @@ class Carrier:
                         cls.last_request = iter_result.request
                         cls.last_response = iter_result.response
                 logger.info(f"updates for global context: {json.dumps(all_saves, indent=2, default=str)}")
-                cls.global_context = cls.global_context.new_child(all_saves)
+                cls.global_context = with_saves(cls.global_context, all_saves)
             else:
                 idx, exc = first_error
                 # Surface the failed iteration's request/response in the report.
@@ -616,7 +617,7 @@ class Carrier:
         cls, stage: Stage, local_context: ChainMap[str, Any], iter_vars: Mapping[str, Any], limiter: Limiter | None = None, rate_limit_delay: float = 60
     ) -> ParallelIterationResult:
         """Execute a single iteration of a stage."""
-        iter_context = local_context.new_child(dict(iter_vars))
+        iter_context = iteration_context(local_context, iter_vars)
 
         # walk() already returns a re-validated model (it dumps, substitutes, and
         # model_validates when templates are present, else returns the model as-is),
@@ -636,7 +637,7 @@ class Carrier:
                     case SaveStep():
                         save_model = walk(step.save, iter_context)
                         step_saved = cls._process_save_step(save_model, response, iter_context)
-                        iter_context = iter_context.new_child(step_saved)
+                        iter_context = with_saves(iter_context, step_saved)
                         saved_context.update(step_saved)
 
                     case VerifyStep():
@@ -706,7 +707,7 @@ class Carrier:
         cls.aborted = False
         cls.last_request = None
         cls.last_response = None
-        cls.global_context = ChainMap(cls.global_context.maps[-1])
+        cls.global_context = base_global_context(cls.global_context.maps[-1])
 
 
 def _normalize_cert(cert: Any) -> str | tuple[str, ...]:
@@ -748,7 +749,7 @@ def create_test_class(scenario: Scenario, class_name: str, max_parallel_iteratio
             "aborted": False,
             "last_request": None,
             "last_response": None,
-            "global_context": ChainMap(scenario_context),
+            "global_context": base_global_context(scenario_context),
             "_initialized": False,
             "_init_failed": None,
             "_context_resolved_at_collection": needs_collection_context,

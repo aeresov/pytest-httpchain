@@ -1,9 +1,9 @@
 """Structured stage data-flow analysis for the ``show`` and ``graph`` CLI commands.
 
-Reuses the same extraction helpers as the order-aware validator
-(``validation._dataflow_diagnostics``) but produces a graph model instead of
-diagnostics: which variables each stage saves, which it consumes from earlier
-stages, and the producer -> consumer edges between stages.
+Consumes the same per-stage scope model (``scoping.stage_scopes``) as the
+order-aware validator, but produces a graph instead of diagnostics: which
+variables each stage saves, which it consumes from earlier stages, and the
+producer -> consumer edges between stages.
 """
 
 from typing import Any
@@ -11,12 +11,10 @@ from typing import Any
 from pydantic import BaseModel
 
 from pytest_httpchain.models import Scenario
-from pytest_httpchain.validation import (
+from pytest_httpchain.scoping import (
     extract_template_variables,
-    parameter_names,
     raw_stages,
-    saved_in_stage,
-    stage_defined_names,
+    stage_scopes,
     substitution_names,
 )
 
@@ -63,12 +61,10 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     never saved values.
     """
     raws = raw_stages(test_data)
-    saves_by_stage = [saved_in_stage(stage) for stage in scenario.stages]
-    scenario_fixture_names = set(scenario.fixtures)
+    scopes = stage_scopes(scenario)
 
     stages: list[StageFlow] = []
     edges: list[DataFlowEdge] = []
-    cumulative_saves: set[str] = set()
     # The most recent stage (so far) that saved each name. A re-saved variable is
     # attributed to its LAST writer before the consumer, matching the runtime
     # ChainMap layering where a later save shadows an earlier one — not the first
@@ -76,6 +72,7 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     last_save_stage: dict[str, int] = {}
 
     for i, stage in enumerate(scenario.stages):
+        scope = scopes[i]
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
         refs: set[str] = set()
@@ -84,14 +81,14 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
 
         # Scenario fixtures count as local everywhere: at runtime they sit above
         # the global context in the ChainMap, shadowing any same-named save.
-        local = stage_defined_names(stage) | scenario_fixture_names
-        consumes = {name for name in refs if name in cumulative_saves and name not in local}
+        local = scope.stage_substitutions | scope.parametrize_params | scope.foreach_params | scope.stage_fixtures | scope.scenario_fixtures
+        consumes = {name for name in refs if name in scope.earlier_saves and name not in local}
 
         # always_run resolves before stage substitutions exist, so only fixtures
         # and parametrize parameters shadow an earlier save there.
         always_run_refs = extract_template_variables(raw.get("always_run"))
-        always_run_local = set(stage.fixtures) | parameter_names(stage.parametrize) | scenario_fixture_names
-        consumes |= {name for name in always_run_refs if name in cumulative_saves and name not in always_run_local}
+        always_run_local = scope.stage_fixtures | scope.parametrize_params | scope.scenario_fixtures
+        consumes |= {name for name in always_run_refs if name in scope.earlier_saves and name not in always_run_local}
 
         by_producer: dict[int, list[str]] = {}
         for name in consumes:
@@ -107,13 +104,12 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
                 url=str(stage.request.url),
                 fixtures=sorted(stage.fixtures),
                 marks=list(stage.marks),
-                saves=sorted(saves_by_stage[i]),
+                saves=sorted(scope.saves),
                 consumes=sorted(consumes),
             )
         )
 
-        cumulative_saves |= saves_by_stage[i]
-        for name in saves_by_stage[i]:
+        for name in scope.saves:
             last_save_stage[name] = i
 
     scenario_var_names = set(substitution_names(scenario.substitutions))
