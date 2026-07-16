@@ -43,6 +43,7 @@ import pytest
 from pydantic import ValidationError
 from pyrate_limiter import Duration, Limiter, Rate
 
+from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.models import (
     Base64Body,
     BinaryBody,
@@ -72,9 +73,7 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.templates import TemplatesError, walk
 from pytest_httpchain.userfunc import UserFunctionError
-
-from .errors import RequestError, SaveError, StageExecutionError, VerificationError
-from .utils import call_user_function, make_marker, process_substitutions
+from pytest_httpchain.utils import call_user_function, make_marker, process_substitutions
 
 logger = logging.getLogger(__name__)
 

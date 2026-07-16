@@ -85,8 +85,12 @@ select = [
     "B",  # flake8-bugbear
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
+    "TID252", # flake8-tidy-imports: ban relative imports
 ]
 ignore = []
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
 
 [tool.ruff.lint.isort]
 known-first-party = ["tests", "utils"]

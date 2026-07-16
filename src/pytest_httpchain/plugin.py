@@ -32,16 +32,15 @@ import pytest
 from pydantic import ValidationError
 
 import pytest_httpchain.jsonref
+from pytest_httpchain.carrier import Carrier, create_test_class
 from pytest_httpchain.constants import LEGACY_INI_NAMES, ConfigOptions
+from pytest_httpchain.har_writer import write_har_file
 from pytest_httpchain.models import Scenario
+from pytest_httpchain.report_formatter import format_request, format_response
 from pytest_httpchain.templates import set_max_comprehension_length
-
-from .carrier import Carrier, create_test_class
-from .har_writer import write_har_file
-from .report_formatter import format_request, format_response
-from .utils import make_marker
-from .validation import check_scenario
-from .warnings import ScenarioValidationWarning
+from pytest_httpchain.utils import make_marker
+from pytest_httpchain.validation import check_scenario
+from pytest_httpchain.warnings import ScenarioValidationWarning
 
 logger = logging.getLogger(__name__)
 

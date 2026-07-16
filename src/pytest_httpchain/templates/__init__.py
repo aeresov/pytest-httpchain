@@ -12,9 +12,9 @@ Example:
     'https://api.example.com/users/123'
 """
 
-from .exceptions import TemplatesError
-from .expressions import TEMPLATE_PATTERN, extract_template_expression, is_complete_template
-from .substitution import TEMPLATE_BUILTINS, contains_template, set_max_comprehension_length, walk
+from pytest_httpchain.templates.exceptions import TemplatesError
+from pytest_httpchain.templates.expressions import TEMPLATE_PATTERN, extract_template_expression, is_complete_template
+from pytest_httpchain.templates.substitution import TEMPLATE_BUILTINS, contains_template, set_max_comprehension_length, walk
 
 __all__ = [
     "walk",

@@ -22,11 +22,10 @@ from typing import Any
 
 import pytest
 
+from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, Substitution, UserFunctionCall, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain.templates import walk
 from pytest_httpchain.userfunc import call_function, wrap_function
-
-from .errors import StageExecutionError
 
 logger = logging.getLogger(__name__)
 

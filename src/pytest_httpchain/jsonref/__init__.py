@@ -15,8 +15,8 @@ Example:
     >>> data = load_json(Path("test_scenario.http.json"))
 """
 
-from .exceptions import DuplicateKeyError, ReferenceResolverError
-from .loader import load_json
+from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, ReferenceResolverError
+from pytest_httpchain.jsonref.loader import load_json
 
 __all__ = [
     "load_json",

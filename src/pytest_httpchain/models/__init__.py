@@ -12,7 +12,7 @@ Key models:
 - Save: Data extraction from responses (JMESPath, substitutions, user functions)
 """
 
-from .entities import (
+from pytest_httpchain.models.entities import (
     Base64Body,
     BinaryBody,
     CombinationsParameter,
@@ -55,7 +55,7 @@ from .entities import (
     XmlBody,
     parametrize_values_contain_template,
 )
-from .types import check_json_schema
+from pytest_httpchain.models.types import check_json_schema
 
 __all__ = [
     "Scenario",
