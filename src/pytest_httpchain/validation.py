@@ -65,8 +65,14 @@ from pydantic import BaseModel, ValidationError
 
 from pytest_httpchain.jsonref import DuplicateKeyError, ReferenceResolverError, load_json
 from pytest_httpchain.models import (
+    BinaryBody,
+    CombinationsParameter,
+    FilesBody,
     FunctionsSubstitution,
+    IndividualParameter,
     JMESPathSave,
+    ParallelConfig,
+    ParallelForeachConfig,
     Parameters,
     SaveStep,
     Scenario,
@@ -226,15 +232,27 @@ def parameter_names(params: Parameters | None) -> set[str]:
     """
     names: set[str] = set()
     for param in params or []:
-        individual = getattr(param, "individual", None)
-        if isinstance(individual, dict):
-            names.update(k for k in individual if isinstance(k, str))
-        combinations = getattr(param, "combinations", None)
-        if isinstance(combinations, list):
-            for combo in combinations:
-                if isinstance(combo, dict):
-                    names.update(k for k in combo if isinstance(k, str))
+        match param:
+            case IndividualParameter(individual=individual):
+                names.update(individual)
+            case CombinationsParameter(combinations=combinations):
+                # A template-string form defers the combinations to runtime, so
+                # it contributes no statically-known names.
+                if not isinstance(combinations, str):
+                    for combo in combinations:
+                        names.update(combo)
     return names
+
+
+def foreach_parameter_names(parallel: ParallelConfig | None) -> set[str]:
+    """Names injected per iteration by a ``parallel.foreach`` config.
+
+    Empty for ``repeat`` configs and for stages without a parallel config."""
+    match parallel:
+        case ParallelForeachConfig(foreach=foreach):
+            return parameter_names(foreach)
+        case _:
+            return set()
 
 
 def stage_defined_names(stage: Stage) -> set[str]:
@@ -242,8 +260,7 @@ def stage_defined_names(stage: Stage) -> set[str]:
     foreach parameters, and its declared fixtures."""
     names = substitution_names(stage.substitutions)
     names |= parameter_names(stage.parametrize)
-    if stage.parallel is not None:
-        names |= parameter_names(getattr(stage.parallel, "foreach", None))
+    names |= foreach_parameter_names(stage.parallel)
     names |= set(stage.fixtures)
     return names
 
@@ -264,8 +281,7 @@ def extract_defined_variables(scenario: Scenario) -> set[str]:
     for stage in scenario.stages:
         defined_vars |= substitution_names(stage.substitutions)
         defined_vars |= parameter_names(stage.parametrize)
-        if stage.parallel is not None:
-            defined_vars |= parameter_names(getattr(stage.parallel, "foreach", None))
+        defined_vars |= foreach_parameter_names(stage.parallel)
 
     return defined_vars
 
@@ -358,7 +374,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
         # parametrize parameters, scenario substitutions and earlier saves — but not
         # foreach parameters. The request/response are resolved per iteration, so
         # they additionally see the foreach parameters.
-        foreach_params = parameter_names(getattr(stage.parallel, "foreach", None)) if stage.parallel is not None else set()
+        foreach_params = foreach_parameter_names(stage.parallel)
         pre_iteration_available = scenario_available | set(stage.fixtures) | parameter_names(stage.parametrize) | substitution_names(stage.substitutions) | cumulative_saves
         request_available = pre_iteration_available | foreach_params
         response_available = request_available | saves_by_stage[i]
@@ -631,22 +647,22 @@ def _file_diagnostics(scenario: Scenario, base_dir: Path | None = None) -> list[
     ``base_dir`` is the scenario file's directory: relative paths resolve
     against it, matching the runtime behavior."""
     diagnostics: list[Diagnostic] = []
-    diagnostics += _check_path_value(getattr(scenario.ssl, "cert", None), "ssl.cert", base_dir)
-    diagnostics += _check_path_value(getattr(scenario.ssl, "verify", None), "ssl.verify", base_dir)
+    diagnostics += _check_path_value(scenario.ssl.cert, "ssl.cert", base_dir)
+    diagnostics += _check_path_value(scenario.ssl.verify, "ssl.verify", base_dir)
 
     for i, stage in enumerate(scenario.stages):
-        body = stage.request.body
-        if body is not None:
-            diagnostics += _check_path_value(getattr(body, "binary", None), f"stages[{i}].request.body.binary", base_dir)
-            files = getattr(body, "files", None)
-            if isinstance(files, dict):
+        match stage.request.body:
+            case BinaryBody(binary=binary):
+                diagnostics += _check_path_value(binary, f"stages[{i}].request.body.binary", base_dir)
+            case FilesBody(files=files):
                 for field, file_path in files.items():
                     diagnostics += _check_path_value(file_path, f"stages[{i}].request.body.files.{field}", base_dir)
+            case _:
+                pass  # other body types (and no body) carry no filesystem paths
 
         for k, step in enumerate(stage.response):
-            verify = getattr(step, "verify", None)
-            if verify is not None:
-                diagnostics += _check_schema_path(verify.body.schema, f"stages[{i}].response[{k}].verify.body.schema", base_dir)
+            if isinstance(step, VerifyStep):
+                diagnostics += _check_schema_path(step.verify.body.schema, f"stages[{i}].response[{k}].verify.body.schema", base_dir)
 
     return diagnostics
 
@@ -704,33 +720,31 @@ def _function_diagnostics(scenario: Scenario) -> list[Diagnostic]:
     # (call, injected-arg-names, check_signature, location). Substitution
     # ``functions`` are invoked dynamically from templates with unknown call-time
     # arguments, so they are import-checked only.
-    sites: list[tuple[Any, set[str], bool, str]] = []
+    sites: list[tuple[UserFunctionCall, set[str], bool, str]] = []
+
+    def _substitution_sites(substitutions: list[Any], location_prefix: str) -> None:
+        for sub in substitutions:
+            match sub:
+                case FunctionsSubstitution(functions=functions):
+                    for alias, call in functions.items():
+                        sites.append((call, set(), False, f"{location_prefix}.functions.{alias}"))
 
     if scenario.auth is not None:
         sites.append((scenario.auth, set(), True, "auth"))
-    for sub in scenario.substitutions:
-        functions = getattr(sub, "functions", None)
-        if isinstance(functions, dict):
-            for alias, call in functions.items():
-                sites.append((call, set(), False, f"substitutions.functions.{alias}"))
+    _substitution_sites(scenario.substitutions, "substitutions")
 
     for i, stage in enumerate(scenario.stages):
         if stage.request.auth is not None:
             sites.append((stage.request.auth, set(), True, f"stages[{i}].request.auth"))
-        for sub in stage.substitutions:
-            functions = getattr(sub, "functions", None)
-            if isinstance(functions, dict):
-                for alias, call in functions.items():
-                    sites.append((call, set(), False, f"stages[{i}].substitutions.functions.{alias}"))
+        _substitution_sites(stage.substitutions, f"stages[{i}].substitutions")
         for k, step in enumerate(stage.response):
-            save = getattr(step, "save", None)
-            if save is not None:
-                for j, call in enumerate(getattr(save, "user_functions", []) or []):
-                    sites.append((call, {"response"}, True, f"stages[{i}].response[{k}].save.user_functions[{j}]"))
-            verify = getattr(step, "verify", None)
-            if verify is not None:
-                for j, call in enumerate(verify.user_functions):
-                    sites.append((call, {"response"}, True, f"stages[{i}].response[{k}].verify.user_functions[{j}]"))
+            match step:
+                case SaveStep(save=UserFunctionsSave(user_functions=calls)):
+                    for j, call in enumerate(calls):
+                        sites.append((call, {"response"}, True, f"stages[{i}].response[{k}].save.user_functions[{j}]"))
+                case VerifyStep(verify=verify):
+                    for j, call in enumerate(verify.user_functions):
+                        sites.append((call, {"response"}, True, f"stages[{i}].response[{k}].verify.user_functions[{j}]"))
 
     for call, injected, check_signature, location in sites:
         name, kwargs = _func_name_and_kwargs(call)
@@ -851,9 +865,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
     var_conflicts: set[str] = set()
     for stage in scenario.stages:
         stage_fixtures = scenario_fixture_set | set(stage.fixtures)
-        stage_params = parameter_names(stage.parametrize)
-        if stage.parallel is not None:
-            stage_params |= parameter_names(getattr(stage.parallel, "foreach", None))
+        stage_params = parameter_names(stage.parametrize) | foreach_parameter_names(stage.parallel)
         stage_vars = scenario_sub_names | substitution_names(stage.substitutions) | stage_params
         var_conflicts |= stage_fixtures & stage_vars
     if var_conflicts:
