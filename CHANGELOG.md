@@ -17,7 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING**: dependency floors raised to match tested reality, now enforced by a lowest-floors CI job that installs every direct dependency at its declared minimum: `pytest>=9.0` (the `[tool.pytest]` configuration table is only read by pytest 9 — under 8.x the plugin mis-collected its own examples and `minversion` was silently unenforced), `pydantic>=2.13.4` (stable generated-schema output), `pyrate-limiter>=4.2.0` (the blocking `try_acquire` API the runner uses).
 - Windows is now part of the CI test matrix. One portability fix came out of it: absolute `$ref` paths are judged under both POSIX and Windows path rules on every platform (previously `/etc/passwd` was not recognized as absolute when running on Windows; the root-containment check still applied, but the explicit rejection now matches on all hosts).
+- HAR output (`--httpchain-output-dir`) for a parallel stage now contains one entry per iteration, in iteration order, instead of a single arbitrary iteration presented as the stage's only exchange. The `write_har_file` helper accordingly takes a list of `(request, response)` exchanges instead of one pair. (Exchanges are only retained for the HAR when the option is on, so runs without it keep the previous memory footprint.)
 - The CLI's default `$ref` resolution root (`--root-path` unset) is now the auto-detected project root — the nearest ancestor containing a standard project marker (`pytest.ini`, `pyproject.toml`, `tox.ini`, `setup.cfg`, `setup.py`, `.git`) — instead of the nearest `tests/` ancestor. This matches pytest collection, which sandboxes `$ref` to pytest's `rootpath`, so `validate`/`show`/`graph` now accept exactly the references that collection accepts; pytest collection itself also routes through the same load pipeline as the CLI. A `$ref` that previously needed an explicit `--root-path` to reach a shared fragment above `tests/` now resolves by default.
+
+### Fixed
+
+- A request that received no response (timeout, connection error) no longer vanishes from the diagnostics: the request that was on the wire is attached to the failure, shown in the report's `HTTP Request` section, and written to the HAR file as a status-`0` entry (the convention browser HAR exports use for aborted requests). Previously the HAR was silently skipped and no request section appeared.
+- The report's `HTTP Request`/`HTTP Response` sections for a parallel stage now say which exchange they show — `(failing of N parallel iterations)` or `(last of N parallel iterations)` — instead of presenting one iteration as the stage's only exchange.
 
 ## [0.10.0] - 2026-07-16
 

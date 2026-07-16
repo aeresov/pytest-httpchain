@@ -134,7 +134,7 @@ def _response_elapsed_ms(response: httpx.Response) -> float:
 
 def request_response_to_har_entry(
     request: httpx.Request,
-    response: httpx.Response,
+    response: httpx.Response | None,
     started_datetime: datetime | None = None,
     elapsed_ms: float | None = None,
 ) -> dict[str, Any]:
@@ -142,7 +142,10 @@ def request_response_to_har_entry(
 
     Args:
         request: The httpx Request object.
-        response: The httpx Response object.
+        response: The httpx Response object, or ``None`` when no response was
+            received (timeout, connection error). Following the convention
+            browser HAR exports use for aborted requests, the entry then
+            carries a synthesized response with ``status: 0``.
         started_datetime: When the request started (defaults to now).
         elapsed_ms: Total elapsed time in milliseconds. When ``None`` (the
             default), the value is derived from ``response.elapsed``.
@@ -154,7 +157,36 @@ def request_response_to_har_entry(
         started_datetime = datetime.now(UTC)
 
     if elapsed_ms is None:
-        elapsed_ms = _response_elapsed_ms(response)
+        elapsed_ms = _response_elapsed_ms(response) if response is not None else 0
+
+    http_version = (response.http_version if response is not None else None) or "HTTP/1.1"
+
+    if response is not None:
+        response_har: dict[str, Any] = {
+            "status": response.status_code,
+            "statusText": response.reason_phrase or "",
+            "httpVersion": http_version,
+            "cookies": _format_cookies(response.cookies),
+            "headers": _format_headers(response.headers),
+            "content": _format_response_content(response),
+            "redirectURL": response.headers.get("location", ""),
+            "headersSize": _calculate_headers_size(response.headers),
+            "bodySize": len(response.content) if response.content else 0,
+        }
+    else:
+        # No response received: status 0 with empty fields, the same shape
+        # browsers write for aborted/failed requests.
+        response_har = {
+            "status": 0,
+            "statusText": "",
+            "httpVersion": http_version,
+            "cookies": [],
+            "headers": [],
+            "content": {"size": 0, "mimeType": "x-unknown"},
+            "redirectURL": "",
+            "headersSize": -1,
+            "bodySize": -1,
+        }
 
     entry: dict[str, Any] = {
         "startedDateTime": started_datetime.isoformat(),
@@ -162,24 +194,14 @@ def request_response_to_har_entry(
         "request": {
             "method": request.method,
             "url": str(request.url),
-            "httpVersion": response.http_version or "HTTP/1.1",
+            "httpVersion": http_version,
             "cookies": _parse_cookie_header(request.headers.get("cookie", "")),
             "headers": _format_headers(request.headers),
             "queryString": _format_query_string(request.url),
             "headersSize": _calculate_headers_size(request.headers),
             "bodySize": len(request.content) if request.content else 0,
         },
-        "response": {
-            "status": response.status_code,
-            "statusText": response.reason_phrase or "",
-            "httpVersion": response.http_version or "HTTP/1.1",
-            "cookies": _format_cookies(response.cookies),
-            "headers": _format_headers(response.headers),
-            "content": _format_response_content(response),
-            "redirectURL": response.headers.get("location", ""),
-            "headersSize": _calculate_headers_size(response.headers),
-            "bodySize": len(response.content) if response.content else 0,
-        },
+        "response": response_har,
         "cache": {},
         "timings": {
             "send": -1,
@@ -187,6 +209,9 @@ def request_response_to_har_entry(
             "receive": -1,
         },
     }
+
+    if response is None:
+        entry["comment"] = "No response received (request failed or timed out)"
 
     post_data = _format_post_data(request)
     if post_data:
@@ -225,8 +250,7 @@ def create_har_log(entries: list[dict[str, Any]], comment: str | None = None) ->
 def write_har_file(
     output_dir: Path,
     test_name: str,
-    request: httpx.Request,
-    response: httpx.Response,
+    exchanges: list[tuple[httpx.Request, httpx.Response | None]],
     started_datetime: datetime | None = None,
     elapsed_ms: float | None = None,
 ) -> Path:
@@ -235,11 +259,14 @@ def write_har_file(
     Args:
         output_dir: Directory to write the HAR file to.
         test_name: Name of the test (used for filename).
-        request: The httpx Request object.
-        response: The httpx Response object.
-        started_datetime: When the request started.
-        elapsed_ms: Total elapsed time in milliseconds. When ``None`` (the
-            default), the value is derived from ``response.elapsed``.
+        exchanges: The test's HTTP exchanges in execution order — one entry
+            per exchange. A parallel stage contributes one exchange per
+            iteration; an exchange's response is ``None`` when none was
+            received (timeout, connection error).
+        started_datetime: When the request started (applied to every entry).
+        elapsed_ms: Total elapsed time in milliseconds (applied to every
+            entry). When ``None`` (the default), each entry's value is derived
+            from its response's ``elapsed``.
 
     Returns:
         Path to the written HAR file.
@@ -250,8 +277,8 @@ def write_har_file(
     filename = f"{safe_name}.har"
     filepath = output_dir / filename
 
-    entry = request_response_to_har_entry(request, response, started_datetime, elapsed_ms)
-    har = create_har_log([entry], comment=f"Test: {test_name}")
+    entries = [request_response_to_har_entry(request, response, started_datetime, elapsed_ms) for request, response in exchanges]
+    har = create_har_log(entries, comment=f"Test: {test_name}")
 
     filepath.write_text(json.dumps(har, indent=2, ensure_ascii=False), encoding="utf-8")
 

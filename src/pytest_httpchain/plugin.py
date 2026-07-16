@@ -127,7 +127,15 @@ class JsonModule(pytest.Module):
         # generate python test class
         max_parallel_iterations = _get_ini(self.config, ConfigOptions.MAX_PARALLEL_ITERATIONS)
         try:
-            CarrierClass = create_test_class(scenario, self.name, max_parallel_iterations=max_parallel_iterations, scenario_dir=self.path.parent)
+            CarrierClass = create_test_class(
+                scenario,
+                self.name,
+                max_parallel_iterations=max_parallel_iterations,
+                scenario_dir=self.path.parent,
+                # Retaining every parallel iteration's exchange costs memory, so
+                # it is only done when the HAR output that consumes them is on.
+                record_all_exchanges=bool(self.config.getoption("output_dir")),
+            )
         except Exception as e:
             # create_test_class parses stage markers and — only when stage
             # parametrize values contain templates — resolves scenario
@@ -323,26 +331,33 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
                 report.outcome = "failed"
                 del report.wasxfail
 
+            # A parallel stage runs many exchanges but the report shows ONE
+            # (the failing iteration, else the last) — say so in the section
+            # title instead of presenting it as the stage's only exchange.
+            suffix = ""
+            if carrier.last_iterations_attempted > 1:
+                shown = "failing" if report.failed else "last"
+                suffix = f" ({shown} of {carrier.last_iterations_attempted} parallel iterations)"
+
             if carrier.last_request is not None:
                 try:
-                    report.sections.append(("HTTP Request", format_request(carrier.last_request)))
+                    report.sections.append((f"HTTP Request{suffix}", format_request(carrier.last_request)))
                 except Exception as e:
-                    report.sections.append(("HTTP Request", f"<Error formatting request: {e}>"))
+                    report.sections.append((f"HTTP Request{suffix}", f"<Error formatting request: {e}>"))
 
             if carrier.last_response is not None:
                 try:
-                    report.sections.append(("HTTP Response", format_response(carrier.last_response)))
+                    report.sections.append((f"HTTP Response{suffix}", format_response(carrier.last_response)))
                 except Exception as e:
-                    report.sections.append(("HTTP Response", f"<Error formatting response: {e}>"))
+                    report.sections.append((f"HTTP Response{suffix}", f"<Error formatting response: {e}>"))
 
             output_dir = item.config.getoption("output_dir")
-            if output_dir and carrier.last_request is not None and carrier.last_response is not None:
+            if output_dir and carrier.last_exchanges:
                 try:
                     har_path = write_har_file(
                         output_dir=Path(output_dir),
                         test_name=item.nodeid,
-                        request=carrier.last_request,
-                        response=carrier.last_response,
+                        exchanges=carrier.last_exchanges,
                     )
                     report.sections.append(("HAR File", str(har_path)))
                 except Exception as e:

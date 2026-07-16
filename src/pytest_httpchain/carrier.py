@@ -91,6 +91,19 @@ _STAGE_FAILURE_EXCEPTIONS = (StageExecutionError, TemplatesError, ValidationErro
 _INIT_LOCK = threading.Lock()
 
 
+def _error_request(e: Exception) -> httpx.Request | None:
+    """The httpx.Request an httpx error was raised for, if it recorded one.
+
+    ``httpx.HTTPError.request`` is a property that RAISES RuntimeError when
+    unset (and arbitrary user exceptions have no such attribute), so this is
+    a lookup, not a simple getattr default."""
+    try:
+        request = e.request  # ty: ignore[unresolved-attribute]
+    except (AttributeError, RuntimeError):
+        return None
+    return request if isinstance(request, httpx.Request) else None
+
+
 @dataclass
 class ParallelIterationResult:
     """Result of a successful parallel iteration."""
@@ -120,6 +133,16 @@ class Carrier:
     aborted: ClassVar[bool] = False
     last_request: ClassVar[httpx.Request | None] = None
     last_response: ClassVar[httpx.Response | None] = None
+    # Exchange bookkeeping for the report/HAR (see _record_exchanges):
+    # last_exchanges holds the executed stage's (request, response) pairs in
+    # iteration order (response is None when none was received);
+    # last_iterations_attempted is the stage's iteration count, so a parallel
+    # stage's single shown exchange can be labeled honestly;
+    # record_all_exchanges keeps EVERY iteration's exchange (HAR output on)
+    # instead of just the shown one.
+    last_exchanges: ClassVar[list[tuple[httpx.Request, httpx.Response | None]]] = []
+    last_iterations_attempted: ClassVar[int] = 0
+    record_all_exchanges: ClassVar[bool] = False
     global_context: ClassVar[ChainMap[str, Any]] = ChainMap()
     active_context_managers: ClassVar[list[AbstractContextManager]] = []
     max_parallel_iterations: ClassVar[int] = 10_000
@@ -279,27 +302,21 @@ class Carrier:
                 )
 
             results, first_error = cls._run_iterations(stage, local_context, iteration_substitutions, parallel_config)
+            completed = [iter_result for iter_result in results if iter_result is not None]
 
             if first_error is None:
+                cls._record_exchanges(completed, failed=None, attempted=total)
                 # Commit saves only on full success. A failed (parallel) stage must
                 # leave the global context untouched, not commit a non-deterministic
                 # subset of iterations whose saves happened to land before the error.
                 all_saves: dict[str, Any] = {}
-                for iter_result in results:
-                    if iter_result is not None:
-                        all_saves.update(iter_result.saved_context)
-                        cls.last_request = iter_result.request
-                        cls.last_response = iter_result.response
+                for iter_result in completed:
+                    all_saves.update(iter_result.saved_context)
                 logger.info(f"updates for global context: {json.dumps(all_saves, indent=2, default=str)}")
                 cls.global_context = with_saves(cls.global_context, all_saves)
             else:
                 idx, exc = first_error
-                # Surface the failed iteration's request/response in the report.
-                if isinstance(exc, StageExecutionError):
-                    if exc.request is not None:
-                        cls.last_request = exc.request
-                    if exc.response is not None:
-                        cls.last_response = exc.response
+                cls._record_exchanges(completed, failed=exc, attempted=total)
                 # Only label the failure as parallel when the user configured
                 # `parallel`; otherwise re-raise the original error unchanged so a
                 # plain stage failure isn't misreported as "Parallel execution failed".
@@ -365,6 +382,41 @@ class Carrier:
             case _:
                 raise RuntimeError(f"Unhandled parallel config: {type(parallel_config).__name__}")
         return iteration_substitutions
+
+    @classmethod
+    def _record_exchanges(cls, completed: list["ParallelIterationResult"], failed: Exception | None, attempted: int) -> None:
+        """Record the executed stage's HTTP exchanges for the report and HAR.
+
+        ``last_request``/``last_response`` are the ONE exchange the test
+        report shows: the failing iteration's when there is one (and it
+        carries request info — otherwise the previous values are kept, matching
+        the report's "last thing seen on the wire" semantics), else the last
+        completed iteration in iteration-index order (deterministic).
+
+        ``last_exchanges`` feeds the HAR file: with ``record_all_exchanges``
+        on (HAR output enabled) it holds every completed iteration's exchange
+        plus the failing one; otherwise only the shown exchange, so a scenario
+        run without HAR output never retains more than one response per stage.
+        """
+        failed_request = failed.request if isinstance(failed, StageExecutionError) else None
+        failed_response = failed.response if isinstance(failed, StageExecutionError) else None
+
+        exchanges: list[tuple[httpx.Request, httpx.Response | None]] = [(r.request, r.response) for r in completed]
+        if failed_request is not None:
+            exchanges.append((failed_request, failed_response))
+        if not cls.record_all_exchanges:
+            exchanges = exchanges[-1:]
+
+        cls.last_exchanges = exchanges
+        cls.last_iterations_attempted = attempted
+
+        if failed is not None:
+            if failed_request is not None:
+                cls.last_request = failed_request
+            if failed_response is not None:
+                cls.last_response = failed_response
+        elif exchanges:
+            cls.last_request, cls.last_response = exchanges[-1]
 
     @classmethod
     def _run_iterations(
@@ -486,17 +538,19 @@ class Carrier:
         # raises non-HTTPError types like InvalidURL. Letting those propagate
         # raw would bypass the chain-abort machinery (aborted never set, a
         # parallel pool never cancelled), so every failure here becomes a
-        # RequestError stage failure.
+        # RequestError stage failure. The request that was on the wire is
+        # attached when httpx recorded one, so a timed-out request still shows
+        # up in the report and the HAR file.
         try:
             return cls.client.request(**request_kwargs)  # ty: ignore[unresolved-attribute]
         except httpx.TimeoutException as e:
-            raise RequestError(f"HTTP request timed out: {e}") from e
+            raise RequestError(f"HTTP request timed out: {e}", request=_error_request(e)) from e
         except httpx.ConnectError as e:
-            raise RequestError(f"HTTP connection error: {e}") from e
+            raise RequestError(f"HTTP connection error: {e}", request=_error_request(e)) from e
         except httpx.HTTPError as e:
-            raise RequestError(f"HTTP request failed: {e}") from e
+            raise RequestError(f"HTTP request failed: {e}", request=_error_request(e)) from e
         except Exception as e:
-            raise RequestError(f"Unexpected error during HTTP request: {e}") from e
+            raise RequestError(f"Unexpected error during HTTP request: {e}", request=_error_request(e)) from e
 
     @staticmethod
     def _process_save_step(save_model: Save, response: httpx.Response, context: ChainMap[str, Any]) -> dict[str, Any]:
@@ -707,6 +761,8 @@ class Carrier:
         cls.aborted = False
         cls.last_request = None
         cls.last_response = None
+        cls.last_exchanges = []
+        cls.last_iterations_attempted = 0
         cls.global_context = base_global_context(cls.global_context.maps[-1])
 
 
@@ -723,7 +779,13 @@ def _normalize_cert(cert: Any) -> str | tuple[str, ...]:
     return str(cert)
 
 
-def create_test_class(scenario: Scenario, class_name: str, max_parallel_iterations: int = 10_000, scenario_dir: Path | None = None) -> type[Carrier]:
+def create_test_class(
+    scenario: Scenario,
+    class_name: str,
+    max_parallel_iterations: int = 10_000,
+    scenario_dir: Path | None = None,
+    record_all_exchanges: bool = False,
+) -> type[Carrier]:
     """Create a dynamic test class from a scenario definition.
 
     Runs at collection time and stays free of side effects: scenario
@@ -749,6 +811,9 @@ def create_test_class(scenario: Scenario, class_name: str, max_parallel_iteratio
             "aborted": False,
             "last_request": None,
             "last_response": None,
+            "last_exchanges": [],
+            "last_iterations_attempted": 0,
+            "record_all_exchanges": record_all_exchanges,
             "global_context": base_global_context(scenario_context),
             "_initialized": False,
             "_init_failed": None,
