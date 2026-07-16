@@ -766,32 +766,35 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
     return diagnostics, scenario_info
 
 
+# Standard project-root markers, matching the files pytest's own rootdir
+# discovery recognizes (plus .git as the universal repository marker).
+_ROOT_MARKERS = ("pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg", "setup.py", ".git")
+
+
 def resolve_root_path(path: Path) -> Path:
-    """Directory that constrains ``$ref`` resolution: the nearest ``tests/``
-    ancestor of ``path``, else the file's own parent."""
-    potential_root = path.parent
-    while potential_root.parent != potential_root:
-        if potential_root.name == "tests":
-            return potential_root
-        potential_root = potential_root.parent
+    """Directory that constrains ``$ref`` resolution when no explicit root is
+    given: the nearest ancestor of ``path`` that looks like a project root
+    (contains one of the standard project markers), else the file's own parent.
+
+    This approximates pytest's ``rootdir``, so the CLI sandboxes ``$ref``
+    resolution the same way pytest collection does (collection passes
+    ``config.rootpath`` explicitly)."""
+    for ancestor in path.resolve().parents:
+        if any((ancestor / marker).exists() for marker in _ROOT_MARKERS):
+            return ancestor
     return path.parent
 
 
 def load_scenario(path: Path, *, root_path: Path | None = None, ref_parent_traversal_depth: int = 3) -> tuple[Scenario, dict[str, Any]]:
     """Load, ``$ref``-resolve and validate a scenario file -> ``(scenario, raw_data)``.
 
-    The single load+resolve+validate path shared by the CLI inspection commands
-    (``show``/``graph``) and the data-flow loader. ``root_path`` constrains ``$ref``
-    resolution; when omitted it defaults to `resolve_root_path` (the nearest
-    ``tests/`` ancestor).
-
-    NOTE on the root-path divergence: pytest collection (``plugin.py``) constrains
-    ``$ref`` resolution to ``config.rootpath`` (the repo root), while every CLI path
-    defaults to `resolve_root_path`. A ``$ref`` reaching above ``tests/`` but
-    inside the repo therefore resolves under collection yet may need an explicit
-    ``--root-path`` to resolve the same way from the CLI. Raises
-    ``ReferenceResolverError`` / ``json.JSONDecodeError`` / ``pydantic.ValidationError``
-    on failure; callers map these to user-facing errors.
+    The single load+resolve+validate path shared by pytest collection
+    (``plugin.py:JsonModule.collect``, which passes ``config.rootpath``) and the
+    CLI commands. ``root_path`` constrains ``$ref`` resolution; when omitted it
+    defaults to `resolve_root_path` (the auto-detected project root, which
+    approximates ``config.rootpath``). Raises ``ReferenceResolverError`` /
+    ``json.JSONDecodeError`` / ``pydantic.ValidationError`` on failure; callers
+    map these to user-facing errors.
     """
     if root_path is None:
         root_path = resolve_root_path(path)
@@ -834,15 +837,8 @@ def validate_scenario(
             )
         )
 
-    if root_path is None:
-        root_path = resolve_root_path(path)
-
     try:
-        test_data = load_json(
-            path,
-            max_parent_traversal_depth=ref_parent_traversal_depth,
-            root_path=root_path,
-        )
+        scenario, test_data = load_scenario(path, root_path=root_path, ref_parent_traversal_depth=ref_parent_traversal_depth)
     except ReferenceResolverError as e:
         # The resolver wraps a plain JSON syntax error as a ReferenceResolverError
         # (chaining the JSONDecodeError as __cause__), and raises DuplicateKeyError
@@ -859,16 +855,13 @@ def validate_scenario(
     except json.JSONDecodeError as e:
         diagnostics.append(_diag(DiagnosticCode.INVALID_JSON, "error", f"Invalid JSON syntax: {e}"))
         return _result(diagnostics)
-    except Exception as e:
-        diagnostics.append(_diag(DiagnosticCode.PARSE_ERROR, "error", f"Failed to parse JSON file: {e}"))
-        return _result(diagnostics)
-
-    try:
-        scenario = Scenario.model_validate(test_data)
     except ValidationError as e:
         for err in e.errors():
             loc = " -> ".join(str(x) for x in err["loc"])
             diagnostics.append(_diag(DiagnosticCode.SCHEMA, "error", f"Schema validation failed: {loc}: {err['msg']}", location=loc))
+        return _result(diagnostics)
+    except Exception as e:
+        diagnostics.append(_diag(DiagnosticCode.PARSE_ERROR, "error", f"Failed to parse JSON file: {e}"))
         return _result(diagnostics)
 
     semantic_diagnostics, scenario_info = check_scenario(scenario, test_data)

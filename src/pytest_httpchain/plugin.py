@@ -39,7 +39,7 @@ from pytest_httpchain.models import Scenario
 from pytest_httpchain.report_formatter import format_request, format_response
 from pytest_httpchain.templates import set_max_comprehension_length
 from pytest_httpchain.utils import make_marker
-from pytest_httpchain.validation import check_scenario
+from pytest_httpchain.validation import check_scenario, load_scenario
 from pytest_httpchain.warnings import ScenarioValidationWarning
 
 logger = logging.getLogger(__name__)
@@ -85,23 +85,19 @@ class JsonModule(pytest.Module):
             )
 
     def collect(self) -> Iterable[pytest.Item | pytest.Collector]:
-        # read JSON and apply references
+        # Load, $ref-resolve and schema-validate through the same pipeline the
+        # CLI uses (validation.load_scenario); only the root path differs, and
+        # only in authority: collection has pytest's real rootpath, while the
+        # CLI default (validation.resolve_root_path) approximates it.
         ref_parent_traversal_depth = _get_ini(self.config, ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
-        root_path = Path(self.config.rootpath)
         try:
-            test_data = pytest_httpchain.jsonref.load_json(
+            scenario, test_data = load_scenario(
                 self.path,
-                max_parent_traversal_depth=ref_parent_traversal_depth,
-                root_path=root_path,
+                root_path=Path(self.config.rootpath),
+                ref_parent_traversal_depth=ref_parent_traversal_depth,
             )
         except pytest_httpchain.jsonref.ReferenceResolverError as e:
             raise pytest.Collector.CollectError(f"Cannot load JSON file {self.path}: {e}") from None
-        except Exception as e:
-            raise pytest.Collector.CollectError(f"Failed to parse JSON file {self.path}: {e}") from None
-
-        # validate general scenario structure
-        try:
-            scenario = Scenario.model_validate(test_data)
         except ValidationError as e:
             error_details = []
             for error in e.errors():
@@ -111,6 +107,8 @@ class JsonModule(pytest.Module):
 
             full_error_msg = f"Cannot parse test scenario in {self.path}:\n" + "\n".join(error_details)
             raise pytest.Collector.CollectError(full_error_msg) from None
+        except Exception as e:
+            raise pytest.Collector.CollectError(f"Failed to parse JSON file {self.path}: {e}") from None
 
         self._reject_chain_splitting_dist_mode(scenario)
 

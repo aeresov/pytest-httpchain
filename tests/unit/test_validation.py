@@ -1,8 +1,9 @@
 """Unit tests for the shared scenario validator (pytest_httpchain.validation)."""
 
+import json
 from pathlib import Path
 
-from pytest_httpchain.validation import DiagnosticCode, validate_scenario
+from pytest_httpchain.validation import DiagnosticCode, resolve_root_path, validate_scenario
 
 # A stable importable directory so `userfuncs:<name>` refs resolve under --syspath.
 USERFUNCS_DIR = Path(__file__).parent / "test_validation_userfuncs"
@@ -450,3 +451,54 @@ def test_deep_ssl_verify_ca_bundle_missing_warns(datadir):
 def test_deep_schema_file_invalid_warns(datadir):
     r = validate_scenario(datadir / "deep_schema_invalid.json", deep=True)
     assert DiagnosticCode.SCHEMA_FILE_INVALID in _codes(r), r.diagnostics
+
+
+class TestRootPathDefault:
+    """The CLI's default $ref root (resolve_root_path) approximates pytest's
+    rootpath: nearest ancestor with a project marker, else the file's parent."""
+
+    def test_finds_project_marker(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("")
+        nested = tmp_path / "suites" / "api"
+        nested.mkdir(parents=True)
+        scenario = nested / "test_x.http.json"
+        scenario.write_text("{}")
+
+        assert resolve_root_path(scenario) == tmp_path
+
+    def test_falls_back_to_file_parent(self, tmp_path):
+        nested = tmp_path / "a" / "b"
+        nested.mkdir(parents=True)
+        scenario = nested / "test_x.http.json"
+        scenario.write_text("{}")
+
+        assert resolve_root_path(scenario) == nested
+
+    def test_ref_above_scenario_dir_resolves_within_project_root(self, tmp_path):
+        """A $ref reaching above the scenario's own tree but inside the project
+        resolves by default — matching what pytest collection accepts."""
+        (tmp_path / ".git").mkdir()
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        (shared / "common.json").write_text(json.dumps({"url": "http://server/x", "method": "GET"}))
+        suite = tmp_path / "tests" / "api"
+        suite.mkdir(parents=True)
+        scenario_path = suite / "test_a.http.json"
+        scenario_path.write_text(
+            json.dumps(
+                {
+                    "stages": [
+                        {
+                            "name": "s",
+                            "request": {"$ref": "../../shared/common.json"},
+                            "response": [{"verify": {"status": 200}}],
+                        }
+                    ]
+                }
+            )
+        )
+
+        result = validate_scenario(scenario_path)
+
+        assert result.valid is True
+        assert result.errors == []
