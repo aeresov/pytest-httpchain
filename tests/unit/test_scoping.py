@@ -9,6 +9,7 @@ from pytest_httpchain.models import Scenario
 from pytest_httpchain.scoping import (
     base_global_context,
     iteration_context,
+    response_step_context,
     stage_scopes,
     stage_start_context,
     with_saves,
@@ -49,7 +50,8 @@ class TestStageScopes:
         assert scope.always_run == {"svar", "sfix", "f1", "p1"}
         assert scope.pre_iteration == scope.always_run | {"sub1"}
         assert scope.request == scope.pre_iteration | {"item"}
-        assert scope.response == scope.request | {"saved1"}
+        # Response steps additionally see the reserved `response` metadata namespace.
+        assert scope.response == scope.request | {"saved1", "response"}
 
     def test_saves_accumulate_into_later_stages(self):
         scopes = stage_scopes(make_scenario())
@@ -101,7 +103,7 @@ class TestContextBuilders:
             iteration = iteration_context(local, dict.fromkeys(scope.foreach_params, "value"))
             assert set(iteration) == scope.request
 
-            responded = with_saves(iteration, dict.fromkeys(scope.saves, "value"))
+            responded = response_step_context(with_saves(iteration, dict.fromkeys(scope.saves, "value")), response_meta=object())
             assert set(responded) == scope.response
 
             global_context = with_saves(global_context, dict.fromkeys(scope.saves, "value"))

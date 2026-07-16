@@ -24,7 +24,8 @@ Phase                     In scope
 stage ``substitutions``   same as ``always_run`` (they are being created)
 ``parallel`` config       the above plus this stage's substitutions
 request (per iteration)   the above plus ``foreach`` parameters
-response (per iteration)  the above plus this stage's own saves
+response (per iteration)  the above plus this stage's own saves and the
+                          ``response`` metadata namespace
 ========================  ====================================================
 
 Scenario-level ``parametrize`` *values* are the exception: they resolve at
@@ -56,6 +57,10 @@ from pytest_httpchain.models import (
     VarsSubstitution,
 )
 from pytest_httpchain.templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN
+
+# The reserved name under which response metadata (status, reason, headers,
+# elapsed_ms) is injected into every response step's template context.
+RESPONSE_META_NAME = "response"
 
 # --------------------------------------------------------------------------- #
 # Name extraction: which names a scenario fragment defines or references.
@@ -265,10 +270,12 @@ class StageScopes:
 
     @property
     def response(self) -> frozenset[str]:
-        """Scope of the response steps. The stage's own saves are treated as
-        available to its whole response (intra-response step ordering is
-        approximated). Runtime twin: `with_saves` layered per save step."""
-        return self.request | self.saves
+        """Scope of the response steps: the request scope plus the stage's own
+        saves and the ``response`` metadata namespace. Own saves are treated as
+        available to the whole response (intra-response step ordering is
+        approximated). Runtime twins: `response_step_context` per step, plus
+        `with_saves` layered per save step."""
+        return self.request | self.saves | frozenset({RESPONSE_META_NAME})
 
 
 def stage_scopes(scenario: Scenario) -> list[StageScopes]:
@@ -338,6 +345,15 @@ def iteration_context(local_context: ChainMap[str, Any], iteration_params: Mappi
 
     Static twin: `StageScopes.request`."""
     return local_context.new_child(dict(iteration_params))
+
+
+def response_step_context(iteration_ctx: ChainMap[str, Any], response_meta: Any) -> ChainMap[str, Any]:
+    """Per-response-step context: the ``response`` metadata namespace over the
+    iteration context (and over any earlier save steps' values layered onto
+    it), so it cannot be shadowed by a user variable within response steps.
+
+    Static twin: `StageScopes.response` (which includes `RESPONSE_META_NAME`)."""
+    return iteration_ctx.new_child({RESPONSE_META_NAME: response_meta})
 
 
 def with_saves(context: ChainMap[str, Any], saves: Mapping[str, Any]) -> ChainMap[str, Any]:

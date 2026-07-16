@@ -51,6 +51,7 @@ from pytest_httpchain.models import (
     FilesBody,
     FormBody,
     GraphQLBody,
+    HeaderMatcher,
     IndividualParameter,
     JMESPathSave,
     JsonBody,
@@ -71,7 +72,14 @@ from pytest_httpchain.models import (
     check_json_schema,
     parametrize_values_contain_template,
 )
-from pytest_httpchain.scoping import base_global_context, iteration_context, stage_start_context, with_saves, with_stage_substitutions
+from pytest_httpchain.scoping import (
+    base_global_context,
+    iteration_context,
+    response_step_context,
+    stage_start_context,
+    with_saves,
+    with_stage_substitutions,
+)
 from pytest_httpchain.templates import TemplatesError, walk
 from pytest_httpchain.userfunc import UserFunctionError
 from pytest_httpchain.utils import call_user_function, make_marker, process_substitutions
@@ -89,6 +97,24 @@ _STAGE_FAILURE_EXCEPTIONS = (StageExecutionError, TemplatesError, ValidationErro
 # scenario class even under thread-based runners. A single module-level lock is
 # enough: init is short and contention across scenario classes is negligible.
 _INIT_LOCK = threading.Lock()
+
+
+def _response_meta(response: httpx.Response) -> SimpleNamespace:
+    """The ``response`` namespace exposed to response-step templates.
+
+    Metadata only — the body stays out (``save`` handles data extraction):
+    ``status`` (int), ``reason`` (str), ``headers`` (case-insensitive mapping),
+    ``elapsed_ms`` (float, None if httpx hasn't recorded it)."""
+    try:
+        elapsed_ms = response.elapsed.total_seconds() * 1000
+    except RuntimeError:
+        elapsed_ms = None
+    return SimpleNamespace(
+        status=response.status_code,
+        reason=response.reason_phrase,
+        headers=response.headers,
+        elapsed_ms=elapsed_ms,
+    )
 
 
 def _error_request(e: Exception) -> httpx.Request | None:
@@ -604,8 +630,22 @@ class Carrier:
             raise VerificationError(f"Status code doesn't match: expected {verify_model.status}, got {response.status_code}")
 
         for header_name, expected_value in verify_model.headers.items():
-            if response.headers.get(header_name) != expected_value:
-                raise VerificationError(f"Header '{header_name}' doesn't match: expected {expected_value}, got {response.headers.get(header_name)}")
+            match expected_value:
+                case HeaderMatcher():
+                    # An absent header behaves as an empty string, mirroring
+                    # the body contains/matches semantics.
+                    actual = response.headers.get(header_name) or ""
+                    if expected_value.contains is not None and expected_value.contains not in actual:
+                        raise VerificationError(f"Header '{header_name}' does not contain '{expected_value.contains}' (value: {actual!r})")
+                    if expected_value.not_contains is not None and expected_value.not_contains in actual:
+                        raise VerificationError(f"Header '{header_name}' contains '{expected_value.not_contains}' while it shouldn't (value: {actual!r})")
+                    if expected_value.matches is not None and not re.search(expected_value.matches, actual):
+                        raise VerificationError(f"Header '{header_name}' does not match '{expected_value.matches}' (value: {actual!r})")
+                    if expected_value.not_matches is not None and re.search(expected_value.not_matches, actual):
+                        raise VerificationError(f"Header '{header_name}' matches '{expected_value.not_matches}' while it shouldn't (value: {actual!r})")
+                case _:
+                    if response.headers.get(header_name) != expected_value:
+                        raise VerificationError(f"Header '{header_name}' doesn't match: expected {expected_value}, got {response.headers.get(header_name)}")
 
         for i, expression in enumerate(verify_model.expressions):
             if not expression:
@@ -686,16 +726,21 @@ class Carrier:
 
         try:
             saved_context: dict[str, Any] = {}
+            response_meta = _response_meta(response)
             for step in stage.response:
+                # Response steps additionally see the `response` metadata
+                # namespace (status/reason/headers/elapsed_ms) on top of the
+                # evolving iteration context.
+                step_context = response_step_context(iter_context, response_meta)
                 match step:
                     case SaveStep():
-                        save_model = walk(step.save, iter_context)
-                        step_saved = cls._process_save_step(save_model, response, iter_context)
+                        save_model = walk(step.save, step_context)
+                        step_saved = cls._process_save_step(save_model, response, step_context)
                         iter_context = with_saves(iter_context, step_saved)
                         saved_context.update(step_saved)
 
                     case VerifyStep():
-                        verify_model = walk(step.verify, iter_context)
+                        verify_model = walk(step.verify, step_context)
                         cls._process_verify_step(verify_model, response)
 
                     case _:

@@ -50,11 +50,9 @@ Use template expressions:
 
 ### Headers
 
-Header values are matched by **exact, full-string equality** — not substring. A
+A **string** value is matched by exact, full-string equality — not substring. A
 response with `Content-Type: application/json; charset=utf-8` does **not** match
-`"application/json"`. Assert the exact value your API returns, or save the header
-and check it with an expression (e.g. a `startswith`/`in` test) for partial
-matches.
+`"application/json"`.
 
 ```json
 {
@@ -67,9 +65,29 @@ matches.
 }
 ```
 
+For partial or pattern matches, use a **matcher object** instead of a string.
+Any combination of `contains`, `not_contains`, `matches`, `not_matches`
+(regexes, checked with `re.search`) is allowed; at least one is required:
+
+```json
+{
+    "verify": {
+        "headers": {
+            "Content-Type": {"contains": "application/json"},
+            "X-Request-Id": {"matches": "^[0-9a-f-]+$"},
+            "Warning": {"not_contains": "deprecated"}
+        }
+    }
+}
+```
+
+An **absent** header behaves as an empty string for matcher forms — `contains`
+and `matches` fail, `not_contains` and `not_matches` pass vacuously. (Exact
+string form fails for an absent header, as before.)
+
 ### Expression Verification
 
-Evaluate template expressions that must return truthy values. Expressions are evaluated against the **context** — saved variables, fixtures, and substitutions — **not** the raw HTTP response. Save the data you want to assert on first, then reference it:
+Evaluate template expressions that must return truthy values. Expressions are evaluated against the **context** — saved variables, fixtures, and substitutions — plus the reserved **`response` metadata namespace** (see below). For response *body* data, save what you want to assert on first, then reference it:
 
 ```json
 {
@@ -94,15 +112,58 @@ Evaluate template expressions that must return truthy values. Expressions are ev
 }
 ```
 
-Response facets that aren't in the JSON body — elapsed time, raw text, individual headers — can't be reached with JMESPath. Capture them with a [save user function](#user-function-save), which receives the `httpx.Response`:
+#### The `response` Namespace
+
+Every **response step** (save and verify alike) sees a reserved `response`
+namespace holding the response's metadata:
+
+| Name | Type | Meaning |
+|------|------|---------|
+| `response.status` | int | HTTP status code |
+| `response.reason` | str | Reason phrase (`"OK"`, `"Not Found"`) |
+| `response.headers` | mapping | Response headers, case-insensitive keys |
+| `response.elapsed_ms` | float | Round-trip time in milliseconds |
+
+Use it directly in verify expressions:
+
+```json
+{
+    "verify": {
+        "expressions": [
+            "{{ response.status == 200 }}",
+            "{{ 'json' in response.headers['content-type'] }}",
+            "{{ response.elapsed_ms < 500 }}"
+        ]
+    }
+}
+```
+
+Or save a header for later stages with a substitutions save:
+
+```json
+{
+    "save": {
+        "substitutions": [
+            {"vars": {"request_id": "{{ response.headers['x-request-id'] }}"}}
+        ]
+    }
+}
+```
+
+The name `response` is reserved inside response steps: a variable, save, or
+fixture with that name is shadowed there (the validator warns with
+`HTTPCHAIN027`). It is only in scope in response steps — referencing it in a
+request template is an error. The response **body** is deliberately not in the
+namespace; extract body data with a `save` step.
+
+Response facets beyond the metadata — e.g. the raw body text — can be captured with a [save user function](#user-function-save), which receives the `httpx.Response`:
 
 ```python
 # checks.py
 import httpx
 
-def response_meta(response: httpx.Response) -> dict:
+def body_meta(response: httpx.Response) -> dict:
     return {
-        "response_time": response.elapsed.total_seconds(),
         "body_text": response.text,
     }
 ```
@@ -110,11 +171,10 @@ def response_meta(response: httpx.Response) -> dict:
 ```json
 {
     "response": [
-        {"save": {"user_functions": ["checks:response_meta"]}},
+        {"save": {"user_functions": ["checks:body_meta"]}},
         {
             "verify": {
                 "expressions": [
-                    "{{ response_time < 1.0 }}",
                     "{{ 'error' not in body_text }}"
                 ]
             }
@@ -123,7 +183,7 @@ def response_meta(response: httpx.Response) -> dict:
 }
 ```
 
-`validate` can't see the keys a user function returns, so it reports `response_time` and `body_text` as `HTTPCHAIN003` ("potentially undefined"). The warning is expected here — the expressions resolve correctly at runtime once the save step has run.
+`validate` can't see the keys a user function returns, so it reports `body_text` as `HTTPCHAIN003` ("potentially undefined"). The warning is expected here — the expression resolves correctly at runtime once the save step has run.
 
 ### Body Content Checks
 

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Response metadata is now declaratively reachable in response steps via the reserved `response` namespace — `response.status`, `response.reason`, `response.headers` (case-insensitive), `response.elapsed_ms` — usable in `verify.expressions` (`{{ response.status == 200 }}`, `{{ 'json' in response.headers['content-type'] }}`) and in save templates, which makes saving a header a one-liner substitutions save. The namespace exists only inside response steps; the response **body** stays out (extract it with `save`). A user variable/save/fixture named `response` is shadowed there — the validator warns with the new `HTTPCHAIN027` diagnostic.
+- `verify.headers` values accept matcher objects — `{"contains": ...}`, `{"not_contains": ...}`, `{"matches": ...}`, `{"not_matches": ...}` — besides the existing exact-match strings, so partial and pattern header assertions no longer require saving the header first. An absent header behaves as an empty string for the matcher forms, mirroring the body-check semantics. Contradictory matchers (same value in `contains` and `not_contains`) are a validation error, like their body counterparts.
 - Ambiguous `$ref` lookups are now flagged. A relative reference path is looked up against the referencing file's directory first, then the root path; when a file exists under **both**, the file-relative one wins as before, but the resolver now emits `AmbiguousReferenceWarning` (surfaced by `pytest-httpchain validate` as the new `HTTPCHAIN026` warning diagnostic) instead of silently shadowing the root-relative file. The lookup order itself is now documented in the references guide.
 
 ### Changed

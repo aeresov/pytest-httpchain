@@ -42,6 +42,7 @@ Code     Severity Meaning
 024      warning  Missing required argument for a user function (deep)
 025      info     Template parametrize values force collection-time resolution
 026      warning  ``$ref`` path matches files under both lookup bases (ambiguous)
+027      warning  User-defined name shadowed by the reserved ``response`` namespace
 ======== ======== ==========================================================
 
 The ``020``–``024`` codes come from *deep* validation, which is opt-in
@@ -67,6 +68,7 @@ from pytest_httpchain.models import (
     BinaryBody,
     FilesBody,
     FunctionsSubstitution,
+    HeaderMatcher,
     SaveStep,
     Scenario,
     UserFunctionCall,
@@ -79,6 +81,7 @@ from pytest_httpchain.models import (
     parametrize_values_contain_template,
 )
 from pytest_httpchain.scoping import (
+    RESPONSE_META_NAME,
     extract_defined_variables,
     extract_saved_variables,
     extract_template_variables,
@@ -125,6 +128,7 @@ class DiagnosticCode:
     MISSING_ARG = "HTTPCHAIN024"
     PARAMETRIZE_COLLECTION_RESOLUTION = "HTTPCHAIN025"
     AMBIGUOUS_REF = "HTTPCHAIN026"
+    RESERVED_NAME = "HTTPCHAIN027"
 
 
 class Diagnostic(BaseModel):
@@ -344,6 +348,29 @@ def _verify_diagnostics(scenario: Scenario) -> list[Diagnostic]:
                         location=f"{location}.body",
                     )
                 )
+
+            # Same contradiction rule for header matchers (per header key).
+            for header_name, expected in verify.headers.items():
+                if not isinstance(expected, HeaderMatcher):
+                    continue
+                if expected.contains is not None and expected.contains == expected.not_contains:
+                    diagnostics.append(
+                        _diag(
+                            DiagnosticCode.CONTAINS_CONTRADICTION,
+                            "error",
+                            f"Stage '{stage.name}': header '{header_name}' verification both requires and forbids substring {expected.contains!r}",
+                            location=f"{location}.headers.{header_name}",
+                        )
+                    )
+                if expected.matches is not None and str(expected.matches) == str(expected.not_matches or ""):
+                    diagnostics.append(
+                        _diag(
+                            DiagnosticCode.MATCHES_CONTRADICTION,
+                            "error",
+                            f"Stage '{stage.name}': header '{header_name}' verification both requires and forbids pattern {str(expected.matches)!r}",
+                            location=f"{location}.headers.{header_name}",
+                        )
+                    )
 
     return diagnostics
 
@@ -728,11 +755,22 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
                 )
             )
 
-    # NOTE: response data (response/status_code/body/json/text/headers/cookies) is
-    # NOT ambient in {{ }} templates — it reaches save/verify handlers directly and
-    # only enters the template context via an earlier `save` step. So there are no
-    # response "builtins" to whitelist here; template functions are already excluded
-    # from references via TEMPLATE_BUILTINS.
+    # Response METADATA (status/reason/headers/elapsed_ms) is ambient in
+    # response-step templates as the reserved `response` namespace — encoded in
+    # scoping.StageScopes.response, so the data-flow check accepts it there and
+    # only there. A user-defined name colliding with it is shadowed inside
+    # response steps: warn rather than let the save silently change meaning.
+    reserved_conflicts = (vars_defined | vars_saved | set(fixtures)) & {RESPONSE_META_NAME}
+    if reserved_conflicts:
+        diagnostics.append(
+            _diag(
+                DiagnosticCode.RESERVED_NAME,
+                "warning",
+                f"Name(s) {sorted(reserved_conflicts)} are shadowed by the reserved response metadata namespace inside response steps "
+                f"(save/verify templates see the HTTP response there, not your value)",
+            )
+        )
+
     diagnostics.extend(_dataflow_diagnostics(scenario, test_data))
 
     diagnostics.extend(_verify_diagnostics(scenario))

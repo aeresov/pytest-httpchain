@@ -533,3 +533,74 @@ def test_ambiguous_ref_reported_as_diagnostic(tmp_path):
     assert result.valid is True  # a warning, not an error
     assert DiagnosticCode.AMBIGUOUS_REF in {d.code for d in result.diagnostics}
     assert any("file-relative wins" in w for w in result.warnings)
+
+
+class TestResponseMetadataNamespace:
+    """The reserved `response` namespace (task 25): in scope for response
+    steps, out of scope elsewhere, and shadowing user names is warned about."""
+
+    def _scenario(self, tmp_path, stages):
+        path = tmp_path / "test_x.http.json"
+        path.write_text(json.dumps({"stages": stages}))
+        return path
+
+    def test_response_refs_accepted_in_response_steps(self, tmp_path):
+        path = self._scenario(
+            tmp_path,
+            [
+                {
+                    "name": "s",
+                    "request": {"url": "http://server/x"},
+                    "response": [
+                        {"save": {"substitutions": [{"vars": {"req_id": "{{ response.headers['x-request-id'] }}"}}]}},
+                        {"verify": {"expressions": ["{{ response.status == 200 }}"]}},
+                    ],
+                }
+            ],
+        )
+        result = validate_scenario(path)
+        assert DiagnosticCode.UNDEFINED_VAR not in _codes(result)
+
+    def test_response_ref_in_request_still_flagged(self, tmp_path):
+        path = self._scenario(
+            tmp_path,
+            [
+                {
+                    "name": "s",
+                    "request": {"url": "http://server/x", "headers": {"x": "{{ response.status }}"}},
+                    "response": [{"verify": {"status": 200}}],
+                }
+            ],
+        )
+        result = validate_scenario(path)
+        assert DiagnosticCode.UNDEFINED_VAR in _codes(result)
+
+    def test_user_name_shadowed_by_namespace_warns(self, tmp_path):
+        path = self._scenario(
+            tmp_path,
+            [
+                {
+                    "name": "s",
+                    "substitutions": [{"vars": {"response": "mine"}}],
+                    "request": {"url": "http://server/x"},
+                    "response": [{"verify": {"status": 200}}],
+                }
+            ],
+        )
+        result = validate_scenario(path)
+        assert DiagnosticCode.RESERVED_NAME in _codes(result)
+
+    def test_header_matcher_contradiction_is_error(self, tmp_path):
+        path = self._scenario(
+            tmp_path,
+            [
+                {
+                    "name": "s",
+                    "request": {"url": "http://server/x"},
+                    "response": [{"verify": {"headers": {"x-h": {"contains": "a", "not_contains": "a"}}}}],
+                }
+            ],
+        )
+        result = validate_scenario(path)
+        assert result.valid is False
+        assert DiagnosticCode.CONTAINS_CONTRADICTION in _codes(result)

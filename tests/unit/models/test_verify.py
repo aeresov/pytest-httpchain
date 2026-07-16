@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from pytest_httpchain.models.entities import (
+    HeaderMatcher,
     Request,
     ResponseBody,
     Stage,
@@ -95,6 +96,29 @@ class TestVerifyHeaders:
             }
         )
         assert len(verify.headers) == 3
+
+
+class TestVerifyHeaderMatchers:
+    """Verify.headers values may be matcher objects besides exact strings."""
+
+    def test_matcher_object_parsed(self):
+        verify = Verify(headers={"content-type": {"contains": "json"}})
+        matcher = verify.headers["content-type"]
+        assert isinstance(matcher, HeaderMatcher)
+        assert matcher.contains == "json"
+
+    def test_exact_string_still_a_string(self):
+        verify = Verify(headers={"content-type": "application/json", "x-id": {"matches": "^[0-9]+$"}})
+        assert verify.headers["content-type"] == "application/json"
+        assert isinstance(verify.headers["x-id"], HeaderMatcher)
+
+    def test_empty_matcher_rejected(self):
+        with pytest.raises(ValidationError, match="at least one"):
+            Verify(headers={"content-type": {}})
+
+    def test_unknown_matcher_key_rejected(self):
+        with pytest.raises(ValidationError):
+            Verify(headers={"content-type": {"equals": "x"}})
 
 
 class TestVerifyExpressions:

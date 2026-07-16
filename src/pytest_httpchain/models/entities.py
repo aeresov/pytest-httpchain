@@ -410,21 +410,43 @@ with _suppress_field_shadow_warning("schema"):
         not_matches: list[RegexPattern] = Field(default_factory=list, description="Regex patterns the response body must NOT match.")
 
 
+class HeaderMatcher(StrictModel):
+    """Declarative matcher for one expected response header.
+
+    At least one field must be set. An absent header behaves as an empty
+    string, mirroring the body ``contains``/``matches`` semantics (so
+    ``not_contains``/``not_matches`` pass vacuously for a missing header)."""
+
+    contains: str | PartialTemplateStr | None = Field(default=None, description="Substring the header value must contain.")
+    not_contains: str | PartialTemplateStr | None = Field(default=None, description="Substring the header value must NOT contain.")
+    matches: RegexPattern | PartialTemplateStr | None = Field(default=None, description="Regex the header value must match (re.search).")
+    not_matches: RegexPattern | PartialTemplateStr | None = Field(default=None, description="Regex the header value must NOT match (re.search).")
+
+    @model_validator(mode="after")
+    def at_least_one_check(self) -> Self:
+        if self.contains is None and self.not_contains is None and self.matches is None and self.not_matches is None:
+            raise ValueError("Header matcher must set at least one of: contains, not_contains, matches, not_matches")
+        return self
+
+
 class Verify(Descripted):
     status: HTTPStatus | StatusCode | None | NumberOrTemplate = Field(
         default=None,
         description="Expected HTTP status code: a standard code (autocompleted) or any integer 100-599 (e.g. 499).",
     )
-    headers: dict[str, str] = Field(default_factory=dict, description="Expected response headers (exact match per key).")
+    headers: dict[str, str | HeaderMatcher] = Field(
+        default_factory=dict,
+        description="Expected response headers: a string (exact match) or a matcher object (contains/not_contains/matches/not_matches) per key.",
+    )
     expressions: list[Any] = Field(
         default_factory=list,
         description=(
             "Template expressions evaluated as boolean conditions against the context "
             "(saved variables, fixtures, substitutions). Each must be a full template "
-            "expression that evaluates to a truthy/falsy value. The HTTP response is not "
-            "directly available here — save response data first, then reference it."
+            "expression that evaluates to a truthy/falsy value. Response metadata is "
+            "available as `response.*`: status, reason, headers, elapsed_ms."
         ),
-        examples=[["{{ user_age >= 18 }}", "{{ saved_total > 0 }}", "{{ 'admin' in user_roles }}"]],
+        examples=[["{{ user_age >= 18 }}", "{{ response.status == 200 }}", "{{ 'json' in response.headers['content-type'] }}"]],
     )
     user_functions: FunctionsList = Field(default_factory=list, description="Functions to process response data.")
     body: ResponseBody = Field(default_factory=ResponseBody)
