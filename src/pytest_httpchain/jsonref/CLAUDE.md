@@ -44,7 +44,7 @@ All three directives (`$include`, `$merge`, `$ref`) work identically:
 - Combined: `{"$include": "file.json#/path"}` references specific node in external file
 
 ### Deep Merging
-When `$include` (or `$ref`) has sibling properties, they are merged **additively** with the referenced content: sibling keys are added, lists are **concatenated**, and nested dicts are merged recursively. There is **no** last-wins override — a sibling that would override an existing scalar (or conflicts by type) raises `ReferenceResolverError` (`Merge conflict at <path>`) rather than silently winning.
+When `$include` (or `$ref`) has sibling properties, they are merged **additively** with the referenced content: sibling keys are added, lists are **concatenated**, and nested dicts are merged recursively. There is **no** last-wins override — a sibling that would override an existing scalar (or conflicts by type) raises `ReferenceResolverError` (`Merge conflict at <path>`) rather than silently winning. `null` is a value like any other (not an override or a hole): a `null` paired with a different value at the same path is a conflict, while equal values — including two `null`s — merge fine. The whole policy lives in ONE place: `_SIBLING_MERGER` (a custom `deepmerge.Merger` in `plumbing/reference.py`) whose fallback and type-conflict strategies raise.
 ```json
 {
   "$include": "base.json",

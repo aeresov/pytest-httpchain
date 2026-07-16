@@ -171,7 +171,7 @@ A `$ref` (or `$include`/`$merge`) and its sibling properties are combined by **a
 3. **Scalars**: A sibling must match the referenced value. Any **differing** scalar raises a merge conflict at load time (`Merge conflict at <path>`).
 4. **Type mismatch**: Combining different JSON types at the same path (object vs array, scalar vs object, …) raises a merge conflict.
 
-`null` is the one exception: a `null` on either side of a path is always accepted and the sibling wins — so a sibling `null` can blank out a referenced value of any type.
+`null` is not an exception: it is a value like any other, not an override or a hole. A `null` paired with a different value at the same path is a merge conflict; two `null`s merge fine.
 
 > **References add, they don't override.** To change a value a fragment already sets, don't merge over it — keep that key out of the shared fragment (so the local scenario is its only writer), or point the `$ref` at a sub-node that omits it. Trying to replace a referenced scalar with a different one is a load-time error by design, so a shared fragment can never be silently contradicted.
 

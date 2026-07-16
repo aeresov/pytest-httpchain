@@ -6,7 +6,7 @@ from functools import reduce
 from pathlib import Path
 from typing import Any, Self
 
-from deepmerge import always_merger
+from deepmerge import Merger
 
 from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, ReferenceResolverError
 from pytest_httpchain.jsonref.plumbing.circular import CircularDependencyTracker
@@ -16,6 +16,30 @@ REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 
 # Supported reference keys: $include/$merge (preferred, avoids VS Code conflicts) and $ref (legacy)
 REF_KEYS = ("$include", "$merge", "$ref")
+
+
+def _raise_on_conflict(config: Any, path: list[Any], base: Any, nxt: Any) -> Any:
+    """deepmerge strategy: allow equal values, raise on any real conflict.
+
+    Serves as both the fallback strategy (same-type values that aren't dicts
+    or lists) and the type-conflict strategy, so the no-last-wins promise
+    holds for every type combination — including a null on either side (null
+    is a value, not an override or a hole).
+    """
+    if base == nxt:
+        return base
+    location = ".".join(str(part) for part in path) or "root"
+    raise ReferenceResolverError(f"Merge conflict at {location}")
+
+
+# The single encoding of the sibling-merge policy: nested dicts merge
+# recursively, lists concatenate, and any other overlap must be equal —
+# otherwise it is a conflict and resolution fails loudly.
+_SIBLING_MERGER = Merger(
+    [(list, "append"), (dict, "merge")],
+    [_raise_on_conflict],
+    [_raise_on_conflict],
+)
 
 
 def _parse_json_rejecting_duplicates(path: Path) -> Any:
@@ -239,13 +263,7 @@ class ReferenceResolver:
 
         resolved_siblings = self._resolve_refs(siblings, current_path, root_data, root_path)
 
-        # Two-call contract: conflict detection MUST run before always_merger.merge,
-        # and _detect_merge_conflicts deliberately mirrors the merger's per-type policy
-        # (recurse into dicts, allow list concatenation, reject conflicting scalars). If
-        # you change the merge strategy, change _detect_merge_conflicts to match.
-        self._detect_merge_conflicts(referenced_data, resolved_siblings)
-
-        return always_merger.merge(referenced_data, resolved_siblings)
+        return _SIBLING_MERGER.merge(referenced_data, resolved_siblings)
 
     def _load_json_file(self, path: Path) -> dict[str, Any]:
         """Load JSON file content."""
@@ -256,24 +274,3 @@ class ReferenceResolver:
         child_resolver = type(self)(self.max_parent_traversal_depth, root_path)
         child_resolver.tracker = self.tracker.create_child_tracker()
         return child_resolver
-
-    def _detect_merge_conflicts(
-        self,
-        base: Any,
-        overlay: Any,
-        path: str = "",
-    ) -> None:
-        if base is None or overlay is None or base == overlay:
-            return
-
-        if isinstance(base, dict) and isinstance(overlay, dict):
-            for key, value in overlay.items():
-                if key in base:
-                    new_path = f"{path}.{key}" if path else key
-                    self._detect_merge_conflicts(base[key], value, new_path)
-            return
-
-        if isinstance(base, list) and isinstance(overlay, list):
-            return
-
-        raise ReferenceResolverError(f"Merge conflict at {path if path else 'root'}")

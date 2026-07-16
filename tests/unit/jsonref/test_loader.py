@@ -386,3 +386,30 @@ class TestMultipleDirectives:
         )
         with pytest.raises(ReferenceResolverError, match="Multiple reference directives"):
             load_json(file)
+
+
+class TestNullMergeSemantics:
+    """Null is not an override: the no-last-wins promise holds for null like
+    any other value. A null/value pair in the same position is a conflict."""
+
+    def test_null_sibling_conflicts_with_value(self, create_json_file):
+        create_json_file("base.json", {"value": 42})
+        file = create_json_file("main.json", {"data": {"$ref": "base.json", "value": None}})
+        with pytest.raises(ReferenceResolverError, match="Merge conflict at value"):
+            load_json(file)
+
+    def test_value_sibling_conflicts_with_null_base(self, create_json_file):
+        create_json_file("base.json", {"value": None})
+        file = create_json_file("main.json", {"data": {"$ref": "base.json", "value": 42}})
+        with pytest.raises(ReferenceResolverError, match="Merge conflict at value"):
+            load_json(file)
+
+    def test_equal_values_are_not_a_conflict(self, create_json_file):
+        create_json_file("base.json", {"value": 42})
+        file = create_json_file("main.json", {"data": {"$ref": "base.json", "value": 42}})
+        assert load_json(file)["data"] == {"value": 42}
+
+    def test_equal_nulls_are_not_a_conflict(self, create_json_file):
+        create_json_file("base.json", {"value": None})
+        file = create_json_file("main.json", {"data": {"$ref": "base.json", "value": None}})
+        assert load_json(file)["data"] == {"value": None}
