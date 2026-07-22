@@ -233,6 +233,16 @@ def _free_port() -> int:
 
 
 @pytest.fixture
+def closed_port():
+    """A port that was just bound and released — connecting to it is REFUSED
+    on every platform. A static port cannot promise that portably: a low port
+    is silently DROPPED by the Windows CI runners' firewall (a timeout, not a
+    refusal), and a high port may sit inside an OS's ephemeral range and be
+    legitimately in use."""
+    return _free_port()
+
+
+@pytest.fixture
 def server():
     reset_counter()  # Reset counter before each test
     port = _free_port()
