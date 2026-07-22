@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An inactive `xfail` mark (`xfail(False, ...)`) no longer smuggles a genuine stage failure past the chain-abort machinery: pytest reports such a stage as failed, and subsequent stages now correctly skip.
 - The runtime HTTPCHAIN027 reserved-name warning surfaces as a clean stage failure under `filterwarnings = error` instead of a raw warning traceback that bypassed chain-abort.
 - JSON pointer array indices follow RFC 6901 strictly: `-1`, `+1`, and whitespace forms are invalid-pointer errors instead of silently resolving via Python indexing semantics; pointer errors inside external fragments now name the fragment file.
-- The connection-refused example scenario targets port 2 (outside every platform's ephemeral range) instead of 59999, which Linux could legitimately hand to a running process.
+- The connection-refused example scenario targets a dynamically bound-and-released port via a `closed_port` fixture instead of the static 59999, which Linux could legitimately hand to a running process (and any static choice fails somewhere: low ports are silently dropped by the Windows CI firewall).
 - `format_response` tolerates undecodable bytes served with a JSON content type (UnicodeDecodeError), matching the runner's own handling.
 - Docs/metadata accuracy sweep: README's hosted-schema claim (tracks `main`, not the latest release), HAR size note, a pointer to the diagnostics reference; classifiers include Python 3.14; stale isort config entry removed; error subclasses documented; assorted docstring corrections (JsonModule, scoping's parametrize note, iteration parameter naming).
 

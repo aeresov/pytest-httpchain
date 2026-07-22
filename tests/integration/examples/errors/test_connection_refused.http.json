@@ -3,9 +3,9 @@
     "stages": [
         {
             "name": "connection_refused",
-            "description": "Request to non-existent server should fail",
+            "description": "Request to a just-released (closed) port must be refused",
             "request": {
-                "url": "http://localhost:2/nonexistent",
+                "url": "http://127.0.0.1:{{ closed_port }}/nonexistent",
                 "timeout": 2
             },
             "response": [
@@ -14,6 +14,9 @@
                         "status": 200
                     }
                 }
+            ],
+            "fixtures": [
+                "closed_port"
             ]
         }
     ]
