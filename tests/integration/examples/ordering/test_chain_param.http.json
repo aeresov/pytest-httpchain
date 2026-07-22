@@ -1,0 +1,60 @@
+{
+    "stages": [
+        {
+            "name": "s0",
+            "fixtures": [
+                "server"
+            ],
+            "parametrize": [
+                {
+                    "individual": {
+                        "v": [
+                            1,
+                            2
+                        ]
+                    }
+                }
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "y": "{{ v }}"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "s1",
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ y == 2 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

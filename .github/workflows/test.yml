@@ -74,11 +74,17 @@ jobs:
             # `coverage run -m pytest` (not `pytest --cov`) so coverage starts before
             # pytest imports the plugin under test — otherwise every module-level line
             # of the package is imported pre-measurement and reported as a 0% floor.
+            # One command per step: on windows-latest the default shell is pwsh, which
+            # only propagates the LAST command's exit code from a multi-line block —
+            # a failing pytest would be masked by a succeeding `coverage xml`.
             - name: Run tests with coverage
-              run: |
-                  uv run coverage run -m pytest tests -v
-                  uv run coverage report --show-missing
-                  uv run coverage xml
+              run: uv run coverage run -m pytest tests -v
+
+            - name: Coverage report
+              run: uv run coverage report --show-missing
+
+            - name: Coverage XML
+              run: uv run coverage xml
 
             - name: Upload coverage to Codecov
               if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'

@@ -43,6 +43,7 @@ Code     Severity Meaning
 025      info     Template parametrize values force collection-time resolution
 026      warning  ``$ref`` path matches files under both lookup bases (ambiguous)
 027      warning  User-defined name shadowed by the reserved ``response`` namespace
+028      warning  Scenario directive (``$include``/``$merge``, or file-path ``$ref``) inside an inline JSON Schema — not resolved there
 ======== ======== ==========================================================
 
 The ``020``–``024`` codes come from *deep* validation, which is opt-in
@@ -129,6 +130,7 @@ class DiagnosticCode:
     PARAMETRIZE_COLLECTION_RESOLUTION = "HTTPCHAIN025"
     AMBIGUOUS_REF = "HTTPCHAIN026"
     RESERVED_NAME = "HTTPCHAIN027"
+    SCHEMA_SCENARIO_DIRECTIVE = "HTTPCHAIN028"
 
 
 class Diagnostic(BaseModel):
@@ -267,6 +269,63 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
                 )
             )
 
+    return diagnostics
+
+
+def _inline_schema_diagnostics(scenario: Scenario) -> list[Diagnostic]:
+    """HTTPCHAIN028: scenario reference directives inside an inline JSON Schema.
+
+    Inline ``verify.body.schema`` subtrees are opaque to the reference
+    resolver — their ``$ref`` belongs to the schema validator — so an
+    ``$include``/``$merge`` found inside one can never be processed, and a
+    file-path ``$ref`` can never resolve at runtime either. Both are almost
+    certainly leftovers assuming the pre-0.12 behavior of resolving scenario
+    directives there.
+    """
+    diagnostics: list[Diagnostic] = []
+
+    def directive_keys(node: Any) -> set[str]:
+        # A leftover directive's value is always a string (anything else was a
+        # load error pre-0.12), so string-typed values only: a schema whose
+        # `properties` legitimately DECLARES an "$include" property maps it to
+        # a schema object (a dict) and is not flagged. "$ref" is normally
+        # schema vocabulary and stays unflagged — except a non-"#" value (a
+        # file path), which the runtime jsonschema validator can never resolve
+        # (no retrieve/base URI is configured) and which was exactly the
+        # pre-0.12 way to share an inline schema.
+        match node:
+            case dict():
+                found = set()
+                for key, value in node.items():
+                    if key in ("$include", "$merge") and isinstance(value, str):
+                        found.add(key)
+                    elif key == "$ref" and isinstance(value, str) and not value.startswith("#"):
+                        found.add(key)
+                    found |= directive_keys(value)
+                return found
+            case list():
+                found = set()
+                for item in node:
+                    found |= directive_keys(item)
+                return found
+            case _:
+                return set()
+
+    for stage in scenario.stages:
+        for step in stage.response:
+            if isinstance(step, VerifyStep) and isinstance(step.verify.body.schema, dict):
+                found = directive_keys(step.verify.body.schema)
+                if found:
+                    diagnostics.append(
+                        _diag(
+                            DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE,
+                            "warning",
+                            f"Inline JSON schema contains scenario reference directive(s) {sorted(found)}. "
+                            f"Inline schemas are standard JSON Schema: scenario directives are not resolved there. "
+                            f"Inline the shared content, or reference the schema by file path instead.",
+                            location=stage.name,
+                        )
+                    )
     return diagnostics
 
 
@@ -799,6 +858,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
     diagnostics.extend(_dataflow_diagnostics(scenario, test_data))
 
     diagnostics.extend(_verify_diagnostics(scenario))
+    diagnostics.extend(_inline_schema_diagnostics(scenario))
 
     diagnostics.extend(_marker_diagnostics(scenario))
 
@@ -857,6 +917,29 @@ def resolve_root_path(path: Path) -> Path:
     return path.parent
 
 
+def is_inline_schema_position(path: tuple[str | int, ...]) -> bool:
+    """True for raw-JSON positions that hold an inline verify schema.
+
+    These subtrees are standard JSON Schema — their ``$ref``/``$defs`` are
+    addressed to the schema validator, not the scenario's reference resolver —
+    so the load pipeline passes this as the resolver's ``opaque`` predicate.
+
+    The grammar (mirroring the ``Scenario`` model) is
+    ``stages[K].response[K].verify.body.schema``, where stages and response
+    steps each accept both the list form (``K`` is an index) and the
+    name-keyed mapping form (``K`` is a name), and a response mapping value
+    may itself be a list of steps (one extra index segment).
+    """
+    if path[-3:] != ("verify", "body", "schema"):
+        return False
+    head = path[:-3]
+    if len(head) == 4:
+        return head[0] == "stages" and head[2] == "response"
+    if len(head) == 5:
+        return head[0] == "stages" and head[2] == "response" and isinstance(head[4], int)
+    return False
+
+
 def load_scenario(path: Path, *, root_path: Path | None = None, ref_parent_traversal_depth: int = 3) -> tuple[Scenario, dict[str, Any]]:
     """Load, ``$ref``-resolve and validate a scenario file -> ``(scenario, raw_data)``.
 
@@ -864,13 +947,14 @@ def load_scenario(path: Path, *, root_path: Path | None = None, ref_parent_trave
     (``plugin.py:JsonModule.collect``, which passes ``config.rootpath``) and the
     CLI commands. ``root_path`` constrains ``$ref`` resolution; when omitted it
     defaults to `resolve_root_path` (the auto-detected project root, which
-    approximates ``config.rootpath``). Raises ``ReferenceResolverError`` /
+    approximates ``config.rootpath``). Inline verify schemas are opaque to the
+    resolver (`is_inline_schema_position`). Raises ``ReferenceResolverError`` /
     ``json.JSONDecodeError`` / ``pydantic.ValidationError`` on failure; callers
     map these to user-facing errors.
     """
     if root_path is None:
         root_path = resolve_root_path(path)
-    test_data = load_json(path, max_parent_traversal_depth=ref_parent_traversal_depth, root_path=root_path)
+    test_data = load_json(path, max_parent_traversal_depth=ref_parent_traversal_depth, root_path=root_path, opaque=is_inline_schema_position)
     return Scenario.model_validate(test_data), test_data
 
 

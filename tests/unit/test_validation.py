@@ -667,3 +667,57 @@ class TestReviewRegressionsBatch2:
         scenario.write_text("{}")
 
         assert resolve_root_path(scenario) == tmp_path / "bundle" / "tests"
+
+
+def test_inline_schema_standard_json_schema_kept(datadir):
+    """$ref/$defs inside verify.body.schema are JSON Schema vocabulary, not
+    scenario directives: the loader must leave the subtree untouched."""
+    from pytest_httpchain.validation import load_scenario
+
+    r = validate_scenario(datadir / "inline_schema_standard_ref.json")
+    assert r.valid is True, r.errors
+    _, raw = load_scenario(datadir / "inline_schema_standard_ref.json")
+    schema = raw["stages"][0]["response"][0]["verify"]["body"]["schema"]
+    assert schema["$defs"] == {"item": {"type": "string"}}
+    assert schema["properties"]["item"] == {"$ref": "#/$defs/item"}
+
+
+def test_inline_schema_dict_form_kept(datadir):
+    """The name-keyed response mapping form gets the same opacity."""
+    r = validate_scenario(datadir / "inline_schema_dict_form.json")
+    assert r.valid is True, r.errors
+
+
+def test_inline_schema_via_stage_fragment_kept(datadir):
+    """A stage spliced in via $include keeps its inline schema opaque too:
+    document positions compose across file boundaries."""
+    r = validate_scenario(datadir / "inline_schema_fragment_stage.json")
+    assert r.valid is True, r.errors
+
+
+def test_scenario_directive_inside_inline_schema_warns(datadir):
+    """$include/$merge are never JSON Schema keywords; inside an inline schema
+    they are dead (the resolver no longer processes them) and almost certainly
+    a migration leftover — worth a diagnostic."""
+    r = validate_scenario(datadir / "inline_schema_scenario_directive.json")
+    assert r.valid is True, r.errors
+    assert DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE in _codes(r)
+
+
+def test_legacy_file_ref_inside_inline_schema_warns(datadir):
+    """A whole-value {"$ref": "<file path>"} schema was the pre-0.12 way to
+    share an inline schema; the runtime jsonschema validator can never resolve
+    a non-'#' $ref (no retrieve/base URI), so it is unambiguously a migration
+    leftover and must get HTTPCHAIN028."""
+    r = validate_scenario(datadir / "inline_schema_legacy_file_ref.json")
+    assert r.valid is True, r.errors
+    assert DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE in _codes(r)
+
+
+def test_property_named_include_inside_inline_schema_no_warn(datadir):
+    """A schema describing documents with an '$include' PROPERTY is legitimate
+    JSON Schema: property-name keys map to schema objects (dicts), while a real
+    leftover directive's value is always a string — no false positive."""
+    r = validate_scenario(datadir / "inline_schema_property_named_include.json")
+    assert r.valid is True, r.errors
+    assert DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE not in _codes(r)

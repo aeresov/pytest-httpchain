@@ -32,8 +32,25 @@ src/pytest_httpchain/jsonref/
 from pytest_httpchain.jsonref import load_json, ReferenceResolverError
 
 # Load JSON with $ref resolution
-data = load_json(path, max_parent_traversal_depth=3, root_path=None)
+data = load_json(path, max_parent_traversal_depth=3, root_path=None, opaque=None)
 ```
+
+### Opaque subtrees
+
+`opaque` is an optional predicate over document positions (tuples of dict
+keys / list indices from the root). A subtree at a matching position passes
+through **verbatim** — no directive resolution, no merging — even when it
+contains `$ref`/`$include`/`$merge` keys. Positions compose across file
+boundaries: content spliced in via a reference is judged at the reference
+site's position plus its fragment-relative path. The consumer supplies the
+predicate because only it knows which positions hold foreign vocabulary —
+pytest-httpchain's load pipeline (`validation.is_inline_schema_position`)
+uses it for inline `verify.body.schema` values, where `$ref`/`$defs` belong
+to the JSON Schema validator, not this resolver.
+
+Opacity extends to sibling merging: an opaque position merges **atomically**
+(equal values keep, differing values raise `Merge conflict`) instead of the
+recursive dict merge — two foreign-vocabulary subtrees are never blended.
 
 ## Key Behaviors
 

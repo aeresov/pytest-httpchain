@@ -1,0 +1,8 @@
+{
+    "stages": [
+        {
+            "$include": "fragments_stage_with_schema.json",
+            "name": "s"
+        }
+    ]
+}

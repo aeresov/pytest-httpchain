@@ -26,7 +26,7 @@ import jmespath
 import jsonschema
 from pydantic import AfterValidator, BeforeValidator, Field, JsonValue, PlainSerializer, WithJsonSchema
 
-from pytest_httpchain.templates import TEMPLATE_PATTERN, is_complete_template
+from pytest_httpchain.templates import TEMPLATE_PATTERN, TEMPLATE_PATTERN_ECMA, is_complete_template
 from pytest_httpchain.userfunc import NAME_PATTERN
 
 
@@ -195,7 +195,10 @@ PartialTemplateStr = Annotated[str, AfterValidator(validate_partial_template_str
 # editor flags a non-template string that is also not a valid value for the
 # concrete type (e.g. timeout "abc"), without rejecting templates, concrete
 # values, or the stringified concretes the runtime coerces.
-_COMPLETE_TEMPLATE_PATTERN = rf"^\s*{TEMPLATE_PATTERN}\s*$"
+# Built on TEMPLATE_PATTERN_ECMA, not TEMPLATE_PATTERN: JSON Schema `pattern`
+# is an ECMA-262 regex, and JS engines (VS Code's JSON language service)
+# reject Python's `(?P<` named-group spelling.
+_COMPLETE_TEMPLATE_PATTERN = rf"^\s*{TEMPLATE_PATTERN_ECMA}\s*$"
 _NUMBER_OR_TEMPLATE_PATTERN = rf"(?:{_COMPLETE_TEMPLATE_PATTERN})|(?:^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)$)"
 
 # Whole-value template where the concrete type's valid strings are already

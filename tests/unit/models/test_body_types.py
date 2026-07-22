@@ -95,7 +95,7 @@ class TestBinaryBody:
         """Test BinaryBody with path as string."""
         body = BinaryBody(binary="csvs/mydata.csv")
         assert isinstance(body.binary, Path)
-        assert str(body.binary) == "csvs/mydata.csv"
+        assert body.binary == Path("csvs/mydata.csv")
 
     def test_binary_body_with_path_object(self):
         """Test BinaryBody with Path object."""
@@ -118,7 +118,7 @@ class TestBinaryBody:
         request = Request(url="https://example.com/upload", body=BinaryBody(binary="files/data.bin"))
         assert isinstance(request.body, BinaryBody)
         assert isinstance(request.body.binary, Path)
-        assert str(request.body.binary) == "files/data.bin"
+        assert request.body.binary == Path("files/data.bin")
 
 
 class TestBodyTypeDiscriminator:
@@ -253,7 +253,7 @@ class TestFilesBody:
         """Test FilesBody with single file."""
         body = FilesBody(files={"document": "path/to/file.pdf"})
         assert isinstance(body.files["document"], Path)
-        assert str(body.files["document"]) == "path/to/file.pdf"
+        assert body.files["document"] == Path("path/to/file.pdf")
 
     def test_files_body_multiple_files(self):
         """Test FilesBody with multiple files."""

@@ -262,7 +262,7 @@ A `$ref` (or `$include`/`$merge`) and its sibling properties are combined by **a
 }
 ```
 
-A fragment file may carry its own top-level `$schema` key for editor support — wherever the fragment lands in the referencing scenario, validation discards the key. A fragment that *is* a JSON Schema (e.g. pulled into a verify step's `schema` field) keeps its `$schema` dialect declaration, since that position is data rather than scenario structure.
+A fragment file may carry its own top-level `$schema` key for editor support — wherever the fragment lands in the referencing scenario, validation discards the key. Inline `verify.body.schema` values are the exception to resolution itself: that position holds a standard JSON Schema, so the resolver leaves the whole subtree untouched — its `$ref`/`$defs`/`$schema` belong to the schema validator, and scenario directives (`$include`/`$merge`, or a file-path `$ref`) are not processed there (the validator warns with `HTTPCHAIN028`). The opacity extends to sibling merging: two differing schema values arriving at the same position via `$merge` are a **merge conflict**, never blended — an opaque subtree merges atomically, like a scalar. To share a schema between scenarios, use the file-path form (`"schema": "./schemas/user.json"`) rather than a reference directive.
 
 ### Shared Configuration
 

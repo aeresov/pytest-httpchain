@@ -41,6 +41,7 @@ import jmespath
 import jmespath.exceptions
 import jsonschema
 import pytest
+import referencing.exceptions
 from pydantic import ValidationError
 from pyrate_limiter import Duration, Limiter, Rate
 
@@ -709,6 +710,14 @@ class Carrier:
                 raise VerificationError(f"Body schema validation failed: {e}") from e
             except jsonschema.SchemaError as e:
                 raise VerificationError(f"Invalid body validation schema: {e}") from e
+            except referencing.exceptions.Unresolvable as e:
+                # Inline schemas are standard JSON Schema, so a schema-internal
+                # $ref jsonschema cannot resolve (typo'd "#/$defs/..." pointer,
+                # or a pre-0.12 file-path $ref leftover) surfaces here — it must
+                # fail the stage cleanly like any other verification failure,
+                # not escape as a raw referencing traceback that would skip
+                # exchange attribution and the chain-abort machinery.
+                raise VerificationError(f"Cannot resolve $ref in body schema: {e}") from e
 
         cls._verify_text_matchers(
             "Body",
@@ -977,6 +986,10 @@ def create_test_class(
 
         all_fixtures = ["self"] + list(dict.fromkeys(all_param_names + stage.fixtures + scenario.fixtures))
         stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # ty: ignore[unresolved-attribute]
+
+        # Stage index for the chain-contiguity hook (plugin.pytest_collection_modifyitems),
+        # which restores stage order within a class without parsing method names or marks.
+        stage_method._httpchain_stage_index = i  # ty: ignore[unresolved-attribute]
 
         all_marks = [f"order({i})"] + stage.marks
         for mark_str in all_marks:

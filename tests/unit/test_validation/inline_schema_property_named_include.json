@@ -1,0 +1,20 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/ok" },
+            "response": [
+                {
+                    "verify": {
+                        "body": {
+                            "schema": {
+                                "type": "object",
+                                "properties": { "$include": { "type": "string" } }
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,37 @@
+{
+    "stages": [
+        {
+            "name": "broken_schema_ref",
+            "description": "An unresolvable schema-internal $ref fails cleanly, not with a raw referencing traceback",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/schema-test"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "schema": { "$ref": "#/$defs/missing" }
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "after_broken_ref",
+            "description": "A clean stage failure must abort the chain: this stage is skipped, not run",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -10,7 +10,7 @@ from pytest_httpchain.dataflow import DataFlow, analyze_dataflow
 from pytest_httpchain.jsonref import ReferenceResolverError, load_json
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.schema import build_schema
-from pytest_httpchain.validation import ValidateResult, load_scenario, resolve_root_path, validate_scenario
+from pytest_httpchain.validation import ValidateResult, is_inline_schema_position, load_scenario, resolve_root_path, validate_scenario
 
 app = typer.Typer()
 
@@ -98,10 +98,14 @@ def resolve(
 ) -> None:
     """Resolve $ref/$include/$merge and print the merged scenario JSON to stdout."""
     try:
+        # Same opacity as the load pipeline (load_scenario), so the printed
+        # document is exactly what collection sees: inline verify schemas are
+        # standard JSON Schema and stay untouched.
         data = load_json(
             scenario,
             max_parent_traversal_depth=ref_parent_traversal_depth,
             root_path=root_path or resolve_root_path(scenario),
+            opaque=is_inline_schema_position,
         )
     except (ReferenceResolverError, json.JSONDecodeError, OSError) as e:
         typer.echo(f"error: {e}", err=True)

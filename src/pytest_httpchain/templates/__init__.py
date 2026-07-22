@@ -13,7 +13,7 @@ Example:
 """
 
 from pytest_httpchain.templates.exceptions import TemplatesError
-from pytest_httpchain.templates.expressions import TEMPLATE_PATTERN, extract_template_expression, is_complete_template
+from pytest_httpchain.templates.expressions import TEMPLATE_PATTERN, TEMPLATE_PATTERN_ECMA, extract_template_expression, is_complete_template
 from pytest_httpchain.templates.substitution import TEMPLATE_BUILTINS, contains_template, set_max_comprehension_length, walk
 
 __all__ = [
@@ -23,6 +23,7 @@ __all__ = [
     "is_complete_template",
     "extract_template_expression",
     "TEMPLATE_PATTERN",
+    "TEMPLATE_PATTERN_ECMA",
     "TEMPLATE_BUILTINS",
     "TemplatesError",
 ]

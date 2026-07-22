@@ -1,0 +1,69 @@
+{
+    "stages": [
+        {
+            "name": "s0",
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "x": 0
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "s1",
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ x == 999 }}"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "s2",
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ x == 0 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

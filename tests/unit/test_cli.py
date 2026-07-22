@@ -146,6 +146,33 @@ def test_build_schema_matches_committed():
     assert build_schema() == committed
 
 
+def test_schema_patterns_are_ecma262_compatible():
+    """JSON Schema defines `pattern` as an ECMA-262 regex. Python's named-group
+    spelling `(?P<name>...)` is a SyntaxError in JS engines, and VS Code's JSON
+    language service silently drops a pattern it cannot compile — so no emitted
+    pattern may use Python-only syntax."""
+    from pytest_httpchain.schema import build_schema
+
+    patterns: list[str] = []
+
+    def collect(node):
+        match node:
+            case dict():
+                for key, value in node.items():
+                    if key == "pattern" and isinstance(value, str):
+                        patterns.append(value)
+                    else:
+                        collect(value)
+            case list():
+                for item in node:
+                    collect(item)
+
+    collect(build_schema())
+    assert patterns, "expected the schema to carry pattern constraints"
+    offenders = [p for p in patterns if "(?P<" in p]
+    assert not offenders, f"Python-only named groups in schema patterns: {offenders}"
+
+
 def test_schema_rejects_typos_accepts_documented_keys():
     """The editor schema must catch misspelled keys while accepting the
     documented $schema key, reference directives, and ordinary scenarios."""

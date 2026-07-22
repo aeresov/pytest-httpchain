@@ -47,7 +47,11 @@ def test_connection_refused(pytester):
     """Test connection refused error when server is not running"""
     result = run_scenario(pytester, "errors/test_connection_refused.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
-    result.stdout.fnmatch_lines(["*Connection refused*"])
+    # Must fail specifically because the connection was refused. The OS text
+    # differs per platform: POSIX says "Connection refused", Windows raises
+    # WinError 10061 "... actively refused it".
+    out = result.stdout.str()
+    assert "Connection refused" in out or "actively refused" in out, out
 
 
 def test_invalid_hostname(pytester):
@@ -57,9 +61,17 @@ def test_invalid_hostname(pytester):
     # Must fail specifically because the host name could not be resolved (DNS),
     # not for an unrelated reason. httpx classifies this as either a ConnectError
     # ("HTTP connection error") or a generic failure ("Unexpected error")
-    # depending on resolver state, so the stable common fragment is the OS
-    # resolver text rather than the plugin's wrapper prefix.
-    result.stdout.fnmatch_lines(["*Name or service not known*"])
+    # depending on resolver state, so the stable fragment is the OS resolver
+    # text rather than the plugin's wrapper prefix — and that text differs per
+    # platform/libc.
+    out = result.stdout.str()
+    resolver_texts = (
+        "Name or service not known",  # glibc
+        "Name does not resolve",  # musl
+        "getaddrinfo failed",  # Windows (WinError 11001)
+        "nodename nor servname provided",  # macOS
+    )
+    assert any(text in out for text in resolver_texts), out
 
 
 def test_malformed_json_save(pytester):

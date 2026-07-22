@@ -2,15 +2,22 @@
 
 import json
 import re
+from collections.abc import Callable
 from functools import reduce
 from pathlib import Path
 from typing import Any, Self
 
-from deepmerge import Merger
+from deepmerge import STRATEGY_END, Merger
 
 from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, ReferenceResolverError
 from pytest_httpchain.jsonref.plumbing.circular import CircularDependencyTracker
 from pytest_httpchain.jsonref.plumbing.path import RefPathHelper
+
+# Predicate over a document position — the tuple of dict keys / list indices
+# from the document root to a value. Positions are composed across file
+# boundaries: content spliced in via a reference is judged at the reference
+# site's position plus its fragment-relative path.
+OpaquePredicate = Callable[[tuple[str | int, ...]], bool]
 
 REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 
@@ -42,6 +49,30 @@ _SIBLING_MERGER = Merger(
 )
 
 
+def _build_opaque_aware_merger(opaque: "OpaquePredicate", base_path: tuple[str | int, ...]) -> Merger:
+    """Sibling merger that treats opaque positions as atomic values.
+
+    An opaque subtree is verbatim foreign vocabulary, so the recursive dict
+    merge must not blend two of them into one: at an opaque position the
+    whole values must be equal (kept) or it is a merge conflict — the same
+    no-silent-contradiction rule scalars already follow. ``base_path`` is the
+    reference site's document position; deepmerge's per-strategy ``path`` is
+    relative to the merge root, so their concatenation is the absolute
+    position the ``opaque`` predicate expects.
+    """
+
+    def atomic_at_opaque(config: Any, path: list[Any], base: Any, nxt: Any) -> Any:
+        if opaque(base_path + tuple(path)):
+            return _raise_on_conflict(config, path, base, nxt)
+        return STRATEGY_END
+
+    return Merger(
+        [(list, [atomic_at_opaque, "append"]), (dict, [atomic_at_opaque, "merge"])],
+        [_raise_on_conflict],
+        [_raise_on_conflict],
+    )
+
+
 def _parse_json_rejecting_duplicates(path: Path) -> Any:
     """Parse a JSON file, rejecting duplicate object keys.
 
@@ -67,14 +98,24 @@ def _parse_json_rejecting_duplicates(path: Path) -> Any:
 
 
 class ReferenceResolver:
-    """Resolves JSON reference directives ($include/$merge, or legacy $ref) in documents."""
+    """Resolves JSON reference directives ($include/$merge, or legacy $ref) in documents.
 
-    def __init__(self, max_parent_traversal_depth: int = 3, root_path: Path | None = None):
+    ``opaque`` (optional) marks document positions whose values are not the
+    resolver's to process: a subtree at a position the predicate matches is
+    passed through verbatim — no directive resolution, no merging — even when
+    it contains ``$ref``/``$include``/``$merge`` keys. The consumer supplies
+    the predicate because only it knows which positions hold foreign
+    vocabulary (e.g. inline JSON Schemas, where ``$ref`` belongs to the
+    schema validator).
+    """
+
+    def __init__(self, max_parent_traversal_depth: int = 3, root_path: Path | None = None, opaque: OpaquePredicate | None = None):
         self.max_parent_traversal_depth = max_parent_traversal_depth
         self.ref_paths = RefPathHelper()
         self.tracker = CircularDependencyTracker()
         self.base_path: Path | None = None
         self.root_path = root_path
+        self.opaque = opaque
 
     def resolve_document(self, data: dict[str, Any], base_path: Path, root_path: Path | None = None) -> dict[str, Any]:
         """Resolve all references in a document.
@@ -93,7 +134,7 @@ class ReferenceResolver:
         """
         self.base_path = base_path
         effective_root = root_path if root_path is not None else self.root_path
-        return self._resolve_refs(data, base_path, root_data=data, root_path=effective_root or base_path)
+        return self._resolve_refs(data, base_path, root_data=data, root_path=effective_root or base_path, doc_path=())
 
     def resolve_file(self, path: Path) -> dict[str, Any]:
         """Load a JSON file and resolve all references.
@@ -135,14 +176,17 @@ class ReferenceResolver:
         current_path: Path,
         root_data: Any,
         root_path: Path,
+        doc_path: tuple[str | int, ...],
     ) -> Any:
+        if self.opaque is not None and self.opaque(doc_path):
+            return data
         match data:
             case dict() if self._get_ref_key(data):
-                return self._resolve_single_ref(data, current_path, root_data, root_path)
+                return self._resolve_single_ref(data, current_path, root_data, root_path, doc_path)
             case dict():
-                return {key: self._resolve_refs(value, current_path, root_data, root_path) for key, value in data.items()}
+                return {key: self._resolve_refs(value, current_path, root_data, root_path, doc_path + (key,)) for key, value in data.items()}
             case list():
-                return [self._resolve_refs(item, current_path, root_data, root_path) for item in data]
+                return [self._resolve_refs(item, current_path, root_data, root_path, doc_path + (index,)) for index, item in enumerate(data)]
             case _:
                 return data
 
@@ -163,6 +207,7 @@ class ReferenceResolver:
         current_path: Path,
         root_data: Any,
         root_path: Path,
+        doc_path: tuple[str | int, ...],
     ) -> Any:
         ref_key = self._get_ref_key(data)
         assert ref_key is not None
@@ -177,12 +222,14 @@ class ReferenceResolver:
         file_path = match.group("file")
         pointer = match.group("pointer") or ""
 
+        # The referenced content lands at the reference site, so it is resolved
+        # at the site's document position (doc_path), not its source position.
         if file_path:
-            referenced_data = self._resolve_external_ref(file_path, pointer, current_path, root_path)
+            referenced_data = self._resolve_external_ref(file_path, pointer, current_path, root_path, doc_path)
         else:
-            referenced_data = self._resolve_internal_ref(pointer, root_data, root_path)
+            referenced_data = self._resolve_internal_ref(pointer, root_data, root_path, doc_path)
 
-        return self._merge_with_siblings(data, referenced_data, current_path, root_data, root_path)
+        return self._merge_with_siblings(data, referenced_data, current_path, root_data, root_path, doc_path)
 
     def _resolve_external_ref(
         self,
@@ -190,6 +237,7 @@ class ReferenceResolver:
         pointer: str,
         current_path: Path,
         root_path: Path,
+        doc_path: tuple[str | int, ...],
     ) -> Any:
         resolved_path = self.ref_paths.validate_ref_path(file_path, current_path, root_path, self.max_parent_traversal_depth)
 
@@ -201,7 +249,7 @@ class ReferenceResolver:
 
             child_resolver = self._create_child_resolver(root_path)
             child_resolver.base_path = resolved_path.parent
-            result = child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data, root_path=root_path)
+            result = child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data, root_path=root_path, doc_path=doc_path)
             return result
 
         except (OSError, json.JSONDecodeError) as e:
@@ -214,13 +262,14 @@ class ReferenceResolver:
         pointer: str,
         root_data: Any,
         root_path: Path,
+        doc_path: tuple[str | int, ...],
     ) -> Any:
         self.tracker.check_internal_ref(pointer)
 
         try:
             referenced_data = self._navigate_pointer(root_data, pointer)
             assert self.base_path is not None
-            return self._resolve_refs(referenced_data, self.base_path, root_data, root_path)
+            return self._resolve_refs(referenced_data, self.base_path, root_data, root_path, doc_path)
         finally:
             self.tracker.clear_internal_ref(pointer)
 
@@ -250,6 +299,7 @@ class ReferenceResolver:
         current_path: Path,
         root_data: Any,
         root_path: Path,
+        doc_path: tuple[str | int, ...],
     ) -> Any:
         siblings = {k: v for k, v in ref_dict.items() if k not in REF_KEYS}
 
@@ -261,9 +311,10 @@ class ReferenceResolver:
         if not isinstance(referenced_data, dict):
             raise ReferenceResolverError("Cannot merge non-dict reference with sibling properties")
 
-        resolved_siblings = self._resolve_refs(siblings, current_path, root_data, root_path)
+        resolved_siblings = self._resolve_refs(siblings, current_path, root_data, root_path, doc_path)
 
-        return _SIBLING_MERGER.merge(referenced_data, resolved_siblings)
+        merger = _SIBLING_MERGER if self.opaque is None else _build_opaque_aware_merger(self.opaque, doc_path)
+        return merger.merge(referenced_data, resolved_siblings)
 
     def _load_json_file(self, path: Path) -> dict[str, Any]:
         """Load JSON file content."""
@@ -271,6 +322,6 @@ class ReferenceResolver:
 
     def _create_child_resolver(self, root_path: Path) -> Self:
         """Create a child resolver with inherited state."""
-        child_resolver = type(self)(self.max_parent_traversal_depth, root_path)
+        child_resolver = type(self)(self.max_parent_traversal_depth, root_path, opaque=self.opaque)
         child_resolver.tracker = self.tracker.create_child_tracker()
         return child_resolver

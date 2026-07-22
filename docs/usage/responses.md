@@ -236,6 +236,17 @@ Inline schema:
 }
 ```
 
+An inline schema is **standard JSON Schema, verbatim**: the scenario's
+reference resolver treats the whole `schema` value as opaque, so `$ref`,
+`$defs`, `$schema` and every other keyword inside it are addressed to the
+schema validator, exactly as in a standalone schema document. Scenario
+reference directives are **not** processed inside an inline schema — the
+validator flags `$include`/`$merge` (and a file-path `$ref`, which the
+runtime schema validator can never resolve) with the `HTTPCHAIN028` warning,
+and an unresolvable schema-internal `$ref` fails the stage with a clean
+verification error. To share a schema between scenarios, reference it by
+file path instead:
+
 External schema file:
 
 ```json

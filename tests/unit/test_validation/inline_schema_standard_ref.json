@@ -1,0 +1,21 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/ok" },
+            "response": [
+                {
+                    "verify": {
+                        "body": {
+                            "schema": {
+                                "type": "object",
+                                "properties": { "item": { "$ref": "#/$defs/item" } },
+                                "$defs": { "item": { "type": "string" } }
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

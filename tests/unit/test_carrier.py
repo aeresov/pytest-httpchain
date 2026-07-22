@@ -37,12 +37,14 @@ class TestNormalizeCert:
     def test_single_path_becomes_str(self):
         from pathlib import Path
 
-        assert _normalize_cert(Path("/p/client.pem")) == "/p/client.pem"
+        # Expected values built via str(Path(...)) so the assertion is
+        # platform-native (Windows renders these with backslashes).
+        assert _normalize_cert(Path("/p/client.pem")) == str(Path("/p/client.pem"))
 
     def test_tuple_of_paths_becomes_tuple_of_str(self):
         from pathlib import Path
 
-        assert _normalize_cert((Path("/p/c.pem"), Path("/p/k.pem"))) == ("/p/c.pem", "/p/k.pem")
+        assert _normalize_cert((Path("/p/c.pem"), Path("/p/k.pem"))) == (str(Path("/p/c.pem")), str(Path("/p/k.pem")))
 
 
 class TestBuildRequestKwargsErrors:

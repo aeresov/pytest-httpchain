@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-22
+
+### Added
+
+- New `HTTPCHAIN028` warning diagnostic: a scenario reference directive inside an **inline** `verify.body.schema` is flagged — inline schemas are now standard JSON Schema and scenario directives are never resolved there (see the breaking change below). Flagged forms: `$include`/`$merge` with a string value, and a file-path `$ref` (a non-`#` `$ref` can never resolve in the runtime schema validator, so it is unambiguously a pre-0.12 leftover). A schema-internal `#/...` `$ref` is legitimate schema vocabulary and is never flagged.
+- `pytest_httpchain.jsonref.load_json` accepts an `opaque` predicate over document positions; a matching subtree passes through resolution verbatim. Positions compose across file boundaries (content spliced in via a reference is judged at the reference site's position plus its fragment-relative path). The load pipeline uses it to keep inline verify schemas intact.
+
+### Changed
+
+- **BREAKING**: inline `verify.body.schema` values are now opaque to the reference resolver and treated as **standard JSON Schema, verbatim**. Previously the resolver intercepted `$ref` (and `$include`/`$merge`) anywhere in the document — so a real-world schema using `$defs`/`$ref` either failed collection with a pointer error or had scenario data silently spliced into it, and inline schemas behaved differently from external schema files (which were always loaded verbatim). Now `$ref`/`$defs`/`$schema` inside an inline schema are addressed to the schema validator, exactly as in the external-file form; an unresolvable schema-internal `$ref` fails the stage with a clean `VerificationError` (and aborts the chain) rather than an internal traceback. The opacity extends to sibling merging: two differing schemas arriving at the same position via `$merge` are a merge conflict, never blended. Scenarios that composed inline schemas via scenario directives must inline the shared content or switch to the file-path form (`"schema": "./shared.json"`); leftover directives inside schemas are flagged by the new `HTTPCHAIN028` warning.
+- Dependency floors raised: `jsonschema>=4.18.0` (the first version with the `referencing`-based resolution machinery whose `Unresolvable` error the runner now catches), plus `referencing>=0.28.4` declared as a direct dependency (its exception type is imported directly). Enforced by the existing lowest-floors CI job.
+
+### Fixed
+
+- Multi-stage scenarios no longer interleave (and wipe each other's saved context) when two or more scenario files run in one plain, non-xdist pytest session. Every scenario class carried the same `order(0..n-1)` stage marks and pytest-order's default session-wide group scope stable-sorted equal indices across classes into A0, B0, A1, B1, … — with `teardown_class` resetting the chain state at every class switch, every stage after the first failed with a misleading "Undefined variable". The plugin now enforces its own invariant — each scenario class's items run contiguously, in stage order — after all other sorters, including tryfirst-wrapper sorters (pytest's `--ff`, pytest-order's `--order-after-ff`), and restores parametrized-instance order under shuffling plugins.
+- The published editor schema's `pattern` constraints are now valid ECMA-262 regexes. They embedded Python's `(?P<name>…)` named-group spelling, which JS engines reject — VS Code's JSON language service silently dropped every pattern, so the promised editor-side flagging (e.g. of `"timeout": "abc"`) never happened.
+- README (the PyPI long description) documented the pre-0.11 option spellings removed in 0.11.0; it now names the `httpchain_`-prefixed ini options and `--httpchain-output-dir`.
+- The Windows CI job could report success while tests failed: the multi-line pwsh step only propagated the last command's exit code. The step is split so a failing pytest fails the job, and the tests that actually failed on Windows are fixed (glibc-specific network-error assertions and path-separator assertions on `str(Path)`).
+
 ## [0.11.0] - 2026-07-16
 
 ### Added
@@ -352,7 +371,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.0...v0.9.1

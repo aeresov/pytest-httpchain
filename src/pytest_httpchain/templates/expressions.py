@@ -13,7 +13,13 @@ import re
 # single-line in practice, and every consumer (substitution.py, models/types.py,
 # the validator) shares this one pattern, so keeping it single-line keeps their
 # behaviour aligned. Write multi-line logic in a user function instead.
-TEMPLATE_PATTERN = r"\{\{(?P<expr>(?:(?!\}\}).)+)\}\}"
+_TEMPLATE_INNER = r"(?:(?!\}\}).)+"
+TEMPLATE_PATTERN = r"\{\{(?P<expr>" + _TEMPLATE_INNER + r")\}\}"
+# ECMA-262-compatible variant for JSON Schema `pattern` sites (same match
+# semantics, no capture): JSON Schema defines `pattern` as an ECMA-262 regex,
+# and Python's named-group spelling `(?P<` is a SyntaxError in JS engines —
+# VS Code's JSON language service silently drops a pattern it cannot compile.
+TEMPLATE_PATTERN_ECMA = r"\{\{" + _TEMPLATE_INNER + r"\}\}"
 
 
 def is_complete_template(value: str) -> bool:

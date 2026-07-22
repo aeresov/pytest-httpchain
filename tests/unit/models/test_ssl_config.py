@@ -30,7 +30,7 @@ class TestSSLConfigVerify:
         """Test verify with CA bundle path as string."""
         config = SSLConfig(verify="/path/to/ca-bundle.crt")
         assert isinstance(config.verify, Path)
-        assert str(config.verify) == "/path/to/ca-bundle.crt"
+        assert config.verify == Path("/path/to/ca-bundle.crt")
 
     def test_verify_with_path_object(self):
         """Test verify with CA bundle path as Path object."""
@@ -60,7 +60,7 @@ class TestSSLConfigCert:
         """Test cert with single combined PEM file."""
         config = SSLConfig(cert="/path/to/client.pem")
         assert isinstance(config.cert, Path)
-        assert str(config.cert) == "/path/to/client.pem"
+        assert config.cert == Path("/path/to/client.pem")
 
     def test_cert_single_path_object(self):
         """Test cert with Path object."""

@@ -20,6 +20,7 @@ scenarios into pytest:
 
 import logging
 import re
+import sys
 import types
 import warnings
 from collections.abc import Iterable
@@ -184,6 +185,89 @@ class JsonModule(pytest.Module):
                 raise pytest.Collector.CollectError(f"Invalid marker '{mark_str}' in {self.path}: {e}") from None
 
         yield json_class
+
+
+# Collection (definition) order of all items, recorded before any sorter runs.
+# Used as the regroup sort tiebreaker so parametrized instances of one stage
+# are restored to their original order even after a shuffling plugin.
+_ORIGINAL_POSITIONS: pytest.StashKey[dict[pytest.Item, int]] = pytest.StashKey()
+
+
+def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[pytest.Item, int]) -> None:
+    """Re-sort collected items so each scenario class's stages run contiguously,
+    in stage order.
+
+    A multi-stage scenario is one ordered chain over shared class state, and
+    pytest finalizes class scope every time execution leaves the class —
+    ``Carrier.teardown_class`` resets the chain's saved context. Any sorter
+    that splits a scenario class's items therefore breaks the chain. The main
+    offender is pytest-order itself: every scenario class carries the same
+    ``order(0..n-1)`` stage marks, and its default session-wide group scope
+    stable-sorts equal indices across classes into A0, B0, A1, B1, ...
+
+    Each scenario class's items are pulled together at the position of the
+    class's first item — preserving inter-class order — and sorted back into
+    stage order within the class; ``original_position`` breaks ties so
+    parametrized instances of one stage run in collection order (the last
+    instance's save is what later stages consume).
+    """
+    buckets: dict[type, list[pytest.Item]] = {}
+    for item in items:
+        cls = getattr(item, "cls", None)
+        if cls is not None and issubclass(cls, Carrier):
+            buckets.setdefault(cls, []).append(item)
+    if not buckets:
+        return
+
+    def stage_key(item: pytest.Item) -> tuple[int, int]:
+        index = getattr(getattr(item, "function", None), "_httpchain_stage_index", 0)
+        return (index, original_position.get(item, sys.maxsize))
+
+    for bucket in buckets.values():
+        bucket.sort(key=stage_key)
+
+    regrouped: list[pytest.Item] = []
+    emitted: set[type] = set()
+    for item in items:
+        cls = getattr(item, "cls", None)
+        if cls is None or cls not in buckets:
+            regrouped.append(item)
+        elif cls not in emitted:
+            emitted.add(cls)
+            regrouped.extend(buckets[cls])
+    items[:] = regrouped
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> Any:
+    """Enforce chain contiguity after the non-wrapper sorters have run.
+
+    The pre-yield half runs before any non-wrapper implementation: items are
+    still in collection (definition) order, which is recorded as the regroup
+    tiebreaker. The post-yield half runs after all non-wrapper
+    ``pytest_collection_modifyitems`` implementations (pytest-order,
+    pytest-randomly, ...) and regroups scenario chains. Sorters implemented as
+    *tryfirst wrappers* (core cacheprovider's ``--ff``, pytest-order's
+    ``--order-after-ff``) post-yield even later than this hook — those are
+    caught by `pytest_collection_finish` below.
+    """
+    config.stash[_ORIGINAL_POSITIONS] = {item: i for i, item in enumerate(items)}
+    result = yield
+    _regroup_carrier_items(items, config.stash[_ORIGINAL_POSITIONS])
+    return result
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Re-enforce chain contiguity after ALL ``pytest_collection_modifyitems``
+    activity — including tryfirst wrappers whose post-yield runs after this
+    plugin's own wrapper (core cacheprovider's ``--ff`` reorder, pytest-order's
+    ``--order-after-ff``). ``tryfirst`` so this runs before xdist's
+    WorkerInteractor reports collected IDs to the controller: workers must
+    report the final, regrouped order.
+    """
+    positions = session.config.stash.get(_ORIGINAL_POSITIONS, {})
+    _regroup_carrier_items(session.items, positions)
 
 
 @pytest.hookimpl(optionalhook=True)
