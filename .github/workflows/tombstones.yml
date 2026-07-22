@@ -1,0 +1,42 @@
+# One-shot (manually dispatched) publisher for the deprecated sub-package
+# placeholders under tombstones/. The original pytest-httpchain-* sub-package
+# projects were deleted from PyPI after the 0.9.0 consolidation, leaving the
+# names claimable by anyone while pre-0.9 releases still depend on them; these
+# placeholders re-register the names (Development Status :: Inactive, depending
+# on pytest-httpchain>=0.9). Each name needs a PyPI "pending publisher" entry
+# pointing at this repo + workflow + environment before its job can publish.
+name: Publish tombstones
+
+on:
+    workflow_dispatch:
+
+jobs:
+    publish:
+        name: Publish ${{ matrix.package }}
+        runs-on: ubuntu-latest
+        environment: pypi
+        permissions:
+            id-token: write # mandatory for trusted publishing
+        strategy:
+            fail-fast: false
+            matrix:
+                package:
+                    - pytest-httpchain-core
+                    - pytest-httpchain-jsonref
+                    - pytest-httpchain-models
+                    - pytest-httpchain-templates
+                    - pytest-httpchain-userfunc
+                    - pytest-httpchain-mcp
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@v8.3.2
+
+            - name: Build
+              run: uv build --project "tombstones/${{ matrix.package }}" --out-dir dist
+
+            - name: Publish to PyPI
+              uses: pypa/gh-action-pypi-publish@release/v1
+              with:
+                  packages-dir: dist
