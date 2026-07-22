@@ -15,9 +15,18 @@ from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     extract_template_variables,
     raw_stages,
+    raw_substitution_entries,
+    raw_substitution_entry_names,
+    raw_substitution_entry_templates,
     stage_scopes,
     substitution_names,
 )
+
+
+def _consumed(refs: set[str], earlier_saves: frozenset[str], shadows: frozenset[str]) -> set[str]:
+    """The subset of ``refs`` that reads an earlier stage's save: saved earlier
+    and not masked by the phase's shadow set."""
+    return {name for name in refs if name in earlier_saves and name not in shadows}
 
 
 class DataFlowEdge(BaseModel):
@@ -53,13 +62,16 @@ class DataFlow(BaseModel):
 def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     """Build the stage data-flow graph for a validated scenario.
 
-    A stage *consumes* a variable when its request/response/substitutions/parallel
-    templates reference a name saved by an earlier stage and not redefined locally
-    (own substitutions, parametrize/foreach parameters, or stage/scenario fixtures).
-    ``always_run`` references count too, but only fixtures and parametrize
-    parameters shadow them — always_run resolves before stage substitutions exist.
-    ``parametrize`` values are excluded — they resolve against scenario scope,
-    never saved values.
+    A stage *consumes* a variable when one of its templates references a name
+    saved by an earlier stage and not shadowed in that template's phase. Each
+    phase is judged against the shadow set scoping defines for it
+    (`StageScopes.*_shadows`): substitutions and the ``parallel`` config
+    resolve BEFORE iterations exist, so foreach parameters shadow only
+    request/response references; substitution steps resolve in order, so only
+    PRIOR steps' names shadow a step's references; ``always_run`` resolves
+    before stage substitutions exist, so only fixtures and parametrize
+    parameters shadow it. ``parametrize`` values are excluded — they resolve
+    against scenario scope, never saved values.
     """
     raws = raw_stages(test_data)
     scopes = stage_scopes(scenario)
@@ -76,25 +88,25 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         scope = scopes[i]
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
-        refs: set[str] = set()
-        for key in ("request", "substitutions", "parallel"):
-            extract_template_variables(raw.get(key), refs)
+        consumes: set[str] = set()
+
+        # Substitution steps resolve in order: each step sees only PRIOR
+        # steps' names, so their shadowing accumulates step by step. Only
+        # `vars` values are rendered at seed time (`functions` kwargs are
+        # passed raw), so only they can consume an earlier save.
+        prior_sub_names: frozenset[str] = frozenset()
+        for entry in raw_substitution_entries(raw.get("substitutions")):
+            consumes |= _consumed(extract_template_variables(raw_substitution_entry_templates(entry)), scope.earlier_saves, scope.always_run_shadows | prior_sub_names)
+            prior_sub_names |= frozenset(raw_substitution_entry_names(entry))
+
+        consumes |= _consumed(extract_template_variables(raw.get("parallel")), scope.earlier_saves, scope.pre_iteration_shadows)
+        consumes |= _consumed(extract_template_variables(raw.get("request")), scope.earlier_saves, scope.request_shadows)
         # Inside response steps the reserved `response` metadata namespace
         # shadows a same-named earlier save, so a `response` reference there is
         # NOT a data dependency on the earlier stage (in request/substitutions
         # templates it still is — no namespace exists in those scopes).
-        refs |= extract_template_variables(raw.get("response")) - {RESPONSE_META_NAME}
-
-        # Scenario fixtures count as local everywhere: at runtime they sit above
-        # the global context in the ChainMap, shadowing any same-named save.
-        local = scope.stage_substitutions | scope.parametrize_params | scope.foreach_params | scope.stage_fixtures | scope.scenario_fixtures
-        consumes = {name for name in refs if name in scope.earlier_saves and name not in local}
-
-        # always_run resolves before stage substitutions exist, so only fixtures
-        # and parametrize parameters shadow an earlier save there.
-        always_run_refs = extract_template_variables(raw.get("always_run"))
-        always_run_local = scope.stage_fixtures | scope.parametrize_params | scope.scenario_fixtures
-        consumes |= {name for name in always_run_refs if name in scope.earlier_saves and name not in always_run_local}
+        consumes |= _consumed(extract_template_variables(raw.get("response")) - {RESPONSE_META_NAME}, scope.earlier_saves, scope.request_shadows)
+        consumes |= _consumed(extract_template_variables(raw.get("always_run")), scope.earlier_saves, scope.always_run_shadows)
 
         by_producer: dict[int, list[str]] = {}
         for name in consumes:

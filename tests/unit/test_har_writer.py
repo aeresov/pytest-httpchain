@@ -32,7 +32,7 @@ def _make_pair(elapsed_ms: float | None = 123.5) -> tuple[httpx.Request, httpx.R
 class TestWriteHarFile:
     def test_creates_file(self, tmp_path):
         request, response = _make_pair()
-        path = write_har_file(tmp_path, "test_users", [(request, response)])
+        path = write_har_file(tmp_path, "test_users", [(request, response, None)])
 
         assert path.exists()
         assert path.suffix == ".har"
@@ -40,7 +40,7 @@ class TestWriteHarFile:
 
     def test_top_level_shape(self, tmp_path):
         request, response = _make_pair()
-        path = write_har_file(tmp_path, "test_users", [(request, response)])
+        path = write_har_file(tmp_path, "test_users", [(request, response, None)])
 
         har = json.loads(path.read_text(encoding="utf-8"))
 
@@ -55,7 +55,7 @@ class TestWriteHarFile:
 
     def test_entry_request_and_response_fields(self, tmp_path):
         request, response = _make_pair()
-        path = write_har_file(tmp_path, "test_users", [(request, response)])
+        path = write_har_file(tmp_path, "test_users", [(request, response, None)])
 
         entry = json.loads(path.read_text(encoding="utf-8"))["log"]["entries"][0]
 
@@ -67,7 +67,7 @@ class TestWriteHarFile:
         # M19 regression guard: a real duration derived from response.elapsed
         # must appear instead of 0.
         request, response = _make_pair(elapsed_ms=123.5)
-        path = write_har_file(tmp_path, "test_users", [(request, response)])
+        path = write_har_file(tmp_path, "test_users", [(request, response, None)])
 
         entry = json.loads(path.read_text(encoding="utf-8"))["log"]["entries"][0]
 
@@ -78,7 +78,7 @@ class TestWriteHarFile:
     def test_elapsed_ms_override(self, tmp_path):
         # An explicit elapsed_ms takes precedence over response.elapsed.
         request, response = _make_pair(elapsed_ms=999.0)
-        path = write_har_file(tmp_path, "test_users", [(request, response)], elapsed_ms=42.0)
+        path = write_har_file(tmp_path, "test_users", [(request, response, None)], elapsed_ms=42.0)
 
         entry = json.loads(path.read_text(encoding="utf-8"))["log"]["entries"][0]
 
@@ -88,7 +88,7 @@ class TestWriteHarFile:
         # When response.elapsed is unavailable (unread response), timing falls
         # back to 0 without raising.
         request, response = _make_pair(elapsed_ms=None)
-        path = write_har_file(tmp_path, "test_users", [(request, response)])
+        path = write_har_file(tmp_path, "test_users", [(request, response, None)])
 
         entry = json.loads(path.read_text(encoding="utf-8"))["log"]["entries"][0]
 
@@ -97,7 +97,7 @@ class TestWriteHarFile:
 
     def test_unsafe_test_name_is_sanitized(self, tmp_path):
         request, response = _make_pair()
-        path = write_har_file(tmp_path, "tests/foo.py::test_bar", [(request, response)])
+        path = write_har_file(tmp_path, "tests/foo.py::test_bar", [(request, response, None)])
 
         assert path.exists()
         assert "/" not in path.name
@@ -110,7 +110,7 @@ class TestMultipleExchanges:
         for i, (request, _) in enumerate(pairs):
             request.headers["x-iteration"] = str(i)
 
-        path = write_har_file(tmp_path, "test_parallel", pairs)
+        path = write_har_file(tmp_path, "test_parallel", [(request, response, None) for request, response in pairs])
 
         entries = json.loads(path.read_text(encoding="utf-8"))["log"]["entries"]
         assert len(entries) == 3
@@ -122,9 +122,34 @@ class TestMultipleExchanges:
         real, the response side is the browser-convention status-0 stub."""
         request, _ = _make_pair()
 
-        path = write_har_file(tmp_path, "test_timeout", [(request, None)])
+        path = write_har_file(tmp_path, "test_timeout", [(request, None, None)])
 
         entry = json.loads(path.read_text(encoding="utf-8"))["log"]["entries"][0]
         assert entry["request"]["url"] == "https://example.com/api/users"
         assert entry["response"]["status"] == 0
         assert "No response received" in entry["comment"]
+
+
+class TestPerExchangeStartTimes:
+    """Each exchange carries its own start timestamp; HAR waterfalls are built
+    from startedDateTime, so per-entry truth matters."""
+
+    def test_entries_carry_their_own_start_times(self, tmp_path):
+        from datetime import UTC, datetime
+
+        req1, resp1 = _make_pair()
+        req2, resp2 = _make_pair()
+        t0 = datetime(2026, 7, 22, 10, 0, 0, tzinfo=UTC)
+        t1 = datetime(2026, 7, 22, 10, 0, 5, tzinfo=UTC)
+        path = write_har_file(tmp_path, "t", [(req1, resp1, t0), (req2, resp2, t1)])
+        entries = json.loads(path.read_text())["log"]["entries"]
+        assert entries[0]["startedDateTime"] == t0.isoformat()
+        assert entries[1]["startedDateTime"] == t1.isoformat()
+
+    def test_missing_start_time_falls_back_to_write_time(self, tmp_path):
+        from datetime import datetime
+
+        req, resp = _make_pair()
+        path = write_har_file(tmp_path, "t", [(req, resp, None)])
+        entries = json.loads(path.read_text())["log"]["entries"]
+        datetime.fromisoformat(entries[0]["startedDateTime"])

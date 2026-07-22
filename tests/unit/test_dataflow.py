@@ -273,3 +273,80 @@ def test_saved_response_name_not_consumed_in_response_steps():
 
     assert flow.stages[1].consumes == []  # metadata namespace, not the save
     assert flow.stages[2].consumes == ["response"]  # request scope: real dependency
+
+
+def test_foreach_param_does_not_shadow_substitution_phase_refs():
+    """Stage substitutions resolve BEFORE iterations exist (stage_start_context),
+    so a foreach parameter cannot shadow an earlier save referenced there — the
+    producer edge is real and must be drawn."""
+    sc, data = _scenario(
+        [
+            {"name": "a", "request": {"url": "https://x.test/", "method": "POST"}, "response": [{"save": {"jmespath": {"x": "id"}}}]},
+            {
+                "name": "b",
+                "substitutions": [{"vars": {"y": "{{ x }}"}}],
+                "parallel": {"foreach": [{"individual": {"x": [1, 2]}}]},
+                "request": {"url": "https://x.test/{{ x }}/{{ y }}"},
+                "response": [{"verify": {"status": 200}}],
+            },
+        ]
+    )
+    flow = analyze_dataflow(sc, data)
+    assert flow.stages[1].consumes == ["x"]
+    assert [e.model_dump() for e in flow.edges] == [{"producer": 0, "consumer": 1, "vars": ["x"]}]
+
+
+def test_foreach_param_does_not_shadow_parallel_config_refs():
+    """The parallel config resolves before any iteration exists, so its own
+    foreach parameter names cannot shadow an earlier save referenced by e.g.
+    max_concurrency."""
+    sc, data = _scenario(
+        [
+            {"name": "a", "request": {"url": "https://x.test/", "method": "POST"}, "response": [{"save": {"jmespath": {"n": "id"}}}]},
+            {
+                "name": "b",
+                "parallel": {"foreach": [{"individual": {"n": [1, 2]}}], "max_concurrency": "{{ n }}"},
+                "request": {"url": "https://x.test/"},
+                "response": [{"verify": {"status": 200}}],
+            },
+        ]
+    )
+    flow = analyze_dataflow(sc, data)
+    assert flow.stages[1].consumes == ["n"]
+
+
+def test_prior_substitution_step_shadows_substitution_phase_ref():
+    """A prior step's name shadows the earlier save for later steps — no edge."""
+    sc, data = _scenario(
+        [
+            {"name": "a", "request": {"url": "https://x.test/", "method": "POST"}, "response": [{"save": {"jmespath": {"t": "id"}}}]},
+            {
+                "name": "b",
+                "substitutions": [{"vars": {"t": "local"}}, {"vars": {"u": "{{ t }}"}}],
+                "request": {"url": "https://x.test/"},
+                "response": [{"verify": {"status": 200}}],
+            },
+        ]
+    )
+    flow = analyze_dataflow(sc, data)
+    assert flow.stages[1].consumes == []
+    assert flow.edges == []
+
+
+def test_later_substitution_step_does_not_shadow_earlier_step_ref():
+    """Substitution steps resolve in order: a ref in step 1 to a name step 2
+    defines reads the EARLIER SAVE at runtime, so the edge must be drawn."""
+    sc, data = _scenario(
+        [
+            {"name": "a", "request": {"url": "https://x.test/", "method": "POST"}, "response": [{"save": {"jmespath": {"t": "id"}}}]},
+            {
+                "name": "b",
+                "substitutions": [{"vars": {"u": "{{ t }}"}}, {"vars": {"t": "local"}}],
+                "request": {"url": "https://x.test/"},
+                "response": [{"verify": {"status": 200}}],
+            },
+        ]
+    )
+    flow = analyze_dataflow(sc, data)
+    assert flow.stages[1].consumes == ["t"]
+    assert [e.model_dump() for e in flow.edges] == [{"producer": 0, "consumer": 1, "vars": ["t"]}]

@@ -1,0 +1,14 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "substitutions": [
+                { "vars": { "u": "{{ t }}" } },
+                { "vars": { "v": "{{ t }}" } },
+                { "vars": { "t": "1" } }
+            ],
+            "request": { "url": "https://x.test/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

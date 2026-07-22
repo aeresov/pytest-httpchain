@@ -1,0 +1,24 @@
+{
+    "stages": [
+        {
+            "name": "slow_rate_limited_requests",
+            "description": "3 iterations at 2/sec: real request starts spread over ~1s",
+            "fixtures": ["server"],
+            "parallel": {
+                "repeat": 3,
+                "max_concurrency": 3,
+                "calls_per_sec": 2
+            },
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

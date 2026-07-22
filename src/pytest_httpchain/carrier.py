@@ -32,6 +32,7 @@ from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar, cast
@@ -142,11 +143,14 @@ def _error_request(e: Exception) -> httpx.Request | None:
 
 @dataclass
 class ParallelIterationResult:
-    """Result of a successful parallel iteration."""
+    """Result of a successful stage iteration (every stage runs at least one;
+    a parallel stage runs many). ``started`` is the request's actual start
+    time — HAR waterfalls are built from it."""
 
     saved_context: dict[str, Any]
     request: httpx.Request
     response: httpx.Response
+    started: datetime
 
 
 class Carrier:
@@ -170,13 +174,13 @@ class Carrier:
     last_request: ClassVar[httpx.Request | None] = None
     last_response: ClassVar[httpx.Response | None] = None
     # Exchange bookkeeping for the report/HAR (see _record_exchanges):
-    # last_exchanges holds the executed stage's (request, response) pairs in
+    # last_exchanges holds the executed stage's (request, response, started) triples in
     # iteration order (response is None when none was received);
     # last_iterations_attempted is the stage's iteration count, so a parallel
     # stage's single shown exchange can be labeled honestly;
     # record_all_exchanges keeps EVERY iteration's exchange (HAR output on)
     # instead of just the shown one.
-    last_exchanges: ClassVar[list[tuple[httpx.Request, httpx.Response | None]]] = []
+    last_exchanges: ClassVar[list[tuple[httpx.Request, httpx.Response | None, datetime | None]]] = []
     last_iterations_attempted: ClassVar[int] = 0
     record_all_exchanges: ClassVar[bool] = False
     global_context: ClassVar[ChainMap[str, Any]] = ChainMap()
@@ -292,16 +296,12 @@ class Carrier:
 
         Any expected failure is reported via ``pytest.fail`` (clean, no
         traceback) and marks the chain aborted so later stages skip unless they
-        opt into ``always_run``. A failing stage commits **no** saves, so the
+        opt into ``always_run`` — with one exemption: a stage marked ``xfail``
+        is *expected* to fail, so its failure does not abort the chain and
+        subsequent stages proceed. A failing stage commits **no** saves, so the
         global context is left unchanged (deterministic) rather than carrying a
         thread-timing-dependent subset of a parallel run.
         """
-        # Hard gate, ahead of the always_run machinery: a failed initialization
-        # makes the whole scenario unusable (no context, no client), so even
-        # always_run stages skip — matching the previous eager behavior where an
-        # init problem failed collection and no stage ran at all. This also
-        # keeps template-form always_run from being evaluated against the empty
-        # context that an init failure leaves behind.
         # The exchange bookkeeping describes THIS stage only. Reset before
         # anything can fail or skip, so a stage that never reaches
         # _record_exchanges (skipped, or failed in substitutions/always_run/
@@ -312,6 +312,12 @@ class Carrier:
         cls.last_exchanges = []
         cls.last_iterations_attempted = 0
 
+        # Hard gate, ahead of the always_run machinery: a failed initialization
+        # makes the whole scenario unusable (no context, no client), so even
+        # always_run stages skip — matching the previous eager behavior where an
+        # init problem failed collection and no stage ran at all. This also
+        # keeps template-form always_run from being evaluated against the empty
+        # context that an init failure leaves behind.
         if cls._init_failed is not None:
             pytest.skip(reason=f"Scenario initialization failed: {cls._init_failed}")
 
@@ -328,11 +334,19 @@ class Carrier:
             stage_substitutions = process_substitutions(stage.substitutions, stage_context)
             local_context = with_stage_substitutions(stage_context, stage_substitutions)
 
-            logger.info(f"global context on start: {json.dumps(dict(cls.global_context), indent=2, default=str)}")
-            logger.info(f"local context on start: {json.dumps(dict(local_context), indent=2, default=str)}")
+            # DEBUG, guarded, and via _context_dump: full-context dumps carry
+            # every saved value — chained auth tokens included — and pytest
+            # attaches captured logs to failure reports, so they must be opt-in;
+            # the guard also keeps every stage from paying O(context size)
+            # serialization when the level is off (f-string args would evaluate
+            # before the logger checks anything).
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("global context on start: %s", _context_dump(cls.global_context))
+                logger.debug("local context on start: %s", _context_dump(local_context))
 
             parallel_config = walk(stage.parallel, local_context) if stage.parallel else None
-            iteration_substitutions = cls._build_iteration_substitutions(parallel_config)
+            # The cap is enforced inside the builder, before materialization.
+            iteration_substitutions = cls._build_iteration_substitutions(parallel_config, cls.max_parallel_iterations)
 
             total = len(iteration_substitutions)
             if total == 0:
@@ -341,11 +355,6 @@ class Carrier:
                 # $ref-sourced parallel config can still resolve to empty at
                 # runtime, so guard rather than silently send zero requests.
                 raise StageExecutionError("Parallel configuration produced zero iterations; foreach/repeat must yield at least one item")
-            if total > cls.max_parallel_iterations:
-                raise StageExecutionError(
-                    f"Parallel iteration count ({total}) exceeds maximum ({cls.max_parallel_iterations}). "
-                    f"Set 'httpchain_max_parallel_iterations' in pytest.ini to increase the limit."
-                )
 
             results, first_error = cls._run_iterations(stage, local_context, iteration_substitutions, parallel_config)
             completed = [iter_result for iter_result in results if iter_result is not None]
@@ -358,7 +367,8 @@ class Carrier:
                 all_saves: dict[str, Any] = {}
                 for iter_result in completed:
                     all_saves.update(iter_result.saved_context)
-                logger.info(f"updates for global context: {json.dumps(all_saves, indent=2, default=str)}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("updates for global context: %s", _context_dump(all_saves))
                 cls.global_context = with_saves(cls.global_context, all_saves)
             else:
                 idx, exc = first_error
@@ -377,6 +387,8 @@ class Carrier:
             # round-tripped through make_marker() at collection time (create_test_class),
             # so parsing here cannot raise on a previously-validated scenario.
             is_xfail = any(make_marker(mark).name == "xfail" for mark in stage.marks)
+            # An xfail-marked stage's failure is EXPECTED: it must not stop the
+            # chain, so later stages still run (only genuine failures abort).
             if not is_xfail:
                 logger.error(str(e))
                 cls.aborted = True
@@ -395,21 +407,45 @@ class Carrier:
         return stage_fixtures
 
     @staticmethod
-    def _build_iteration_substitutions(parallel_config: Any) -> list[dict[str, Any]]:
+    def _build_iteration_substitutions(parallel_config: Any, max_parallel_iterations: int) -> list[dict[str, Any]]:
         """Expand the (already template-resolved) parallel config into per-iteration
         substitution dicts: non-parallel -> a single empty dict; ``repeat`` -> N
         empties; ``foreach`` -> the cross-product of its parameter steps.
 
+        The ``max_parallel_iterations`` cap is enforced BEFORE anything is
+        materialized — the iteration count is known from the config alone
+        (repeat value / product of step lengths), and the runaway
+        template-driven counts the cap exists to catch would otherwise OOM the
+        process building the list the cap was about to reject.
+
         Like pytest's stacked ``parametrize`` marker this is a cross-product, but the
         resulting iteration ORDER is the *reverse* of pytest's — do not assume the
         two orders match."""
+
+        def check_cap(count: int) -> None:
+            if count > max_parallel_iterations:
+                raise StageExecutionError(
+                    f"Parallel iteration count ({count}) exceeds maximum ({max_parallel_iterations}). Set 'httpchain_max_parallel_iterations' in pytest.ini to increase the limit."
+                )
+
         iteration_substitutions: list[dict[str, Any]] = [{}]
         match parallel_config:
             case None:
                 pass
             case ParallelRepeatConfig(repeat=repeat_count):
+                check_cap(repeat_count)
                 iteration_substitutions = [{} for _ in range(repeat_count)]
             case ParallelForeachConfig(foreach=foreach_steps):
+                product = 1
+                for step in foreach_steps:
+                    match step:
+                        case IndividualParameter(individual=individual):
+                            product *= len(next(iter(individual.values())))
+                        case CombinationsParameter(combinations=combinations):
+                            product *= len(combinations)
+                        case _:
+                            raise RuntimeError(f"Unhandled foreach step: {type(step).__name__}")
+                check_cap(product)
                 for step in foreach_steps:
                     # Comprehension clause order is load-bearing: the new values are the
                     # OUTER loop and the accumulated dicts the INNER loop, which is what
@@ -449,9 +485,12 @@ class Carrier:
         failed_request = failed.request if isinstance(failed, StageExecutionError) else None
         failed_response = failed.response if isinstance(failed, StageExecutionError) else None
 
-        exchanges: list[tuple[httpx.Request, httpx.Response | None]] = [(r.request, r.response) for r in completed]
+        exchanges: list[tuple[httpx.Request, httpx.Response | None, datetime | None]] = [(r.request, r.response, r.started) for r in completed]
         if failed_request is not None:
-            exchanges.append((failed_request, failed_response))
+            # The failing exchange's start time is not tracked (the exception
+            # carries only request/response); None makes the HAR writer fall
+            # back to write time for that one entry.
+            exchanges.append((failed_request, failed_response, None))
         if not cls.record_all_exchanges:
             exchanges = exchanges[-1:]
 
@@ -463,7 +502,7 @@ class Carrier:
         elif exchanges:
             # No request info on the failure (or no failure): show the stage's
             # own last completed exchange rather than nothing.
-            cls.last_request, cls.last_response = exchanges[-1]
+            cls.last_request, cls.last_response = exchanges[-1][0], exchanges[-1][1]
 
     @classmethod
     def _run_iterations(
@@ -487,29 +526,38 @@ class Carrier:
         total = len(iteration_substitutions)
         results: list[ParallelIterationResult | None] = [None] * total
         first_error: tuple[int, Exception] | None = None
-        limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec else None
+        # No limiter for a single iteration: one acquire from a fresh bucket
+        # can never block (calls_per_sec is a PositiveInt after resolution).
+        limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec and total > 1 else None
 
-        if total == 1:
-            try:
-                results[0] = cls._execute_single_iteration(stage, local_context, iteration_substitutions[0], limiter, max_rate_limit_delay)
-            except _STAGE_FAILURE_EXCEPTIONS as e:
-                first_error = (0, e)
-        else:
-            workers = min(max_concurrency, total)
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures: dict[Future[ParallelIterationResult], int] = {}
-                for idx, iter_vars in enumerate(iteration_substitutions):
-                    future = executor.submit(cls._execute_single_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay)
-                    futures[future] = idx
+        try:
+            if total == 1:
+                try:
+                    results[0] = cls._execute_single_iteration(stage, local_context, iteration_substitutions[0], limiter, max_rate_limit_delay)
+                except _STAGE_FAILURE_EXCEPTIONS as e:
+                    first_error = (0, e)
+            else:
+                workers = min(max_concurrency, total)
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures: dict[Future[ParallelIterationResult], int] = {}
+                    for idx, iter_vars in enumerate(iteration_substitutions):
+                        future = executor.submit(cls._execute_single_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay)
+                        futures[future] = idx
 
-                for future in as_completed(futures):
-                    idx = futures[future]
-                    try:
-                        results[idx] = future.result()
-                    except _STAGE_FAILURE_EXCEPTIONS as e:
-                        first_error = (idx, e)
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        break
+                    for future in as_completed(futures):
+                        idx = futures[future]
+                        try:
+                            results[idx] = future.result()
+                        except _STAGE_FAILURE_EXCEPTIONS as e:
+                            first_error = (idx, e)
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            break
+        finally:
+            # Each Limiter owns a leaker daemon thread that keeps itself alive
+            # until closed — leaking one per rate-limited stage execution
+            # accumulates threads for the rest of the session.
+            if limiter is not None:
+                limiter.close()
 
         return results, first_error
 
@@ -772,6 +820,9 @@ class Carrier:
         if limiter is not None and not limiter.try_acquire("api", blocking=True, timeout=rate_limit_delay):
             raise RequestError(f"Rate limit exceeded: could not acquire a request slot within {rate_limit_delay}s")
 
+        # After the rate-limit acquire, so it stamps when the request actually
+        # goes on the wire — this feeds the HAR entry's startedDateTime.
+        started = datetime.now(UTC)
         response = cls._execute_http_request(request_kwargs)
 
         try:
@@ -821,6 +872,7 @@ class Carrier:
             saved_context=saved_context,
             request=response.request,
             response=response,
+            started=started,
         )
 
     @classmethod
@@ -872,6 +924,19 @@ class Carrier:
         cls.last_exchanges = []
         cls.last_iterations_attempted = 0
         cls.global_context = base_global_context(cls.global_context.maps[-1])
+
+
+def _context_dump(data: Mapping[str, Any]) -> str:
+    """Render a context for DEBUG logging; logging must never break a stage.
+
+    A user-function save can put anything into the context, and ``json.dumps``
+    can fail on it in several ways even with ``default=str`` — circular
+    structures (ValueError), non-string dict keys (TypeError), a ``__str__``
+    that itself raises — so ANY failure degrades to a placeholder."""
+    try:
+        return json.dumps(dict(data), indent=2, default=str)
+    except Exception as e:
+        return f"<unserializable context: {e}>"
 
 
 def _normalize_cert(cert: Any) -> str | tuple[str, ...]:

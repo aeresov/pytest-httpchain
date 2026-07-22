@@ -52,3 +52,27 @@ def test_parallel_no_partial_save(pytester):
     # stage 1 fails (an iteration hits /bad -> 400); stage 2 (always_run) passes
     # only because `leaked` was NOT committed. Without M4 it would be failed=2.
     result.assert_outcomes(errors=0, failed=1, passed=1)
+
+
+def test_rate_limiter_threads_not_leaked(pytester):
+    """Each rate-limited stage execution used to construct a pyrate-limiter
+    Limiter and never dispose it — and each Limiter owns a leaker daemon thread
+    that keeps itself alive forever. The limiter must be closed once the
+    stage's iterations are done."""
+    import threading
+    import time
+
+    result = run_scenario(pytester, "parallel/test_rate_limit.http.json")
+    result.assert_outcomes(errors=0, failed=0, passed=1)
+
+    def leakers() -> list[str]:
+        return [t.name for t in threading.enumerate() if "pyratelimiter" in t.name.lower().replace(" ", "")]
+
+    # Limiter.close() signals the leaker thread, which only notices on its next
+    # wake — pyrate-limiter's leak interval is 10s — so the deadline must span
+    # one full wake cycle. An unclosed (pre-fix) leaker is immortal: its own
+    # reference keeps it alive forever, so it is still running at 15s.
+    deadline = time.monotonic() + 15
+    while leakers() and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert leakers() == [], f"leaked rate-limiter threads: {leakers()}"

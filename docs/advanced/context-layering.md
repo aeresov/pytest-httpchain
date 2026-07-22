@@ -243,24 +243,26 @@ If a variable has an unexpected value:
 
 ### Context Inspection
 
-Enable debug logging to see context state:
+Enable debug logging to see context state (the full-context dumps are
+DEBUG-level — they contain every saved value, secrets included, so they are
+opt-in):
 
 ```bash
-pytest test_scenario.http.json -v --log-cli-level=INFO
+pytest test_scenario.http.json -v --log-cli-level=DEBUG
 ```
 
 Log output shows:
 ```
-INFO - global context on start: {"base_url": "https://..."}
-INFO - local context on start: {"endpoint": "/users", "base_url": "..."}
-INFO - updates for global context: {"user_ids": [1, 2, 3]}
+DEBUG - global context on start: {"base_url": "https://..."}
+DEBUG - local context on start: {"endpoint": "/users", "base_url": "..."}
+DEBUG - updates for global context: {"user_ids": [1, 2, 3]}
 ```
 
 ## Secrets and sensitive output
 
 pytest-httpchain is built for **full visibility while debugging** — and that visibility extends to secrets. By design, nothing is redacted:
 
-- **Logs** (`--log-cli-level=INFO`, as shown above) print the entire context as JSON — fixture values, substitution variables, and saved values such as auth tokens.
+- **Logs** (`--log-cli-level=DEBUG`, as shown above) print the entire context as JSON — fixture values, substitution variables, and saved values such as auth tokens.
 - **Report sections** attach the full HTTP request and response of a failing stage, including `Authorization` and other credential headers.
 - **HAR export** (`--httpchain-output-dir`) writes complete requests and responses — headers, cookies, and bodies — to disk.
 

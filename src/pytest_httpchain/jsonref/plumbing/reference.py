@@ -31,9 +31,11 @@ def _raise_on_conflict(config: Any, path: list[Any], base: Any, nxt: Any) -> Any
     Serves as both the fallback strategy (same-type values that aren't dicts
     or lists) and the type-conflict strategy, so the no-last-wins promise
     holds for every type combination — including a null on either side (null
-    is a value, not an override or a hole).
+    is a value, not an override or a hole). Equality is judged in JSON terms:
+    Python's ``True == 1`` must not smuggle a bool/number pair through as
+    "equal" — in JSON those are different types and different values.
     """
-    if base == nxt:
+    if isinstance(base, bool) == isinstance(nxt, bool) and base == nxt:
         return base
     location = ".".join(str(part) for part in path) or "root"
     raise ReferenceResolverError(f"Merge conflict at {location}")

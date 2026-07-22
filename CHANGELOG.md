@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-22
+
+### Added
+
+- Published the full `HTTPCHAINxxx` diagnostic-code reference as a docs page (Validation Diagnostics), including a `filterwarnings` recipe for `ScenarioValidationWarning`; a unit test keeps the page and the `DiagnosticCode` registry from drifting in either direction.
+- The order-aware validator now catches intra-list substitution forward references: stage substitution steps resolve strictly in order, so a step referencing a LATER step's name is a guaranteed runtime `TemplatesError` — flagged as `HTTPCHAIN004` ("before the substitution step that defines it") instead of validating silently.
+
+### Changed
+
+- Context dumps in the runner ("global/local context on start", "updates for global context") moved from INFO to DEBUG, behind an `isEnabledFor` guard. They serialize every saved value — chained auth tokens included — and pytest attaches captured logs to failure reports, so they are now opt-in; the guard also stops every stage from paying O(context size) JSON serialization when the level is off, and an unserializable (circular) saved value degrades to a placeholder instead of breaking the stage.
+- HAR entries now carry each request's **actual** start time in `startedDateTime` (captured per iteration, after the rate-limit acquire) instead of a timestamp fabricated at report-write time — HAR waterfalls of parallel/rate-limited stages were fiction. `write_har_file` exchanges are now `(request, response, started)` triples.
+
+### Fixed
+
+- `$include`/`$merge` sibling-merge equality is now judged in JSON terms: Python's `True == 1` let a boolean/number pair at the same path merge silently (the sibling vanished), violating the documented no-silent-contradiction guarantee — such pairs are now a merge conflict. A scenario relying on the old silent behavior fails loading with `Merge conflict at <path>`.
+- `show`/`graph` data-flow edges are computed per phase against the shadow rules `scoping` actually defines: stage substitutions and the `parallel` config resolve before iterations exist, so a `foreach` parameter no longer hides a genuine dependency on an earlier stage's save referenced there; substitution steps shadow cumulatively (a later step's name no longer hides an earlier step's dependency).
+- A pyrate-limiter `Limiter` (owning an immortal leaker daemon thread) was created and leaked on every rate-limited stage execution; the limiter is now closed after the stage's iterations finish, and is not built at all for single-iteration stages (where it can never limit anything).
+- The `httpchain_max_parallel_iterations` cap is enforced before the iteration list is materialized: a template-driven runaway `repeat`/`foreach` count used to allocate everything first and could OOM the process ahead of the very guard meant to catch it.
+- Request/response report formatting: pretty-printed JSON bodies now honor the same 1000-character truncation cap as plain text (`_MAX_BODY_CHARS` promised it, but valid JSON of any size was included in full).
+- `execute_stage`'s docstring documents the deliberate `xfail` exemption from chain-abort (an expected failure lets subsequent stages proceed); CLAUDE.md's lint commands now include the full CI gate (ty + import-linter) and the correct `httpchain_suffix` option name.
+
 ## [0.12.0] - 2026-07-22
 
 ### Added
@@ -371,7 +392,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.1...v0.10.0

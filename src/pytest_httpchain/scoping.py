@@ -21,7 +21,8 @@ Phase                     In scope
 ========================  ====================================================
 ``always_run``            fixtures, parametrize parameters, scenario
                           substitutions, earlier stages' saves
-stage ``substitutions``   same as ``always_run`` (they are being created)
+stage ``substitutions``   same as ``always_run``, plus PRIOR steps' names
+                          (steps resolve strictly in order)
 ``parallel`` config       the above plus this stage's substitutions
 request (per iteration)   the above plus ``foreach`` parameters
 response (per iteration)  the above plus this stage's own saves and the
@@ -226,6 +227,49 @@ def raw_stages(test_data: dict[str, Any]) -> list[Any]:
     return []
 
 
+def raw_substitution_entries(raw_substitutions: Any) -> list[Any]:
+    """Raw substitution entries in resolution order.
+
+    Substitutions may be authored as a list or as a name-keyed mapping (whose
+    values may themselves be lists); this mirrors the model's list/mapping
+    normalization (``_normalize_list_input``), so consumers walking the raw
+    form see the same step order the runtime resolves in."""
+    if isinstance(raw_substitutions, dict):
+        entries: list[Any] = []
+        for value in raw_substitutions.values():
+            if isinstance(value, list):
+                entries.extend(value)
+            else:
+                entries.append(value)
+        return entries
+    if isinstance(raw_substitutions, list):
+        return list(raw_substitutions)
+    return []
+
+
+def raw_substitution_entry_names(entry: Any) -> set[str]:
+    """Names a single raw substitution entry introduces (``vars``/``functions``
+    keys) — the raw twin of `substitution_names` for one entry."""
+    if not isinstance(entry, dict):
+        return set()
+    names: set[str] = set()
+    for key in ("vars", "functions"):
+        value = entry.get(key)
+        if isinstance(value, dict):
+            names.update(value.keys())
+    return names
+
+
+def raw_substitution_entry_templates(entry: Any) -> Any:
+    """The part of a raw substitution entry the runtime renders at seed time:
+    ``vars`` values only. ``functions`` kwargs are passed to ``wrap_function``
+    raw (``utils.process_substitutions``) — a ``{{ }}`` inside them is dead
+    text at seed time, not a context reference."""
+    if isinstance(entry, dict):
+        return entry.get("vars")
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Static scope model: per-stage, per-phase name availability.
 # --------------------------------------------------------------------------- #
@@ -276,6 +320,30 @@ class StageScopes:
         approximated). Runtime twins: `response_step_context` per step, plus
         `with_saves` layered per save step."""
         return self.request | self.saves | frozenset({RESPONSE_META_NAME})
+
+    # Shadow sets: the names layered ABOVE the global context in each phase — a
+    # same-named earlier save is unreadable behind them. The per-phase mirror
+    # of the scope properties, for consumers (dataflow) that need to know not
+    # just what is visible but what MASKS an earlier save.
+
+    @property
+    def always_run_shadows(self) -> frozenset[str]:
+        """Shadows while ``always_run`` resolves, and the base shadows for each
+        stage-substitution step (prior steps' names add to these cumulatively;
+        walk `raw_substitution_entries` for the step order)."""
+        return self.scenario_fixtures | self.stage_fixtures | self.parametrize_params
+
+    @property
+    def pre_iteration_shadows(self) -> frozenset[str]:
+        """Shadows in the ``parallel`` config scope: the stage's substitutions
+        are fully resolved by then and layer above the global context."""
+        return self.always_run_shadows | self.stage_substitutions
+
+    @property
+    def request_shadows(self) -> frozenset[str]:
+        """Shadows in request/response templates (per iteration): everything
+        above plus the ``foreach`` parameters."""
+        return self.pre_iteration_shadows | self.foreach_params
 
 
 def stage_scopes(scenario: Scenario) -> list[StageScopes]:

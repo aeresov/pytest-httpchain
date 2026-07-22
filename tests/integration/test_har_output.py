@@ -169,3 +169,25 @@ def test_timeout_after_passing_stage_shows_no_stale_response(pytester):
     result.assert_outcomes(passed=1, failed=1)
     result.stdout.fnmatch_lines(["*HTTP Request*", "*GET*/delay/2*"])
     result.stdout.no_fnmatch_line("*HTTP Response*")
+
+
+def test_har_entries_carry_real_start_times(pytester):
+    """startedDateTime must be each request's actual start, not export time:
+    a rate-limited stage (3 iterations at 2/sec) spreads real starts over
+    roughly a second, while export-time fabrication packs every entry within
+    milliseconds of the stage's end."""
+    from datetime import datetime
+
+    har_dir = pytester.path / "har_out"
+    pytester.copy_example("conftest.py")
+    pytester.copy_example("parallel/test_rate_limit_slow.http.json")
+    result = pytester.runpytest("-s", "--httpchain-output-dir", str(har_dir))
+    result.assert_outcomes(errors=0, failed=0, passed=1)
+
+    har_files = list(har_dir.glob("*.har"))
+    assert len(har_files) == 1
+    entries = json.loads(har_files[0].read_text(encoding="utf-8"))["log"]["entries"]
+    assert len(entries) == 3
+    times = sorted(datetime.fromisoformat(e["startedDateTime"]) for e in entries)
+    spread = (times[-1] - times[0]).total_seconds()
+    assert spread >= 0.4, f"start times span only {spread}s — fabricated at export time?"

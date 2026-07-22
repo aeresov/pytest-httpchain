@@ -721,3 +721,59 @@ def test_property_named_include_inside_inline_schema_no_warn(datadir):
     r = validate_scenario(datadir / "inline_schema_property_named_include.json")
     assert r.valid is True, r.errors
     assert DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE not in _codes(r)
+
+
+def test_substitution_intra_list_forward_ref_warns(datadir):
+    """Stage substitution steps resolve strictly in order (each step sees only
+    earlier steps' names), so a step referencing a LATER step's name is a
+    guaranteed runtime TemplatesError and must be flagged."""
+    r = validate_scenario(datadir / "substitution_intra_list_forward.json")
+    assert r.valid is True, r.errors
+    assert DiagnosticCode.FORWARD_REF in _codes(r)
+    assert any("before the substitution step that defines it" in w for w in r.warnings)
+
+
+def test_substitution_prior_step_ref_ok(datadir):
+    """A step referencing a PRIOR step's name is the supported chaining form —
+    no diagnostics."""
+    r = validate_scenario(datadir / "substitution_prior_step_ok.json")
+    assert r.valid is True, r.errors
+    assert DiagnosticCode.FORWARD_REF not in _codes(r)
+    assert DiagnosticCode.UNDEFINED_VAR not in _codes(r)
+
+
+def test_all_diagnostic_codes_published_in_docs():
+    """README promises stable HTTPCHAINxxx diagnostic codes; the full table must
+    be published on the docs site, not only in a source docstring — and the
+    page must not drift from the DiagnosticCode registry in either direction."""
+    import re
+
+    page_path = Path(__file__).resolve().parents[2] / "docs" / "diagnostics.md"
+    assert page_path.exists(), "docs/diagnostics.md is missing"
+    page = page_path.read_text()
+
+    registry = {v for v in vars(DiagnosticCode).values() if isinstance(v, str) and v.startswith("HTTPCHAIN")}
+    assert registry, "DiagnosticCode registry is empty?"
+    for code in sorted(registry):
+        assert code in page, f"{code} is not documented in docs/diagnostics.md"
+    for code in set(re.findall(r"HTTPCHAIN\d{3}", page)):
+        assert code in registry, f"docs/diagnostics.md documents unknown code {code}"
+
+
+def test_function_kwargs_templates_are_dead_text_no_warn(datadir):
+    """functions-substitution kwargs are passed to wrap_function raw
+    (utils.process_substitutions) — a template inside them is never rendered
+    at seed time, so it must not produce data-flow diagnostics."""
+    r = validate_scenario(datadir / "substitution_function_kwargs_template_ok.json")
+    assert r.valid is True, r.errors
+    assert DiagnosticCode.FORWARD_REF not in _codes(r)
+    assert DiagnosticCode.UNDEFINED_VAR not in _codes(r)
+
+
+def test_duplicate_substitution_forward_refs_reported_once(datadir):
+    """The same unavailable name referenced by several substitution steps is
+    one problem — one HTTPCHAIN004, not one per step."""
+    r = validate_scenario(datadir / "substitution_duplicate_forward_refs.json")
+    assert r.valid is True, r.errors
+    forward = [d for d in r.diagnostics if d.code == DiagnosticCode.FORWARD_REF]
+    assert len(forward) == 1, [d.message for d in forward]

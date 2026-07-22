@@ -252,3 +252,22 @@ class TestFormatResponse:
 
         # Should have HTTP version (defaults to HTTP/1.1)
         assert "HTTP" in result
+
+
+class TestJsonBodyTruncation:
+    """_MAX_BODY_CHARS promises request/response bodies are capped; the
+    pretty-printed JSON branches must honor it too, not only plain text."""
+
+    def test_large_json_request_body_truncated(self):
+        big = {"data": ["x" * 50] * 200}
+        request = httpx.Request("POST", "https://x.test/", json=big)
+        out = format_request(request)
+        assert "(truncated)" in out
+        assert len(out) < 3000
+
+    def test_large_json_response_body_truncated(self):
+        big = {"data": ["x" * 50] * 200}
+        response = httpx.Response(200, json=big)
+        out = format_response(response)
+        assert "(truncated)" in out
+        assert len(out) < 3000

@@ -16,9 +16,11 @@ uv run pytest
 uv run pytest tests/integration/test_primer.py -v
 uv run pytest tests/unit/test_foo.py::test_specific -v
 
-# Lint
+# Lint — CI's Lint job runs ALL FOUR of these; run them all before pushing
 uv run ruff check .
 uv run ruff format --check .
+uvx ty@0.0.49 check     # type check (pin matches CI)
+uv run lint-imports     # import layering contracts (exhaustive: new modules fail until placed)
 
 # Format
 uv run ruff format .
@@ -61,7 +63,7 @@ The models, templates, and jsonref subpackages carry their own CLAUDE.md next to
 
 ## Test File Pattern
 
-Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix configurable via `suffix` ini option).
+Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix configurable via `httpchain_suffix` ini option).
 
 ## Key Execution Flow
 

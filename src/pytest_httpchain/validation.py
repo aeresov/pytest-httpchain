@@ -19,7 +19,7 @@ Code     Severity Meaning
 001      error    Duplicate stage names
 002      error    Fixture and variable share the same name
 003      warning  Variable referenced but never defined/saved/fixture (typo)
-004      warning  Variable referenced before it is saved (ordering / data-flow)
+004      warning  Variable referenced before it is saved/defined (ordering / data-flow)
 005      warning  Stage has no verify step (no response validation)
 006      warning  Verify step asserts nothing (no-op)
 007      error    Body ``contains``/``not_contains`` list the same substring
@@ -87,6 +87,9 @@ from pytest_httpchain.scoping import (
     extract_saved_variables,
     extract_template_variables,
     raw_stages,
+    raw_substitution_entries,
+    raw_substitution_entry_names,
+    raw_substitution_entry_templates,
     stage_scopes,
     substitution_names,
 )
@@ -173,7 +176,8 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
     of a stage's own saves are treated as available to its whole response.
 
     A reference that is unavailable is reported as `DiagnosticCode.FORWARD_REF`
-    if the name is saved somewhere later (an ordering bug) or
+    if the name is saved somewhere later, or defined by a later substitution
+    step of the same stage (both ordering bugs) — or
     `DiagnosticCode.UNDEFINED_VAR` otherwise (likely a typo).
     """
     diagnostics: list[Diagnostic] = []
@@ -193,9 +197,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
         scope = scopes[i]
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
-        pre_iteration_refs: set[str] = set()
-        for key in ("substitutions", "parallel"):
-            extract_template_variables(raw.get(key), pre_iteration_refs)
+        pre_iteration_refs = extract_template_variables(raw.get("parallel"))
         request_refs = extract_template_variables(raw.get("request"))
         response_refs = extract_template_variables(raw.get("response"))
 
@@ -241,15 +243,44 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
 
         undefined_here: set[str] = set()
 
-        for refs, available, in_request in (
+        # Stage substitutions resolve strictly in order in the always_run scope
+        # (utils.process_substitutions): each step sees only PRIOR steps'
+        # names, so their refs are checked cumulatively — checking against the
+        # whole pre_iteration set would hide intra-list forward references
+        # that are guaranteed TemplatesErrors at runtime. Only ``vars`` values
+        # are checked (`raw_substitution_entry_templates`): ``functions``
+        # kwargs are never rendered at seed time. A name referenced by several
+        # steps is one problem — reported once, at its first occurrence.
+        phase_checks: list[tuple[list[str], frozenset[str], bool]] = []
+        prior_sub_names: frozenset[str] = frozenset()
+        seen_sub_refs: set[str] = set()
+        for entry in raw_substitution_entries(raw.get("substitutions")):
+            entry_refs = extract_template_variables(raw_substitution_entry_templates(entry)) - seen_sub_refs
+            seen_sub_refs |= entry_refs
+            phase_checks.append((sorted(entry_refs), scope.always_run | prior_sub_names, True))
+            prior_sub_names |= frozenset(raw_substitution_entry_names(entry))
+        phase_checks += [
             (sorted(pre_iteration_refs), scope.pre_iteration, True),
             (sorted(request_refs), scope.request, True),
             (sorted(response_refs), scope.response, False),
-        ):
+        ]
+
+        for refs, available, in_request in phase_checks:
             for name in refs:
                 if name in available:
                     continue
-                if name in all_saved:
+                if name in scope.stage_substitutions:
+                    # Only reachable from the substitution-step checks: in every
+                    # later phase the stage's substitution names are in scope.
+                    diagnostics.append(
+                        _diag(
+                            DiagnosticCode.FORWARD_REF,
+                            "warning",
+                            f"Stage '{stage.name}': substitution references '{name}' before the substitution step that defines it — steps resolve in order",
+                            location=stage.name,
+                        )
+                    )
+                elif name in all_saved:
                     j = first_save_stage[name]
                     if j == i and in_request:
                         msg = f"Stage '{stage.name}': variable '{name}' is referenced in the request but only saved in this stage's response"

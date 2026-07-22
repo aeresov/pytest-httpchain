@@ -38,9 +38,10 @@ def format_request(request: httpx.Request) -> str:
         else:
             # Decoded fine. Pretty-print JSON when it parses; a JSON body that
             # fails to parse is malformed *text*, not binary — show it as text.
+            # The pretty-printed form goes through the same truncation cap.
             if "application/json" in content_type:
                 try:
-                    lines.append(json.dumps(json.loads(decoded), indent=2, ensure_ascii=False))
+                    lines.append(_format_body_text(json.dumps(json.loads(decoded), indent=2, ensure_ascii=False)))
                 except json.JSONDecodeError:
                     lines.append(_format_body_text(decoded))
             else:
@@ -69,7 +70,7 @@ def format_response(response: httpx.Response) -> str:
         content_type = response.headers.get("Content-Type", "")
         if "application/json" in content_type:
             try:
-                lines.append(json.dumps(response.json(), indent=2, ensure_ascii=False))
+                lines.append(_format_body_text(json.dumps(response.json(), indent=2, ensure_ascii=False)))
             except json.JSONDecodeError:
                 lines.append(_format_body_text(response.text))
         elif _is_textual_content_type(content_type):

@@ -358,3 +358,78 @@ class TestContextManagerFixtureCleanup:
 
         assert exited == ["good"]
         assert carrier.active_context_managers == []
+
+
+class TestContextDump:
+    """Context dumps feed DEBUG logging only; they must never break a stage."""
+
+    def test_serializes_plain_context(self):
+        from pytest_httpchain.carrier import _context_dump
+
+        assert '"a": 1' in _context_dump({"a": 1})
+
+    def test_circular_context_degrades_to_placeholder(self):
+        from pytest_httpchain.carrier import _context_dump
+
+        circular: dict = {}
+        circular["self"] = circular
+        out = _context_dump(circular)
+        assert "unserializable" in out
+
+
+class TestIterationCapBeforeMaterialization:
+    """The max_parallel_iterations cap exists to stop runaway template-driven
+    counts; it must be checked BEFORE the iteration list is materialized, or
+    the runaway values it exists to catch OOM the process first. These tests
+    completing quickly (no 10^9 allocations) is the point."""
+
+    def test_huge_repeat_rejected_before_allocation(self):
+        from pytest_httpchain.errors import StageExecutionError
+        from pytest_httpchain.models import ParallelRepeatConfig
+
+        config = ParallelRepeatConfig(repeat=10**9)
+        with pytest.raises(StageExecutionError, match="exceeds maximum"):
+            Carrier._build_iteration_substitutions(config, max_parallel_iterations=10)
+
+    def test_huge_foreach_product_rejected_before_expansion(self):
+        from pytest_httpchain.errors import StageExecutionError
+        from pytest_httpchain.models import IndividualParameter, ParallelForeachConfig
+
+        config = ParallelForeachConfig(
+            foreach=[
+                IndividualParameter(individual={"a": list(range(5000))}),
+                IndividualParameter(individual={"b": list(range(5000))}),
+            ]
+        )
+        with pytest.raises(StageExecutionError, match="exceeds maximum"):
+            Carrier._build_iteration_substitutions(config, max_parallel_iterations=10)
+
+    def test_small_configs_still_expand(self):
+        from pytest_httpchain.models import ParallelRepeatConfig
+
+        result = Carrier._build_iteration_substitutions(ParallelRepeatConfig(repeat=3), max_parallel_iterations=10)
+        assert result == [{}, {}, {}]
+
+    def test_non_parallel_single_iteration(self):
+        assert Carrier._build_iteration_substitutions(None, max_parallel_iterations=10) == [{}]
+
+
+class TestContextDumpNeverRaises:
+    """The helper's contract is absolute: logging must never break a stage,
+    whatever a user-function save put into the context."""
+
+    def test_tuple_keyed_dict_degrades(self):
+        from pytest_httpchain.carrier import _context_dump
+
+        out = _context_dump({"a": {(1, 2): 3}})
+        assert "unserializable" in out
+
+    def test_poison_str_degrades(self):
+        from pytest_httpchain.carrier import _context_dump
+
+        class Poison:
+            def __str__(self):
+                raise RuntimeError("boom")
+
+        out = _context_dump({"a": Poison()})
+        assert "unserializable" in out

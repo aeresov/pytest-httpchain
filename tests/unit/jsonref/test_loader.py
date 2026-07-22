@@ -452,3 +452,32 @@ class TestTwoCandidateLookup:
             result = load_json(main, root_path=tmp_path)
 
         assert result["data"] == {"value": "local"}
+
+
+class TestCrossTypeBoolConflicts:
+    """Python's True == 1 must not defeat the no-silent-contradiction rule:
+    JSON true and 1 are different types AND different values, so a bool paired
+    with a number at the same path is a merge conflict, not an equality."""
+
+    @pytest.mark.parametrize(
+        ("ref_value", "sibling_value"),
+        [(True, 1), (False, 0), (1, True), (0, False)],
+    )
+    def test_bool_number_pair_is_conflict(self, create_json_files, ref_value, sibling_value):
+        files = create_json_files(
+            {
+                "main.json": {"$merge": "frag.json", "flag": sibling_value},
+                "frag.json": {"flag": ref_value},
+            }
+        )
+        with pytest.raises(ReferenceResolverError, match="conflict"):
+            load_json(files["main.json"])
+
+    def test_equal_bools_still_merge(self, create_json_files):
+        files = create_json_files(
+            {
+                "main.json": {"$merge": "frag.json", "flag": True},
+                "frag.json": {"flag": True},
+            }
+        )
+        assert load_json(files["main.json"])["flag"] is True

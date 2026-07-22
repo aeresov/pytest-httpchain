@@ -73,6 +73,7 @@ nav:
           - Parallel Execution: advanced/parallel.md
           - Context Layering: advanced/context-layering.md
           - $ref & Deep Merging: advanced/ref-merging.md
+    - Validation Diagnostics: diagnostics.md
     - Troubleshooting: troubleshooting.md
 
 extra:

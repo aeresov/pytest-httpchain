@@ -250,7 +250,7 @@ def create_har_log(entries: list[dict[str, Any]], comment: str | None = None) ->
 def write_har_file(
     output_dir: Path,
     test_name: str,
-    exchanges: list[tuple[httpx.Request, httpx.Response | None]],
+    exchanges: list[tuple[httpx.Request, httpx.Response | None, datetime | None]],
     started_datetime: datetime | None = None,
     elapsed_ms: float | None = None,
 ) -> Path:
@@ -259,11 +259,14 @@ def write_har_file(
     Args:
         output_dir: Directory to write the HAR file to.
         test_name: Name of the test (used for filename).
-        exchanges: The test's HTTP exchanges in execution order — one entry
-            per exchange. A parallel stage contributes one exchange per
-            iteration; an exchange's response is ``None`` when none was
-            received (timeout, connection error).
-        started_datetime: When the request started (applied to every entry).
+        exchanges: The test's HTTP exchanges in execution order — one
+            ``(request, response, started)`` triple per exchange. A parallel
+            stage contributes one exchange per iteration; a response is
+            ``None`` when none was received (timeout, connection error);
+            ``started`` is the request's actual start time (HAR waterfalls
+            are built from ``startedDateTime``), or ``None`` when unknown —
+            the entry then falls back to ``started_datetime``/write time.
+        started_datetime: Fallback start time for exchanges without their own.
         elapsed_ms: Total elapsed time in milliseconds (applied to every
             entry). When ``None`` (the default), each entry's value is derived
             from its response's ``elapsed``.
@@ -277,7 +280,7 @@ def write_har_file(
     filename = f"{safe_name}.har"
     filepath = output_dir / filename
 
-    entries = [request_response_to_har_entry(request, response, started_datetime, elapsed_ms) for request, response in exchanges]
+    entries = [request_response_to_har_entry(request, response, started or started_datetime, elapsed_ms) for request, response, started in exchanges]
     har = create_har_log(entries, comment=f"Test: {test_name}")
 
     filepath.write_text(json.dumps(har, indent=2, ensure_ascii=False), encoding="utf-8")
