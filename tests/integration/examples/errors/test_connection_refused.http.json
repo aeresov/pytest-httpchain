@@ -5,7 +5,7 @@
             "name": "connection_refused",
             "description": "Request to non-existent server should fail",
             "request": {
-                "url": "http://localhost:59999/nonexistent",
+                "url": "http://localhost:2/nonexistent",
                 "timeout": 2
             },
             "response": [

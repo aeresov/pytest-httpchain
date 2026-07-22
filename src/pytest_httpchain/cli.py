@@ -61,8 +61,12 @@ def validate(
     all_passed = all(passed(result) for _, result in results)
 
     if output_format is OutputFormat.json:
+        # Top-level `valid` is the GATE result (validity, plus warnings under
+        # --strict) — it matches the exit code. Each file's `result.valid` is
+        # pure validity; `strict` says which gate produced the top-level value.
         payload = {
             "valid": all_passed,
+            "strict": strict,
             "files": [{"path": str(path), "result": result.model_dump()} for path, result in results],
         }
         typer.echo(json.dumps(payload, indent=2, default=str))

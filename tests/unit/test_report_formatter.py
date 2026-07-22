@@ -271,3 +271,16 @@ class TestJsonBodyTruncation:
         out = format_response(response)
         assert "(truncated)" in out
         assert len(out) < 3000
+
+
+class TestUndecodableJsonResponse:
+    def test_undecodable_bytes_with_json_content_type_do_not_raise(self):
+        """httpx's .json() can raise UnicodeDecodeError (not only
+        JSONDecodeError) for undecodable bytes served as JSON — the formatter
+        must degrade like the carrier's equivalent call sites do."""
+        response = httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            content=b"\xff\xfe\x00b\x00a\x00d",
+        )
+        format_response(response)

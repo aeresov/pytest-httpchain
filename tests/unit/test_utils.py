@@ -2,7 +2,8 @@ import pytest
 
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
-from pytest_httpchain.utils import call_user_function, process_substitutions
+from pytest_httpchain.userfunc import call_user_function
+from pytest_httpchain.utils import process_substitutions
 
 
 # Test helper functions to be imported

@@ -1,3 +1,5 @@
+import pytest
+
 from tests.integration.conftest import run_scenario
 
 
@@ -62,3 +64,44 @@ def test_always_run_template_lazy(pytester):
     result = run_scenario(pytester, "marks/test_always_run_lazy.http.json")
     # The chain is healthy, so the would-crash template is never evaluated
     result.assert_outcomes(errors=0, failed=0, passed=2)
+
+
+def _rewrite_marks(pytester, marks):
+    """Rewrite the copied xfail(False) example's stage marks in place."""
+    import json as jsonlib
+
+    scenario_path = pytester.path / "test_xfail_false_condition.http.json"
+    data = jsonlib.loads(scenario_path.read_text())
+    data["stages"][0]["marks"] = marks
+    scenario_path.write_text(jsonlib.dumps(data))
+
+
+@pytest.mark.parametrize(
+    "marks",
+    [
+        ['xfail(False, reason="disabled condition")'],
+        ['xfail(condition=False, reason="disabled condition")'],
+    ],
+    ids=["positional", "kwarg"],
+)
+def test_inactive_xfail_aborts_chain(pytester, marks):
+    """An INACTIVE xfail — falsy condition, in either the positional or the
+    condition= kwarg spelling pytest honors — means pytest reports the stage
+    as a genuine failure, so the carrier must abort the chain too: an inactive
+    xfail must not smuggle failures past the abort machinery."""
+    pytester.copy_example("conftest.py")
+    pytester.copy_example("marks/test_xfail_false_condition.http.json")
+    _rewrite_marks(pytester, marks)
+    result = pytester.runpytest("-s")
+    result.assert_outcomes(errors=0, failed=1, passed=0, skipped=1)
+
+
+def test_multi_condition_active_xfail_does_not_abort(pytester):
+    """pytest activates xfail when ANY condition is truthy — an active xfail's
+    failure is expected and must not abort the chain (matching
+    test_xfail_continues for the plain form)."""
+    pytester.copy_example("conftest.py")
+    pytester.copy_example("marks/test_xfail_false_condition.http.json")
+    _rewrite_marks(pytester, ['xfail(True, False, reason="one truthy condition")'])
+    result = pytester.runpytest("-s")
+    result.assert_outcomes(errors=0, failed=0, passed=1, xfailed=1)

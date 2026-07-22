@@ -1,0 +1,41 @@
+{
+    "stages": [
+        {
+            "name": "xfail_false_stage",
+            "description": "xfail(False) means the mark is INACTIVE: this is a genuine failure",
+            "marks": [
+                "xfail(False, reason=\"disabled condition\")"
+            ],
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "url": "{{ server }}/bad"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "after_inactive_xfail",
+            "description": "A genuine failure aborts the chain: this stage must be skipped",
+            "fixtures": [
+                "server"
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

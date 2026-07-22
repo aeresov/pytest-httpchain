@@ -153,3 +153,19 @@ class TestPerExchangeStartTimes:
         path = write_har_file(tmp_path, "t", [(req, resp, None)])
         entries = json.loads(path.read_text())["log"]["entries"]
         datetime.fromisoformat(entries[0]["startedDateTime"])
+
+
+class TestFilenameCollisions:
+    def test_distinct_nodeids_get_distinct_files(self, tmp_path):
+        """Sanitization maps '/'/'\\'/':' all to '_' — distinct pytest nodeids
+        must still get distinct .har paths, not silently overwrite each other."""
+        request, response = _make_pair()
+        p1 = write_har_file(tmp_path, "t/x", [(request, response, None)])
+        p2 = write_har_file(tmp_path, "t:x", [(request, response, None)])
+        assert p1 != p2
+        assert p1.exists() and p2.exists()
+
+    def test_clean_names_keep_plain_filenames(self, tmp_path):
+        request, response = _make_pair()
+        path = write_har_file(tmp_path, "plain_name", [(request, response, None)])
+        assert path.name == "plain_name.har"

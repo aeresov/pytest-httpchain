@@ -240,5 +240,6 @@ A scenario's stages form an ordered chain over shared state, so they must all
 run on the same worker, in order. Modes that distribute tests individually —
 `--dist load` (the default when only `-n` is given), `--dist each`, and
 `--dist worksteal` — would scatter the chain across workers and are rejected
-at collection time with an error pointing here. Different scenarios never share
-state, so scenario-level distribution is safe under the supported modes.
+at collection time (the error names the supported modes). Different scenarios
+never share state, so scenario-level distribution is safe under the supported
+modes.

@@ -340,3 +340,33 @@ def test_show_reports_scenario_fixtures_and_vars(tmp_path):
     data = json.loads(rj.output)
     assert data["scenario_fixtures"] == ["server"]
     assert data["scenario_vars"] == ["api_key", "base_url"]
+
+
+def test_validate_json_payload_reports_strictness(tmp_path):
+    """The top-level `valid` reflects the gate (including --strict), while each
+    file's `result.valid` is pure validity — the payload must say which gate
+    was applied so consumers can tell the two apart."""
+    f = tmp_path / "warn_only.json"
+    f.write_text(
+        json.dumps(
+            {
+                "stages": [
+                    {
+                        "name": "s",
+                        "request": {"url": "https://x.test/ok"},
+                        "response": [{"verify": {"expressions": ["{{ nosuchvar }}"]}}],
+                    }
+                ]
+            }
+        )
+    )
+    result = runner.invoke(app, ["validate", "--strict", "--format", "json", str(f)])
+    payload = json.loads(result.output)
+    assert payload["strict"] is True
+    assert payload["valid"] is False
+    assert payload["files"][0]["result"]["valid"] is True
+
+    result2 = runner.invoke(app, ["validate", "--format", "json", str(f)])
+    payload2 = json.loads(result2.output)
+    assert payload2["strict"] is False
+    assert payload2["valid"] is True

@@ -1,13 +1,13 @@
 """Shared helpers for building pytest markers, resolving substitutions, and
 invoking user functions.
 
-These helpers are used from both the collection path (``carrier.create_test_class``
+These helpers are used from both the collection path (``factory.create_test_class``
 and ``plugin.JsonModule.collect`` resolve scenario-level substitutions and markers
 while building the test class) and the runtime path (``Carrier.execute_stage``
-resolves stage-level substitutions and calls user functions during a request).
+resolves stage-level substitutions during a request).
 
-Naming oddity: ``process_substitutions`` and ``call_user_function`` raise
-``StageExecutionError`` on a malformed function definition/call, but
+Naming oddity: ``process_substitutions`` raises
+``StageExecutionError`` on a malformed function definition, but
 ``process_substitutions(scenario.substitutions)`` is invoked at *collection* time
 by ``create_test_class``. So a ``StageExecutionError`` can surface before any
 stage runs; the collection caller catches it and re-wraps it into a pytest
@@ -23,11 +23,18 @@ from typing import Any
 import pytest
 
 from pytest_httpchain.errors import StageExecutionError
-from pytest_httpchain.models import FunctionsSubstitution, Substitution, UserFunctionCall, UserFunctionKwargs, UserFunctionName, VarsSubstitution
+from pytest_httpchain.models import FunctionsSubstitution, Substitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain.templates import walk
-from pytest_httpchain.userfunc import call_function, wrap_function
+from pytest_httpchain.userfunc import wrap_function
 
 logger = logging.getLogger(__name__)
+
+
+def optional_as_list(value: Any) -> list[Any]:
+    """None -> [], anything else -> [value]. Adapts HeaderMatcher's optional
+    single-value fields to list-based shared checks (the carrier's matcher
+    checks and the validator's contradiction checks share this adapter)."""
+    return [] if value is None else [value]
 
 
 def make_marker(mark_str: str) -> pytest.MarkDecorator:
@@ -89,23 +96,3 @@ def process_substitutions(
                 raise RuntimeError(f"Unhandled substitution type: {type(step).__name__}")
 
     return result
-
-
-def call_user_function(func_call: UserFunctionCall, **extra_kwargs: Any) -> object:
-    """Import and call a user function described by a ``UserFunctionCall`` model.
-
-    A bare ``UserFunctionName`` is called with only ``extra_kwargs``; a
-    ``UserFunctionKwargs`` merges its declared kwargs under ``extra_kwargs``
-    (caller-supplied values win on conflict). Used both for request/scenario auth
-    callables and for verify/save user functions, where ``extra_kwargs`` carries
-    the ``response``. Raises ``StageExecutionError`` if ``func_call`` is neither
-    supported shape.
-    """
-    match func_call:
-        case UserFunctionName():
-            return call_function(func_call.root, **extra_kwargs)
-        case UserFunctionKwargs():
-            merged_kwargs = {**func_call.kwargs, **extra_kwargs}
-            return call_function(func_call.name.root, **merged_kwargs)
-        case _:
-            raise StageExecutionError(f"Invalid function call format: {func_call}")

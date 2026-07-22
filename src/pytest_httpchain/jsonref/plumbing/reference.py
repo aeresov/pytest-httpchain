@@ -11,7 +11,7 @@ from deepmerge import STRATEGY_END, Merger
 
 from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, ReferenceResolverError
 from pytest_httpchain.jsonref.plumbing.circular import CircularDependencyTracker
-from pytest_httpchain.jsonref.plumbing.path import RefPathHelper
+from pytest_httpchain.jsonref.plumbing.path import parse_json_pointer, validate_ref_path
 
 # Predicate over a document position — the tuple of dict keys / list indices
 # from the document root to a value. Positions are composed across file
@@ -113,7 +113,6 @@ class ReferenceResolver:
 
     def __init__(self, max_parent_traversal_depth: int = 3, root_path: Path | None = None, opaque: OpaquePredicate | None = None):
         self.max_parent_traversal_depth = max_parent_traversal_depth
-        self.ref_paths = RefPathHelper()
         self.tracker = CircularDependencyTracker()
         self.base_path: Path | None = None
         self.root_path = root_path
@@ -241,13 +240,13 @@ class ReferenceResolver:
         root_path: Path,
         doc_path: tuple[str | int, ...],
     ) -> Any:
-        resolved_path = self.ref_paths.validate_ref_path(file_path, current_path, root_path, self.max_parent_traversal_depth)
+        resolved_path = validate_ref_path(file_path, current_path, root_path, self.max_parent_traversal_depth)
 
         self.tracker.check_external_ref(resolved_path, pointer)
 
         try:
             full_external_data = self._load_json_file(resolved_path)
-            external_data = self._navigate_pointer(full_external_data, pointer) if pointer else full_external_data
+            external_data = self._navigate_pointer(full_external_data, pointer, source=resolved_path) if pointer else full_external_data
 
             child_resolver = self._create_child_resolver(root_path)
             child_resolver.base_path = resolved_path.parent
@@ -275,15 +274,20 @@ class ReferenceResolver:
         finally:
             self.tracker.clear_internal_ref(pointer)
 
-    def _navigate_pointer(self, data: Any, pointer: str) -> Any:
+    def _navigate_pointer(self, data: Any, pointer: str, source: Path | None = None) -> Any:
         if not pointer:
             return data
 
-        parts = self.ref_paths.parse_json_pointer(pointer)
+        parts = parse_json_pointer(pointer)
 
         def navigate_step(obj: Any, key: str) -> Any:
             if isinstance(obj, list):
-                # RFC 6901: array indices must not have leading zeros (except "0" itself)
+                # RFC 6901: an array index is digit-only ("-1", "+1", " 1" are
+                # invalid pointers — Python's int() would accept them and its
+                # negative indexing would silently return wrong-end elements),
+                # with no leading zeros (except "0" itself).
+                if not (key.isascii() and key.isdigit()):
+                    raise ValueError(f"Array index '{key}' is not a valid RFC 6901 index")
                 if len(key) > 1 and key.startswith("0"):
                     raise ValueError(f"Array index '{key}' has leading zeros")
                 return obj[int(key)]
@@ -292,7 +296,8 @@ class ReferenceResolver:
         try:
             return reduce(navigate_step, parts, data)
         except (KeyError, IndexError, ValueError, TypeError) as e:
-            raise ReferenceResolverError(f"Invalid JSON pointer {pointer}: {e}") from e
+            where = f" in {source}" if source is not None else ""
+            raise ReferenceResolverError(f"Invalid JSON pointer {pointer}{where}: {e}") from e
 
     def _merge_with_siblings(
         self,

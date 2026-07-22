@@ -13,7 +13,7 @@ scenarios into pytest:
   against the `Scenario` model, runs the semantic validator
   (warnings become `ScenarioValidationWarning`, errors become
   ``CollectError``), and builds the dynamic test class via
-  ``carrier.create_test_class``.
+  ``factory.create_test_class``.
 - ``pytest_runtest_makereport`` attaches the last HTTP request/response to the
   test report and optionally writes a HAR file.
 """
@@ -31,8 +31,9 @@ import pytest
 from pydantic import ValidationError
 
 import pytest_httpchain.jsonref
-from pytest_httpchain.carrier import Carrier, create_test_class
+from pytest_httpchain.carrier import Carrier
 from pytest_httpchain.constants import ConfigOptions
+from pytest_httpchain.factory import create_test_class
 from pytest_httpchain.har_writer import write_har_file
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.report_formatter import format_request, format_response
@@ -45,11 +46,12 @@ logger = logging.getLogger(__name__)
 
 
 class JsonModule(pytest.Module):
-    """JSON test module that collects and executes HTTP chain tests.
+    """JSON test module: collects HTTP chain test scenarios.
 
     This class extends pytest's Module to handle JSON test files containing
     HTTP chain test scenarios. It loads, validates, and converts JSON test
-    definitions into executable pytest test classes.
+    definitions into executable pytest test classes — execution itself belongs
+    to `Carrier` under pytest's runner.
     """
 
     def _reject_chain_splitting_dist_mode(self, scenario: Scenario) -> None:

@@ -1,14 +1,14 @@
-"""Test execution engine for pytest-httpchain scenarios.
+"""Runtime execution engine for pytest-httpchain scenarios.
 
-``create_test_class`` turns a validated `Scenario` into a dynamic pytest
-test class (a subclass of `Carrier`), one ``test_NN - <stage name>``
-method per stage, ordered by the ``order(i)`` marker so the stages run as a
-chain. Each scenario gets its own subclass; the per-scenario mutable state
-(``client``, ``global_context``, ``aborted``, ``last_request``/``last_response``,
-``active_context_managers``) lives at the *class* level and is overridden in the
-subclass dict, so the stage methods — which are classmethods operating on
-``cls`` — share one running context across the chain while different scenarios
-stay isolated from each other.
+`Carrier` is the base class of the dynamic test classes that
+``factory.create_test_class`` builds at collection time — one
+``test NN - <stage name>`` method per stage, ordered by the ``order(i)``
+marker so the stages run as a chain. Each scenario gets its own subclass; the
+per-scenario mutable state (``client``, ``global_context``, ``aborted``,
+``last_request``/``last_response``, ``active_context_managers``) lives at the
+*class* level and is overridden in the subclass dict, so the stage methods —
+which are classmethods operating on ``cls`` — share one running context across
+the chain while different scenarios stay isolated from each other.
 
 Per stage, `Carrier.execute_stage` gates on the abort/``always_run`` flow,
 layers fixtures and substitutions over the global context, expands any
@@ -58,6 +58,7 @@ from pytest_httpchain.models import (
     IndividualParameter,
     JMESPathSave,
     JsonBody,
+    ParallelConfig,
     ParallelForeachConfig,
     ParallelRepeatConfig,
     Request,
@@ -73,7 +74,6 @@ from pytest_httpchain.models import (
     VerifyStep,
     XmlBody,
     check_json_schema,
-    parametrize_values_contain_template,
 )
 from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
@@ -85,8 +85,8 @@ from pytest_httpchain.scoping import (
     with_stage_substitutions,
 )
 from pytest_httpchain.templates import TemplatesError, walk
-from pytest_httpchain.userfunc import UserFunctionError
-from pytest_httpchain.utils import call_user_function, make_marker, process_substitutions
+from pytest_httpchain.userfunc import UserFunctionError, call_user_function
+from pytest_httpchain.utils import make_marker, optional_as_list, process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
 
 logger = logging.getLogger(__name__)
@@ -122,10 +122,22 @@ def _response_meta(response: httpx.Response) -> SimpleNamespace:
     )
 
 
-def _optional_as_list(value: Any) -> list[Any]:
-    """None -> [], anything else -> [value]. Adapts HeaderMatcher's optional
-    single-value fields to the list-based shared matcher checks."""
-    return [] if value is None else [value]
+def _is_active_xfail(mark: pytest.MarkDecorator) -> bool:
+    """True when the mark is an xfail that will actually apply to the item.
+
+    Mirrors pytest's ``evaluate_xfail_marks``: the condition comes from the
+    ``condition=`` kwarg when present, else the positional args; no conditions
+    means unconditionally active; with conditions, the mark is active when ANY
+    is truthy. An INACTIVE xfail (all conditions falsy) means pytest treats
+    the failure as genuine, so the carrier's abort machinery must too. String
+    conditions (pytest evaluates those against its own config namespace) are
+    conservatively treated as active."""
+    if mark.name != "xfail":
+        return False
+    conditions = (mark.kwargs["condition"],) if "condition" in mark.kwargs else mark.args
+    if not conditions:
+        return True
+    return any(isinstance(condition, str) or bool(condition) for condition in conditions)
 
 
 def _error_request(e: Exception) -> httpx.Request | None:
@@ -142,7 +154,7 @@ def _error_request(e: Exception) -> httpx.Request | None:
 
 
 @dataclass
-class ParallelIterationResult:
+class IterationResult:
     """Result of a successful stage iteration (every stage runs at least one;
     a parallel stage runs many). ``started`` is the request's actual start
     time — HAR waterfalls are built from it."""
@@ -344,7 +356,7 @@ class Carrier:
                 logger.debug("global context on start: %s", _context_dump(cls.global_context))
                 logger.debug("local context on start: %s", _context_dump(local_context))
 
-            parallel_config = walk(stage.parallel, local_context) if stage.parallel else None
+            parallel_config: ParallelConfig | None = walk(stage.parallel, local_context) if stage.parallel else None
             # The cap is enforced inside the builder, before materialization.
             iteration_substitutions = cls._build_iteration_substitutions(parallel_config, cls.max_parallel_iterations)
 
@@ -386,7 +398,7 @@ class Carrier:
             # or a custom `my_xfail` marker is not misclassified. Every mark already
             # round-tripped through make_marker() at collection time (create_test_class),
             # so parsing here cannot raise on a previously-validated scenario.
-            is_xfail = any(make_marker(mark).name == "xfail" for mark in stage.marks)
+            is_xfail = any(_is_active_xfail(make_marker(mark)) for mark in stage.marks)
             # An xfail-marked stage's failure is EXPECTED: it must not stop the
             # chain, so later stages still run (only genuine failures abort).
             if not is_xfail:
@@ -407,7 +419,7 @@ class Carrier:
         return stage_fixtures
 
     @staticmethod
-    def _build_iteration_substitutions(parallel_config: Any, max_parallel_iterations: int) -> list[dict[str, Any]]:
+    def _build_iteration_substitutions(parallel_config: "ParallelConfig | None", max_parallel_iterations: int) -> list[dict[str, Any]]:
         """Expand the (already template-resolved) parallel config into per-iteration
         substitution dicts: non-parallel -> a single empty dict; ``repeat`` -> N
         empties; ``foreach`` -> the cross-product of its parameter steps.
@@ -433,8 +445,11 @@ class Carrier:
             case None:
                 pass
             case ParallelRepeatConfig(repeat=repeat_count):
-                check_cap(repeat_count)
-                iteration_substitutions = [{} for _ in range(repeat_count)]
+                # int(): the model types repeat as `PositiveInt | NumberOrTemplate`
+                # (templates are strings), but the config arrives walk()-resolved.
+                repeat_total = int(repeat_count)
+                check_cap(repeat_total)
+                iteration_substitutions = [{} for _ in range(repeat_total)]
             case ParallelForeachConfig(foreach=foreach_steps):
                 product = 1
                 for step in foreach_steps:
@@ -457,7 +472,9 @@ class Carrier:
                             values = individual[param_name]
                             iteration_substitutions = [{**existing, param_name: val} for val in values for existing in iteration_substitutions]
                         case CombinationsParameter(combinations=combinations):
-                            combos: list[dict[str, Any]] = [vars(item) if isinstance(item, SimpleNamespace) else item for item in combinations]
+                            # A still-string combinations value (template form) cannot
+                            # reach here: the config arrives walk()-resolved.
+                            combos: list[dict[str, Any]] = [vars(item) if isinstance(item, SimpleNamespace) else cast(dict[str, Any], item) for item in combinations]
                             iteration_substitutions = [{**existing, **combo} for combo in combos for existing in iteration_substitutions]
                         case _:
                             raise RuntimeError(f"Unhandled foreach step: {type(step).__name__}")
@@ -466,7 +483,7 @@ class Carrier:
         return iteration_substitutions
 
     @classmethod
-    def _record_exchanges(cls, completed: list["ParallelIterationResult"], failed: Exception | None, attempted: int) -> None:
+    def _record_exchanges(cls, completed: list["IterationResult"], failed: Exception | None, attempted: int) -> None:
         """Record the executed stage's HTTP exchanges for the report and HAR.
 
         ``last_request``/``last_response`` are the ONE exchange the test
@@ -510,8 +527,8 @@ class Carrier:
         stage: Stage,
         local_context: ChainMap[str, Any],
         iteration_substitutions: list[dict[str, Any]],
-        parallel_config: Any,
-    ) -> tuple[list[ParallelIterationResult | None], tuple[int, Exception] | None]:
+        parallel_config: "ParallelConfig | None",
+    ) -> tuple[list[IterationResult | None], tuple[int, Exception] | None]:
         """Run the iterations and return ``(results_by_index, first_error)``.
 
         A single iteration runs inline; multiple iterations run in a
@@ -519,12 +536,15 @@ class Carrier:
         global rate limiter. On the first expected failure the pool is cancelled
         and ``(index, exception)`` is returned; otherwise ``first_error`` is None.
         """
-        max_concurrency = parallel_config.max_concurrency if parallel_config else 1
-        calls_per_sec = parallel_config.calls_per_sec if parallel_config else None
-        max_rate_limit_delay = parallel_config.max_rate_limit_delay if parallel_config else 60
+        # The model types these as `PositiveInt | NumberOrTemplate` (templates
+        # are strings), but the config arrives walk()-resolved, so the numeric
+        # coercions are both the static narrowing and a runtime guarantee.
+        max_concurrency = int(parallel_config.max_concurrency) if parallel_config else 1
+        calls_per_sec = int(parallel_config.calls_per_sec) if parallel_config and parallel_config.calls_per_sec else None
+        max_rate_limit_delay = float(parallel_config.max_rate_limit_delay) if parallel_config else 60.0
 
         total = len(iteration_substitutions)
-        results: list[ParallelIterationResult | None] = [None] * total
+        results: list[IterationResult | None] = [None] * total
         first_error: tuple[int, Exception] | None = None
         # No limiter for a single iteration: one acquire from a fresh bucket
         # can never block (calls_per_sec is a PositiveInt after resolution).
@@ -539,7 +559,7 @@ class Carrier:
             else:
                 workers = min(max_concurrency, total)
                 with ThreadPoolExecutor(max_workers=workers) as executor:
-                    futures: dict[Future[ParallelIterationResult], int] = {}
+                    futures: dict[Future[IterationResult], int] = {}
                     for idx, iter_vars in enumerate(iteration_substitutions):
                         future = executor.submit(cls._execute_single_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay)
                         futures[future] = idx
@@ -637,7 +657,11 @@ class Carrier:
         # attached when httpx recorded one, so a timed-out request still shows
         # up in the report and the HAR file.
         try:
-            return cls.client.request(**request_kwargs)  # ty: ignore[unresolved-attribute]
+            # Inside the try: the terminal catch-all below deliberately converts
+            # ANY exception (including a violated invariant) into a clean
+            # RequestError so the chain-abort machinery engages.
+            assert cls.client is not None, "_ensure_initialized() builds cls.client before any request"
+            return cls.client.request(**request_kwargs)
         except httpx.TimeoutException as e:
             raise RequestError(f"HTTP request timed out: {e}", request=_error_request(e)) from e
         except httpx.ConnectError as e:
@@ -707,10 +731,10 @@ class Carrier:
                     cls._verify_text_matchers(
                         f"Header '{header_name}' (value: {actual!r})",
                         actual,
-                        contains=_optional_as_list(expected_value.contains),
-                        not_contains=_optional_as_list(expected_value.not_contains),
-                        matches=_optional_as_list(expected_value.matches),
-                        not_matches=_optional_as_list(expected_value.not_matches),
+                        contains=optional_as_list(expected_value.contains),
+                        not_contains=optional_as_list(expected_value.not_contains),
+                        matches=optional_as_list(expected_value.matches),
+                        not_matches=optional_as_list(expected_value.not_matches),
                     )
                 case _:
                     if response.headers.get(header_name) != expected_value:
@@ -806,9 +830,14 @@ class Carrier:
 
     @classmethod
     def _execute_single_iteration(
-        cls, stage: Stage, local_context: ChainMap[str, Any], iter_vars: Mapping[str, Any], limiter: Limiter | None = None, rate_limit_delay: float = 60
-    ) -> ParallelIterationResult:
-        """Execute a single iteration of a stage."""
+        cls, stage: Stage, local_context: ChainMap[str, Any], iter_vars: Mapping[str, Any], limiter: Limiter | None = None, max_rate_limit_delay: float = 60
+    ) -> IterationResult:
+        """Run one iteration: resolve the request templates against the
+        iteration context, acquire a rate-limit slot (waiting at most
+        ``max_rate_limit_delay`` seconds), send the request, and process the
+        response steps (verify/save) in order. Returns the iteration's saves
+        and exchange; failures raise the stage-failure exceptions with the
+        request/response attached."""
         iter_context = iteration_context(local_context, iter_vars)
 
         # walk() already returns a re-validated model (it dumps, substitutes, and
@@ -817,8 +846,8 @@ class Carrier:
         request_model = walk(stage.request, iter_context)
         request_kwargs = cls._build_request_kwargs(request_model)
 
-        if limiter is not None and not limiter.try_acquire("api", blocking=True, timeout=rate_limit_delay):
-            raise RequestError(f"Rate limit exceeded: could not acquire a request slot within {rate_limit_delay}s")
+        if limiter is not None and not limiter.try_acquire("api", blocking=True, timeout=max_rate_limit_delay):
+            raise RequestError(f"Rate limit exceeded: could not acquire a request slot within {max_rate_limit_delay}s")
 
         # After the rate-limit acquire, so it stamps when the request actually
         # goes on the wire — this feeds the HAR entry's startedDateTime.
@@ -843,13 +872,20 @@ class Carrier:
                         # old read-your-saved-'response'-back behavior doesn't
                         # break silently.
                         if RESPONSE_META_NAME in step_saved:
-                            warnings.warn(
-                                ScenarioValidationWarning(
-                                    f"Save step produced the reserved name '{RESPONSE_META_NAME}': inside response steps it is "
-                                    f"shadowed by the response metadata namespace (HTTPCHAIN027)"
-                                ),
-                                stacklevel=2,
-                            )
+                            try:
+                                warnings.warn(
+                                    ScenarioValidationWarning(
+                                        f"Save step produced the reserved name '{RESPONSE_META_NAME}': inside response steps it is "
+                                        f"shadowed by the response metadata namespace (HTTPCHAIN027)"
+                                    ),
+                                    stacklevel=2,
+                                )
+                            except ScenarioValidationWarning as promoted:
+                                # filterwarnings=error raises the warning as an
+                                # exception; convert it to a clean stage failure
+                                # so reporting and chain-abort engage instead of
+                                # a raw warning traceback bypassing them.
+                                raise SaveError(str(promoted)) from None
                         iter_context = with_saves(iter_context, step_saved)
                         saved_context.update(step_saved)
 
@@ -868,7 +904,7 @@ class Carrier:
         except (TemplatesError, ValidationError) as e:
             raise StageExecutionError(str(e), request=response.request, response=response) from e
 
-        return ParallelIterationResult(
+        return IterationResult(
             saved_context=saved_context,
             request=response.request,
             response=response,
@@ -950,124 +986,3 @@ def _normalize_cert(cert: Any) -> str | tuple[str, ...]:
     if isinstance(cert, list | tuple):
         return tuple(str(p) for p in cert)
     return str(cert)
-
-
-def create_test_class(
-    scenario: Scenario,
-    class_name: str,
-    max_parallel_iterations: int = 10_000,
-    scenario_dir: Path | None = None,
-    record_all_exchanges: bool = False,
-) -> type[Carrier]:
-    """Create a dynamic test class from a scenario definition.
-
-    Runs at collection time and stays free of side effects: scenario
-    substitutions, ``ssl``/``auth`` resolution, and httpx client construction
-    are deferred to ``Carrier._ensure_initialized`` on first stage execution —
-    with one exception. Template-bearing stage ``parametrize`` values must be
-    resolved NOW (pytest needs concrete parameter values to generate items),
-    and they may reference scenario substitutions, so in that case — and only
-    that case — the scenario context is resolved at collection and marked as
-    such for ``_ensure_initialized`` to reuse.
-    """
-    needs_collection_context = any(parametrize_values_contain_template(stage.parametrize) for stage in scenario.stages)
-    scenario_context = process_substitutions(scenario.substitutions) if needs_collection_context else {}
-
-    CustomCarrier = type(
-        class_name,
-        (Carrier,),
-        {
-            "__doc__": scenario.description,
-            "scenario": scenario,
-            "scenario_dir": scenario_dir,
-            "client": None,
-            "aborted": False,
-            "last_request": None,
-            "last_response": None,
-            "last_exchanges": [],
-            "last_iterations_attempted": 0,
-            "record_all_exchanges": record_all_exchanges,
-            "global_context": base_global_context(scenario_context),
-            "_initialized": False,
-            "_init_failed": None,
-            "_context_resolved_at_collection": needs_collection_context,
-            "active_context_managers": [],
-            "max_parallel_iterations": max_parallel_iterations,
-        },
-    )
-
-    total_stages = len(scenario.stages)
-    padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
-
-    for i, stage in enumerate(scenario.stages):
-        # Factory captures `stage` by value (as stage_template) per iteration. Do NOT
-        # inline this into a closure over the loop variable `stage`: Python closes over
-        # the variable, not its value, so every stage method would run the LAST stage.
-        def make_stage_method(stage_template: Stage) -> Callable:
-            def call_execute_stage(self, **kwargs):
-                type(self).execute_stage(stage_template, kwargs)
-
-            return call_execute_stage
-
-        stage_method = make_stage_method(stage)
-
-        if stage.description:
-            stage_method.__doc__ = stage.description
-
-        all_param_names = []
-
-        if stage.parametrize:
-            for step in stage.parametrize:
-                match step:
-                    case IndividualParameter(individual=individual) if individual:
-                        param_name = next(iter(individual.keys()))
-                        param_values = individual[param_name]
-                        resolved_values = walk(param_values, scenario_context)
-
-                        param_ids = step.ids if step.ids else None
-
-                        all_param_names.append(param_name)
-                        parametrize_marker = pytest.mark.parametrize(param_name, resolved_values, ids=param_ids)
-                        stage_method = parametrize_marker(stage_method)
-
-                    case CombinationsParameter(combinations=combinations) if combinations:
-                        resolved_combinations = walk(combinations, scenario_context)
-                        resolved_combinations = [vars(item) if isinstance(item, SimpleNamespace) else item for item in resolved_combinations]
-
-                        first_item = resolved_combinations[0]
-                        param_names = list(first_item.keys())
-                        param_values = [tuple(combo[name] for name in param_names) for combo in resolved_combinations]
-                        param_ids = step.ids if step.ids else None
-
-                        all_param_names.extend(param_names)
-                        parametrize_marker = pytest.mark.parametrize(",".join(param_names), param_values, ids=param_ids)
-                        stage_method = parametrize_marker(stage_method)
-
-                    case _:
-                        # New union variant (or a model that no longer satisfies the
-                        # guards): fail loudly instead of silently dropping the
-                        # parametrization. A plugin bug, so no clean-fail wrapping.
-                        raise RuntimeError(f"Unhandled parametrize step: {type(step).__name__}")
-
-        all_fixtures = ["self"] + list(dict.fromkeys(all_param_names + stage.fixtures + scenario.fixtures))
-        stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # ty: ignore[unresolved-attribute]
-
-        # Stage index for the chain-contiguity hook (plugin.pytest_collection_modifyitems),
-        # which restores stage order within a class without parsing method names or marks.
-        stage_method._httpchain_stage_index = i  # ty: ignore[unresolved-attribute]
-
-        all_marks = [f"order({i})"] + stage.marks
-        for mark_str in all_marks:
-            try:
-                stage_method = make_marker(mark_str)(stage_method)
-            except Exception as e:
-                # A malformed stage marker is an author error: fail collection (the
-                # caller wraps this into a CollectError) instead of silently dropping
-                # the marker and running the stage — matching how scenario-level
-                # markers are handled in plugin.py.
-                raise StageExecutionError(f"Invalid marker '{mark_str}' on stage '{stage.name}': {e}") from e
-
-        method_name = f"test {str(i).zfill(padding_width)} - {stage.name}"
-        setattr(CustomCarrier, method_name, stage_method)
-
-    return cast(type[Carrier], CustomCarrier)

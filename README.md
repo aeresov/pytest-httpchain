@@ -177,7 +177,7 @@ Pass `--httpchain-output-dir DIR` on the pytest command line to write an [HAR](h
 pytest --httpchain-output-dir ./har-output
 ```
 
-HAR files contain full requests/responses **including credential headers and saved tokens** — nothing is redacted, so scrub them before sharing. See the [HAR export docs](https://aeresov.github.io/pytest-httpchain/getting-started/#har-export).
+HAR files contain full requests/responses **including credential headers and saved tokens** — nothing is redacted, so scrub them before sharing. Bodies are embedded complete and uncapped (binary bodies grow ~33% as base64), so scenarios that transfer large payloads produce large `.har` files. See the [HAR export docs](https://aeresov.github.io/pytest-httpchain/getting-started/#har-export).
 
 ## AI agent support
 
@@ -191,7 +191,7 @@ Validate scenario files for structure and common problems — undefined variable
 uvx pytest-httpchain validate tests/test_login.http.json
 ```
 
-Each finding carries a stable diagnostic code (`HTTPCHAINxxx`) and a severity. It exits non-zero when any file is invalid, so it doubles as a CI gate. Use `--format json` for machine-readable output (editor/CI integration):
+Each finding carries a stable diagnostic code (`HTTPCHAINxxx`) and a severity — the [full code reference](https://aeresov.github.io/pytest-httpchain/diagnostics/) is on the docs site, along with a recipe for filtering the `ScenarioValidationWarning` warnings the same checks emit at pytest collection. It exits non-zero when any file is invalid, so it doubles as a CI gate. Use `--format json` for machine-readable output (editor/CI integration):
 
 ```bash
 uvx pytest-httpchain validate --format json tests/test_login.http.json
@@ -215,7 +215,7 @@ A JSON Schema is published for as-you-type validation and autocomplete. Referenc
 }
 ```
 
-The hosted schema tracks the latest release; to pin the schema matching your installed version (e.g. for CI), emit it locally:
+The hosted schema tracks the `main` branch (it is redeployed on every push, so it may describe unreleased changes); to pin the schema matching your installed version (e.g. for CI), emit it locally:
 
 ```bash
 uvx pytest-httpchain schema > scenario.schema.json

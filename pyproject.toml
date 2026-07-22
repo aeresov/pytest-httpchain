@@ -29,6 +29,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Testing",
 ]
 
@@ -94,7 +95,7 @@ ignore = []
 ban-relative-imports = "all"
 
 [tool.ruff.lint.isort]
-known-first-party = ["tests", "utils"]
+known-first-party = ["tests"]
 
 [tool.ty.environment]
 python-version = "3.13"
@@ -150,11 +151,13 @@ containers = ["pytest_httpchain"]
 exhaustive = true
 layers = [
     "plugin : cli",
+    "factory",
     "carrier : dataflow : schema",
     "validation : har_writer : report_formatter",
     "utils : scoping",
+    "userfunc",
     "models",
-    "templates : jsonref : userfunc",
+    "templates : jsonref",
     "errors : constants : warnings",
 ]
 

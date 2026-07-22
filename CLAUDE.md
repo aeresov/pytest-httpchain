@@ -46,14 +46,15 @@ src/pytest_httpchain/
 ├── dataflow.py                # DataFlow model + analyze_dataflow() (stage data-flow analysis, used by show/graph)
 ├── scoping.py                 # Single encoding of the scope/visibility rules: StageScopes static name sets (used by validation + dataflow) and runtime ChainMap context builders (used by carrier)
 ├── schema.py                  # build_schema() — JSON Schema generation shared by the schema command
-├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule)
-├── carrier.py                 # Test execution engine (Carrier class)
-├── utils.py                   # Marker construction, substitution processing, user function calls
+├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule), chain-contiguity ordering hooks
+├── factory.py                 # Collection-time test-class factory (create_test_class)
+├── carrier.py                 # Runtime execution engine (Carrier class)
+├── utils.py                   # Marker construction, substitution processing, small shared helpers
 ├── report_formatter.py        # HTTP request/response formatting for test reports
 ├── har_writer.py              # HAR file export for HTTP request/response logging
-├── constants.py               # ConfigOptions enum for pytest.ini settings
+├── constants.py               # ConfigOptions enum for pytest.ini settings + the shared user-function name grammar
 ├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response) + subclasses RequestError, SaveError, VerificationError
-├── userfunc.py                # Dynamic function import/invocation
+├── userfunc.py                # Dynamic function import/invocation, incl. the model-aware call_user_function dispatch
 ├── models/                    # Pydantic models (Scenario, Stage, Request, etc.)
 ├── templates/                 # {{ expression }} substitution engine
 └── jsonref/                   # $ref resolution with deep merging
@@ -68,7 +69,7 @@ Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix config
 ## Key Execution Flow
 
 1. **Collection**: `plugin.py:JsonModule.collect()` loads JSON, resolves `$ref`, validates against `Scenario` model, then runs `validation.py:check_scenario()` which returns coded `Diagnostic` objects — error-severity → `CollectError`, warning-severity → `ScenarioValidationWarning`
-2. **Class generation**: `carrier.py:create_test_class()` creates dynamic test class with stage methods
+2. **Class generation**: `factory.py:create_test_class()` creates dynamic test class with stage methods
 3. **Execution**: Each stage method calls `Carrier.execute_stage()` which:
    - Processes substitutions into context
    - Walks request model through template engine

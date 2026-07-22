@@ -71,7 +71,10 @@ def format_response(response: httpx.Response) -> str:
         if "application/json" in content_type:
             try:
                 lines.append(_format_body_text(json.dumps(response.json(), indent=2, ensure_ascii=False)))
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                # httpx's .json() raises UnicodeDecodeError (not only
+                # JSONDecodeError) for undecodable bytes served as JSON —
+                # mirror the carrier's equivalent call sites.
                 lines.append(_format_body_text(response.text))
         elif _is_textual_content_type(content_type):
             lines.append(_format_body_text(response.text))

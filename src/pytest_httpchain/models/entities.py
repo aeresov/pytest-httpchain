@@ -120,7 +120,7 @@ def _suppress_field_shadow_warning(field_name: str):
         yield
 
 
-def _normalize_list_input(v: Any) -> list[Any]:
+def _normalize_list_input(v: Any) -> Any:
     """Normalize list-or-dict input to a flat list.
 
     Accepts:
@@ -148,7 +148,7 @@ def _normalize_list_input(v: Any) -> list[Any]:
     return v
 
 
-def _normalize_stages_input(v: Any) -> list[Any]:
+def _normalize_stages_input(v: Any) -> Any:
     """Normalize stages from dict format to list format.
 
     For dict input, the key becomes the stage's 'name' field (overrides any explicit name).

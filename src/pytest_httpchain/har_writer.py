@@ -5,6 +5,7 @@ and writes them to files for external analysis.
 """
 
 import base64
+import hashlib
 import json
 from datetime import UTC, datetime
 from importlib.metadata import version
@@ -277,6 +278,11 @@ def write_har_file(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = test_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+    if safe_name != test_name:
+        # Sanitization is not injective ("t/x" and "t:x" both map to "t_x"):
+        # a short digest of the original name keeps distinct tests' files
+        # distinct instead of silently overwriting each other.
+        safe_name = f"{safe_name}-{hashlib.sha1(test_name.encode()).hexdigest()[:8]}"
     filename = f"{safe_name}.har"
     filepath = output_dir / filename
 

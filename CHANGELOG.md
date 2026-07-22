@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `validate --format json` payloads carry a top-level `strict` key, so consumers can tell the gate semantics of `valid` (which includes warnings under `--strict`) apart from each file's pure-validity `result.valid`.
+- Retroactive CHANGELOG entry for 0.8.1 (ty adoption + readability pass), which was released without one.
+
+### Changed
+
+- Architecture: the collection-time test-class factory moved out of the runtime engine into its own module (`factory.create_test_class`); the user-function grammar moved to `constants` so `userfunc` sits above `models` and owns the model-aware `call_user_function` dispatch (previously stranded in `utils`); `check_scenario` is now an orchestrator over per-family diagnostic helpers; jsonref's stateless `RefPathHelper` class became module functions. Import-linter layers updated accordingly. No behavior changes.
+- HAR filenames for pytest node IDs containing `/`, `\`, or `:` now carry a short digest suffix — sanitization mapped distinct IDs to the same `_`-separated name, silently overwriting one test's `.har` with another's.
+
+### Fixed
+
+- An inactive `xfail` mark (`xfail(False, ...)`) no longer smuggles a genuine stage failure past the chain-abort machinery: pytest reports such a stage as failed, and subsequent stages now correctly skip.
+- The runtime HTTPCHAIN027 reserved-name warning surfaces as a clean stage failure under `filterwarnings = error` instead of a raw warning traceback that bypassed chain-abort.
+- JSON pointer array indices follow RFC 6901 strictly: `-1`, `+1`, and whitespace forms are invalid-pointer errors instead of silently resolving via Python indexing semantics; pointer errors inside external fragments now name the fragment file.
+- The connection-refused example scenario targets port 2 (outside every platform's ephemeral range) instead of 59999, which Linux could legitimately hand to a running process.
+- `format_response` tolerates undecodable bytes served with a JSON content type (UnicodeDecodeError), matching the runner's own handling.
+- Docs/metadata accuracy sweep: README's hosted-schema claim (tracks `main`, not the latest release), HAR size note, a pointer to the diagnostics reference; classifiers include Python 3.14; stale isort config entry removed; error subclasses documented; assorted docstring corrections (JsonModule, scoping's parametrize note, iteration parameter naming).
+
 ## [0.13.0] - 2026-07-22
 
 ### Added
@@ -110,6 +129,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **BREAKING**: Consolidated the six-distribution uv workspace into the single `pytest-httpchain` distribution. The former sub-packages are now subpackages/modules: `pytest_httpchain.models`, `pytest_httpchain.templates`, `pytest_httpchain.jsonref`, `pytest_httpchain.userfunc`; the shared exception base lives in `pytest_httpchain.errors`. Migration: install `pytest-httpchain>=0.9` only (drop any explicit `pytest-httpchain-*` requirements) and rename imports `pytest_httpchain_X` → `pytest_httpchain.X`. Scenario JSON files, user-function references, ini options, and CLI usage are unaffected.
+
+## [0.8.1] - 2026-06-15
+
+### Changed
+
+- Adopted the `ty` type checker across the workspace: workspace-root `[tool.ty]` configuration with `error-on-warning` (targeted rule relaxations for the test suites), pinpoint `# ty: ignore[...]` suppressions in source, and a pinned `ty` step in the CI lint job.
+- Readability pass from the 2026-06-15 audit: Google-style docstrings throughout, function-local imports hoisted to module level, and assorted naming/comment quick-wins (no behavior changes from the readability work itself).
+
+### Fixed
+
+- `call_function` no longer double-wraps a `UserFunctionError` raised by the user function itself (mirroring `wrap_function`), and the absolute-`$ref`-path rejection message was corrected.
 
 ## [0.8.0] - 2026-06-15
 
@@ -399,6 +429,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.10.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.8.1...v0.9.0
+[0.8.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.5.0...v0.6.0

@@ -481,3 +481,28 @@ class TestCrossTypeBoolConflicts:
             }
         )
         assert load_json(files["main.json"])["flag"] is True
+
+
+class TestRfc6901ArrayIndices:
+    """RFC 6901 array indices are digit-only: '-1'/'+1'/' 1' are invalid
+    pointers, and Python's negative indexing must not silently return
+    wrong-end elements."""
+
+    @pytest.mark.parametrize("bad", ["-1", "+1", " 1", "1_0"])
+    def test_non_digit_array_index_rejected(self, create_json_files, bad):
+        files = create_json_files({"main.json": {"x": {"$ref": f"#/items/{bad}"}, "items": [1, 2, 3]}})
+        with pytest.raises(ReferenceResolverError, match="Invalid JSON pointer"):
+            load_json(files["main.json"])
+
+    def test_plain_index_still_works(self, create_json_files):
+        files = create_json_files({"main.json": {"x": {"$ref": "#/items/2"}, "items": [1, 2, 3]}})
+        assert load_json(files["main.json"])["x"] == 3
+
+
+class TestExternalPointerErrorContext:
+    def test_pointer_error_names_the_fragment_file(self, create_json_files):
+        """A bad pointer into an external fragment must say WHICH file was
+        being navigated."""
+        files = create_json_files({"main.json": {"x": {"$ref": "frag.json#/missing"}}, "frag.json": {"other": 1}})
+        with pytest.raises(ReferenceResolverError, match="frag.json"):
+            load_json(files["main.json"])

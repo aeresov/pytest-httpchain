@@ -86,3 +86,43 @@ def test_malformed_json_schema(pytester):
     result = run_scenario(pytester, "errors/test_malformed_json_schema.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
     result.stdout.fnmatch_lines(["*not valid JSON*"])
+
+
+def test_reserved_name_runtime_warning_under_error_filter(pytester):
+    """HTTPCHAIN027's runtime twin is a ScenarioValidationWarning; under
+    filterwarnings=error it must surface as a clean stage failure that aborts
+    the chain — not a raw warning-exception traceback that bypasses it."""
+    import json as jsonlib
+
+    pytester.copy_example("conftest.py")
+    pytester.makepyfile(
+        userfuncs="""
+        def make_reserved(response):
+            return {"response": "shadowed"}
+        """
+    )
+    (pytester.path / "test_reserved.http.json").write_text(
+        jsonlib.dumps(
+            {
+                "stages": [
+                    {
+                        "name": "s0",
+                        "fixtures": ["server"],
+                        "request": {"url": "{{ server }}/ok"},
+                        "response": [
+                            {"verify": {"status": 200}},
+                            {"save": {"user_functions": ["userfuncs:make_reserved"]}},
+                        ],
+                    },
+                    {
+                        "name": "s1",
+                        "fixtures": ["server"],
+                        "request": {"url": "{{ server }}/ok"},
+                        "response": [{"verify": {"status": 200}}],
+                    },
+                ]
+            }
+        )
+    )
+    result = pytester.runpytest("-s", "-W", "error::pytest_httpchain.ScenarioValidationWarning")
+    result.assert_outcomes(errors=0, failed=1, passed=0, skipped=1)

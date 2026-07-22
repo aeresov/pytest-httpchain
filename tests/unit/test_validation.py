@@ -323,7 +323,7 @@ def test_comprehension_loop_vars_not_flagged(datadir):
 def test_parametrize_value_referencing_stage_scope_warns(datadir):
     """parametrize VALUE expressions are resolved at collection time (pytest
     needs concrete parameter values) against scenario-level substitutions ONLY
-    (carrier.create_test_class). Referencing a stage-level substitution there
+    (factory.create_test_class). Referencing a stage-level substitution there
     fails, so it must be flagged."""
     r = validate_scenario(datadir / "parametrize_value_stage_scope.json")
     assert any(d.code == DiagnosticCode.UNDEFINED_VAR and "stage_var" in d.message for d in r.diagnostics), r.diagnostics

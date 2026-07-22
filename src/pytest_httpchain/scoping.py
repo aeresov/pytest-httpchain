@@ -29,10 +29,10 @@ response (per iteration)  the above plus this stage's own saves and the
                           ``response`` metadata namespace
 ========================  ====================================================
 
-Scenario-level ``parametrize`` *values* are the exception: they resolve at
-collection time against scenario substitutions only (see
-``parametrize_values_contain_template``), which is why `StageScopes` exposes
-``scenario_substitutions`` separately.
+Stage ``parametrize`` *values* are the exception: although parametrize is a
+stage-level field, its values resolve at collection time against scenario
+substitutions only (see ``parametrize_values_contain_template``), which is
+why `StageScopes` exposes ``scenario_substitutions`` separately.
 """
 
 import ast
@@ -62,6 +62,13 @@ from pytest_httpchain.templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN
 # The reserved name under which response metadata (status, reason, headers,
 # elapsed_ms) is injected into every response step's template context.
 RESPONSE_META_NAME = "response"
+
+# Scenario-level template fields: resolved once per scenario against ONLY the
+# scenario substitutions — never fixtures, stage variables, or saves. Runtime
+# twin: carrier's lazy initialization (or collection-time resolution when
+# stage parametrize values force it). The validator checks references in
+# these fields against `StageScopes.scenario_substitutions` alone.
+SCENARIO_TEMPLATE_FIELDS = ("substitutions", "auth", "ssl")
 
 # --------------------------------------------------------------------------- #
 # Name extraction: which names a scenario fragment defines or references.

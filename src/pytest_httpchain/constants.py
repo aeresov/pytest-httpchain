@@ -1,10 +1,21 @@
-"""Configuration constants for pytest-httpchain plugin.
+"""Shared constants for the pytest-httpchain plugin.
 
-This module defines configuration option names that can be set in pytest.ini
-or pyproject.toml to customize plugin behavior.
+Configuration option names (settable in pytest.ini / pyproject.toml) and the
+user-function name grammar shared by the models' validator and the userfunc
+importer.
 """
 
+import re
 from enum import StrEnum
+
+# Matches "module.path:function_name". The module path is REQUIRED and must be a
+# well-formed dotted path: identifier segments joined by single dots, with no
+# leading, trailing, or doubled dots (so "a..b:f" and "mod.:f" are rejected at
+# validation instead of failing later at import time). The function part is a
+# single identifier. This is the single grammar shared by the models'
+# FunctionImportName validator and userfunc's importer, so a bare name (no
+# module) fails at validation/collection instead of only at runtime import.
+USER_FUNCTION_NAME_PATTERN = re.compile(r"^(?P<module>[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*):(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$")
 
 
 class ConfigOptions(StrEnum):

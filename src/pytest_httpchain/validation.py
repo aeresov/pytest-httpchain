@@ -83,6 +83,7 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
+    SCENARIO_TEMPLATE_FIELDS,
     extract_defined_variables,
     extract_saved_variables,
     extract_template_variables,
@@ -95,7 +96,7 @@ from pytest_httpchain.scoping import (
 )
 from pytest_httpchain.templates import is_complete_template
 from pytest_httpchain.userfunc import UserFunctionError, import_function
-from pytest_httpchain.utils import make_marker
+from pytest_httpchain.utils import make_marker, optional_as_list
 from pytest_httpchain.warnings import AmbiguousReferenceWarning
 
 Severity = Literal["error", "warning", "info"]
@@ -202,7 +203,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> list
         response_refs = extract_template_variables(raw.get("response"))
 
         # ``parametrize`` parameter VALUES are resolved at collection time
-        # (carrier.create_test_class) against scenario-level substitutions only — no
+        # (factory.create_test_class) against scenario-level substitutions only — no
         # fixtures, no stage substitutions, no parameter names, no saved values
         # exist yet.
         for name in sorted(extract_template_variables(raw.get("parametrize"))):
@@ -430,19 +431,13 @@ def _verify_diagnostics(scenario: Scenario) -> list[Diagnostic]:
                     stage.name,
                     f"header '{header_name}' verification",
                     f"{location}.headers.{header_name}",
-                    contains=_as_list(expected.contains),
-                    not_contains=_as_list(expected.not_contains),
-                    matches=_as_list(expected.matches),
-                    not_matches=_as_list(expected.not_matches),
+                    contains=optional_as_list(expected.contains),
+                    not_contains=optional_as_list(expected.not_contains),
+                    matches=optional_as_list(expected.matches),
+                    not_matches=optional_as_list(expected.not_matches),
                 )
 
     return diagnostics
-
-
-def _as_list(value: Any) -> list[Any]:
-    """None -> [], anything else -> [value]. Adapts HeaderMatcher's optional
-    single-value fields to the list-based contradiction checks."""
-    return [] if value is None else [value]
 
 
 def _contradiction_diagnostics(
@@ -622,7 +617,7 @@ def _func_name_and_kwargs(call: UserFunctionCall) -> tuple[str | None, dict[str,
     """Extract ``(import_name, explicit_kwargs)`` from a UserFunctionCall.
 
     ``kwargs`` is None for the bare ``UserFunctionName`` form (no explicit
-    keyword arguments). Mirrors the structural dispatch in ``carrier``/``utils`` so
+    keyword arguments). Mirrors the structural dispatch in ``userfunc.call_user_function`` so
     a new union variant is caught by a class-name search."""
     match call:
         case UserFunctionName():
@@ -760,58 +755,51 @@ class ValidateResult(BaseModel):
 
 
 def _result(diagnostics: list[Diagnostic], scenario_info: ScenarioInfo | None = None) -> ValidateResult:
+    # `warning_messages`, not `warnings`: this module uses the stdlib warnings
+    # module at function scope, and a same-named local would shadow it.
     errors = [d.message for d in diagnostics if d.severity == "error"]
-    warnings = [d.message for d in diagnostics if d.severity == "warning"]
+    warning_messages = [d.message for d in diagnostics if d.severity == "warning"]
     return ValidateResult(
         valid=not errors,
         errors=errors,
-        warnings=warnings,
+        warnings=warning_messages,
         diagnostics=diagnostics,
         scenario_info=scenario_info,
     )
 
 
-def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[Diagnostic], ScenarioInfo]:
-    """Semantic checks on an already-loaded, schema-valid scenario.
+def _stage_name_diagnostics(scenario: Scenario) -> list[Diagnostic]:
+    """HTTPCHAIN001: duplicate stage names."""
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for stage in scenario.stages:
+        if stage.name in seen:
+            duplicates.add(stage.name)
+        seen.add(stage.name)
+    if not duplicates:
+        return []
+    return [
+        _diag(
+            DiagnosticCode.DUPLICATE_STAGE,
+            "error",
+            f"Duplicate stage names found: {sorted(duplicates)}",
+            location="stages",
+        )
+    ]
 
-    Operates on the parsed ``test_data`` dict together with the validated ``Scenario``
-    so it can be shared by `validate_scenario` (file-based) and by the pytest
-    collector. Returns ``(diagnostics, scenario_info)``.
+
+def _fixture_diagnostics(scenario: Scenario, vars_saved: set[str]) -> list[Diagnostic]:
+    """HTTPCHAIN002/009: fixtures colliding with same-named variables and
+    shadowing same-named saves.
+
+    HTTPCHAIN002 is scoped per stage — a fixture and a variable that never
+    coexist in one stage (fixture used only in one stage, a same-named
+    parameter only in another) are not falsely flagged. HTTPCHAIN009 fires for
+    scenario-level fixtures, which are injected into every stage above the
+    global context, so a save under the same name can never be read back.
     """
     diagnostics: list[Diagnostic] = []
 
-    stage_names = [stage.name for stage in scenario.stages]
-    seen_names: set[str] = set()
-    duplicate_names: set[str] = set()
-    for name in stage_names:
-        if name in seen_names:
-            duplicate_names.add(name)
-        seen_names.add(name)
-    if duplicate_names:
-        diagnostics.append(
-            _diag(
-                DiagnosticCode.DUPLICATE_STAGE,
-                "error",
-                f"Duplicate stage names found: {sorted(duplicate_names)}",
-                location="stages",
-            )
-        )
-
-    fixtures: list[str] = list(scenario.fixtures)
-    for stage in scenario.stages:
-        fixtures.extend(stage.fixtures)
-    fixtures = sorted(set(fixtures))
-
-    vars_defined = extract_defined_variables(scenario)
-    vars_saved = extract_saved_variables(scenario)
-    vars_referenced = extract_template_variables(test_data)
-
-    # HTTPCHAIN002: a fixture and a variable (substitution or parametrize/foreach
-    # parameter) that share a name AND coexist in the same stage conflict — the
-    # fixture shadows the variable in that stage's generated method. Scope the check
-    # per stage so a fixture used only in one stage and a same-named parameter used
-    # only in another (which never coexist) are not falsely flagged.
-    scenario_sub_names = set(substitution_names(scenario.substitutions))
     var_conflicts: set[str] = set()
     for scope in stage_scopes(scenario):
         fixtures_in_stage = scope.scenario_fixtures | scope.stage_fixtures
@@ -826,9 +814,6 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
             )
         )
 
-    # Scenario fixtures are injected into every stage and sit above the global
-    # context in the runtime ChainMap, so a save under the same name can never
-    # be read back — the fixture value always wins.
     shadowed_saves = set(scenario.fixtures) & vars_saved
     if shadowed_saves:
         diagnostics.append(
@@ -839,13 +824,22 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
             )
         )
 
-    # Scenario-level templates (substitutions/auth/ssl) resolve once per
-    # scenario (carrier's lazy initialization, or at collection when stage
-    # parametrize values reference them) against a context that deliberately
-    # excludes fixture values — a fixture reference there is a guaranteed crash.
-    for key in ("substitutions", "auth", "ssl"):
+    return diagnostics
+
+
+def _scenario_template_diagnostics(test_data: dict[str, Any], fixtures: set[str], scenario_sub_names: set[str]) -> list[Diagnostic]:
+    """HTTPCHAIN016/017: bad references in scenario-level templates.
+
+    Scenario-level templates (the fields in ``scoping.SCENARIO_TEMPLATE_FIELDS``)
+    resolve once per scenario — at carrier's lazy initialization, or at
+    collection when stage parametrize values force it — against only the
+    scenario substitutions. A reference to a fixture (016) or to anything else
+    undefined (017) is a guaranteed crash at scenario initialization.
+    """
+    diagnostics: list[Diagnostic] = []
+    for key in SCENARIO_TEMPLATE_FIELDS:
         scenario_level_refs = extract_template_variables(test_data.get(key))
-        fixture_refs = scenario_level_refs & set(fixtures)
+        fixture_refs = scenario_level_refs & fixtures
         if fixture_refs:
             diagnostics.append(
                 _diag(
@@ -855,11 +849,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
                     location=key,
                 )
             )
-        # Beyond fixtures, scenario-level templates resolve against only the
-        # scenario substitutions (no stage vars, no saved values). A reference
-        # to anything else is a guaranteed crash at scenario initialization, so
-        # flag it as an error (fixtures are reported separately above).
-        undefined_refs = scenario_level_refs - set(fixtures) - scenario_sub_names
+        undefined_refs = scenario_level_refs - fixtures - scenario_sub_names
         if undefined_refs:
             diagnostics.append(
                 _diag(
@@ -869,36 +859,34 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
                     location=key,
                 )
             )
+    return diagnostics
 
-    # Response METADATA (status/reason/headers/elapsed_ms) is ambient in
-    # response-step templates as the reserved `response` namespace — encoded in
-    # scoping.StageScopes.response, so the data-flow check accepts it there and
-    # only there. A user-defined name colliding with it is shadowed inside
-    # response steps: warn rather than let the save silently change meaning.
-    reserved_conflicts = (vars_defined | vars_saved | set(fixtures)) & {RESPONSE_META_NAME}
-    if reserved_conflicts:
-        diagnostics.append(
-            _diag(
-                DiagnosticCode.RESERVED_NAME,
-                "warning",
-                f"Name(s) {sorted(reserved_conflicts)} are shadowed by the reserved response metadata namespace inside response steps "
-                f"(save/verify templates see the HTTP response there, not your value)",
-            )
+
+def _reserved_name_diagnostics(user_names: set[str]) -> list[Diagnostic]:
+    """HTTPCHAIN027 (static half): user names colliding with the reserved
+    ``response`` metadata namespace, which shadows them inside response steps
+    (encoded in ``scoping.StageScopes.response``). The runtime half covers
+    dynamically-produced save keys the static check cannot see."""
+    reserved_conflicts = user_names & {RESPONSE_META_NAME}
+    if not reserved_conflicts:
+        return []
+    return [
+        _diag(
+            DiagnosticCode.RESERVED_NAME,
+            "warning",
+            f"Name(s) {sorted(reserved_conflicts)} are shadowed by the reserved response metadata namespace inside response steps "
+            f"(save/verify templates see the HTTP response there, not your value)",
         )
+    ]
 
-    diagnostics.extend(_dataflow_diagnostics(scenario, test_data))
 
-    diagnostics.extend(_verify_diagnostics(scenario))
-    diagnostics.extend(_inline_schema_diagnostics(scenario))
-
-    diagnostics.extend(_marker_diagnostics(scenario))
-
-    # Phase visibility: template-bearing parametrize VALUES opt the scenario into
-    # collection-time resolution of scenario substitutions (pytest needs concrete
-    # parameter values to generate test items) — the one exception to lazy,
-    # execution-time scenario initialization. Surface that as an info diagnostic
-    # so the timing is discoverable exactly when a scenario triggers it. Uses the
-    # same predicate as the carrier, so validator and runtime agree by construction.
+def _parametrize_timing_diagnostics(scenario: Scenario) -> list[Diagnostic]:
+    """HTTPCHAIN025 (info): template-bearing parametrize VALUES opt the
+    scenario into collection-time resolution of scenario substitutions (pytest
+    needs concrete parameter values to generate test items) — the one
+    exception to lazy, execution-time scenario initialization. Uses the same
+    predicate as the carrier, so validator and runtime agree by construction."""
+    diagnostics: list[Diagnostic] = []
     for i, stage in enumerate(scenario.stages):
         if parametrize_values_contain_template(stage.parametrize):
             diagnostics.append(
@@ -910,10 +898,37 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
                     location=f"stages[{i}].parametrize",
                 )
             )
+    return diagnostics
+
+
+def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[Diagnostic], ScenarioInfo]:
+    """Semantic checks on an already-loaded, schema-valid scenario.
+
+    Operates on the parsed ``test_data`` dict together with the validated ``Scenario``
+    so it can be shared by `validate_scenario` (file-based) and by the pytest
+    collector. Orchestrates the per-family helpers (each documents its own
+    codes) in a stable order and returns ``(diagnostics, scenario_info)``.
+    """
+    fixtures = sorted({*scenario.fixtures, *(name for stage in scenario.stages for name in stage.fixtures)})
+    vars_defined = extract_defined_variables(scenario)
+    vars_saved = extract_saved_variables(scenario)
+    vars_referenced = extract_template_variables(test_data)
+    scenario_sub_names = set(substitution_names(scenario.substitutions))
+
+    diagnostics: list[Diagnostic] = []
+    diagnostics.extend(_stage_name_diagnostics(scenario))
+    diagnostics.extend(_fixture_diagnostics(scenario, vars_saved))
+    diagnostics.extend(_scenario_template_diagnostics(test_data, set(fixtures), scenario_sub_names))
+    diagnostics.extend(_reserved_name_diagnostics(vars_defined | vars_saved | set(fixtures)))
+    diagnostics.extend(_dataflow_diagnostics(scenario, test_data))
+    diagnostics.extend(_verify_diagnostics(scenario))
+    diagnostics.extend(_inline_schema_diagnostics(scenario))
+    diagnostics.extend(_marker_diagnostics(scenario))
+    diagnostics.extend(_parametrize_timing_diagnostics(scenario))
 
     scenario_info = ScenarioInfo(
         num_stages=len(scenario.stages),
-        stage_names=stage_names,
+        stage_names=[stage.name for stage in scenario.stages],
         vars_referenced=sorted(vars_referenced),
         vars_saved=sorted(vars_saved),
         vars_defined=sorted(vars_defined),

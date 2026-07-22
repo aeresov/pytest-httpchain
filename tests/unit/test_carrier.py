@@ -234,7 +234,7 @@ class TestRateLimiting:
         with pytest.raises(RequestError, match="Rate limit exceeded"):
             # The limiter check happens before the HTTP request, so no client is
             # needed; an exhausted limiter forces the timeout path.
-            Carrier._execute_single_iteration(stage, ChainMap(), {}, limiter=limiter, rate_limit_delay=0.2)
+            Carrier._execute_single_iteration(stage, ChainMap(), {}, limiter=limiter, max_rate_limit_delay=0.2)
 
     def test_limiter_blocks_until_timeout_elapses(self):
         import time
@@ -245,7 +245,7 @@ class TestRateLimiting:
         stage = _make_stage()
         start = time.monotonic()
         with pytest.raises(RequestError, match="Rate limit exceeded"):
-            Carrier._execute_single_iteration(stage, ChainMap(), {}, limiter=limiter, rate_limit_delay=0.3)
+            Carrier._execute_single_iteration(stage, ChainMap(), {}, limiter=limiter, max_rate_limit_delay=0.3)
         # It actually blocked for ~the timeout rather than failing instantly.
         assert time.monotonic() - start >= 0.25
 

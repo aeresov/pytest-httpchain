@@ -26,21 +26,18 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from pytest_httpchain.errors import HttpChainError
+from pytest_httpchain.constants import USER_FUNCTION_NAME_PATTERN
+from pytest_httpchain.errors import HttpChainError, StageExecutionError
+from pytest_httpchain.models import UserFunctionCall, UserFunctionKwargs, UserFunctionName
 
 
 class UserFunctionError(HttpChainError):
     """Error importing or calling a user-supplied function."""
 
 
-# Matches "module.path:function_name". The module path is REQUIRED and must be a
-# well-formed dotted path: identifier segments joined by single dots, with no
-# leading, trailing, or doubled dots (so "a..b:f" and "mod.:f" are rejected at
-# validation instead of failing later at import time). The function part is a
-# single identifier. This is the single grammar shared with the models'
-# FunctionImportName validator, so a bare name (no module) now fails at
-# validation/collection instead of only at runtime import.
-NAME_PATTERN = re.compile(r"^(?P<module>[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*):(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$")
+# The grammar lives in constants (bottom layer) so both the models' validator
+# and this importer share one encoding without pinning this module below models.
+NAME_PATTERN = USER_FUNCTION_NAME_PATTERN
 
 
 def import_function(name: str) -> Callable[..., Any]:
@@ -142,8 +139,30 @@ def wrap_function(name: str, /, default_kwargs: dict[str, Any] | None = None) ->
     return wrapped
 
 
+def call_user_function(func_call: UserFunctionCall, **extra_kwargs: Any) -> object:
+    """Import and call a user function described by a ``UserFunctionCall`` model.
+
+    A bare ``UserFunctionName`` is called with only ``extra_kwargs``; a
+    ``UserFunctionKwargs`` merges its declared kwargs under ``extra_kwargs``
+    (caller-supplied values win on conflict). Used both for request/scenario auth
+    callables and for verify/save user functions, where ``extra_kwargs`` carries
+    the ``response``. Raises ``StageExecutionError`` if ``func_call`` is neither
+    supported shape. Lives here (not utils) because it dispatches on the model
+    union — this module sits above models exactly so it can own that dispatch.
+    """
+    match func_call:
+        case UserFunctionName():
+            return call_function(func_call.root, **extra_kwargs)
+        case UserFunctionKwargs():
+            merged_kwargs = {**func_call.kwargs, **extra_kwargs}
+            return call_function(func_call.name.root, **merged_kwargs)
+        case _:
+            raise StageExecutionError(f"Invalid function call format: {func_call}")
+
+
 __all__ = [
     "NAME_PATTERN",
+    "call_user_function",
     "import_function",
     "call_function",
     "wrap_function",

@@ -26,8 +26,8 @@ import jmespath
 import jsonschema
 from pydantic import AfterValidator, BeforeValidator, Field, JsonValue, PlainSerializer, WithJsonSchema
 
+from pytest_httpchain.constants import USER_FUNCTION_NAME_PATTERN
 from pytest_httpchain.templates import TEMPLATE_PATTERN, TEMPLATE_PATTERN_ECMA, is_complete_template
-from pytest_httpchain.userfunc import NAME_PATTERN
 
 
 def create_string_validator(validation_func: Callable[[str], Any], error_message: str) -> Callable[[str], str]:
@@ -140,7 +140,7 @@ def validate_function_import_name(v: str) -> str:
     the grammar the importer accepts, so a bare name fails here (at
     validation/collection) instead of only at runtime import.
     """
-    if not NAME_PATTERN.match(v):
+    if not USER_FUNCTION_NAME_PATTERN.match(v):
         if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", v):
             raise ValueError(f"Module path is required: use 'module:{v}' format instead of '{v}'")
         raise ValueError(f"Invalid function name format: {v}")

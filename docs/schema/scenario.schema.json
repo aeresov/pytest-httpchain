@@ -1890,7 +1890,7 @@
     },
     "$schema": {
       "type": "string",
-      "description": "URL of this schema, for editor as-you-type validation. Stripped before the file is parsed."
+      "description": "URL of this schema, for editor as-you-type validation. Dropped during model validation."
     },
     "$include": {
       "type": "string",

@@ -102,14 +102,13 @@ def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
     schema.setdefault("properties", {})
     schema["properties"]["$schema"] = {
         "type": "string",
-        "description": "URL of this schema, for editor as-you-type validation. Stripped before the file is parsed.",
+        "description": "URL of this schema, for editor as-you-type validation. Dropped during model validation.",
     }
+    # The loop copies all three directive properties ($include/$merge/$ref)
+    # verbatim from the JsonRef definition — including $ref's legacy-alias
+    # description.
     for directive, directive_def in schema["$defs"]["JsonRef"]["properties"].items():
         schema["properties"][directive] = directive_def
-    schema["properties"]["$ref"] = {
-        "type": "string",
-        "description": "Legacy alias for $include. May conflict with VS Code's own $ref handling.",
-    }
 
     return schema
 
