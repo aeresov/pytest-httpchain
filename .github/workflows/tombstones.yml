@@ -16,9 +16,8 @@ jobs:
         runs-on: ubuntu-latest
         # PyPI pending publishers must be unique per (owner, repo, workflow,
         # environment), so each package needs its own environment name as the
-        # distinguishing claim. pytest-httpchain-core predates that discovery
-        # and keeps the plain "pypi" environment it was registered with.
-        environment: ${{ matrix.package == 'pytest-httpchain-core' && 'pypi' || format('pypi-{0}', matrix.package) }}
+        # distinguishing claim.
+        environment: pypi-${{ matrix.package }}
         permissions:
             id-token: write # mandatory for trusted publishing
         strategy:
