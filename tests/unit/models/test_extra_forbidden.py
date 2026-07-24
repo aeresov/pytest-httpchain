@@ -53,8 +53,10 @@ def test_parallel_config_extra_key_rejected():
         "request": {"url": "https://x.test/"},
         "parallel": {"repeat": 2, "max_concurency": 5},
     }
-    with pytest.raises(ValidationError, match="max_concurency"):
+    with pytest.raises(ValidationError) as exc_info:
         Stage.model_validate(stage)
+    errors = exc_info.value.errors()
+    assert any(e["type"] == "extra_forbidden" and "max_concurency" in e["loc"] for e in errors)
 
 
 def test_schema_key_dropped_at_every_model_position():

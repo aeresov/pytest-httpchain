@@ -13,7 +13,7 @@ from pytest_httpchain.models.entities import (
     UserFunctionsSave,
     VarsSubstitution,
 )
-from tests.unit.models.conftest import make_stage
+from tests.unit.models.conftest import assert_error_types, make_stage
 
 
 class TestJMESPathSave:
@@ -65,8 +65,9 @@ class TestJMESPathSave:
 
     def test_jmespath_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        with pytest.raises(ValidationError) as exc_info:
             JMESPathSave(jmespath={"x": "y"}, extra="field")
+        assert_error_types(exc_info, "extra_forbidden")
 
     @pytest.mark.parametrize("bad_key", ["my-var", "with space", "1leading", "class"])
     def test_jmespath_non_identifier_key_rejected(self, bad_key: str):
@@ -120,8 +121,9 @@ class TestSubstitutionsSave:
 
     def test_substitutions_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        with pytest.raises(ValidationError) as exc_info:
             SubstitutionsSave(substitutions=[], extra="field")
+        assert_error_types(exc_info, "extra_forbidden")
 
 
 class TestUserFunctionsSave:
@@ -177,8 +179,9 @@ class TestUserFunctionsSave:
 
     def test_user_functions_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        with pytest.raises(ValidationError) as exc_info:
             UserFunctionsSave(user_functions=[], extra="field")
+        assert_error_types(exc_info, "extra_forbidden")
 
 
 class TestSaveDiscriminator:
@@ -201,8 +204,9 @@ class TestSaveDiscriminator:
 
     def test_discriminator_invalid_rejected(self):
         """Test that invalid save type is rejected."""
-        with pytest.raises(ValidationError, match="does not match any of the expected tags"):
+        with pytest.raises(ValidationError) as exc_info:
             SaveStep(save={"invalid": "value"})
+        assert_error_types(exc_info, "union_tag_invalid")
 
 
 class TestSaveStepInStage:
