@@ -8,14 +8,13 @@ from pydantic import ValidationError
 
 from pytest_httpchain.models.entities import (
     HeaderMatcher,
-    Request,
     ResponseBody,
-    Stage,
     UserFunctionKwargs,
     UserFunctionName,
     Verify,
     VerifyStep,
 )
+from tests.unit.models.conftest import make_request, make_stage
 
 
 class TestVerifyStatus:
@@ -331,19 +330,13 @@ class TestVerifyInStage:
 
     def test_stage_with_verify_status(self):
         """Test Stage with status verification."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            response=[VerifyStep(verify=Verify(status=HTTPStatus.OK))],
-        )
+        stage = make_stage(response=[VerifyStep(verify=Verify(status=HTTPStatus.OK))])
         assert len(stage.response) == 1
         assert isinstance(stage.response[0], VerifyStep)
 
     def test_stage_with_multiple_verifications(self):
         """Test Stage with multiple verify steps."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
+        stage = make_stage(
             response=[
                 VerifyStep(verify=Verify(status=HTTPStatus.OK)),
                 VerifyStep(verify=Verify(headers={"Content-Type": "application/json"})),
@@ -355,9 +348,9 @@ class TestVerifyInStage:
 
     def test_stage_with_complex_verification(self):
         """Test Stage with complex verification."""
-        stage = Stage(
+        stage = make_stage(
             name="create-user",
-            request=Request(url="https://example.com/users", method=HTTPMethod.POST),
+            request=make_request(url="https://example.com/users", method=HTTPMethod.POST),
             response=[
                 VerifyStep(
                     verify=Verify(

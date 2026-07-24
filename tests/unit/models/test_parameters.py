@@ -9,6 +9,7 @@ from pytest_httpchain.models.entities import (
     Request,
     Stage,
 )
+from tests.unit.models.conftest import make_request, make_stage
 
 
 class TestIndividualParameter:
@@ -148,31 +149,21 @@ class TestParameterDiscriminator:
 
     def test_discriminator_individual(self):
         """Test discriminator identifies IndividualParameter."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            parametrize=[IndividualParameter(individual={"x": [1, 2, 3]})],
-        )
+        stage = make_stage(parametrize=[IndividualParameter(individual={"x": [1, 2, 3]})])
         assert stage.parametrize is not None
         assert len(stage.parametrize) == 1
         assert isinstance(stage.parametrize[0], IndividualParameter)
 
     def test_discriminator_combinations(self):
         """Test discriminator identifies CombinationsParameter."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            parametrize=[CombinationsParameter(combinations=[{"x": 1}, {"x": 2}])],
-        )
+        stage = make_stage(parametrize=[CombinationsParameter(combinations=[{"x": 1}, {"x": 2}])])
         assert stage.parametrize is not None
         assert len(stage.parametrize) == 1
         assert isinstance(stage.parametrize[0], CombinationsParameter)
 
     def test_discriminator_mixed_parameters(self):
         """Test discriminator with mixed parameter types."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
+        stage = make_stage(
             parametrize=[
                 IndividualParameter(individual={"id": [1, 2]}),
                 CombinationsParameter(combinations=[{"a": 1, "b": 2}, {"a": 3, "b": 4}]),
@@ -185,11 +176,7 @@ class TestParameterDiscriminator:
     def test_discriminator_invalid_type_rejected(self):
         """Test that invalid parameter type is rejected."""
         with pytest.raises(ValidationError, match="does not match any of the expected tags"):
-            Stage(
-                name="test",
-                request=Request(url="https://example.com"),
-                parametrize=[{"invalid": "value"}],
-            )
+            make_stage(parametrize=[{"invalid": "value"}])
 
 
 class TestParametersInStage:
@@ -202,18 +189,13 @@ class TestParametersInStage:
 
     def test_stage_with_empty_parametrize(self):
         """Test Stage with empty parametrize list."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            parametrize=[],
-        )
+        stage = make_stage(parametrize=[])
         assert stage.parametrize == []
 
     def test_stage_parametrize_with_template_url(self):
         """Test Stage with parametrize and template URL."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com/users/{{ user_id }}"),
+        stage = make_stage(
+            request=make_request(url="https://example.com/users/{{ user_id }}"),
             parametrize=[IndividualParameter(individual={"user_id": [1, 2, 3]})],
         )
         assert stage.parametrize is not None

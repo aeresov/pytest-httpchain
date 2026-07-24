@@ -8,7 +8,6 @@ from pydantic import ValidationError
 from pytest_httpchain.models.entities import (
     FunctionsSubstitution,
     JMESPathSave,
-    Request,
     SaveStep,
     Scenario,
     Stage,
@@ -17,6 +16,7 @@ from pytest_httpchain.models.entities import (
     Verify,
     VerifyStep,
 )
+from tests.unit.models.conftest import make_request, make_stage, stage_dict
 
 
 class TestSubstitutionsListFormat:
@@ -24,20 +24,12 @@ class TestSubstitutionsListFormat:
 
     def test_substitutions_empty_list(self):
         """Test Substitutions with empty list."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            substitutions=[],
-        )
+        stage = make_stage(substitutions=[])
         assert stage.substitutions == []
 
     def test_substitutions_single_vars_item(self):
         """Test Substitutions with single vars item."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            substitutions=[VarsSubstitution(vars={"key1": "value1"})],
-        )
+        stage = make_stage(substitutions=[VarsSubstitution(vars={"key1": "value1"})])
         assert len(stage.substitutions) == 1
         sub0 = stage.substitutions[0]
         assert isinstance(sub0, VarsSubstitution)
@@ -45,9 +37,7 @@ class TestSubstitutionsListFormat:
 
     def test_substitutions_multiple_vars_items(self):
         """Test Substitutions with multiple vars items."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
+        stage = make_stage(
             substitutions=[
                 VarsSubstitution(vars={"key1": "value1"}),
                 VarsSubstitution(vars={"key2": "value2"}),
@@ -62,9 +52,7 @@ class TestSubstitutionsListFormat:
 
     def test_substitutions_mixed_vars_and_functions(self):
         """Test Substitutions with mixed vars and functions."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
+        stage = make_stage(
             substitutions=[
                 VarsSubstitution(vars={"id": 42}),
                 FunctionsSubstitution(functions={"timestamp": UserFunctionName("utils:get_timestamp")}),
@@ -80,24 +68,12 @@ class TestSubstitutionsDictFormat:
 
     def test_substitutions_empty_dict(self):
         """Test Substitutions with empty dict."""
-        stage = Stage.model_validate(
-            {
-                "name": "test",
-                "request": {"url": "https://example.com"},
-                "substitutions": {},
-            }
-        )
+        stage = Stage.model_validate(stage_dict(substitutions={}))
         assert stage.substitutions == []
 
     def test_substitutions_dict_single_item(self):
         """Test Substitutions with dict containing single item."""
-        stage = Stage.model_validate(
-            {
-                "name": "test",
-                "request": {"url": "https://example.com"},
-                "substitutions": {"initial": {"vars": {"key1": "value1"}}},
-            }
-        )
+        stage = Stage.model_validate(stage_dict(substitutions={"initial": {"vars": {"key1": "value1"}}}))
         assert len(stage.substitutions) == 1
         sub0 = stage.substitutions[0]
         assert isinstance(sub0, VarsSubstitution)
@@ -106,14 +82,12 @@ class TestSubstitutionsDictFormat:
     def test_substitutions_dict_multiple_items(self):
         """Test Substitutions with dict containing multiple items."""
         stage = Stage.model_validate(
-            {
-                "name": "test",
-                "request": {"url": "https://example.com"},
-                "substitutions": {
+            stage_dict(
+                substitutions={
                     "first": {"vars": {"key1": "value1"}},
                     "second": {"vars": {"key2": "value2"}},
                 },
-            }
+            )
         )
         assert len(stage.substitutions) == 2
         assert all(isinstance(s, VarsSubstitution) for s in stage.substitutions)
@@ -125,17 +99,15 @@ class TestSubstitutionsDictFormat:
     def test_substitutions_dict_with_list_values(self):
         """Test Substitutions with dict containing list values (flattened)."""
         stage = Stage.model_validate(
-            {
-                "name": "test",
-                "request": {"url": "https://example.com"},
-                "substitutions": {
+            stage_dict(
+                substitutions={
                     "batch1": [
                         {"vars": {"key1": "value1"}},
                         {"vars": {"key2": "value2"}},
                     ],
                     "batch2": {"vars": {"key3": "value3"}},
                 },
-            }
+            )
         )
         # Expects 3 items total: batch1 list is extended (2 items), batch2 is appended (1 item)
         assert len(stage.substitutions) == 3
@@ -144,14 +116,12 @@ class TestSubstitutionsDictFormat:
     def test_substitutions_dict_mixed_vars_and_functions(self):
         """Test Substitutions dict with mixed vars and functions."""
         stage = Stage.model_validate(
-            {
-                "name": "test",
-                "request": {"url": "https://example.com"},
-                "substitutions": {
+            stage_dict(
+                substitutions={
                     "initial_data": {"vars": {"id": 42}},
                     "computed_values": {"functions": {"timestamp": "utils:get_timestamp"}},
                 },
-            }
+            )
         )
         assert len(stage.substitutions) == 2
         # Find the VarsSubstitution and FunctionsSubstitution
@@ -166,38 +136,24 @@ class TestResponsesListFormat:
 
     def test_responses_empty_list(self):
         """Test Responses with empty list."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            response=[],
-        )
+        stage = make_stage(response=[])
         assert stage.response == []
 
     def test_responses_single_save_step(self):
         """Test Responses with single save step."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            response=[SaveStep(save=JMESPathSave(jmespath={"result": "data.value"}))],
-        )
+        stage = make_stage(response=[SaveStep(save=JMESPathSave(jmespath={"result": "data.value"}))])
         assert len(stage.response) == 1
         assert isinstance(stage.response[0], SaveStep)
 
     def test_responses_single_verify_step(self):
         """Test Responses with single verify step."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            response=[VerifyStep(verify=Verify(status=HTTPStatus.OK))],
-        )
+        stage = make_stage(response=[VerifyStep(verify=Verify(status=HTTPStatus.OK))])
         assert len(stage.response) == 1
         assert isinstance(stage.response[0], VerifyStep)
 
     def test_responses_multiple_steps(self):
         """Test Responses with multiple steps."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
+        stage = make_stage(
             response=[
                 VerifyStep(verify=Verify(status=HTTPStatus.OK)),
                 SaveStep(save=JMESPathSave(jmespath={"result": "data"})),
@@ -213,55 +169,39 @@ class TestResponsesDictFormat:
 
     def test_responses_empty_dict(self):
         """Test Responses with empty dict."""
-        stage = Stage.model_validate(
-            {
-                "name": "test",
-                "request": {"url": "https://example.com"},
-                "response": {},
-            }
-        )
+        stage = Stage.model_validate(stage_dict(response={}))
         assert stage.response == []
 
     def test_responses_dict_single_item(self):
         """Test Responses with dict containing single item."""
-        stage = Stage.model_validate(
-            {
-                "name": "test",
-                "request": {"url": "https://example.com"},
-                "response": {"check_status": {"verify": {"status": 200}}},
-            }
-        )
+        stage = Stage.model_validate(stage_dict(response={"check_status": {"verify": {"status": 200}}}))
         assert len(stage.response) == 1
         assert isinstance(stage.response[0], VerifyStep)
 
     def test_responses_dict_multiple_items(self):
         """Test Responses with dict containing multiple items."""
         stage = Stage.model_validate(
-            {
-                "name": "test",
-                "request": {"url": "https://example.com"},
-                "response": {
+            stage_dict(
+                response={
                     "verify_success": {"verify": {"status": 200}},
                     "save_result": {"save": {"jmespath": {"data": "response"}}},
                 },
-            }
+            )
         )
         assert len(stage.response) == 2
 
     def test_responses_dict_with_list_values(self):
         """Test Responses with dict containing list values (flattened)."""
         stage = Stage.model_validate(
-            {
-                "name": "test",
-                "request": {"url": "https://example.com"},
-                "response": {
+            stage_dict(
+                response={
                     "validations": [
                         {"verify": {"status": 200}},
                         {"verify": {"headers": {"Content-Type": "application/json"}}},
                     ],
                     "extraction": {"save": {"jmespath": {"result": "data"}}},
                 },
-            }
+            )
         )
         # Expects 3 items total: validations list extended (2), extraction appended (1)
         assert len(stage.response) == 3
@@ -339,12 +279,7 @@ class TestIntegrationWithScenario:
         """Test Scenario with list-format substitutions."""
         scenario = Scenario(
             substitutions=[VarsSubstitution(vars={"base_url": "https://api.example.com"})],
-            stages=[
-                Stage(
-                    name="test",
-                    request=Request(url="{{ base_url }}/endpoint"),
-                )
-            ],
+            stages=[make_stage(request=make_request(url="{{ base_url }}/endpoint"))],
         )
         assert len(scenario.substitutions) == 1
         assert isinstance(scenario.substitutions[0], VarsSubstitution)
@@ -354,12 +289,7 @@ class TestIntegrationWithScenario:
         scenario = Scenario.model_validate(
             {
                 "substitutions": {"config": {"vars": {"base_url": "https://api.example.com"}}},
-                "stages": [
-                    {
-                        "name": "test",
-                        "request": {"url": "{{ base_url }}/endpoint"},
-                    }
-                ],
+                "stages": [stage_dict(request={"url": "{{ base_url }}/endpoint"})],
             }
         )
         assert len(scenario.substitutions) == 1
@@ -367,23 +297,13 @@ class TestIntegrationWithScenario:
 
     def test_stage_with_list_responses(self):
         """Test Stage with list-format responses."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            response=[VerifyStep(verify=Verify(status=HTTPStatus.OK))],
-        )
+        stage = make_stage(response=[VerifyStep(verify=Verify(status=HTTPStatus.OK))])
         assert len(stage.response) == 1
         assert isinstance(stage.response[0], VerifyStep)
 
     def test_stage_with_dict_responses(self):
         """Test Stage with dict-format responses."""
-        stage = Stage.model_validate(
-            {
-                "name": "test",
-                "request": {"url": "https://example.com"},
-                "response": {"validation": {"verify": {"status": 200}}},
-            }
-        )
+        stage = Stage.model_validate(stage_dict(response={"validation": {"verify": {"status": 200}}}))
         assert len(stage.response) == 1
         assert isinstance(stage.response[0], VerifyStep)
 
@@ -394,42 +314,22 @@ class TestInvalidInputs:
     def test_substitutions_invalid_type(self):
         """Test that invalid types are rejected."""
         with pytest.raises(ValidationError):
-            Stage(
-                name="test",
-                request=Request(url="https://example.com"),
-                substitutions="invalid",
-            )
+            make_stage(substitutions="invalid")
 
     def test_substitutions_invalid_item_structure(self):
         """Test that items with invalid structure are rejected."""
         with pytest.raises(ValidationError, match="does not match any of the expected tags"):
-            Stage.model_validate(
-                {
-                    "name": "test",
-                    "request": {"url": "https://example.com"},
-                    "substitutions": [{"invalid_key": "value"}],
-                }
-            )
+            Stage.model_validate(stage_dict(substitutions=[{"invalid_key": "value"}]))
 
     def test_responses_invalid_type(self):
         """Test that invalid response types are rejected."""
         with pytest.raises(ValidationError):
-            Stage(
-                name="test",
-                request=Request(url="https://example.com"),
-                response="invalid",
-            )
+            make_stage(response="invalid")
 
     def test_responses_invalid_item_structure(self):
         """Test that response items with invalid structure are rejected."""
         with pytest.raises(ValidationError, match="does not match any of the expected tags"):
-            Stage.model_validate(
-                {
-                    "name": "test",
-                    "request": {"url": "https://example.com"},
-                    "response": [{"invalid_key": "value"}],
-                }
-            )
+            Stage.model_validate(stage_dict(response=[{"invalid_key": "value"}]))
 
 
 class TestSubstitutionKeysMustBeIdentifiers:

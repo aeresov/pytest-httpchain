@@ -15,6 +15,7 @@ from pytest_httpchain.models.entities import (
     UserFunctionName,
     VarsSubstitution,
 )
+from tests.unit.models.conftest import make_request, make_stage
 
 
 class TestStageName:
@@ -22,20 +23,17 @@ class TestStageName:
 
     def test_stage_name_default_empty(self):
         """Test that stage name defaults to empty string when not provided."""
-        stage = Stage(request=Request(url="https://example.com"))
+        stage = Stage(request=make_request())
         assert stage.name == ""
 
     def test_stage_name_simple(self):
         """Test simple stage name."""
-        stage = Stage(name="get-users", request=Request(url="https://example.com"))
+        stage = make_stage(name="get-users")
         assert stage.name == "get-users"
 
     def test_stage_name_descriptive(self):
         """Test descriptive stage name."""
-        stage = Stage(
-            name="Create new user account",
-            request=Request(url="https://example.com"),
-        )
+        stage = make_stage(name="Create new user account")
         assert stage.name == "Create new user account"
 
 
@@ -44,16 +42,12 @@ class TestStageDescription:
 
     def test_stage_description_default_none(self):
         """Test default description is None."""
-        stage = Stage(name="test", request=Request(url="https://example.com"))
+        stage = make_stage()
         assert stage.description is None
 
     def test_stage_description_custom(self):
         """Test custom description."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            description="This stage tests the user creation endpoint",
-        )
+        stage = make_stage(description="This stage tests the user creation endpoint")
         assert stage.description == "This stage tests the user creation endpoint"
 
 
@@ -62,34 +56,22 @@ class TestStageMarks:
 
     def test_stage_marks_default_empty(self):
         """Test default marks is empty list."""
-        stage = Stage(name="test", request=Request(url="https://example.com"))
+        stage = make_stage()
         assert stage.marks == []
 
     def test_stage_marks_skip(self):
         """Test stage with skip marker."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            marks=["skip"],
-        )
+        stage = make_stage(marks=["skip"])
         assert "skip" in stage.marks
 
     def test_stage_marks_xfail(self):
         """Test stage with xfail marker."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            marks=["xfail"],
-        )
+        stage = make_stage(marks=["xfail"])
         assert "xfail" in stage.marks
 
     def test_stage_marks_multiple(self):
         """Test stage with multiple markers."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            marks=["slow", "integration", "requires_auth"],
-        )
+        stage = make_stage(marks=["slow", "integration", "requires_auth"])
         assert len(stage.marks) == 3
 
 
@@ -98,25 +80,17 @@ class TestStageFixtures:
 
     def test_stage_fixtures_default_empty(self):
         """Test default fixtures is empty list."""
-        stage = Stage(name="test", request=Request(url="https://example.com"))
+        stage = make_stage()
         assert stage.fixtures == []
 
     def test_stage_fixtures_single(self):
         """Test stage with single fixture."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            fixtures=["auth_token"],
-        )
+        stage = make_stage(fixtures=["auth_token"])
         assert "auth_token" in stage.fixtures
 
     def test_stage_fixtures_multiple(self):
         """Test stage with multiple fixtures."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            fixtures=["db_connection", "auth_token", "test_user"],
-        )
+        stage = make_stage(fixtures=["db_connection", "auth_token", "test_user"])
         assert len(stage.fixtures) == 3
 
 
@@ -125,34 +99,22 @@ class TestStageAlwaysRun:
 
     def test_stage_always_run_default_false(self):
         """Test default always_run is False."""
-        stage = Stage(name="test", request=Request(url="https://example.com"))
+        stage = make_stage()
         assert stage.always_run is False
 
     def test_stage_always_run_true(self):
         """Test always_run set to True."""
-        stage = Stage(
-            name="cleanup",
-            request=Request(url="https://example.com/cleanup"),
-            always_run=True,
-        )
+        stage = make_stage(name="cleanup", always_run=True)
         assert stage.always_run is True
 
     def test_stage_always_run_template(self):
         """Test always_run with template expression."""
-        stage = Stage(
-            name="conditional",
-            request=Request(url="https://example.com"),
-            always_run="{{ should_always_run }}",
-        )
+        stage = make_stage(name="conditional", always_run="{{ should_always_run }}")
         assert stage.always_run == "{{ should_always_run }}"
 
     def test_stage_always_run_conditional_template(self):
         """Test always_run with conditional template."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            always_run="{{ env == 'production' }}",
-        )
+        stage = make_stage(always_run="{{ env == 'production' }}")
         assert stage.always_run == "{{ env == 'production' }}"
 
 
@@ -221,7 +183,7 @@ class TestScenarioStages:
 
     def test_scenario_single_stage(self):
         """Test scenario with single stage."""
-        scenario = Scenario(stages=[Stage(name="get-users", request=Request(url="https://example.com/users"))])
+        scenario = Scenario(stages=[make_stage(name="get-users")])
         assert len(scenario.stages) == 1
         assert isinstance(scenario.stages[0], Stage)
 
@@ -229,9 +191,9 @@ class TestScenarioStages:
         """Test scenario with multiple stages."""
         scenario = Scenario(
             stages=[
-                Stage(name="login", request=Request(url="https://example.com/login")),
-                Stage(name="get-profile", request=Request(url="https://example.com/profile")),
-                Stage(name="logout", request=Request(url="https://example.com/logout")),
+                make_stage(name="login"),
+                make_stage(name="get-profile"),
+                make_stage(name="logout"),
             ]
         )
         assert len(scenario.stages) == 3
