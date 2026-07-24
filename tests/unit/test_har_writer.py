@@ -1,9 +1,10 @@
+import base64
 import datetime
 import json
 
 import httpx
 
-from pytest_httpchain.har_writer import write_har_file
+from pytest_httpchain.har_writer import request_response_to_har_entry, write_har_file
 
 
 def _make_pair(elapsed_ms: float | None = 123.5) -> tuple[httpx.Request, httpx.Response]:
@@ -153,6 +154,75 @@ class TestPerExchangeStartTimes:
         path = write_har_file(tmp_path, "t", [(req, resp, None)])
         entries = json.loads(path.read_text())["log"]["entries"]
         datetime.fromisoformat(entries[0]["startedDateTime"])
+
+
+class TestSerializationFamilies:
+    """Direct coverage of request_response_to_har_entry's body/header branches.
+
+    Each family below hits a distinct serializer that the file-level tests
+    (JSON body, happy path) never exercise.
+    """
+
+    def test_request_cookie_header_parsed(self):
+        req = httpx.Request("GET", "https://x.com/p", headers={"cookie": "s=abc; t=def"})
+        entry = request_response_to_har_entry(req, httpx.Response(200, request=req))
+        assert entry["request"]["cookies"] == [
+            {"name": "s", "value": "abc"},
+            {"name": "t", "value": "def"},
+        ]
+
+    def test_response_set_cookie_serialized(self):
+        req = httpx.Request("GET", "https://x.com/p")
+        resp = httpx.Response(200, headers={"set-cookie": "session=xyz; Path=/"}, request=req)
+        entry = request_response_to_har_entry(req, resp)
+        assert entry["response"]["cookies"] == [{"name": "session", "value": "xyz"}]
+
+    def test_query_string_extracted(self):
+        req = httpx.Request("GET", "https://x.com/p?a=1&b=2&a=3")
+        entry = request_response_to_har_entry(req, httpx.Response(200, request=req))
+        # Repeated keys are preserved as separate entries, per HAR.
+        assert entry["request"]["queryString"] == [
+            {"name": "a", "value": "1"},
+            {"name": "a", "value": "3"},
+            {"name": "b", "value": "2"},
+        ]
+
+    def test_form_urlencoded_body_params(self):
+        req = httpx.Request("POST", "https://x.com", data={"k1": "v1", "k2": "v2"})
+        entry = request_response_to_har_entry(req, httpx.Response(200, request=req))
+        post = entry["request"]["postData"]
+        assert post["mimeType"] == "application/x-www-form-urlencoded"
+        assert {"name": "k1", "value": "v1"} in post["params"]
+        assert {"name": "k2", "value": "v2"} in post["params"]
+
+    def test_binary_request_body_base64_encoded(self):
+        raw = b"\xff\xfe\x00"
+        req = httpx.Request("POST", "https://x.com", content=raw, headers={"content-type": "application/octet-stream"})
+        entry = request_response_to_har_entry(req, httpx.Response(200, request=req))
+        post = entry["request"]["postData"]
+        assert post["encoding"] == "base64"
+        assert base64.b64decode(post["text"]) == raw
+
+    def test_binary_response_body_base64_encoded(self):
+        raw = b"\xff\xfe"
+        req = httpx.Request("GET", "https://x.com")
+        resp = httpx.Response(200, content=raw, headers={"content-type": "application/octet-stream"}, request=req)
+        content = request_response_to_har_entry(req, resp)["response"]["content"]
+        assert content["encoding"] == "base64"
+        assert content["size"] == len(raw)
+        assert base64.b64decode(content["text"]) == raw
+
+    def test_empty_response_body_has_no_text(self):
+        req = httpx.Request("GET", "https://x.com")
+        resp = httpx.Response(204, request=req)
+        content = request_response_to_har_entry(req, resp)["response"]["content"]
+        assert content["size"] == 0
+        assert "text" not in content
+
+    def test_empty_request_body_has_no_post_data(self):
+        req = httpx.Request("GET", "https://x.com")
+        entry = request_response_to_har_entry(req, httpx.Response(200, request=req))
+        assert "postData" not in entry["request"]
 
 
 class TestFilenameCollisions:

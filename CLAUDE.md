@@ -31,8 +31,13 @@ uv run pytest-httpchain validate tests/integration/examples/save/test_save_jmesp
 # Deep validation (opt-in): import user functions + check signatures + referenced files
 uv run pytest-httpchain validate --deep --syspath tests/integration/examples tests/integration/examples/save/test_save_user_function.http.json
 
-# Run unit tests with coverage report
-uv run pytest tests/unit --cov=src --cov-report=term-missing
+# Run tests with coverage report.
+# Use `coverage run -m pytest` (NOT `pytest --cov`): the plugin is imported via its
+# pytest11 entry point before pytest-cov starts recording, so `--cov` counts every
+# module-level line (model fields, class bodies) as missed and reports a ~20-point-low
+# floor (e.g. models/entities.py at 40% instead of its real 97%). CI uses this form.
+uv run coverage run -m pytest tests/unit
+uv run coverage report --show-missing
 ```
 
 ## Architecture

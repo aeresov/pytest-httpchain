@@ -56,6 +56,17 @@ def delay(seconds: int):
     return {"delayed": seconds}, HTTPStatus.OK
 
 
+@app.get("/delay_ms/<int:ms>")
+def delay_ms(ms: int):
+    # Millisecond-granularity delay. The mock server is single-threaded, so a
+    # handler keeps sleeping even after the client has timed out, and teardown
+    # blocks until it returns. Timeout tests should use this (e.g. /delay_ms/600
+    # with a 0.1s client timeout) instead of whole-second /delay to keep the
+    # timeout margin without paying seconds of teardown sleep on every run.
+    time.sleep(ms / 1000)
+    return {"delayed_ms": ms}, HTTPStatus.OK
+
+
 # ============ Echo Endpoints (for body type tests) ============
 
 

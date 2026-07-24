@@ -14,6 +14,7 @@ jobs:
     lint:
         name: Lint
         runs-on: ubuntu-latest
+        timeout-minutes: 10
         steps:
             - uses: actions/checkout@v7
 
@@ -44,6 +45,7 @@ jobs:
     test:
         name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
         runs-on: ${{ matrix.os }}
+        timeout-minutes: 15
         strategy:
             fail-fast: false
             matrix:
@@ -97,6 +99,7 @@ jobs:
     test-lowest:
         name: Test (lowest dependency floors)
         runs-on: ubuntu-latest
+        timeout-minutes: 15
         steps:
             - uses: actions/checkout@v7
 

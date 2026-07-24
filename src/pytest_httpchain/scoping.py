@@ -190,16 +190,6 @@ def foreach_parameter_names(parallel: ParallelConfig | None) -> set[str]:
             return set()
 
 
-def stage_defined_names(stage: Stage) -> set[str]:
-    """Names available *within a single stage*: its substitutions, parametrize /
-    foreach parameters, and its declared fixtures."""
-    names = substitution_names(stage.substitutions)
-    names |= parameter_names(stage.parametrize)
-    names |= foreach_parameter_names(stage.parallel)
-    names |= set(stage.fixtures)
-    return names
-
-
 def extract_defined_variables(scenario: Scenario) -> set[str]:
     """Extract variable names made available before/within templates (scenario-wide).
 

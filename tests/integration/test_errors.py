@@ -1,3 +1,8 @@
+import socket
+import sys
+
+import pytest
+
 from tests.integration.conftest import run_scenario
 
 
@@ -52,13 +57,32 @@ def test_connection_refused(pytester):
     # "actively refused" — but GitHub's Windows CI runners silently DROP
     # loopback SYNs to closed ports (verified even for a just-released bound
     # port), so the failure there surfaces as the request timeout instead.
+    # "timed out" is accepted only on Windows: on POSIX a timeout instead of a
+    # refusal is a real regression and must not be masked.
     out = result.stdout.str()
-    accepted = ("Connection refused", "actively refused", "timed out")
+    accepted = ("Connection refused", "actively refused")
+    if sys.platform == "win32":
+        accepted += ("timed out",)
     assert any(text in out for text in accepted), out
+
+
+_UNRESOLVABLE_HOST = "this-hostname-definitely-does-not-exist-12345.invalid"
 
 
 def test_invalid_hostname(pytester):
     """Test error handling for invalid hostname (DNS resolution failure)"""
+    # This is the suite's only real-network dependency. Some resolvers (captive
+    # portals, ISPs, corporate DNS) wildcard NXDOMAIN and hand back an address
+    # for any name, which turns the intended resolution failure into a
+    # connection/timeout error and flakes the assertion below. Skip rather than
+    # flake when the environment's resolver hijacks the lookup.
+    try:
+        socket.getaddrinfo(_UNRESOLVABLE_HOST, 80)
+    except socket.gaierror:
+        pass  # good: the resolver correctly fails to resolve the bogus name
+    else:
+        pytest.skip("resolver wildcards NXDOMAIN; cannot test DNS failure here")
+
     result = run_scenario(pytester, "errors/test_invalid_hostname.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
     # Must fail specifically because the host name could not be resolved (DNS),

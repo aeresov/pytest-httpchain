@@ -128,10 +128,16 @@ class TestSSLConfigValidation:
     """Tests for SSLConfig validation."""
 
     def test_verify_non_template_string_treated_as_path(self):
-        """Test that non-template strings for verify are treated as paths."""
-        # Non-template string is treated as a path
-        config = SSLConfig(verify=Path("some/path.crt"))
+        """A plain (non-template) string for verify is coerced to a Path."""
+        config = SSLConfig(verify="some/path.crt")
         assert isinstance(config.verify, Path)
+        assert config.verify == Path("some/path.crt")
+
+    def test_verify_template_string_kept_as_string(self):
+        """A template string for verify is left as a str for later substitution."""
+        config = SSLConfig(verify="{{ ca_bundle }}")
+        assert config.verify == "{{ ca_bundle }}"
+        assert isinstance(config.verify, str)
 
     def test_cert_invalid_tuple_length(self):
         """Test that cert tuple must have exactly 2 elements."""

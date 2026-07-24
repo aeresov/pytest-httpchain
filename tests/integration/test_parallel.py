@@ -1,3 +1,5 @@
+import pytest
+
 from tests.integration.conftest import run_scenario
 
 
@@ -54,6 +56,7 @@ def test_parallel_no_partial_save(pytester):
     result.assert_outcomes(errors=0, failed=1, passed=1)
 
 
+@pytest.mark.slow
 def test_rate_limiter_threads_not_leaked(pytester):
     """Each rate-limited stage execution used to construct a pyrate-limiter
     Limiter and never dispose it — and each Limiter owns a leaker daemon thread
