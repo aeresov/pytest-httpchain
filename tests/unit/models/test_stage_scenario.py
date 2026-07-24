@@ -18,135 +18,70 @@ from pytest_httpchain.models.entities import (
 from tests.unit.models.conftest import make_request, make_stage
 
 
-class TestStageName:
-    """Tests for Stage.name field."""
+class TestStageFields:
+    """Per-field defaults and round-trips for Stage's simple fields."""
 
-    def test_stage_name_default_empty(self):
-        """Test that stage name defaults to empty string when not provided."""
-        stage = Stage(request=make_request())
-        assert stage.name == ""
+    @pytest.mark.parametrize(
+        "attr, default",
+        [
+            ("description", None),
+            ("marks", []),
+            ("fixtures", []),
+            ("always_run", False),
+        ],
+    )
+    def test_field_default(self, attr, default):
+        assert getattr(make_stage(), attr) == default
 
-    def test_stage_name_simple(self):
-        """Test simple stage name."""
-        stage = make_stage(name="get-users")
-        assert stage.name == "get-users"
+    def test_name_defaults_to_empty_string(self):
+        # name is the one field make_stage() fills in, so build the stage directly.
+        assert Stage(request=make_request()).name == ""
 
-    def test_stage_name_descriptive(self):
-        """Test descriptive stage name."""
-        stage = make_stage(name="Create new user account")
-        assert stage.name == "Create new user account"
-
-
-class TestStageDescription:
-    """Tests for Stage.description field."""
-
-    def test_stage_description_default_none(self):
-        """Test default description is None."""
-        stage = make_stage()
-        assert stage.description is None
-
-    def test_stage_description_custom(self):
-        """Test custom description."""
-        stage = make_stage(description="This stage tests the user creation endpoint")
-        assert stage.description == "This stage tests the user creation endpoint"
-
-
-class TestStageMarks:
-    """Tests for Stage.marks field."""
-
-    def test_stage_marks_default_empty(self):
-        """Test default marks is empty list."""
-        stage = make_stage()
-        assert stage.marks == []
-
-    def test_stage_marks_skip(self):
-        """Test stage with skip marker."""
-        stage = make_stage(marks=["skip"])
-        assert "skip" in stage.marks
-
-    def test_stage_marks_xfail(self):
-        """Test stage with xfail marker."""
-        stage = make_stage(marks=["xfail"])
-        assert "xfail" in stage.marks
-
-    def test_stage_marks_multiple(self):
-        """Test stage with multiple markers."""
-        stage = make_stage(marks=["slow", "integration", "requires_auth"])
-        assert len(stage.marks) == 3
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            pytest.param("name", "get-users", id="name-simple"),
+            pytest.param("name", "Create new user account", id="name-descriptive"),
+            pytest.param("description", "This stage tests the user creation endpoint", id="description"),
+            pytest.param("marks", ["skip"], id="marks-single"),
+            pytest.param("marks", ["xfail"], id="marks-xfail"),
+            pytest.param("marks", ["slow", "integration", "requires_auth"], id="marks-multiple"),
+            pytest.param("fixtures", ["auth_token"], id="fixtures-single"),
+            pytest.param("fixtures", ["db_connection", "auth_token", "test_user"], id="fixtures-multiple"),
+            pytest.param("always_run", True, id="always_run-true"),
+            pytest.param("always_run", "{{ should_always_run }}", id="always_run-template"),
+            pytest.param("always_run", "{{ env == 'production' }}", id="always_run-conditional-template"),
+        ],
+    )
+    def test_field_roundtrip(self, field, value):
+        assert getattr(make_stage(**{field: value}), field) == value
 
 
-class TestStageFixtures:
-    """Tests for Stage.fixtures field."""
+class TestScenarioSimpleFields:
+    """Per-field defaults and round-trips for Scenario's simple fields.
 
-    def test_stage_fixtures_default_empty(self):
-        """Test default fixtures is empty list."""
-        stage = make_stage()
-        assert stage.fixtures == []
+    (auth / stages / substitutions have their own classes below because they
+    coerce and discriminate their inputs rather than storing them verbatim.)"""
 
-    def test_stage_fixtures_single(self):
-        """Test stage with single fixture."""
-        stage = make_stage(fixtures=["auth_token"])
-        assert "auth_token" in stage.fixtures
+    @pytest.mark.parametrize(
+        "attr, default",
+        [
+            ("description", None),
+            ("marks", []),
+        ],
+    )
+    def test_field_default(self, attr, default):
+        assert getattr(Scenario(), attr) == default
 
-    def test_stage_fixtures_multiple(self):
-        """Test stage with multiple fixtures."""
-        stage = make_stage(fixtures=["db_connection", "auth_token", "test_user"])
-        assert len(stage.fixtures) == 3
-
-
-class TestStageAlwaysRun:
-    """Tests for Stage.always_run field."""
-
-    def test_stage_always_run_default_false(self):
-        """Test default always_run is False."""
-        stage = make_stage()
-        assert stage.always_run is False
-
-    def test_stage_always_run_true(self):
-        """Test always_run set to True."""
-        stage = make_stage(name="cleanup", always_run=True)
-        assert stage.always_run is True
-
-    def test_stage_always_run_template(self):
-        """Test always_run with template expression."""
-        stage = make_stage(name="conditional", always_run="{{ should_always_run }}")
-        assert stage.always_run == "{{ should_always_run }}"
-
-    def test_stage_always_run_conditional_template(self):
-        """Test always_run with conditional template."""
-        stage = make_stage(always_run="{{ env == 'production' }}")
-        assert stage.always_run == "{{ env == 'production' }}"
-
-
-class TestScenarioDescription:
-    """Tests for Scenario.description field."""
-
-    def test_scenario_description_default_none(self):
-        """Test default description is None."""
-        scenario = Scenario()
-        assert scenario.description is None
-
-    def test_scenario_description_custom(self):
-        """Test custom description."""
-        scenario = Scenario(
-            description="Test user authentication flow",
-        )
-        assert scenario.description == "Test user authentication flow"
-
-
-class TestScenarioMarks:
-    """Tests for Scenario.marks field."""
-
-    def test_scenario_marks_default_empty(self):
-        """Test default marks is empty list."""
-        scenario = Scenario()
-        assert scenario.marks == []
-
-    def test_scenario_marks_multiple(self):
-        """Test scenario with multiple markers."""
-        scenario = Scenario(marks=["smoke", "critical"])
-        assert "smoke" in scenario.marks
-        assert "critical" in scenario.marks
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            pytest.param("description", "Test user authentication flow", id="description"),
+            pytest.param("marks", ["smoke", "critical"], id="marks-multiple"),
+        ],
+    )
+    def test_field_roundtrip(self, field, value):
+        assert getattr(Scenario(**{field: value}), field) == value
 
 
 class TestScenarioAuth:
