@@ -45,7 +45,13 @@ jobs:
     test:
         name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
         runs-on: ${{ matrix.os }}
-        timeout-minutes: 15
+        # Generous enough for the Windows leg, which legitimately runs ~20 min:
+        # pytester spawns a subprocess (and its own HTTP server) per integration
+        # test, and that is far slower on Windows than on Linux (~3 min there).
+        # This is a hang guard, not a performance budget — it only needs to beat
+        # GitHub's 360-minute default, so leave real headroom above the observed
+        # runtime rather than trimming it close.
+        timeout-minutes: 40
         strategy:
             fail-fast: false
             matrix:
