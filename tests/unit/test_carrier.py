@@ -24,6 +24,8 @@ from pytest_httpchain.models import (
     JMESPathSave,
     ParallelRepeatConfig,
     Request,
+    Scenario,
+    SSLConfig,
     Stage,
     Verify,
 )
@@ -243,6 +245,50 @@ def _make_carrier_subclass(**attrs) -> type[Carrier]:
     }
     defaults.update(attrs)
     return type("UnitCarrier", (Carrier,), defaults)
+
+
+class TestSSLClientWiring:
+    """SSLConfig -> httpx.Client kwargs, the ssl branches of _ensure_initialized.
+
+    No real TLS handshake or cert files are needed: httpx.Client is captured so
+    the test asserts exactly what verify/cert the engine hands it. These branches
+    have no runtime coverage otherwise (the mock server used by the integration
+    suite is plain HTTP)."""
+
+    def _client_kwargs_for(self, monkeypatch, ssl: SSLConfig) -> dict:
+        captured: dict = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        monkeypatch.setattr("pytest_httpchain.carrier.httpx.Client", FakeClient)
+        cls = _make_carrier_subclass(
+            _initialized=False,
+            _context_resolved_at_collection=True,
+            scenario=Scenario(ssl=ssl),
+        )
+        cls._ensure_initialized()
+        return captured
+
+    def test_verify_false_passed_through(self, monkeypatch):
+        assert self._client_kwargs_for(monkeypatch, SSLConfig(verify=False))["verify"] is False
+
+    def test_verify_path_resolved_to_str(self, monkeypatch, tmp_path):
+        ca = tmp_path / "ca-bundle.pem"
+        ca.write_text("dummy")
+        assert self._client_kwargs_for(monkeypatch, SSLConfig(verify=ca))["verify"] == str(ca)
+
+    def test_cert_pair_resolved_and_normalized(self, monkeypatch, tmp_path):
+        crt, key = tmp_path / "client.crt", tmp_path / "client.key"
+        crt.write_text("c")
+        key.write_text("k")
+        assert self._client_kwargs_for(monkeypatch, SSLConfig(cert=(crt, key)))["cert"] == (str(crt), str(key))
+
+    def test_single_cert_resolved_and_normalized(self, monkeypatch, tmp_path):
+        crt = tmp_path / "client.pem"
+        crt.write_text("c")
+        assert self._client_kwargs_for(monkeypatch, SSLConfig(cert=crt))["cert"] == str(crt)
 
 
 class TestRateLimiting:

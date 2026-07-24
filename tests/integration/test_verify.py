@@ -26,6 +26,27 @@ def test_verify_user_function(pytester):
     result.assert_outcomes(errors=0, failed=0, passed=1)
 
 
+def test_verify_user_function_returns_false(pytester):
+    """A verify function returning False fails the stage with a clear message."""
+    result = run_scenario(pytester, "verify/test_verify_user_function_false.http.json", "verify.py")
+    result.assert_outcomes(errors=0, failed=1, passed=0)
+    result.stdout.fnmatch_lines(["*verification failed*"])
+
+
+def test_verify_user_function_returns_non_bool(pytester):
+    """A verify function returning a non-bool is rejected, not coerced."""
+    result = run_scenario(pytester, "verify/test_verify_user_function_non_bool.http.json", "verify.py")
+    result.assert_outcomes(errors=0, failed=1, passed=0)
+    result.stdout.fnmatch_lines(["*must return bool*"])
+
+
+def test_verify_user_function_raises(pytester):
+    """A raising verify function surfaces as a clean stage failure, not a raw traceback."""
+    result = run_scenario(pytester, "verify/test_verify_user_function_raises.http.json", "verify.py")
+    result.assert_outcomes(errors=0, failed=1, passed=0)
+    result.stdout.fnmatch_lines(["*Error calling user function*"])
+
+
 def test_verify_body_schema(pytester):
     """Test JSON schema validation"""
     result = run_scenario(pytester, "verify/test_verify_body_schema.http.json", "verify/schema.json")
