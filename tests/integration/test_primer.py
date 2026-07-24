@@ -3,8 +3,6 @@ from tests.integration.conftest import run_scenario
 
 def test_primer(pytester):
     result = run_scenario(pytester, "primer/test_primer.http.json", "primer/common.json")
-    print(result.stdout.str())
-    print(result.stderr.str())
     result.assert_outcomes(
         errors=0,
         failed=0,

@@ -17,6 +17,11 @@ incrementing, so any interleaving, reordering, or context reset fails
 immediately.
 """
 
+import pytest
+
+# Every test here spawns pytester subprocesses (runpytest_subprocess).
+pytestmark = pytest.mark.slow
+
 CHAIN_SCENARIOS = [
     "xdist/test_chain_a.http.json",
     "xdist/test_chain_b.http.json",

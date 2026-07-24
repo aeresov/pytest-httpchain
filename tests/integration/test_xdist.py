@@ -13,6 +13,10 @@ values), so a split across workers cannot pass by accident.
 
 import pytest
 
+# Every test here spawns pytester subprocesses (runpytest_subprocess) with their
+# own per-stage HTTP servers — the slowest family in the suite.
+pytestmark = pytest.mark.slow
+
 SCENARIO = "save/test_save_jmespath.http.json"
 
 

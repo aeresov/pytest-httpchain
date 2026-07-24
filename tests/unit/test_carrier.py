@@ -190,6 +190,30 @@ class TestProcessVerifyStepErrors:
         with pytest.raises(VerificationError, match="Expression.*failed"):
             Carrier._process_verify_step(verify, response)
 
+    def test_verify_body_contains_failure(self):
+        response = httpx.Response(200, content=b"hello world")
+        verify = Verify(body=ResponseBody(contains=["goodbye"]))
+        with pytest.raises(VerificationError, match="Body doesn't contain 'goodbye'"):
+            Carrier._process_verify_step(verify, response)
+
+    def test_verify_body_not_contains_failure(self):
+        response = httpx.Response(200, content=b"hello world")
+        verify = Verify(body=ResponseBody(not_contains=["hello"]))
+        with pytest.raises(VerificationError, match="Body contains 'hello' while it shouldn't"):
+            Carrier._process_verify_step(verify, response)
+
+    def test_verify_body_matches_failure(self):
+        response = httpx.Response(200, content=b"hello world")
+        verify = Verify(body=ResponseBody(matches=["z{3}"]))
+        with pytest.raises(VerificationError, match="Body doesn't match 'z"):
+            Carrier._process_verify_step(verify, response)
+
+    def test_verify_body_not_matches_failure(self):
+        response = httpx.Response(200, content=b"hello world")
+        verify = Verify(body=ResponseBody(not_matches=["wor"]))
+        with pytest.raises(VerificationError, match="Body matches 'wor' while it shouldn't"):
+            Carrier._process_verify_step(verify, response)
+
 
 def _make_stage(**kwargs) -> Stage:
     """Minimal valid stage pointing at a URL that is never actually requested in

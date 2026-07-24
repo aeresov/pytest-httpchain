@@ -67,19 +67,19 @@ class TestWalk:
         assert result == [1, 2, 3, 4]
 
     def test_dict_creation(self):
-        # Using dict() constructor which is supported by simpleeval
-        result = walk("{{ dict(key='value', number=42) }}", {})
-        assert result == {"key": "value", "number": 42}
+        # Both the dict() constructor and the {} literal are supported.
+        assert walk("{{ dict(key='value', number=42) }}", {}) == {"key": "value", "number": 42}
+        assert walk("{{ {'key': 'value', 'number': 42} }}", {}) == {"key": "value", "number": 42}
+        assert walk("{{ {} }}", {}) == {}
 
     def test_list_comprehension(self):
         result = walk("{{ [x * 2 for x in items] }}", {"items": [1, 2, 3]})
         assert result == [2, 4, 6]
 
     def test_dict_comprehension(self):
-        # Dictionary comprehensions need to be tested differently
-        # simpleeval may not support dict comprehensions directly
-        result = walk("{{ dict([(k, v * 2) for k, v in data.items()]) }}", {"data": {"a": 1, "b": 2}})
-        assert result == {"a": 2, "b": 4}
+        # Dict comprehensions work directly; the dict([(k, v), ...]) form is equivalent.
+        assert walk("{{ {k: v * 2 for k, v in data.items()} }}", {"data": {"a": 1, "b": 2}}) == {"a": 2, "b": 4}
+        assert walk("{{ dict([(k, v * 2) for k, v in data.items()]) }}", {"data": {"a": 1, "b": 2}}) == {"a": 2, "b": 4}
 
     def test_nested_structures(self):
         context = {"users": [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}], "index": 0}
@@ -164,9 +164,8 @@ class TestWalk:
         result = walk("{{ get('missing_key', 'default') }}", context)
         assert result == "default"
 
-        # Using get with nested dict access
-        # Note: {} is not a valid literal in simpleeval, use dict() instead
-        result = walk("{{ get('config', dict()).get('missing', 'not found') }}", {})
+        # Using get with nested dict access ({} literal works as the default)
+        result = walk("{{ get('config', {}).get('missing', 'not found') }}", {})
         assert result == "not found"
 
         # Using exists() to safely check before accessing

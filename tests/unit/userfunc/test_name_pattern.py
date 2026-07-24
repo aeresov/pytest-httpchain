@@ -41,7 +41,8 @@ class TestValidModulePatterns:
         assert callable(func)
 
     def test_underscore_in_module(self):
-        func = import_function("collections.abc:Callable")
+        # wsgiref.simple_server has an underscore in a module segment.
+        func = import_function("wsgiref.simple_server:demo_app")
         assert func is not None
 
     def test_numeric_in_module(self):
