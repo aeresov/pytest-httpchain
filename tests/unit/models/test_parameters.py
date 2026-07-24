@@ -9,7 +9,7 @@ from pytest_httpchain.models.entities import (
     Request,
     Stage,
 )
-from tests.unit.models.conftest import make_request, make_stage
+from tests.unit.models.conftest import assert_error_types, make_request, make_stage
 
 
 class TestIndividualParameter:
@@ -43,8 +43,9 @@ class TestIndividualParameter:
 
     def test_individual_empty_values_rejected(self):
         """Test that empty values list is rejected."""
-        with pytest.raises(ValidationError, match="at least 1"):
+        with pytest.raises(ValidationError) as exc_info:
             IndividualParameter(individual={"x": []})
+        assert_error_types(exc_info, "too_short")
 
     def test_individual_with_template_expression(self):
         """Test IndividualParameter with template expression."""
@@ -62,8 +63,9 @@ class TestIndividualParameter:
 
     def test_individual_multi_key_rejected(self):
         """M22: more than one parameter per step is rejected, not silently truncated."""
-        with pytest.raises(ValidationError, match="at most 1"):
+        with pytest.raises(ValidationError) as exc_info:
             IndividualParameter(individual={"x": [1, 2], "y": [3, 4]})
+        assert_error_types(exc_info, "too_long")
 
 
 class TestCombinationsParameter:
@@ -119,8 +121,9 @@ class TestCombinationsParameter:
 
     def test_combinations_empty_dict_rejected(self):
         """Test that empty combination dict is rejected."""
-        with pytest.raises(ValidationError, match="at least 1"):
+        with pytest.raises(ValidationError) as exc_info:
             CombinationsParameter(combinations=[{}])
+        assert_error_types(exc_info, "too_short")
 
     def test_combinations_empty_list_rejected(self):
         """An empty combinations list expands to zero iterations at runtime
@@ -175,8 +178,9 @@ class TestParameterDiscriminator:
 
     def test_discriminator_invalid_type_rejected(self):
         """Test that invalid parameter type is rejected."""
-        with pytest.raises(ValidationError, match="does not match any of the expected tags"):
+        with pytest.raises(ValidationError) as exc_info:
             make_stage(parametrize=[{"invalid": "value"}])
+        assert_error_types(exc_info, "union_tag_invalid")
 
 
 class TestParametersInStage:

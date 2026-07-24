@@ -18,6 +18,7 @@ from pytest_httpchain.models.entities import (
     TextBody,
     XmlBody,
 )
+from tests.unit.models.conftest import assert_error_types
 
 
 class TestTextBody:
@@ -395,5 +396,6 @@ class TestBodyTypeDiscriminatorExtended:
 )
 def test_body_extra_fields_forbidden(construct):
     """Every body model rejects unknown keys (extra='forbid')."""
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+    with pytest.raises(ValidationError) as exc_info:
         construct()
+    assert_error_types(exc_info, "extra_forbidden")

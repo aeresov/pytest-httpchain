@@ -11,7 +11,7 @@ from pytest_httpchain.models.entities import (
     Request,
     Stage,
 )
-from tests.unit.models.conftest import make_request, make_stage
+from tests.unit.models.conftest import assert_error_types, make_request, make_stage
 
 
 class TestParallelConfigBase:
@@ -76,8 +76,9 @@ class TestParallelRepeatConfig:
 
     def test_repeat_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        with pytest.raises(ValidationError) as exc_info:
             ParallelRepeatConfig(repeat=10, extra="field")
+        assert_error_types(exc_info, "extra_forbidden")
 
 
 class TestParallelForeachConfig:
@@ -120,11 +121,12 @@ class TestParallelForeachConfig:
 
     def test_foreach_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        with pytest.raises(ValidationError) as exc_info:
             ParallelForeachConfig(
                 foreach=[IndividualParameter(individual={"x": [1]})],
                 extra="field",
             )
+        assert_error_types(exc_info, "extra_forbidden")
 
     def test_empty_foreach_rejected(self):
         """An empty foreach is meaningless: at runtime it would silently run the
@@ -155,8 +157,9 @@ class TestParallelConfigDiscriminator:
 
     def test_discriminator_invalid_rejected(self):
         """Test that invalid parallel config type is rejected."""
-        with pytest.raises(ValidationError, match="does not match any of the expected tags"):
+        with pytest.raises(ValidationError) as exc_info:
             make_stage(parallel={"invalid": "value"})
+        assert_error_types(exc_info, "union_tag_invalid")
 
 
 class TestParallelInStage:

@@ -16,7 +16,7 @@ from pytest_httpchain.models.entities import (
     Verify,
     VerifyStep,
 )
-from tests.unit.models.conftest import make_request, make_stage, stage_dict
+from tests.unit.models.conftest import assert_error_types, make_request, make_stage, stage_dict
 
 
 class TestSubstitutionsListFormat:
@@ -318,8 +318,9 @@ class TestInvalidInputs:
 
     def test_substitutions_invalid_item_structure(self):
         """Test that items with invalid structure are rejected."""
-        with pytest.raises(ValidationError, match="does not match any of the expected tags"):
+        with pytest.raises(ValidationError) as exc_info:
             Stage.model_validate(stage_dict(substitutions=[{"invalid_key": "value"}]))
+        assert_error_types(exc_info, "union_tag_invalid")
 
     def test_responses_invalid_type(self):
         """Test that invalid response types are rejected."""
@@ -328,8 +329,9 @@ class TestInvalidInputs:
 
     def test_responses_invalid_item_structure(self):
         """Test that response items with invalid structure are rejected."""
-        with pytest.raises(ValidationError, match="does not match any of the expected tags"):
+        with pytest.raises(ValidationError) as exc_info:
             Stage.model_validate(stage_dict(response=[{"invalid_key": "value"}]))
+        assert_error_types(exc_info, "union_tag_invalid")
 
 
 class TestSubstitutionKeysMustBeIdentifiers:
