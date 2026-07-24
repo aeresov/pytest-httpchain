@@ -11,6 +11,7 @@ from pytest_httpchain.models.entities import (
     Request,
     Stage,
 )
+from tests.unit.models.conftest import make_request, make_stage
 
 
 class TestParallelConfigBase:
@@ -137,9 +138,8 @@ class TestParallelConfigDiscriminator:
 
     def test_discriminator_repeat(self):
         """Test discriminator identifies ParallelRepeatConfig."""
-        stage = Stage(
+        stage = make_stage(
             name="load-test",
-            request=Request(url="https://example.com"),
             parallel=ParallelRepeatConfig(repeat=100),
         )
         assert isinstance(stage.parallel, ParallelRepeatConfig)
@@ -147,9 +147,8 @@ class TestParallelConfigDiscriminator:
 
     def test_discriminator_foreach(self):
         """Test discriminator identifies ParallelForeachConfig."""
-        stage = Stage(
+        stage = make_stage(
             name="batch-test",
-            request=Request(url="https://example.com"),
             parallel=ParallelForeachConfig(foreach=[IndividualParameter(individual={"id": [1, 2, 3]})]),
         )
         assert isinstance(stage.parallel, ParallelForeachConfig)
@@ -157,11 +156,7 @@ class TestParallelConfigDiscriminator:
     def test_discriminator_invalid_rejected(self):
         """Test that invalid parallel config type is rejected."""
         with pytest.raises(ValidationError, match="does not match any of the expected tags"):
-            Stage(
-                name="test",
-                request=Request(url="https://example.com"),
-                parallel={"invalid": "value"},
-            )
+            make_stage(parallel={"invalid": "value"})
 
 
 class TestParallelInStage:
@@ -174,9 +169,9 @@ class TestParallelInStage:
 
     def test_stage_repeat_with_full_config(self):
         """Test Stage with full repeat configuration."""
-        stage = Stage(
+        stage = make_stage(
             name="stress-test",
-            request=Request(url="https://example.com/api"),
+            request=make_request(url="https://example.com/api"),
             parallel=ParallelRepeatConfig(
                 repeat=1000,
                 max_concurrency=50,
@@ -190,9 +185,9 @@ class TestParallelInStage:
 
     def test_stage_foreach_with_template_params(self):
         """Test Stage with foreach using template parameters."""
-        stage = Stage(
+        stage = make_stage(
             name="batch-test",
-            request=Request(url="https://example.com/{{ item_id }}"),
+            request=make_request(url="https://example.com/{{ item_id }}"),
             parallel=ParallelForeachConfig(
                 foreach=[IndividualParameter(individual={"item_id": "{{ item_ids }}"})],
                 max_concurrency=10,

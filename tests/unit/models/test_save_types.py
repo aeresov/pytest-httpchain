@@ -6,15 +6,14 @@ from pydantic import ValidationError
 from pytest_httpchain.models.entities import (
     FunctionsSubstitution,
     JMESPathSave,
-    Request,
     SaveStep,
-    Stage,
     SubstitutionsSave,
     UserFunctionKwargs,
     UserFunctionName,
     UserFunctionsSave,
     VarsSubstitution,
 )
+from tests.unit.models.conftest import make_stage
 
 
 class TestJMESPathSave:
@@ -211,20 +210,14 @@ class TestSaveStepInStage:
 
     def test_stage_with_jmespath_save(self):
         """Test Stage with JMESPath save step."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
-            response=[SaveStep(save=JMESPathSave(jmespath={"token": "data.token"}))],
-        )
+        stage = make_stage(response=[SaveStep(save=JMESPathSave(jmespath={"token": "data.token"}))])
         assert len(stage.response) == 1
         assert isinstance(stage.response[0], SaveStep)
         assert isinstance(stage.response[0].save, JMESPathSave)
 
     def test_stage_with_multiple_save_steps(self):
         """Test Stage with multiple save steps."""
-        stage = Stage(
-            name="test",
-            request=Request(url="https://example.com"),
+        stage = make_stage(
             response=[
                 SaveStep(save=JMESPathSave(jmespath={"id": "data.id"})),
                 SaveStep(save=UserFunctionsSave(user_functions=[UserFunctionName("custom:saver")])),
