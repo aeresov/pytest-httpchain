@@ -119,7 +119,10 @@ missing-argument = "ignore"
 
 [tool.pytest]
 minversion = "9.0"
-log_cli = true
+# Logs are captured and shown only for failing tests (pytest's default). Streaming
+# live INFO for every passing test buried real output ~10-27x; opt back in per-run
+# with `-o log_cli=true --log-cli-level=INFO` when debugging.
+log_cli = false
 log_cli_level = "INFO"
 norecursedirs = ["examples"]
 pytester_example_dir = "tests/integration/examples"
@@ -130,6 +133,14 @@ pythonpath = [
 testpaths = ["tests"]
 markers = [
     "slow: subprocess-spawning or sleep-bound integration test; deselect with -m 'not slow'",
+]
+# Treat warnings as errors so dependency deprecations (e.g. across the 3.13/3.14
+# and lowest-floor matrix) fail loudly instead of rotting. The plugin's own
+# ScenarioValidationWarning is intentional behavior that many tests assert on,
+# so it stays a warning; individual tests still escalate it via -W when needed.
+filterwarnings = [
+    "error",
+    "default::pytest_httpchain.ScenarioValidationWarning",
 ]
 
 [tool.coverage.run]

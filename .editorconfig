@@ -1,0 +1,26 @@
+# EditorConfig codifies the repo's existing whitespace conventions so editors
+# apply them automatically and formatting stays consistent across contributors.
+# https://editorconfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Example scenario files and all JSON use 4-space indent (already uniform).
+[*.json]
+indent_size = 4
+
+[*.{yml,yaml}]
+indent_size = 4
+
+# Markdown uses trailing whitespace for hard line breaks.
+[*.md]
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab
