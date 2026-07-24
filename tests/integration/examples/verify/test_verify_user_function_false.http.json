@@ -1,0 +1,20 @@
+{
+    "stages": [
+        {
+            "name": "verify_function_returns_false",
+            "description": "A verify function returning False fails the stage",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "user_functions": ["verify:verify_returns_false"]
+                    }
+                }
+            ]
+        }
+    ]
+}

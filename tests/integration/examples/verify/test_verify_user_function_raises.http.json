@@ -1,0 +1,20 @@
+{
+    "stages": [
+        {
+            "name": "verify_function_raises",
+            "description": "A raising verify function surfaces as a clean verification failure",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "user_functions": ["verify:verify_raises"]
+                    }
+                }
+            ]
+        }
+    ]
+}

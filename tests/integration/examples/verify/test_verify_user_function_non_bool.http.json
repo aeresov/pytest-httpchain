@@ -1,0 +1,20 @@
+{
+    "stages": [
+        {
+            "name": "verify_function_returns_non_bool",
+            "description": "A verify function returning a non-bool is rejected",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "user_functions": ["verify:verify_returns_non_bool"]
+                    }
+                }
+            ]
+        }
+    ]
+}
