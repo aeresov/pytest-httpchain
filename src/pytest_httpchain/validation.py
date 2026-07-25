@@ -460,27 +460,20 @@ def _contradiction_diagnostics(
     partial static context risks false-positive errors."""
     diagnostics: list[Diagnostic] = []
 
-    contains_overlap = {str(s) for s in contains} & {str(s) for s in not_contains}
-    if contains_overlap:
-        diagnostics.append(
-            _diag(
-                DiagnosticCode.CONTAINS_CONTRADICTION,
-                "error",
-                f"Stage '{stage_name}': {what} both requires and forbids substring(s): {sorted(contains_overlap)}",
-                location=location,
+    for required, forbidden, code, noun in (
+        (contains, not_contains, DiagnosticCode.CONTAINS_CONTRADICTION, "substring(s)"),
+        (matches, not_matches, DiagnosticCode.MATCHES_CONTRADICTION, "pattern(s)"),
+    ):
+        overlap = {str(value) for value in required} & {str(value) for value in forbidden}
+        if overlap:
+            diagnostics.append(
+                _diag(
+                    code,
+                    "error",
+                    f"Stage '{stage_name}': {what} both requires and forbids {noun}: {sorted(overlap)}",
+                    location=location,
+                )
             )
-        )
-
-    matches_overlap = {str(p) for p in matches} & {str(p) for p in not_matches}
-    if matches_overlap:
-        diagnostics.append(
-            _diag(
-                DiagnosticCode.MATCHES_CONTRADICTION,
-                "error",
-                f"Stage '{stage_name}': {what} both requires and forbids pattern(s): {sorted(matches_overlap)}",
-                location=location,
-            )
-        )
 
     return diagnostics
 
@@ -954,10 +947,11 @@ def resolve_root_path(path: Path) -> Path:
     ``$ref`` resolution the same way pytest collection does (collection passes
     ``config.rootpath`` explicitly); the ``tests/`` fallback preserves the
     pre-marker default so marker-less trees keep their sandbox breadth."""
-    for ancestor in path.resolve().parents:
+    ancestors = path.resolve().parents
+    for ancestor in ancestors:
         if any((ancestor / marker).exists() for marker in _ROOT_MARKERS):
             return ancestor
-    for ancestor in path.resolve().parents:
+    for ancestor in ancestors:
         if ancestor.name == "tests":
             return ancestor
     return path.parent

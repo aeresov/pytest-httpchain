@@ -105,11 +105,5 @@ def parse_json_pointer(pointer: str) -> list[str]:
     if not pointer.startswith("/"):
         raise ReferenceResolverError(f"Invalid JSON pointer: {pointer} (must start with '/')")
 
-    # Split by / and handle escaped characters
-    parts = []
-    for part in pointer[1:].split("/"):
-        # Unescape JSON pointer escape sequences
-        part = part.replace("~1", "/").replace("~0", "~")
-        parts.append(part)
-
-    return parts
+    # Split by / and unescape the JSON pointer escape sequences
+    return [part.replace("~1", "/").replace("~0", "~") for part in pointer[1:].split("/")]

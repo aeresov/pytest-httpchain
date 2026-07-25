@@ -26,23 +26,14 @@ def _get_version() -> str:
 
 def _format_cookies(cookies: httpx.Cookies) -> list[dict[str, str]]:
     """Convert httpx Cookies to HAR cookie format."""
-    result = []
-    for name, value in cookies.items():
-        result.append({"name": name, "value": value})
-    return result
+    return [{"name": name, "value": value} for name, value in cookies.items()]
 
 
 def _parse_cookie_header(cookie_header: str) -> list[dict[str, str]]:
     """Parse Cookie header string into HAR cookie format."""
-    if not cookie_header:
-        return []
-    result = []
-    for pair in cookie_header.split(";"):
-        pair = pair.strip()
-        if "=" in pair:
-            name, value = pair.split("=", 1)
-            result.append({"name": name.strip(), "value": value.strip()})
-    return result
+    # An empty header splits to [""], which carries no "=" and so yields nothing.
+    pairs = (pair.partition("=") for pair in cookie_header.split(";"))
+    return [{"name": name.strip(), "value": value.strip()} for name, separator, value in pairs if separator]
 
 
 def _format_headers(headers: httpx.Headers) -> list[dict[str, str]]:
@@ -52,13 +43,8 @@ def _format_headers(headers: httpx.Headers) -> list[dict[str, str]]:
 
 def _format_query_string(url: httpx.URL) -> list[dict[str, str]]:
     """Extract query string parameters from URL."""
-    parsed = urlparse(str(url))
-    params = parse_qs(parsed.query, keep_blank_values=True)
-    result = []
-    for name, values in params.items():
-        for value in values:
-            result.append({"name": name, "value": value})
-    return result
+    params = parse_qs(urlparse(str(url)).query, keep_blank_values=True)
+    return [{"name": name, "value": value} for name, values in params.items() for value in values]
 
 
 def _format_post_data(request: httpx.Request) -> dict[str, Any] | None:
@@ -113,10 +99,8 @@ def _format_response_content(response: httpx.Response) -> dict[str, Any]:
 
 def _calculate_headers_size(headers: httpx.Headers) -> int:
     """Calculate approximate size of headers in bytes."""
-    size = 0
-    for name, value in headers.items():
-        size += len(name) + len(value) + 4  # ": " (2) + CRLF (2) per header line
-    return size
+    # ": " (2) + CRLF (2) per header line
+    return sum(len(name) + len(value) + 4 for name, value in headers.items())
 
 
 def _response_elapsed_ms(response: httpx.Response) -> float:

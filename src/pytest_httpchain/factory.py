@@ -97,36 +97,28 @@ def create_test_class(
 
         if stage.parametrize:
             for step in stage.parametrize:
+                # Each step reduces to pytest.mark.parametrize's (argnames, argvalues):
+                # an `individual` step names one parameter and lists its values, a
+                # `combinations` step names every key of its (uniformly-keyed) dicts
+                # and lists one value tuple per combination.
                 match step:
                     case IndividualParameter(individual=individual) if individual:
-                        param_name = next(iter(individual.keys()))
-                        param_values = individual[param_name]
-                        resolved_values = walk(param_values, scenario_context)
-
-                        param_ids = step.ids if step.ids else None
-
-                        all_param_names.append(param_name)
-                        parametrize_marker = pytest.mark.parametrize(param_name, resolved_values, ids=param_ids)
-                        stage_method = parametrize_marker(stage_method)
+                        param_names = [next(iter(individual))]
+                        param_values = walk(individual[param_names[0]], scenario_context)
 
                     case CombinationsParameter(combinations=combinations) if combinations:
-                        resolved_combinations = walk(combinations, scenario_context)
-                        resolved_combinations = [vars(item) if isinstance(item, SimpleNamespace) else item for item in resolved_combinations]
-
-                        first_item = resolved_combinations[0]
-                        param_names = list(first_item.keys())
+                        resolved_combinations = [vars(item) if isinstance(item, SimpleNamespace) else item for item in walk(combinations, scenario_context)]
+                        param_names = list(resolved_combinations[0].keys())
                         param_values = [tuple(combo[name] for name in param_names) for combo in resolved_combinations]
-                        param_ids = step.ids if step.ids else None
-
-                        all_param_names.extend(param_names)
-                        parametrize_marker = pytest.mark.parametrize(",".join(param_names), param_values, ids=param_ids)
-                        stage_method = parametrize_marker(stage_method)
 
                     case _:
                         # New union variant (or a model that no longer satisfies the
                         # guards): fail loudly instead of silently dropping the
                         # parametrization. A plugin bug, so no clean-fail wrapping.
                         raise RuntimeError(f"Unhandled parametrize step: {type(step).__name__}")
+
+                all_param_names.extend(param_names)
+                stage_method = pytest.mark.parametrize(",".join(param_names), param_values, ids=step.ids or None)(stage_method)
 
         all_fixtures = ["self"] + list(dict.fromkeys(all_param_names + stage.fixtures + scenario.fixtures))
         stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # ty: ignore[unresolved-attribute]

@@ -24,6 +24,7 @@ import base64
 import inspect
 import json
 import logging
+import math
 import re
 import threading
 import warnings
@@ -410,13 +411,7 @@ class Carrier:
     def _build_stage_fixtures(cls, fixture_kwargs: dict[str, Any]) -> dict[str, Any]:
         """Resolve injected fixtures, wrapping callable (factory) fixtures so they
         can be invoked from template expressions while plain values pass through."""
-        stage_fixtures: dict[str, Any] = {}
-        for name, value in fixture_kwargs.items():
-            if callable(value) and not inspect.isclass(value):
-                stage_fixtures[name] = cls._wrap_factory_fixture(value)
-            else:
-                stage_fixtures[name] = value
-        return stage_fixtures
+        return {name: cls._wrap_factory_fixture(value) if callable(value) and not inspect.isclass(value) else value for name, value in fixture_kwargs.items()}
 
     @staticmethod
     def _build_iteration_substitutions(parallel_config: "ParallelConfig | None", max_parallel_iterations: int) -> list[dict[str, Any]]:
@@ -451,33 +446,32 @@ class Carrier:
                 check_cap(repeat_total)
                 iteration_substitutions = [{} for _ in range(repeat_total)]
             case ParallelForeachConfig(foreach=foreach_steps):
-                product = 1
+                # (param_name, values) per step: an ``individual`` step contributes one
+                # name with its value list, a ``combinations`` step contributes None
+                # with its combination dicts. Reading the steps into this shape first
+                # keeps the cap check ahead of any expansion — the product follows from
+                # the lengths alone, and each list is already in memory on the model.
+                steps: list[tuple[str | None, list[Any]]] = []
                 for step in foreach_steps:
                     match step:
                         case IndividualParameter(individual=individual):
-                            product *= len(next(iter(individual.values())))
+                            param_name = next(iter(individual))
+                            steps.append((param_name, individual[param_name]))
                         case CombinationsParameter(combinations=combinations):
-                            product *= len(combinations)
+                            # A still-string combinations value (template form) cannot
+                            # reach here: the config arrives walk()-resolved.
+                            steps.append((None, cast(list[Any], combinations)))
                         case _:
                             raise RuntimeError(f"Unhandled foreach step: {type(step).__name__}")
-                check_cap(product)
-                for step in foreach_steps:
+                check_cap(math.prod(len(values) for _, values in steps))
+
+                for param_name, values in steps:
+                    additions = [{param_name: value} if param_name is not None else (vars(value) if isinstance(value, SimpleNamespace) else value) for value in values]
                     # Comprehension clause order is load-bearing: the new values are the
                     # OUTER loop and the accumulated dicts the INNER loop, which is what
                     # produces the (reverse-of-pytest) ordering noted above. Swapping the
                     # two `for` clauses silently changes the iteration order.
-                    match step:
-                        case IndividualParameter(individual=individual):
-                            param_name = next(iter(individual.keys()))
-                            values = individual[param_name]
-                            iteration_substitutions = [{**existing, param_name: val} for val in values for existing in iteration_substitutions]
-                        case CombinationsParameter(combinations=combinations):
-                            # A still-string combinations value (template form) cannot
-                            # reach here: the config arrives walk()-resolved.
-                            combos: list[dict[str, Any]] = [vars(item) if isinstance(item, SimpleNamespace) else cast(dict[str, Any], item) for item in combinations]
-                            iteration_substitutions = [{**existing, **combo} for combo in combos for existing in iteration_substitutions]
-                        case _:
-                            raise RuntimeError(f"Unhandled foreach step: {type(step).__name__}")
+                    iteration_substitutions = [{**existing, **addition} for addition in additions for existing in iteration_substitutions]
             case _:
                 raise RuntimeError(f"Unhandled parallel config: {type(parallel_config).__name__}")
         return iteration_substitutions
@@ -499,8 +493,7 @@ class Carrier:
         plus the failing one; otherwise only the shown exchange, so a scenario
         run without HAR output never retains more than one response per stage.
         """
-        failed_request = failed.request if isinstance(failed, StageExecutionError) else None
-        failed_response = failed.response if isinstance(failed, StageExecutionError) else None
+        failed_request, failed_response = (failed.request, failed.response) if isinstance(failed, StageExecutionError) else (None, None)
 
         exchanges: list[tuple[httpx.Request, httpx.Response | None, datetime | None]] = [(r.request, r.response, r.started) for r in completed]
         if failed_request is not None:

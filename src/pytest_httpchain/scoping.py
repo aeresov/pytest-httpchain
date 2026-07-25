@@ -102,23 +102,18 @@ def _extract_names_from_expr(expr: str) -> set[str]:
     return loaded - bound
 
 
-def extract_template_variables(obj: Any, variables: set[str] | None = None) -> set[str]:
+def extract_template_variables(obj: Any) -> set[str]:
     """Recursively extract variable names from {{ expr }} template expressions."""
-    if variables is None:
-        variables = set()
-
-    if isinstance(obj, str):
-        for match in re.finditer(TEMPLATE_PATTERN, obj):
-            names = _extract_names_from_expr(match.group("expr"))
-            variables.update(names - TEMPLATE_BUILTINS)
-    elif isinstance(obj, dict):
-        for value in obj.values():
-            extract_template_variables(value, variables)
-    elif isinstance(obj, list):
-        for item in obj:
-            extract_template_variables(item, variables)
-
-    return variables
+    match obj:
+        case str():
+            names = {name for match in re.finditer(TEMPLATE_PATTERN, obj) for name in _extract_names_from_expr(match.group("expr"))}
+            return names - TEMPLATE_BUILTINS
+        case dict():
+            return set().union(*(extract_template_variables(value) for value in obj.values()))
+        case list():
+            return set().union(*(extract_template_variables(item) for item in obj))
+        case _:
+            return set()
 
 
 def substitution_names(substitutions: Any) -> set[str]:

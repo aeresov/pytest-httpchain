@@ -76,13 +76,9 @@ def check_json_schema(schema: dict[str, Any]) -> None:
     """Check JSON schema validity using appropriate validator version."""
     schema_uri = schema.get("$schema", "http://json-schema.org/draft-07/schema#")
 
-    # Find matching validator
-    validator_class = jsonschema.Draft7Validator  # Default
-    for version_key, validator in SCHEMA_VALIDATORS.items():
-        if version_key in schema_uri:
-            validator_class = validator
-            break
-    else:
+    validator_class = next((validator for version_key, validator in SCHEMA_VALIDATORS.items() if version_key in schema_uri), None)
+    if validator_class is None:
+        validator_class = jsonschema.Draft7Validator
         if "$schema" in schema:
             logger.warning(f"Unrecognized JSON Schema version '{schema_uri}', falling back to Draft 7")
 
@@ -151,10 +147,7 @@ def convert_dict_to_namespace(v: Any) -> Any:
     """Recursively turn dicts into ``SimpleNamespace`` so ``{{ var.attr }}`` attribute
     access works in templates (used by ``VarsSubstitution.vars`` via ``NamespaceFromDict``)."""
     if isinstance(v, dict):
-        converted = {}
-        for key, value in v.items():
-            converted[key] = convert_dict_to_namespace(value)
-        return types.SimpleNamespace(**converted)
+        return types.SimpleNamespace(**{key: convert_dict_to_namespace(value) for key, value in v.items()})
     elif isinstance(v, list):
         return [convert_dict_to_namespace(item) for item in v]
     else:
@@ -165,10 +158,7 @@ def convert_namespace_to_dict(v: Any) -> Any:
     """Recursively normalize any ``SimpleNamespace`` back to a plain dict so the value
     is JSON-serializable (used by ``JsonBody.json`` and GraphQL variables via ``NamespaceOrDict``)."""
     if isinstance(v, types.SimpleNamespace):
-        result = {}
-        for key, value in vars(v).items():
-            result[key] = convert_namespace_to_dict(value)
-        return result
+        return {key: convert_namespace_to_dict(value) for key, value in vars(v).items()}
     elif isinstance(v, list):
         return [convert_namespace_to_dict(item) for item in v]
     elif isinstance(v, dict):

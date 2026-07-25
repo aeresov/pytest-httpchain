@@ -332,33 +332,27 @@ def pytest_configure(config: pytest.Config) -> None:
     # int() conversion with a bare int(value) that raises ValueError for a
     # non-integer ini value — which pytest renders as an INTERNALERROR traceback.
     # Wrap the read so a garbage value becomes a clean usage error; the range
-    # checks below likewise raise pytest.UsageError.
-    def _getint(option: ConfigOptions) -> int:
+    # checks likewise raise pytest.UsageError.
+    def _getint(option: ConfigOptions, minimum: int, minimum_message: str, maximum: int | None = None) -> int:
         try:
-            return _get_ini(config, option)
+            value = _get_ini(config, option)
         except ValueError as e:
             raise pytest.UsageError(f"{option} must be an integer: {e}") from None
+        if value < minimum:
+            raise pytest.UsageError(f"{option} {minimum_message}")
+        if maximum is not None and value > maximum:
+            raise pytest.UsageError(f"{option} must not exceed {maximum:,}")
+        return value
 
     suffix = str(_get_ini(config, ConfigOptions.SUFFIX))
     if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", suffix):
         raise pytest.UsageError(f"{ConfigOptions.SUFFIX} must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
 
-    ref_parent_traversal_depth = _getint(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
-    if ref_parent_traversal_depth < 0:
-        raise pytest.UsageError(f"{ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH} must be non-negative")
+    _getint(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, minimum=0, minimum_message="must be non-negative")
+    max_comprehension_length = _getint(ConfigOptions.MAX_COMPREHENSION_LENGTH, minimum=1, minimum_message="must be a positive integer", maximum=1_000_000)
+    _getint(ConfigOptions.MAX_PARALLEL_ITERATIONS, minimum=1, minimum_message="must be a positive integer", maximum=1_000_000)
 
-    max_comprehension_length = _getint(ConfigOptions.MAX_COMPREHENSION_LENGTH)
-    if max_comprehension_length < 1:
-        raise pytest.UsageError(f"{ConfigOptions.MAX_COMPREHENSION_LENGTH} must be a positive integer")
-    if max_comprehension_length > 1_000_000:
-        raise pytest.UsageError(f"{ConfigOptions.MAX_COMPREHENSION_LENGTH} must not exceed 1,000,000")
     set_max_comprehension_length(max_comprehension_length)
-
-    max_parallel_iterations = _getint(ConfigOptions.MAX_PARALLEL_ITERATIONS)
-    if max_parallel_iterations < 1:
-        raise pytest.UsageError(f"{ConfigOptions.MAX_PARALLEL_ITERATIONS} must be a positive integer")
-    if max_parallel_iterations > 1_000_000:
-        raise pytest.UsageError(f"{ConfigOptions.MAX_PARALLEL_ITERATIONS} must not exceed 1,000,000")
 
 
 def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> pytest.Collector | None:
@@ -406,17 +400,17 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
                 shown = "failing" if report.failed else "last"
                 suffix = f" ({shown} of {carrier.last_iterations_attempted} parallel iterations)"
 
-            if carrier.last_request is not None:
+            for title, what, exchange, formatter in (
+                ("HTTP Request", "request", carrier.last_request, format_request),
+                ("HTTP Response", "response", carrier.last_response, format_response),
+            ):
+                if exchange is None:
+                    continue
                 try:
-                    report.sections.append((f"HTTP Request{suffix}", format_request(carrier.last_request)))
+                    body = formatter(exchange)  # ty: ignore[invalid-argument-type]
                 except Exception as e:
-                    report.sections.append((f"HTTP Request{suffix}", f"<Error formatting request: {e}>"))
-
-            if carrier.last_response is not None:
-                try:
-                    report.sections.append((f"HTTP Response{suffix}", format_response(carrier.last_response)))
-                except Exception as e:
-                    report.sections.append((f"HTTP Response{suffix}", f"<Error formatting response: {e}>"))
+                    body = f"<Error formatting {what}: {e}>"
+                report.sections.append((f"{title}{suffix}", body))
 
             output_dir = item.config.getoption("output_dir")
             if output_dir and carrier.last_exchanges:

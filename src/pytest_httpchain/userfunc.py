@@ -124,15 +124,9 @@ def wrap_function(name: str, /, default_kwargs: dict[str, Any] | None = None) ->
     default_kwargs_dict: dict[str, Any] = default_kwargs if default_kwargs is not None else {}
 
     def wrapped(*args, **kwargs):
-        try:
-            func = import_function(name)
-            # Merge default kwargs with call-time kwargs (call-time wins)
-            merged_kwargs = {**default_kwargs_dict, **kwargs}
-            return func(*args, **merged_kwargs)
-        except UserFunctionError:
-            raise
-        except Exception as e:
-            raise UserFunctionError(f"Error calling function '{name}': {e}") from e
+        # Import, call and error-wrapping semantics are call_function's — this
+        # only pre-merges the defaults (call-time kwargs win on conflict).
+        return call_function(name, *args, **{**default_kwargs_dict, **kwargs})
 
     # Set a meaningful name for debugging
     wrapped.__name__ = f"wrapped_{name.replace(':', '_').replace('.', '_')}"

@@ -25,9 +25,11 @@ class GraphDirection(enum.StrEnum):
     LR = "LR"
 
 
-# Shared $ref traversal-depth option, reused by validate/resolve/show/graph so the
-# help text and default stay in one place.
+# Shared options, reused by validate/resolve/show/graph so each one's help text
+# and default stay in one place.
 RefParentTraversalDepth = Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")]
+RootPath = Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: auto-detected project root).")]
+OutputFormatOption = Annotated[OutputFormat, typer.Option("--format", help="Output format: human-readable text or machine-readable JSON.")]
 
 
 @app.callback()
@@ -39,8 +41,8 @@ def main() -> None:
 def validate(
     paths: Annotated[list[Path], typer.Argument(help="Scenario JSON file(s) to validate.")],
     ref_parent_traversal_depth: RefParentTraversalDepth = 3,
-    root_path: Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: auto-detected project root).")] = None,
-    output_format: Annotated[OutputFormat, typer.Option("--format", help="Output format: human-readable text or machine-readable JSON.")] = OutputFormat.text,
+    root_path: RootPath = None,
+    output_format: OutputFormatOption = OutputFormat.text,
     deep: Annotated[bool, typer.Option("--deep", help="Run deep checks: resolve user-function imports/signatures and referenced files. Imports user modules.")] = False,
     syspath: Annotated[list[Path] | None, typer.Option("--syspath", help="Extra directories to add to sys.path for --deep import resolution (repeatable).")] = None,
     strict: Annotated[bool, typer.Option("--strict", help="Treat warnings as failures for the exit code.")] = False,
@@ -98,7 +100,7 @@ def schema() -> None:
 def resolve(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to resolve.")],
     ref_parent_traversal_depth: RefParentTraversalDepth = 3,
-    root_path: Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: auto-detected project root).")] = None,
+    root_path: RootPath = None,
 ) -> None:
     """Resolve $ref/$include/$merge and print the merged scenario JSON to stdout."""
     try:
@@ -169,9 +171,9 @@ def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[st
 @app.command()
 def show(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to summarize.")],
-    output_format: Annotated[OutputFormat, typer.Option("--format", help="Output format: human-readable text or machine-readable JSON.")] = OutputFormat.text,
+    output_format: OutputFormatOption = OutputFormat.text,
     ref_parent_traversal_depth: RefParentTraversalDepth = 3,
-    root_path: Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: auto-detected project root).")] = None,
+    root_path: RootPath = None,
 ) -> None:
     """Summarize a scenario's stages and variable data-flow."""
     sc, test_data = _load_for_inspection(scenario, ref_parent_traversal_depth, root_path)
@@ -208,7 +210,7 @@ def graph(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to graph.")],
     direction: Annotated[GraphDirection, typer.Option("--direction", help="Flowchart orientation.")] = GraphDirection.TD,
     ref_parent_traversal_depth: RefParentTraversalDepth = 3,
-    root_path: Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: auto-detected project root).")] = None,
+    root_path: RootPath = None,
 ) -> None:
     """Emit a Mermaid flowchart of the stage data-flow."""
     sc, test_data = _load_for_inspection(scenario, ref_parent_traversal_depth, root_path)
