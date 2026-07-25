@@ -18,18 +18,21 @@ verify/save steps, and on full success commits the collected saves as a new
 global-context layer for later stages. Expected failures (bad scenario, failed
 verification, unreachable server) are surfaced via ``pytest.fail(pytrace=False)``
 so the report stays clean rather than dumping an internal traceback.
+
+This module owns the *sequencing* only. What an individual piece means lives
+next door and is free of chain state: ``request_builder`` turns resolved models
+into httpx client/request arguments, ``response_steps`` gives one verify/save
+step its meaning, and ``scoping`` defines the context layering.
 """
 
-import base64
 import inspect
 import json
 import logging
 import math
-import re
 import threading
 import warnings
 from collections import ChainMap
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -39,43 +42,24 @@ from types import SimpleNamespace
 from typing import Any, ClassVar, cast
 
 import httpx
-import jmespath
-import jmespath.exceptions
-import jsonschema
 import pytest
-import referencing.exceptions
 from pydantic import ValidationError
 from pyrate_limiter import Duration, Limiter, Rate
 
-from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
+from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError
 from pytest_httpchain.models import (
-    Base64Body,
-    BinaryBody,
     CombinationsParameter,
-    FilesBody,
-    FormBody,
-    GraphQLBody,
-    HeaderMatcher,
     IndividualParameter,
-    JMESPathSave,
-    JsonBody,
     ParallelConfig,
     ParallelForeachConfig,
     ParallelRepeatConfig,
-    Request,
-    Save,
     SaveStep,
     Scenario,
-    SSLConfig,
     Stage,
-    SubstitutionsSave,
-    TextBody,
-    UserFunctionsSave,
-    Verify,
     VerifyStep,
-    XmlBody,
-    check_json_schema,
 )
+from pytest_httpchain.request_builder import build_client_kwargs, build_request_kwargs
+from pytest_httpchain.response_steps import process_save, process_verify
 from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     base_global_context,
@@ -86,8 +70,7 @@ from pytest_httpchain.scoping import (
     with_stage_substitutions,
 )
 from pytest_httpchain.templates import TemplatesError, walk
-from pytest_httpchain.userfunc import UserFunctionError, call_user_function
-from pytest_httpchain.utils import make_marker, optional_as_list, process_substitutions
+from pytest_httpchain.utils import make_marker, process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
 
 logger = logging.getLogger(__name__)
@@ -154,6 +137,29 @@ def _error_request(e: Exception) -> httpx.Request | None:
     return request if isinstance(request, httpx.Request) else None
 
 
+def fresh_scenario_state() -> dict[str, Any]:
+    """The per-scenario mutable class state, in its pristine form.
+
+    Single source of truth for the ClassVars a scenario must own rather than
+    share: ``factory.create_test_class`` seeds every dynamic subclass with it
+    (so two scenarios never share a client, an abort flag or an exchange list),
+    and `Carrier.teardown_class` re-applies it so a re-run of the same class
+    starts clean. Declaring a new piece of per-scenario state means adding it
+    here — the annotations on `Carrier` are types, this is the value.
+    """
+    return {
+        "client": None,
+        "aborted": False,
+        "last_request": None,
+        "last_response": None,
+        "last_exchanges": [],
+        "last_iterations_attempted": 0,
+        "active_context_managers": [],
+        "_initialized": False,
+        "_init_failed": None,
+    }
+
+
 @dataclass
 class IterationResult:
     """Result of a successful stage iteration (every stage runs at least one;
@@ -174,12 +180,12 @@ class Carrier:
     """
 
     # These ClassVars are placeholders: create_test_class() overrides every one of
-    # them in each per-scenario subclass dict (see the bottom of this module), so
-    # the values here are never the ones used at runtime — do NOT rely on the
-    # ChainMap()/None/[] defaults, and do NOT move this state to instance
-    # attributes: the stage methods are classmethods that share one running context
-    # across the chain via `cls`, while distinct scenarios stay isolated because
-    # each gets its own subclass.
+    # them in each per-scenario subclass dict (the mutable ones come from
+    # `fresh_scenario_state`), so the values here are never the ones used at
+    # runtime — do NOT rely on the ChainMap()/None/[] defaults, and do NOT move
+    # this state to instance attributes: the stage methods are classmethods that
+    # share one running context across the chain via `cls`, while distinct
+    # scenarios stay isolated because each gets its own subclass.
     scenario: ClassVar[Scenario | None] = None
     scenario_dir: ClassVar[Path | None] = None
     client: ClassVar[httpx.Client | None] = None
@@ -208,22 +214,6 @@ class Carrier:
     _initialized: ClassVar[bool] = False
     _init_failed: ClassVar[str | None] = None
     _context_resolved_at_collection: ClassVar[bool] = False
-
-    @classmethod
-    def _resolve_scenario_path(cls, value: str | Path) -> Path:
-        """Resolve a dialect file path against the scenario file's directory.
-
-        Relative paths in scenario fields (``body.binary``, ``body.files``
-        values, ``verify.body.schema``, ``ssl.cert``/``ssl.verify``) resolve
-        against the scenario file's directory — matching ``$ref`` — not the
-        pytest invocation CWD. Absolute paths pass through. Falls back to
-        CWD-relative when no ``scenario_dir`` was seeded (hand-built
-        subclasses in unit tests).
-        """
-        path = Path(value)
-        if path.is_absolute() or cls.scenario_dir is None:
-            return path
-        return cls.scenario_dir / path
 
     @classmethod
     def _ensure_initialized(cls) -> None:
@@ -257,27 +247,9 @@ class Carrier:
                 if not cls._context_resolved_at_collection:
                     cls.global_context = base_global_context(process_substitutions(scenario.substitutions))
 
-                resolved_ssl: SSLConfig = walk(scenario.ssl, cls.global_context)
-                # A Path-valued `verify` is a CA bundle file: scenario-relative.
-                ssl_verify = resolved_ssl.verify
-                if isinstance(ssl_verify, Path):
-                    ssl_verify = str(cls._resolve_scenario_path(ssl_verify))
-                client_kwargs: dict[str, Any] = {
-                    "verify": ssl_verify,
-                    "http2": True,
-                }
-                if resolved_ssl.cert is not None:
-                    cert = resolved_ssl.cert
-                    if isinstance(cert, list | tuple):
-                        cert = tuple(cls._resolve_scenario_path(p) for p in cert)
-                    else:
-                        cert = cls._resolve_scenario_path(cert)
-                    client_kwargs["cert"] = _normalize_cert(cert)
-                if scenario.auth:
-                    resolved_auth = walk(scenario.auth, cls.global_context)
-                    client_kwargs["auth"] = call_user_function(resolved_auth)
-
-                cls.client = httpx.Client(**client_kwargs)
+                resolved_ssl = walk(scenario.ssl, cls.global_context)
+                resolved_auth = walk(scenario.auth, cls.global_context) if scenario.auth else None
+                cls.client = httpx.Client(**build_client_kwargs(resolved_ssl, resolved_auth, cls.scenario_dir))
             except Exception as e:
                 cls._init_failed = str(e)
                 raise StageExecutionError(f"Failed to initialize scenario: {e}") from e
@@ -575,71 +547,6 @@ class Carrier:
         return results, first_error
 
     @classmethod
-    def _build_request_kwargs(cls, request_model: Request) -> dict[str, Any]:
-        request_kwargs: dict[str, Any] = {
-            "method": request_model.method,
-            "url": str(request_model.url),
-            "headers": request_model.headers,
-            "params": request_model.params or None,
-            "timeout": request_model.timeout,
-            "follow_redirects": request_model.allow_redirects,
-        }
-
-        if request_model.auth:
-            try:
-                auth_result = call_user_function(request_model.auth)
-                request_kwargs["auth"] = auth_result
-            except UserFunctionError as e:
-                raise RequestError(f"Failed to configure authentication: {e}") from e
-
-        match request_model.body:
-            case None:
-                pass
-
-            case JsonBody(json=data):
-                request_kwargs["json"] = data
-
-            case GraphQLBody(graphql=gql):
-                request_kwargs["json"] = {"query": gql.query, "variables": gql.variables}
-
-            case FormBody(form=data):
-                request_kwargs["data"] = data
-
-            case XmlBody(xml=data) | TextBody(text=data):
-                request_kwargs["content"] = data
-
-            case Base64Body(base64=encoded_data):
-                decoded_data = base64.b64decode(encoded_data)
-                request_kwargs["content"] = decoded_data
-
-            case BinaryBody(binary=file_path):
-                try:
-                    request_kwargs["content"] = cls._resolve_scenario_path(file_path).read_bytes()
-                except FileNotFoundError as e:
-                    raise RequestError(f"Binary file not found: {file_path}") from e
-                except OSError as e:
-                    raise RequestError(f"Cannot read binary file '{file_path}': {e}") from e
-
-            case FilesBody(files=file_paths):
-                files_list = []
-                for field_name, file_path in file_paths.items():
-                    path = cls._resolve_scenario_path(file_path)
-                    try:
-                        files_list.append((field_name, (path.name, path.read_bytes())))
-                    except FileNotFoundError as e:
-                        raise RequestError(f"File not found for upload: {file_path}") from e
-                    except OSError as e:
-                        raise RequestError(f"Cannot read file for upload '{file_path}': {e}") from e
-                request_kwargs["files"] = files_list
-
-            case _:
-                # New body-type variant not handled here: a plugin bug — fail
-                # loudly instead of silently sending a request with NO body.
-                raise RuntimeError(f"Unhandled request body type: {type(request_model.body).__name__}")
-
-        return request_kwargs
-
-    @classmethod
     def _execute_http_request(cls, request_kwargs: dict[str, Any]) -> httpx.Response:
         # The terminal catch-all is deliberate: client.request() executes USER
         # code (a scenario `auth` httpx.Auth flow can raise anything) and httpx
@@ -664,163 +571,6 @@ class Carrier:
         except Exception as e:
             raise RequestError(f"Unexpected error during HTTP request: {e}", request=_error_request(e)) from e
 
-    @staticmethod
-    def _process_save_step(save_model: Save, response: httpx.Response, context: ChainMap[str, Any]) -> dict[str, Any]:
-        step_saved: dict[str, Any] = {}
-
-        match save_model:
-            case JMESPathSave():
-                try:
-                    response_json = response.json()
-                except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                    raise SaveError(f"Cannot extract variables, response is not valid JSON: {e}") from e
-
-                for var_name, jmespath_expr in save_model.jmespath.items():
-                    try:
-                        saved_value = jmespath.search(jmespath_expr, response_json)
-                        step_saved[var_name] = saved_value
-                    except jmespath.exceptions.JMESPathError as e:
-                        raise SaveError(f"Error saving variable {var_name}: {e}") from e
-
-            case SubstitutionsSave():
-                try:
-                    substitution_result = process_substitutions(save_model.substitutions, context)
-                    step_saved.update(substitution_result)
-                except TemplatesError as e:
-                    raise SaveError(f"Error processing substitutions: {e}") from e
-
-            case UserFunctionsSave():
-                for func_item in save_model.user_functions:
-                    try:
-                        func_result = call_user_function(func_item, response=response)
-
-                        if not isinstance(func_result, dict):
-                            raise SaveError(f"Save function must return dict, got {type(func_result).__name__}")
-
-                        step_saved.update(func_result)  # ty: ignore[no-matching-overload]
-                    except SaveError:
-                        raise
-                    except UserFunctionError as e:
-                        raise SaveError(f"Error calling user function '{func_item}': {e}") from e
-
-            case _:
-                # New save variant not handled here: a plugin bug — fail loudly
-                # instead of silently saving nothing.
-                raise RuntimeError(f"Unhandled save type: {type(save_model).__name__}")
-
-        return step_saved
-
-    @classmethod
-    def _process_verify_step(cls, verify_model: Verify, response: httpx.Response) -> None:
-        if verify_model.status and response.status_code != verify_model.status:
-            raise VerificationError(f"Status code doesn't match: expected {verify_model.status}, got {response.status_code}")
-
-        for header_name, expected_value in verify_model.headers.items():
-            match expected_value:
-                case HeaderMatcher():
-                    # An absent header behaves as an empty string, mirroring
-                    # the body contains/matches semantics.
-                    actual = response.headers.get(header_name) or ""
-                    cls._verify_text_matchers(
-                        f"Header '{header_name}' (value: {actual!r})",
-                        actual,
-                        contains=optional_as_list(expected_value.contains),
-                        not_contains=optional_as_list(expected_value.not_contains),
-                        matches=optional_as_list(expected_value.matches),
-                        not_matches=optional_as_list(expected_value.not_matches),
-                    )
-                case _:
-                    if response.headers.get(header_name) != expected_value:
-                        raise VerificationError(f"Header '{header_name}' doesn't match: expected {expected_value}, got {response.headers.get(header_name)}")
-
-        for i, expression in enumerate(verify_model.expressions):
-            if not expression:
-                raise VerificationError(f"Expression {i} failed: evaluated to {expression}")
-
-        for func_item in verify_model.user_functions:
-            try:
-                result = call_user_function(func_item, response=response)
-
-                if not isinstance(result, bool):
-                    raise VerificationError(f"Verify function must return bool, got {type(result).__name__}")
-
-                if not result:
-                    raise VerificationError(f"Function '{func_item}' verification failed")
-
-            except VerificationError:
-                raise
-            except UserFunctionError as e:
-                raise VerificationError(f"Error calling user function '{func_item}': {e}") from e
-
-        if verify_model.body.schema:
-            schema = verify_model.body.schema
-            if isinstance(schema, str | Path):
-                schema_path = cls._resolve_scenario_path(schema)
-                try:
-                    schema = json.loads(schema_path.read_text())
-                    check_json_schema(schema)
-                except (OSError, json.JSONDecodeError) as e:
-                    raise VerificationError(f"Error reading body schema file '{schema_path}': {e}") from e
-                except jsonschema.SchemaError as e:
-                    raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e}") from e
-
-            try:
-                response_json = response.json()
-            except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                raise VerificationError(f"Cannot validate schema, response is not valid JSON: {e}") from e
-
-            try:
-                jsonschema.validate(instance=response_json, schema=schema)
-            except jsonschema.ValidationError as e:
-                raise VerificationError(f"Body schema validation failed: {e}") from e
-            except jsonschema.SchemaError as e:
-                raise VerificationError(f"Invalid body validation schema: {e}") from e
-            except referencing.exceptions.Unresolvable as e:
-                # Inline schemas are standard JSON Schema, so a schema-internal
-                # $ref jsonschema cannot resolve (typo'd "#/$defs/..." pointer,
-                # or a pre-0.12 file-path $ref leftover) surfaces here — it must
-                # fail the stage cleanly like any other verification failure,
-                # not escape as a raw referencing traceback that would skip
-                # exchange attribution and the chain-abort machinery.
-                raise VerificationError(f"Cannot resolve $ref in body schema: {e}") from e
-
-        cls._verify_text_matchers(
-            "Body",
-            response.text,
-            contains=verify_model.body.contains,
-            not_contains=verify_model.body.not_contains,
-            matches=verify_model.body.matches,
-            not_matches=verify_model.body.not_matches,
-        )
-
-    @staticmethod
-    def _verify_text_matchers(
-        subject: str,
-        text: str,
-        *,
-        contains: Iterable[str],
-        not_contains: Iterable[str],
-        matches: Iterable[Any],
-        not_matches: Iterable[Any],
-    ) -> None:
-        """The single encoding of the contains/matches check semantics, shared
-        by body verification and header matchers (patterns use ``re.search``)."""
-        for substring in contains:
-            if substring not in text:
-                raise VerificationError(f"{subject} doesn't contain '{substring}'")
-
-        for substring in not_contains:
-            if substring in text:
-                raise VerificationError(f"{subject} contains '{substring}' while it shouldn't")
-
-        for pattern in matches:
-            if not re.search(pattern, text):
-                raise VerificationError(f"{subject} doesn't match '{pattern}'")
-
-        for pattern in not_matches:
-            if re.search(pattern, text):
-                raise VerificationError(f"{subject} matches '{pattern}' while it shouldn't")
-
     @classmethod
     def _execute_single_iteration(
         cls, stage: Stage, local_context: ChainMap[str, Any], iter_vars: Mapping[str, Any], limiter: Limiter | None = None, max_rate_limit_delay: float = 60
@@ -837,7 +587,7 @@ class Carrier:
         # model_validates when templates are present, else returns the model as-is),
         # so a further model_validate would be a no-op (revalidate_instances='never').
         request_model = walk(stage.request, iter_context)
-        request_kwargs = cls._build_request_kwargs(request_model)
+        request_kwargs = build_request_kwargs(request_model, cls.scenario_dir)
 
         if limiter is not None and not limiter.try_acquire("api", blocking=True, timeout=max_rate_limit_delay):
             raise RequestError(f"Rate limit exceeded: could not acquire a request slot within {max_rate_limit_delay}s")
@@ -858,7 +608,7 @@ class Carrier:
                 match step:
                     case SaveStep():
                         save_model = walk(step.save, step_context)
-                        step_saved = cls._process_save_step(save_model, response, step_context)
+                        step_saved = process_save(save_model, response, step_context)
                         # The static HTTPCHAIN027 check cannot see dynamically
                         # produced keys (user_functions saves, template-form
                         # parameters) — surface the shadowing at runtime so the
@@ -884,7 +634,7 @@ class Carrier:
 
                     case VerifyStep():
                         verify_model = walk(step.verify, step_context)
-                        cls._process_verify_step(verify_model, response)
+                        process_verify(verify_model, response, cls.scenario_dir)
 
                     case _:
                         # New response-step variant not handled here: a plugin bug —
@@ -938,20 +688,16 @@ class Carrier:
 
         if cls.client is not None:
             cls.client.close()
-            cls.client = None
+
         # Reset ALL per-run chain state so a re-run of this class after teardown
-        # (e.g. a rerun plugin) actually re-executes: rebuild the client lazily
-        # ("_initialized implies client is built"), clear the abort flag (else
-        # every rerun stage would skip "Flow aborted"), and drop saved-context
-        # layers back to the pristine base (maps[-1] is the original scenario
-        # context from create_test_class; saves only ever prepend new layers).
-        cls._initialized = False
-        cls._init_failed = None
-        cls.aborted = False
-        cls.last_request = None
-        cls.last_response = None
-        cls.last_exchanges = []
-        cls.last_iterations_attempted = 0
+        # (e.g. a rerun plugin) actually re-executes: the client is dropped and
+        # rebuilt lazily ("_initialized implies client is built"), the abort flag
+        # is cleared (else every rerun stage would skip "Flow aborted"), and the
+        # saved-context layers fall back to the pristine base (maps[-1] is the
+        # original scenario context from create_test_class; saves only ever
+        # prepend new layers).
+        for name, value in fresh_scenario_state().items():
+            setattr(cls, name, value)
         cls.global_context = base_global_context(cls.global_context.maps[-1])
 
 
@@ -966,16 +712,3 @@ def _context_dump(data: Mapping[str, Any]) -> str:
         return json.dumps(dict(data), indent=2, default=str)
     except Exception as e:
         return f"<unserializable context: {e}>"
-
-
-def _normalize_cert(cert: Any) -> str | tuple[str, ...]:
-    """Stringify SSL client-cert paths for httpx.
-
-    The model stores ``cert`` as ``pathlib.Path`` (single) or a tuple of Paths.
-    httpx builds the SSL context via ``load_cert_chain(*cert)`` for a non-tuple
-    cert, so a bare ``Path`` is unpacked and raises ``TypeError``. Passing string
-    paths avoids that for both the single-path and (cert, key) tuple forms.
-    """
-    if isinstance(cert, list | tuple):
-        return tuple(str(p) for p in cert)
-    return str(cert)

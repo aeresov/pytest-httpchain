@@ -15,11 +15,9 @@ from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     extract_template_variables,
     raw_stages,
-    raw_substitution_entries,
-    raw_substitution_entry_names,
-    raw_substitution_entry_templates,
     stage_scopes,
     substitution_names,
+    substitution_step_refs,
 )
 
 
@@ -94,10 +92,8 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         # steps' names, so their shadowing accumulates step by step. Only
         # `vars` values are rendered at seed time (`functions` kwargs are
         # passed raw), so only they can consume an earlier save.
-        prior_sub_names: frozenset[str] = frozenset()
-        for entry in raw_substitution_entries(raw.get("substitutions")):
-            consumes |= _consumed(extract_template_variables(raw_substitution_entry_templates(entry)), scope.earlier_saves, scope.always_run_shadows | prior_sub_names)
-            prior_sub_names |= frozenset(raw_substitution_entry_names(entry))
+        for entry_refs, prior_sub_names in substitution_step_refs(raw.get("substitutions")):
+            consumes |= _consumed(entry_refs, scope.earlier_saves, scope.always_run_shadows | prior_sub_names)
 
         consumes |= _consumed(extract_template_variables(raw.get("parallel")), scope.earlier_saves, scope.pre_iteration_shadows)
         consumes |= _consumed(extract_template_variables(raw.get("request")), scope.earlier_saves, scope.request_shadows)

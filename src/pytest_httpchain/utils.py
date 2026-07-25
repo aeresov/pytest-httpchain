@@ -18,6 +18,7 @@ path rather than introducing a second error type for the same malformed input.
 import ast
 import logging
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -35,6 +36,21 @@ def optional_as_list(value: Any) -> list[Any]:
     single-value fields to list-based shared checks (the carrier's matcher
     checks and the validator's contradiction checks share this adapter)."""
     return [] if value is None else [value]
+
+
+def resolve_scenario_path(scenario_dir: Path | None, value: str | Path) -> Path:
+    """Resolve a dialect file path against the scenario file's directory.
+
+    Relative paths in scenario fields (``body.binary``, ``body.files`` values,
+    ``verify.body.schema``, ``ssl.cert``/``ssl.verify``) resolve against the
+    scenario file's directory — matching ``$ref`` — not the pytest invocation
+    CWD. Absolute paths pass through, as does everything when no
+    ``scenario_dir`` is known (hand-built carrier subclasses in unit tests).
+    """
+    path = Path(value)
+    if path.is_absolute() or scenario_dir is None:
+        return path
+    return scenario_dir / path
 
 
 def make_marker(mark_str: str) -> pytest.MarkDecorator:

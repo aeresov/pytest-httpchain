@@ -146,25 +146,27 @@ def validate_function_import_name(v: str) -> str:
 def convert_dict_to_namespace(v: Any) -> Any:
     """Recursively turn dicts into ``SimpleNamespace`` so ``{{ var.attr }}`` attribute
     access works in templates (used by ``VarsSubstitution.vars`` via ``NamespaceFromDict``)."""
-    if isinstance(v, dict):
-        return types.SimpleNamespace(**{key: convert_dict_to_namespace(value) for key, value in v.items()})
-    elif isinstance(v, list):
-        return [convert_dict_to_namespace(item) for item in v]
-    else:
-        return v
+    match v:
+        case dict():
+            return types.SimpleNamespace(**{key: convert_dict_to_namespace(value) for key, value in v.items()})
+        case list():
+            return [convert_dict_to_namespace(item) for item in v]
+        case _:
+            return v
 
 
 def convert_namespace_to_dict(v: Any) -> Any:
     """Recursively normalize any ``SimpleNamespace`` back to a plain dict so the value
     is JSON-serializable (used by ``JsonBody.json`` and GraphQL variables via ``NamespaceOrDict``)."""
-    if isinstance(v, types.SimpleNamespace):
-        return {key: convert_namespace_to_dict(value) for key, value in vars(v).items()}
-    elif isinstance(v, list):
-        return [convert_namespace_to_dict(item) for item in v]
-    elif isinstance(v, dict):
-        return {key: convert_namespace_to_dict(value) for key, value in v.items()}
-    else:
-        return v
+    match v:
+        case types.SimpleNamespace():
+            return {key: convert_namespace_to_dict(value) for key, value in vars(v).items()}
+        case list():
+            return [convert_namespace_to_dict(item) for item in v]
+        case dict():
+            return {key: convert_namespace_to_dict(value) for key, value in v.items()}
+        case _:
+            return v
 
 
 # Type aliases with validators

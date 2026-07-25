@@ -84,28 +84,13 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
     # simpleeval keeps callables and data in two separate maps (functions= vs
     # names=), so the context is partitioned by callable(): a callable (user
     # function / factory fixture) goes to functions=, everything else to names=.
-    callables = {}
-    names = {}
-
-    for key, value in context.items():
-        if callable(value):
-            callables[key] = value
-        else:
-            names[key] = value
+    callables = {key: value for key, value in context.items() if callable(value)}
+    names = {key: value for key, value in context.items() if not callable(value)}
 
     # exists()/get() must see the WHOLE context (callables included), not just the
-    # `names` half — so they close over a full copy, kept in sync with the split above.
+    # `names` half, so they are bound to a full copy: `exists(name)` is the copy's
+    # membership test, `get(name, default)` its lookup.
     context_dict = dict(context)
-
-    # Helper function to check if a variable exists
-    def exists(var_name):
-        """Check if a variable exists in the context."""
-        return var_name in context_dict
-
-    # Helper function to safely get a value with optional default
-    def get(var_name, default_value=None):
-        """Get a variable from context with optional default."""
-        return context_dict.get(var_name, default_value)
 
     # Merge order is load-bearing: on a name collision the LAST mapping wins, so
     # user-supplied `callables` can shadow SAFE_FUNCTIONS/DEFAULT_FUNCTIONS, but the
@@ -117,8 +102,8 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
         | DEFAULT_FUNCTIONS
         | callables
         | {
-            "exists": exists,
-            "get": get,
+            "exists": context_dict.__contains__,
+            "get": context_dict.get,
         },
         names=JSON_LITERALS | names,
     )

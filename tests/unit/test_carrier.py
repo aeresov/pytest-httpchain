@@ -16,7 +16,7 @@ import httpx
 import pytest
 from pyrate_limiter import Duration, Limiter, Rate
 
-from pytest_httpchain.carrier import Carrier, _normalize_cert
+from pytest_httpchain.carrier import Carrier, fresh_scenario_state
 from pytest_httpchain.errors import RequestError, SaveError, VerificationError
 from pytest_httpchain.models import (
     BinaryBody,
@@ -30,6 +30,8 @@ from pytest_httpchain.models import (
     Verify,
 )
 from pytest_httpchain.models.entities import ResponseBody
+from pytest_httpchain.request_builder import build_request_kwargs, normalize_cert
+from pytest_httpchain.response_steps import process_save, process_verify
 
 
 class TestNormalizeCert:
@@ -41,12 +43,12 @@ class TestNormalizeCert:
 
         # Expected values built via str(Path(...)) so the assertion is
         # platform-native (Windows renders these with backslashes).
-        assert _normalize_cert(Path("/p/client.pem")) == str(Path("/p/client.pem"))
+        assert normalize_cert(Path("/p/client.pem")) == str(Path("/p/client.pem"))
 
     def test_tuple_of_paths_becomes_tuple_of_str(self):
         from pathlib import Path
 
-        assert _normalize_cert((Path("/p/c.pem"), Path("/p/k.pem"))) == (str(Path("/p/c.pem")), str(Path("/p/k.pem")))
+        assert normalize_cert((Path("/p/c.pem"), Path("/p/k.pem"))) == (str(Path("/p/c.pem")), str(Path("/p/k.pem")))
 
 
 class TestBuildRequestKwargsErrors:
@@ -60,7 +62,7 @@ class TestBuildRequestKwargsErrors:
         )
 
         with pytest.raises(RequestError, match="Binary file not found"):
-            Carrier._build_request_kwargs(request)
+            build_request_kwargs(request)
 
     def test_files_body_file_not_found(self):
         request = Request(
@@ -70,7 +72,7 @@ class TestBuildRequestKwargsErrors:
         )
 
         with pytest.raises(RequestError, match="File not found for upload"):
-            Carrier._build_request_kwargs(request)
+            build_request_kwargs(request)
 
     def test_binary_body_unreadable_path(self, tmp_path):
         # A directory raises IsADirectoryError, an OSError that is NOT a
@@ -82,7 +84,7 @@ class TestBuildRequestKwargsErrors:
         )
 
         with pytest.raises(RequestError, match="Cannot read binary file"):
-            Carrier._build_request_kwargs(request)
+            build_request_kwargs(request)
 
     def test_files_body_unreadable_path(self, tmp_path):
         request = Request(
@@ -92,7 +94,7 @@ class TestBuildRequestKwargsErrors:
         )
 
         with pytest.raises(RequestError, match="Cannot read file for upload"):
-            Carrier._build_request_kwargs(request)
+            build_request_kwargs(request)
 
 
 class TestBuildRequestKwargsParams:
@@ -105,7 +107,7 @@ class TestBuildRequestKwargsParams:
             method=HTTPMethod.GET,
         )
 
-        kwargs = Carrier._build_request_kwargs(request)
+        kwargs = build_request_kwargs(request)
         assert kwargs["params"] is None
 
     def test_non_empty_params_passed_through(self):
@@ -115,7 +117,7 @@ class TestBuildRequestKwargsParams:
             params={"key": "value"},
         )
 
-        kwargs = Carrier._build_request_kwargs(request)
+        kwargs = build_request_kwargs(request)
         assert kwargs["params"] == {"key": "value"}
 
 
@@ -132,7 +134,7 @@ class TestProcessSaveStepErrors:
         context = ChainMap()
 
         with pytest.raises(SaveError, match="response is not valid JSON"):
-            Carrier._process_save_step(save_model, response, context)
+            process_save(save_model, response, context)
 
 
 class TestProcessVerifyStepErrors:
@@ -143,7 +145,7 @@ class TestProcessVerifyStepErrors:
         verify = Verify(body=ResponseBody(schema="/nonexistent/schema.json"))
 
         with pytest.raises(VerificationError, match="Error reading body schema file"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_body_schema_invalid_json_response(self):
         response = httpx.Response(
@@ -155,7 +157,7 @@ class TestProcessVerifyStepErrors:
         verify = Verify(body=ResponseBody(schema=schema))
 
         with pytest.raises(VerificationError, match="response is not valid JSON"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_body_schema_from_file(self, tmp_path):
         """Test schema loaded from file path - unique to unit tests."""
@@ -174,7 +176,7 @@ class TestProcessVerifyStepErrors:
         verify = Verify(body=ResponseBody(schema=str(schema_path)))
 
         # Should not raise
-        Carrier._process_verify_step(verify, response)
+        process_verify(verify, response)
 
     def test_verify_expressions_falsy_values(self):
         """Test that falsy expression values fail verification."""
@@ -182,7 +184,7 @@ class TestProcessVerifyStepErrors:
         verify = Verify(expressions=[True, False, True])
 
         with pytest.raises(VerificationError, match="Expression.*failed"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_expressions_empty_string_fails(self):
         """Test that empty string expression fails."""
@@ -190,31 +192,31 @@ class TestProcessVerifyStepErrors:
         verify = Verify(expressions=[""])
 
         with pytest.raises(VerificationError, match="Expression.*failed"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_body_contains_failure(self):
         response = httpx.Response(200, content=b"hello world")
         verify = Verify(body=ResponseBody(contains=["goodbye"]))
         with pytest.raises(VerificationError, match="Body doesn't contain 'goodbye'"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_body_not_contains_failure(self):
         response = httpx.Response(200, content=b"hello world")
         verify = Verify(body=ResponseBody(not_contains=["hello"]))
         with pytest.raises(VerificationError, match="Body contains 'hello' while it shouldn't"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_body_matches_failure(self):
         response = httpx.Response(200, content=b"hello world")
         verify = Verify(body=ResponseBody(matches=["z{3}"]))
         with pytest.raises(VerificationError, match="Body doesn't match 'z"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_body_not_matches_failure(self):
         response = httpx.Response(200, content=b"hello world")
         verify = Verify(body=ResponseBody(not_matches=["wor"]))
         with pytest.raises(VerificationError, match="Body matches 'wor' while it shouldn't"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
 
 def _make_stage(**kwargs) -> Stage:
@@ -234,13 +236,9 @@ def _make_carrier_subclass(**attrs) -> type[Carrier]:
     `_initialized` is True: the subclass is hand-built (no `scenario` model), so
     the lazy scenario initialization in execute_stage must not run."""
     defaults = {
-        "client": None,
-        "aborted": False,
-        "last_request": None,
-        "last_response": None,
+        **fresh_scenario_state(),
         "global_context": ChainMap(),
         "_initialized": True,
-        "active_context_managers": [],
         "max_parallel_iterations": 10_000,
     }
     defaults.update(attrs)

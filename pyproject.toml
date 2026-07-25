@@ -172,7 +172,7 @@ layers = [
     "plugin : cli",
     "factory",
     "carrier : dataflow : schema",
-    "validation : har_writer : report_formatter",
+    "validation : har_writer : report_formatter : request_builder : response_steps",
     "utils : scoping",
     "userfunc",
     "models",

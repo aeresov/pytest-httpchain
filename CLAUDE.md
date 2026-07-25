@@ -53,8 +53,10 @@ src/pytest_httpchain/
 ├── schema.py                  # build_schema() — JSON Schema generation shared by the schema command
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule), chain-contiguity ordering hooks
 ├── factory.py                 # Collection-time test-class factory (create_test_class)
-├── carrier.py                 # Runtime execution engine (Carrier class)
-├── utils.py                   # Marker construction, substitution processing, small shared helpers
+├── carrier.py                 # Runtime execution engine (Carrier class): chain state, iteration matrix, threading, reporting
+├── request_builder.py         # Resolved models -> httpx kwargs (build_client_kwargs, build_request_kwargs)
+├── response_steps.py          # Meaning of a single verify/save step (process_verify, process_save) — pure, no chain state
+├── utils.py                   # Marker construction, substitution processing, scenario-relative path resolution
 ├── report_formatter.py        # HTTP request/response formatting for test reports
 ├── har_writer.py              # HAR file export for HTTP request/response logging
 ├── constants.py               # ConfigOptions enum for pytest.ini settings + the shared user-function name grammar
@@ -77,10 +79,12 @@ Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix config
 2. **Class generation**: `factory.py:create_test_class()` creates dynamic test class with stage methods
 3. **Execution**: Each stage method calls `Carrier.execute_stage()` which:
    - Processes substitutions into context
-   - Walks request model through template engine
+   - Walks request model through template engine, then `request_builder.build_request_kwargs()`
    - Executes HTTP request via httpx
-   - Processes response steps (verify/save)
+   - Processes response steps via `response_steps.process_verify()` / `process_save()`
    - Updates global context with saved values
+
+Per-scenario mutable class state (client, abort flag, exchange bookkeeping) is defined once in `carrier.fresh_scenario_state()`; the factory seeds each generated subclass with it and `teardown_class` re-applies it.
 
 ## Integration Tests
 

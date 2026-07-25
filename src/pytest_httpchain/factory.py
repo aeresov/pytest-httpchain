@@ -17,7 +17,7 @@ from typing import cast
 
 import pytest
 
-from pytest_httpchain.carrier import Carrier
+from pytest_httpchain.carrier import Carrier, fresh_scenario_state
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import (
     CombinationsParameter,
@@ -59,19 +59,13 @@ def create_test_class(
             "__doc__": scenario.description,
             "scenario": scenario,
             "scenario_dir": scenario_dir,
-            "client": None,
-            "aborted": False,
-            "last_request": None,
-            "last_response": None,
-            "last_exchanges": [],
-            "last_iterations_attempted": 0,
             "record_all_exchanges": record_all_exchanges,
             "global_context": base_global_context(scenario_context),
-            "_initialized": False,
-            "_init_failed": None,
             "_context_resolved_at_collection": needs_collection_context,
-            "active_context_managers": [],
             "max_parallel_iterations": max_parallel_iterations,
+            # Mutable per-run state (client, abort flag, exchange bookkeeping):
+            # owned per scenario, defined once in carrier.
+            **fresh_scenario_state(),
         },
     )
 

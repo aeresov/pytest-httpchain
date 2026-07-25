@@ -133,29 +133,39 @@ def wrap_function(name: str, /, default_kwargs: dict[str, Any] | None = None) ->
     return wrapped
 
 
-def call_user_function(func_call: UserFunctionCall, **extra_kwargs: Any) -> object:
-    """Import and call a user function described by a ``UserFunctionCall`` model.
+def call_target(func_call: UserFunctionCall) -> tuple[str, dict[str, Any]]:
+    """Destructure a ``UserFunctionCall`` into ``(import name, declared kwargs)``.
 
-    A bare ``UserFunctionName`` is called with only ``extra_kwargs``; a
-    ``UserFunctionKwargs`` merges its declared kwargs under ``extra_kwargs``
-    (caller-supplied values win on conflict). Used both for request/scenario auth
-    callables and for verify/save user functions, where ``extra_kwargs`` carries
-    the ``response``. Raises ``StageExecutionError`` if ``func_call`` is neither
-    supported shape. Lives here (not utils) because it dispatches on the model
-    union — this module sits above models exactly so it can own that dispatch.
+    The single dispatch over the call union, shared by `call_user_function` (which
+    invokes it) and the validator's deep checks (which compare the declared
+    kwargs against the imported signature), so a new union variant is handled in
+    one place. Raises ``StageExecutionError`` for an unsupported shape.
     """
     match func_call:
         case UserFunctionName():
-            return call_function(func_call.root, **extra_kwargs)
+            return str(func_call.root), {}
         case UserFunctionKwargs():
-            merged_kwargs = {**func_call.kwargs, **extra_kwargs}
-            return call_function(func_call.name.root, **merged_kwargs)
+            return str(func_call.name.root), dict(func_call.kwargs)
         case _:
             raise StageExecutionError(f"Invalid function call format: {func_call}")
 
 
+def call_user_function(func_call: UserFunctionCall, **extra_kwargs: Any) -> object:
+    """Import and call a user function described by a ``UserFunctionCall`` model.
+
+    Declared kwargs are merged under ``extra_kwargs`` (caller-supplied values win
+    on conflict). Used both for request/scenario auth callables and for
+    verify/save user functions, where ``extra_kwargs`` carries the ``response``.
+    Lives here (not utils) because it dispatches on the model union — this module
+    sits above models exactly so it can own that dispatch.
+    """
+    name, kwargs = call_target(func_call)
+    return call_function(name, **{**kwargs, **extra_kwargs})
+
+
 __all__ = [
     "NAME_PATTERN",
+    "call_target",
     "call_user_function",
     "import_function",
     "call_function",

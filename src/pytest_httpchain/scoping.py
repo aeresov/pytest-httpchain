@@ -38,7 +38,7 @@ why `StageScopes` exposes ``scenario_substitutions`` separately.
 import ast
 import re
 from collections import ChainMap
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -219,7 +219,7 @@ def raw_stages(test_data: dict[str, Any]) -> list[Any]:
     return []
 
 
-def raw_substitution_entries(raw_substitutions: Any) -> list[Any]:
+def _raw_substitution_entries(raw_substitutions: Any) -> list[Any]:
     """Raw substitution entries in resolution order.
 
     Substitutions may be authored as a list or as a name-keyed mapping (whose
@@ -239,7 +239,7 @@ def raw_substitution_entries(raw_substitutions: Any) -> list[Any]:
     return []
 
 
-def raw_substitution_entry_names(entry: Any) -> set[str]:
+def _raw_substitution_entry_names(entry: Any) -> set[str]:
     """Names a single raw substitution entry introduces (``vars``/``functions``
     keys) — the raw twin of `substitution_names` for one entry."""
     if not isinstance(entry, dict):
@@ -252,7 +252,7 @@ def raw_substitution_entry_names(entry: Any) -> set[str]:
     return names
 
 
-def raw_substitution_entry_templates(entry: Any) -> Any:
+def _raw_substitution_entry_templates(entry: Any) -> Any:
     """The part of a raw substitution entry the runtime renders at seed time:
     ``vars`` values only. ``functions`` kwargs are passed to ``wrap_function``
     raw (``utils.process_substitutions``) — a ``{{ }}`` inside them is dead
@@ -260,6 +260,20 @@ def raw_substitution_entry_templates(entry: Any) -> Any:
     if isinstance(entry, dict):
         return entry.get("vars")
     return None
+
+
+def substitution_step_refs(raw_substitutions: Any) -> Iterator[tuple[set[str], frozenset[str]]]:
+    """Walk raw substitution steps in resolution order, yielding
+    ``(names the step's templates reference, names defined by PRIOR steps)``.
+
+    Steps resolve strictly in order (``utils.process_substitutions``), so a step
+    sees only the names earlier steps introduced — which makes the prior-name set
+    both the scope addition (validation) and the shadow addition (dataflow) for
+    that step. One encoding of that walk for the two consumers."""
+    prior_names: frozenset[str] = frozenset()
+    for entry in _raw_substitution_entries(raw_substitutions):
+        yield extract_template_variables(_raw_substitution_entry_templates(entry)), prior_names
+        prior_names |= frozenset(_raw_substitution_entry_names(entry))
 
 
 # --------------------------------------------------------------------------- #
@@ -322,7 +336,7 @@ class StageScopes:
     def always_run_shadows(self) -> frozenset[str]:
         """Shadows while ``always_run`` resolves, and the base shadows for each
         stage-substitution step (prior steps' names add to these cumulatively;
-        walk `raw_substitution_entries` for the step order)."""
+        walk `_raw_substitution_entries` for the step order)."""
         return self.scenario_fixtures | self.stage_fixtures | self.parametrize_params
 
     @property
