@@ -47,7 +47,7 @@ The plugin is a single distribution; domain subpackages (models, templates, json
 ```
 src/pytest_httpchain/
 ├── cli.py                     # Typer CLI (validate, schema, resolve, show, graph)
-├── validation.py              # Shared validator (CLI + collection-time): coded Diagnostic objects (HTTPCHAINxxx) for semantic checks incl. order-aware data-flow; plus opt-in `check_scenario_deep` (imports/signatures/files) used only by `validate --deep`
+├── validation/                # Shared validator (CLI + collection-time), a package: diagnostics (codes/result types), loader ($ref + model validation), semantic (checks incl. order-aware data-flow), deep (imports/signatures/files, `validate --deep` only), validate (file-level entry point)
 ├── dataflow.py                # DataFlow model + analyze_dataflow() (stage data-flow analysis, used by show/graph)
 ├── scoping.py                 # Single encoding of the scope/visibility rules: StageScopes static name sets (used by validation + dataflow) and runtime ChainMap context builders (used by carrier)
 ├── schema.py                  # build_schema() — JSON Schema generation shared by the schema command
@@ -75,7 +75,7 @@ Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix config
 
 ## Key Execution Flow
 
-1. **Collection**: `plugin.py:JsonModule.collect()` loads JSON, resolves `$ref`, validates against `Scenario` model, then runs `validation.py:check_scenario()` which returns coded `Diagnostic` objects — error-severity → `CollectError`, warning-severity → `ScenarioValidationWarning`
+1. **Collection**: `plugin.py:JsonModule.collect()` loads JSON, resolves `$ref`, validates against `Scenario` model, then runs `validation.check_scenario()` which returns coded `Diagnostic` objects — error-severity → `CollectError`, warning-severity → `ScenarioValidationWarning`
 2. **Class generation**: `factory.py:create_test_class()` creates dynamic test class with stage methods
 3. **Execution**: Each stage method calls `Carrier.execute_stage()` which:
    - Processes substitutions into context

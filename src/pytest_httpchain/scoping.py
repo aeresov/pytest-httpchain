@@ -1,18 +1,10 @@
 """Scenario scope resolution: which names are visible to which phase.
 
-This module is the single encoding of the scenario visibility rules, shared by
-the three places that previously each hand-encoded them:
-
-* ``carrier`` builds the runtime ``ChainMap`` contexts with the
-  context-builder functions (`base_global_context`, `stage_start_context`,
-  `with_stage_substitutions`, `iteration_context`, `with_saves`);
-* ``validation`` checks template references against the statically-known
-  name sets (`StageScopes`) in its order-aware data-flow diagnostics;
-* ``dataflow`` derives producer/consumer edges from the same sets.
-
-Each context builder names the static phase it realizes, so the value-level
-(runtime) and name-level (static) views of one rule sit side by side and a
-change to either is visibly a change to both.
+The single encoding of the visibility rules, in three parts: name extraction
+from a scenario (or its raw JSON), the static per-stage `StageScopes` used by
+``validation`` and ``dataflow``, and the runtime ``ChainMap`` builders used by
+``carrier``. Each context builder names the static phase it realizes, so a
+change to either view is visibly a change to both.
 
 The rules, in resolution order within a stage:
 
@@ -29,10 +21,9 @@ response (per iteration)  the above plus this stage's own saves and the
                           ``response`` metadata namespace
 ========================  ====================================================
 
-Stage ``parametrize`` *values* are the exception: although parametrize is a
-stage-level field, its values resolve at collection time against scenario
-substitutions only (see ``parametrize_values_contain_template``), which is
-why `StageScopes` exposes ``scenario_substitutions`` separately.
+Stage ``parametrize`` *values* are the exception: they resolve at collection
+time against scenario substitutions only, which is why `StageScopes` exposes
+``scenario_substitutions`` separately.
 """
 
 import ast
@@ -59,15 +50,10 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN
 
-# The reserved name under which response metadata (status, reason, headers,
-# elapsed_ms) is injected into every response step's template context.
+# The name under which response metadata is injected into response-step contexts.
 RESPONSE_META_NAME = "response"
 
-# Scenario-level template fields: resolved once per scenario against ONLY the
-# scenario substitutions — never fixtures, stage variables, or saves. Runtime
-# twin: carrier's lazy initialization (or collection-time resolution when
-# stage parametrize values force it). The validator checks references in
-# these fields against `StageScopes.scenario_substitutions` alone.
+# Fields resolved once per scenario, against only the scenario substitutions.
 SCENARIO_TEMPLATE_FIELDS = ("substitutions", "auth", "ssl")
 
 # --------------------------------------------------------------------------- #
@@ -76,12 +62,10 @@ SCENARIO_TEMPLATE_FIELDS = ("substitutions", "auth", "ssl")
 
 
 def _extract_names_from_expr(expr: str) -> set[str]:
-    """Extract free identifier names referenced by a Python expression.
+    """Free identifiers referenced by a Python expression.
 
-    Names bound *within* the expression — comprehension targets
-    (``for x in ...``) and lambda parameters — are local bindings, not context
-    references, so they are excluded. Falls back to a permissive regex if the
-    expression doesn't parse.
+    Comprehension targets and lambda parameters are local bindings, not context
+    references. Falls back to a permissive regex if the expression doesn't parse.
     """
     try:
         tree = ast.parse(expr.strip(), mode="eval")
@@ -103,7 +87,7 @@ def _extract_names_from_expr(expr: str) -> set[str]:
 
 
 def extract_template_variables(obj: Any) -> set[str]:
-    """Recursively extract variable names from {{ expr }} template expressions."""
+    """Variable names referenced by every ``{{ expr }}`` in a structure."""
     match obj:
         case str():
             names = {name for match in re.finditer(TEMPLATE_PATTERN, obj) for name in _extract_names_from_expr(match.group("expr"))}
@@ -117,7 +101,7 @@ def extract_template_variables(obj: Any) -> set[str]:
 
 
 def substitution_names(substitutions: Any) -> set[str]:
-    """Names introduced by a list of ``vars``/``functions`` substitution entries."""
+    """Names introduced by ``vars``/``functions`` substitution entries."""
     names: set[str] = set()
     for sub in substitutions or []:
         match sub:
@@ -129,7 +113,8 @@ def substitution_names(substitutions: Any) -> set[str]:
 
 
 def saved_in_stage(stage: Stage) -> set[str]:
-    """Variable names a single stage's response steps save into the context."""
+    """Names one stage's response steps save. A ``user_functions`` save returns
+    arbitrary keys, so it contributes none."""
     saved: set[str] = set()
     for response_step in stage.response:
         if not isinstance(response_step, SaveStep):
@@ -140,13 +125,12 @@ def saved_in_stage(stage: Stage) -> set[str]:
             case SubstitutionsSave(substitutions=substitutions):
                 saved |= substitution_names(substitutions)
             case UserFunctionsSave():
-                # user_functions saves return arbitrary dict keys -> not statically known.
                 pass
     return saved
 
 
 def extract_saved_variables(scenario: Scenario) -> set[str]:
-    """Extract variable names saved across all response steps in the scenario."""
+    """Names saved anywhere in the scenario."""
     saved_vars: set[str] = set()
     for stage in scenario.stages:
         saved_vars |= saved_in_stage(stage)
@@ -154,20 +138,14 @@ def extract_saved_variables(scenario: Scenario) -> set[str]:
 
 
 def parameter_names(params: Parameters | None) -> set[str]:
-    """Names injected by a list of parametrize/foreach Parameter entries.
-
-    Covers both ``individual`` (one name -> list of values) and ``combinations``
-    (list of dicts whose keys are the names). Template-string forms (deferred to
-    runtime) contribute no statically-known names.
-    """
+    """Names injected by parametrize/foreach entries. A template-string form
+    defers its values to runtime and contributes no static names."""
     names: set[str] = set()
     for param in params or []:
         match param:
             case IndividualParameter(individual=individual):
                 names.update(individual)
             case CombinationsParameter(combinations=combinations):
-                # A template-string form defers the combinations to runtime, so
-                # it contributes no statically-known names.
                 if not isinstance(combinations, str):
                     for combo in combinations:
                         names.update(combo)
@@ -175,9 +153,7 @@ def parameter_names(params: Parameters | None) -> set[str]:
 
 
 def foreach_parameter_names(parallel: ParallelConfig | None) -> set[str]:
-    """Names injected per iteration by a ``parallel.foreach`` config.
-
-    Empty for ``repeat`` configs and for stages without a parallel config."""
+    """Names injected per iteration by a ``parallel.foreach`` config."""
     match parallel:
         case ParallelForeachConfig(foreach=foreach):
             return parameter_names(foreach)
@@ -186,17 +162,9 @@ def foreach_parameter_names(parallel: ParallelConfig | None) -> set[str]:
 
 
 def extract_defined_variables(scenario: Scenario) -> set[str]:
-    """Extract variable names made available before/within templates (scenario-wide).
-
-    Sources: ``vars`` and ``functions`` substitutions (scenario- and stage-level),
-    plus parameter names injected by ``parametrize`` and ``parallel.foreach``. This
-    is the *union* across the whole scenario, used for the fixture-conflict check
-    and informational output; the order-aware checks use `stage_scopes` to compute
-    availability per stage instead.
-    """
-    defined_vars: set[str] = set()
-
-    defined_vars |= substitution_names(scenario.substitutions)
+    """Every name substitutions and parameters define, scenario-wide. The
+    order-aware checks use `stage_scopes` instead."""
+    defined_vars = substitution_names(scenario.substitutions)
 
     for stage in scenario.stages:
         defined_vars |= substitution_names(stage.substitutions)
@@ -207,10 +175,8 @@ def extract_defined_variables(scenario: Scenario) -> set[str]:
 
 
 def raw_stages(test_data: dict[str, Any]) -> list[Any]:
-    """Raw (pre-validation) stage bodies in declaration order.
-
-    Stages may be authored as a list or as a ``{name: stage}`` mapping; both
-    preserve order, matching the normalized ``scenario.stages``."""
+    """Raw (pre-validation) stage bodies in declaration order, from either the
+    list or the ``{name: stage}`` form."""
     raw = test_data.get("stages")
     if isinstance(raw, dict):
         return list(raw.values())
@@ -220,12 +186,8 @@ def raw_stages(test_data: dict[str, Any]) -> list[Any]:
 
 
 def _raw_substitution_entries(raw_substitutions: Any) -> list[Any]:
-    """Raw substitution entries in resolution order.
-
-    Substitutions may be authored as a list or as a name-keyed mapping (whose
-    values may themselves be lists); this mirrors the model's list/mapping
-    normalization (``_normalize_list_input``), so consumers walking the raw
-    form see the same step order the runtime resolves in."""
+    """Raw substitution entries in resolution order, mirroring the model's
+    list/mapping normalization."""
     if isinstance(raw_substitutions, dict):
         entries: list[Any] = []
         for value in raw_substitutions.values():
@@ -240,8 +202,6 @@ def _raw_substitution_entries(raw_substitutions: Any) -> list[Any]:
 
 
 def _raw_substitution_entry_names(entry: Any) -> set[str]:
-    """Names a single raw substitution entry introduces (``vars``/``functions``
-    keys) — the raw twin of `substitution_names` for one entry."""
     if not isinstance(entry, dict):
         return set()
     names: set[str] = set()
@@ -253,10 +213,8 @@ def _raw_substitution_entry_names(entry: Any) -> set[str]:
 
 
 def _raw_substitution_entry_templates(entry: Any) -> Any:
-    """The part of a raw substitution entry the runtime renders at seed time:
-    ``vars`` values only. ``functions`` kwargs are passed to ``wrap_function``
-    raw (``utils.process_substitutions``) — a ``{{ }}`` inside them is dead
-    text at seed time, not a context reference."""
+    """What the runtime renders at seed time: ``vars`` values only, since
+    ``functions`` kwargs are passed to ``wrap_function`` raw."""
     if isinstance(entry, dict):
         return entry.get("vars")
     return None
@@ -264,12 +222,11 @@ def _raw_substitution_entry_templates(entry: Any) -> Any:
 
 def substitution_step_refs(raw_substitutions: Any) -> Iterator[tuple[set[str], frozenset[str]]]:
     """Walk raw substitution steps in resolution order, yielding
-    ``(names the step's templates reference, names defined by PRIOR steps)``.
+    ``(names the step references, names defined by PRIOR steps)``.
 
-    Steps resolve strictly in order (``utils.process_substitutions``), so a step
-    sees only the names earlier steps introduced — which makes the prior-name set
-    both the scope addition (validation) and the shadow addition (dataflow) for
-    that step. One encoding of that walk for the two consumers."""
+    Steps resolve strictly in order, so the prior-name set is both the scope
+    addition (validation) and the shadow addition (dataflow) for that step.
+    """
     prior_names: frozenset[str] = frozenset()
     for entry in _raw_substitution_entries(raw_substitutions):
         yield extract_template_variables(_raw_substitution_entry_templates(entry)), prior_names
@@ -285,10 +242,9 @@ def substitution_step_refs(raw_substitutions: Any) -> Iterator[tuple[set[str], f
 class StageScopes:
     """Statically-known names visible to one stage, per resolution phase.
 
-    The ingredient sets are stored separately (so consumers like ``dataflow``
-    can distinguish *why* a name is visible); the phase properties union them
-    in the order the runtime layers its contexts. Each phase property names
-    the context-builder function that realizes it at runtime.
+    Ingredients are stored separately so consumers can tell *why* a name is
+    visible; the phase properties union them in the order the runtime layers its
+    contexts, and each names its runtime twin.
     """
 
     scenario_substitutions: frozenset[str]
@@ -302,62 +258,48 @@ class StageScopes:
 
     @property
     def always_run(self) -> frozenset[str]:
-        """Scope of ``always_run`` and of the stage's own ``substitutions``
-        while they are being resolved. Runtime twin: `stage_start_context`."""
+        """``always_run`` and the stage's own substitutions as they resolve.
+        Twin: `stage_start_context`."""
         return self.scenario_substitutions | self.earlier_saves | self.scenario_fixtures | self.stage_fixtures | self.parametrize_params
 
     @property
     def pre_iteration(self) -> frozenset[str]:
-        """Scope of the ``parallel`` config: resolved after stage substitutions,
-        before any iteration. Runtime twin: `with_stage_substitutions`."""
+        """The ``parallel`` config. Twin: `with_stage_substitutions`."""
         return self.always_run | self.stage_substitutions
 
     @property
     def request(self) -> frozenset[str]:
-        """Scope of the request templates, per iteration. Runtime twin:
-        `iteration_context`."""
+        """Request templates, per iteration. Twin: `iteration_context`."""
         return self.pre_iteration | self.foreach_params
 
     @property
     def response(self) -> frozenset[str]:
-        """Scope of the response steps: the request scope plus the stage's own
-        saves and the ``response`` metadata namespace. Own saves are treated as
-        available to the whole response (intra-response step ordering is
-        approximated). Runtime twins: `response_step_context` per step, plus
-        `with_saves` layered per save step."""
+        """Response steps: the request scope plus this stage's own saves (treated
+        as available to the whole response) and the ``response`` namespace.
+        Twins: `response_step_context`, `with_saves`."""
         return self.request | self.saves | frozenset({RESPONSE_META_NAME})
 
-    # Shadow sets: the names layered ABOVE the global context in each phase — a
-    # same-named earlier save is unreadable behind them. The per-phase mirror
-    # of the scope properties, for consumers (dataflow) that need to know not
-    # just what is visible but what MASKS an earlier save.
+    # Shadow sets: names layered ABOVE the global context in each phase, behind
+    # which a same-named earlier save is unreadable.
 
     @property
     def always_run_shadows(self) -> frozenset[str]:
-        """Shadows while ``always_run`` resolves, and the base shadows for each
-        stage-substitution step (prior steps' names add to these cumulatively;
-        walk `_raw_substitution_entries` for the step order)."""
+        """Also the base shadows of each substitution step, to which prior steps'
+        names add cumulatively (see `substitution_step_refs`)."""
         return self.scenario_fixtures | self.stage_fixtures | self.parametrize_params
 
     @property
     def pre_iteration_shadows(self) -> frozenset[str]:
-        """Shadows in the ``parallel`` config scope: the stage's substitutions
-        are fully resolved by then and layer above the global context."""
         return self.always_run_shadows | self.stage_substitutions
 
     @property
     def request_shadows(self) -> frozenset[str]:
-        """Shadows in request/response templates (per iteration): everything
-        above plus the ``foreach`` parameters."""
         return self.pre_iteration_shadows | self.foreach_params
 
 
 def stage_scopes(scenario: Scenario) -> list[StageScopes]:
-    """Compute per-stage `StageScopes` for every stage, in execution order.
-
-    ``earlier_saves`` accumulates stage by stage, mirroring the runtime commit
-    of a stage's saves into the global context (`with_saves`) after it passes.
-    """
+    """Per-stage scopes in execution order. ``earlier_saves`` accumulates stage
+    by stage, mirroring the runtime commit of saves after a stage passes."""
     scenario_substitutions = frozenset(substitution_names(scenario.substitutions))
     scenario_fixtures = frozenset(scenario.fixtures)
 
@@ -383,58 +325,37 @@ def stage_scopes(scenario: Scenario) -> list[StageScopes]:
 
 # --------------------------------------------------------------------------- #
 # Runtime context builders: the value-level twins of the phases above.
-# The carrier calls these instead of layering ChainMaps inline, so the
-# layering order is defined here, next to its static description.
 # --------------------------------------------------------------------------- #
 
 
 def base_global_context(scenario_substitutions: Mapping[str, Any]) -> ChainMap[str, Any]:
-    """The pristine global context: resolved scenario substitutions only.
-
-    Static twin: `StageScopes.scenario_substitutions` (saves accumulate on top
-    via `with_saves` as stages pass)."""
+    """The pristine global context; saves accumulate on top via `with_saves`."""
     return ChainMap(dict(scenario_substitutions))
 
 
 def stage_start_context(global_context: ChainMap[str, Any], stage_fixtures: Mapping[str, Any]) -> ChainMap[str, Any]:
-    """Context at stage start: fixtures (and parametrize parameters, which
-    pytest injects through the same method signature) over the global context.
-
-    Evaluates ``always_run`` and resolves the stage's substitutions.
-    Static twin: `StageScopes.always_run`."""
+    """Fixtures (and parametrize parameters, which pytest injects through the
+    same signature) over the global context."""
     return ChainMap(dict(stage_fixtures), global_context)
 
 
 def with_stage_substitutions(stage_start: ChainMap[str, Any], stage_substitutions: Mapping[str, Any]) -> ChainMap[str, Any]:
-    """The stage-local context: resolved stage substitutions over the stage-start
-    context. Resolves the ``parallel`` config and is the base for iterations.
-
-    Static twin: `StageScopes.pre_iteration`."""
+    """The stage-local context: the base for every iteration."""
     return stage_start.new_child(dict(stage_substitutions))
 
 
 def iteration_context(local_context: ChainMap[str, Any], iteration_params: Mapping[str, Any]) -> ChainMap[str, Any]:
-    """Per-iteration context: ``foreach``/``repeat`` iteration parameters over the
-    stage-local context. Resolves the request and response templates.
-
-    Static twin: `StageScopes.request`."""
+    """Iteration parameters over the stage-local context."""
     return local_context.new_child(dict(iteration_params))
 
 
 def response_step_context(iteration_ctx: ChainMap[str, Any], response_meta: Any) -> ChainMap[str, Any]:
-    """Per-response-step context: the ``response`` metadata namespace over the
-    iteration context (and over any earlier save steps' values layered onto
-    it), so it cannot be shadowed by a user variable within response steps.
-
-    Static twin: `StageScopes.response` (which includes `RESPONSE_META_NAME`)."""
+    """The ``response`` namespace over the iteration context, layered last so a
+    user variable cannot shadow it inside response steps."""
     return iteration_ctx.new_child({RESPONSE_META_NAME: response_meta})
 
 
 def with_saves(context: ChainMap[str, Any], saves: Mapping[str, Any]) -> ChainMap[str, Any]:
-    """Layer saved values over a context: later saves shadow earlier ones.
-
-    Used both for intra-response accumulation (each save step's results are
-    visible to the steps after it — static twin: `StageScopes.response`) and
-    for committing a passed stage's saves into the global context (static
-    twin: `StageScopes.earlier_saves` of the following stages)."""
+    """Layer saved values over a context; later saves shadow earlier ones. Used
+    both within a response and to commit a passed stage's saves."""
     return context.new_child(dict(saves))

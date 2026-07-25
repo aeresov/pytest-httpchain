@@ -1,11 +1,7 @@
-"""Semantics of a stage's response steps: ``verify`` and ``save``.
+"""What a stage's ``verify`` and ``save`` steps mean.
 
-Pure functions over ``(resolved model, httpx.Response)`` — no chain state — so
-they can be read, tested and changed without the carrier's threading, abort and
-reporting machinery. The carrier owns the *sequence* (walk each step's model
-through the template engine, layer each save's result onto the iteration
-context); this module owns what an individual step means, and raises
-`SaveError` / `VerificationError` when it fails.
+Pure functions over ``(resolved model, response)`` — no chain state — raising
+`VerificationError` / `SaveError` on failure. The carrier owns the sequence.
 """
 
 import json
@@ -71,8 +67,6 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
                 step_saved.update(func_result)  # ty: ignore[no-matching-overload]
 
         case _:
-            # New save variant not handled here: a plugin bug — fail loudly
-            # instead of silently saving nothing.
             raise RuntimeError(f"Unhandled save type: {type(save_model).__name__}")
 
     return step_saved
@@ -86,8 +80,7 @@ def process_verify(verify_model: Verify, response: httpx.Response, scenario_dir:
     for header_name, expected_value in verify_model.headers.items():
         match expected_value:
             case HeaderMatcher():
-                # An absent header behaves as an empty string, mirroring
-                # the body contains/matches semantics.
+                # An absent header behaves as an empty string, as bodies do.
                 actual = response.headers.get(header_name) or ""
                 verify_text_matchers(
                     f"Header '{header_name}' (value: {actual!r})",
@@ -153,12 +146,8 @@ def _verify_body_schema(schema: Any, response: httpx.Response, scenario_dir: Pat
     except jsonschema.SchemaError as e:
         raise VerificationError(f"Invalid body validation schema: {e}") from e
     except referencing.exceptions.Unresolvable as e:
-        # Inline schemas are standard JSON Schema, so a schema-internal
-        # $ref jsonschema cannot resolve (typo'd "#/$defs/..." pointer,
-        # or a pre-0.12 file-path $ref leftover) surfaces here — it must
-        # fail the stage cleanly like any other verification failure,
-        # not escape as a raw referencing traceback that would skip
-        # exchange attribution and the chain-abort machinery.
+        # An unresolvable $ref inside the schema itself must fail the stage
+        # cleanly, not escape as a raw traceback past the abort machinery.
         raise VerificationError(f"Cannot resolve $ref in body schema: {e}") from e
 
 
@@ -171,8 +160,8 @@ def verify_text_matchers(
     matches: Iterable[Any],
     not_matches: Iterable[Any],
 ) -> None:
-    """The single encoding of the contains/matches check semantics, shared
-    by body verification and header matchers (patterns use ``re.search``)."""
+    """The contains/matches semantics, shared by body and header checks
+    (patterns use ``re.search``)."""
     for substring in contains:
         if substring not in text:
             raise VerificationError(f"{subject} doesn't contain '{substring}'")

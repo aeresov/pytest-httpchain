@@ -1,21 +1,9 @@
-"""pytest plugin entry point: discovery, collection, and reporting hooks.
+"""pytest plugin entry point (the ``pytest11`` hook module).
 
-Registered as the ``pytest11`` entry point, this module wires HTTP-chain JSON
-scenarios into pytest:
-
-- ``pytest_addoption`` / ``pytest_configure`` register and validate the ini
-  options (``httpchain_suffix``, ``httpchain_ref_parent_traversal_depth``,
-  ``httpchain_max_comprehension_length``, ``httpchain_max_parallel_iterations``)
-  and the ``--httpchain-output-dir`` flag.
-- ``pytest_collect_file`` matches ``test_<name>.<suffix>.json`` files and hands
-  them to `JsonModule`.
-- `JsonModule.collect` loads the JSON (resolving ``$ref``), validates it
-  against the `Scenario` model, runs the semantic validator
-  (warnings become `ScenarioValidationWarning`, errors become
-  ``CollectError``), and builds the dynamic test class via
-  ``factory.create_test_class``.
-- ``pytest_runtest_makereport`` attaches the last HTTP request/response to the
-  test report and optionally writes a HAR file.
+Registers the ini options and ``--httpchain-output-dir``, collects
+``test_<name>.<suffix>.json`` files into `JsonModule`, keeps each scenario's
+stages contiguous and ordered, and attaches the HTTP exchange (plus an optional
+HAR file) to test reports.
 """
 
 import logging
@@ -46,29 +34,17 @@ logger = logging.getLogger(__name__)
 
 
 class JsonModule(pytest.Module):
-    """JSON test module: collects HTTP chain test scenarios.
-
-    This class extends pytest's Module to handle JSON test files containing
-    HTTP chain test scenarios. It loads, validates, and converts JSON test
-    definitions into executable pytest test classes — execution itself belongs
-    to `Carrier` under pytest's runner.
-    """
+    """Collector for one scenario file: loads, validates, and turns it into a
+    test class. Execution belongs to `Carrier`, under pytest's runner."""
 
     def _reject_chain_splitting_dist_mode(self, scenario: Scenario) -> None:
         """Fail collection when pytest-xdist would scatter a stage chain.
 
-        A multi-stage scenario forms one ordered chain over shared class state
-        (Carrier ClassVars), and pytest-order is a no-op across xdist workers —
-        so dist modes that distribute tests individually (load/each/worksteal)
-        would break the chain silently. Class-preserving modes work: loadscope
-        groups by class, loadfile by file, loadgroup by the xdist_group marker
-        added in `collect`. Single-stage scenarios have no chain and are safe
-        under any mode (a parametrized single stage never consumes its own
-        saves), so they are exempt.
-
-        Inside a worker the real mode is only available via workerinput
-        (seeded by `pytest_configure_node` below): xdist resets the worker's
-        own ``dist`` option to "no" so workers don't recursively spawn.
+        Modes that distribute tests individually would break a multi-stage
+        chain silently, since pytest-order is a no-op across workers.
+        Class-preserving modes are fine, and single-stage scenarios have no
+        chain to break. Inside a worker the real mode is only visible via
+        workerinput, seeded by `pytest_configure_node`.
         """
         if len(scenario.stages) <= 1:
             return
@@ -86,18 +62,12 @@ class JsonModule(pytest.Module):
             )
 
     def collect(self) -> Iterable[pytest.Item | pytest.Collector]:
-        # Load, $ref-resolve and schema-validate through the same pipeline the
-        # CLI uses (validation.load_scenario); only the root path differs, and
-        # only in authority: collection has pytest's real rootpath, while the
-        # CLI default (validation.resolve_root_path) approximates it.
         ref_parent_traversal_depth = _get_ini(self.config, ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
         try:
-            # Record resolver warnings instead of letting them escape raw: under
-            # `filterwarnings = error` a bare AmbiguousReferenceWarning would be
-            # promoted mid-load and land in the generic handler below as a
-            # misleading "Failed to parse JSON file". Recorded warnings are
-            # re-emitted after loading, in the same [HTTPCHAINxxx] form as the
-            # semantic diagnostics.
+            # Recorded, not raised: under `filterwarnings = error` an escaping
+            # resolver warning would land in the generic handler below as a
+            # misleading "Failed to parse JSON file". They are re-emitted after
+            # the load in the same [HTTPCHAINxxx] form as the diagnostics.
             with warnings.catch_warnings(record=True) as caught_warnings:
                 warnings.simplefilter("always")
                 scenario, test_data = load_scenario(
@@ -127,9 +97,6 @@ class JsonModule(pytest.Module):
 
         self._reject_chain_splitting_dist_mode(scenario)
 
-        # semantic validation: cross-cutting checks the schema cannot express
-        # (duplicate stage names, fixture/variable conflicts, undefined/forward-referenced
-        # variables, no-op verify, contradictory body checks, ...)
         diagnostics, _ = check_scenario(scenario, test_data)
         for diagnostic in diagnostics:
             if diagnostic.severity == "warning":
@@ -139,7 +106,6 @@ class JsonModule(pytest.Module):
             detail = "\n".join(f"  - [{d.code}] {d.message}" for d in error_diagnostics)
             raise pytest.Collector.CollectError(f"Invalid test scenario in {self.path}:\n{detail}")
 
-        # generate python test class
         max_parallel_iterations = _get_ini(self.config, ConfigOptions.MAX_PARALLEL_ITERATIONS)
         try:
             CarrierClass = create_test_class(
@@ -147,22 +113,14 @@ class JsonModule(pytest.Module):
                 self.name,
                 max_parallel_iterations=max_parallel_iterations,
                 scenario_dir=self.path.parent,
-                # Retaining every parallel iteration's exchange costs memory, so
-                # it is only done when the HAR output that consumes them is on.
+                # Retaining every iteration's exchange costs memory, so it is
+                # done only when the HAR output that consumes them is on.
                 record_all_exchanges=bool(self.config.getoption("output_dir")),
             )
         except Exception as e:
-            # create_test_class parses stage markers and — only when stage
-            # parametrize values contain templates — resolves scenario
-            # substitutions (which can execute user functions). Client/auth/ssl
-            # initialization is deferred to first stage execution
-            # (Carrier._ensure_initialized), so collection stays free of user
-            # code otherwise. Surface any failure as a clean collection error,
-            # like the sibling load/validate paths above.
             raise pytest.Collector.CollectError(f"Cannot build test class for {self.path}: {e}") from None
-        # Module._getobj() defaults to importtestmodule(self.path), which would try
-        # to import this .json file as a Python module and fail. Bypass it by handing
-        # pytest an in-memory module that already carries the generated test class.
+        # _getobj() would try to import the .json file as a Python module, so
+        # hand pytest an in-memory module carrying the generated class instead.
         dummy_module = types.ModuleType("generated")
         setattr(dummy_module, self.name, CarrierClass)
         self._getobj = lambda: dummy_module  # ty: ignore[invalid-assignment]
@@ -173,13 +131,11 @@ class JsonModule(pytest.Module):
             obj=CarrierClass,
         )
 
-        # Keep all stages of this scenario on one xdist worker under
-        # --dist loadgroup. Guarded by plugin presence: without xdist the
-        # marker is unregistered and would fail --strict-markers.
+        # Keeps the scenario's stages on one worker under --dist loadgroup.
+        # Guarded: without xdist the marker fails --strict-markers.
         if self.config.pluginmanager.hasplugin("xdist"):
             json_class.add_marker(pytest.mark.xdist_group(name=self.nodeid))
 
-        # apply class-level markers
         for mark_str in scenario.marks:
             try:
                 json_class.add_marker(make_marker(mark_str))
@@ -189,9 +145,7 @@ class JsonModule(pytest.Module):
         yield json_class
 
 
-# Collection (definition) order of all items, recorded before any sorter runs.
-# Used as the regroup sort tiebreaker so parametrized instances of one stage
-# are restored to their original order even after a shuffling plugin.
+# Collection order, recorded before any sorter runs: the regroup tiebreaker.
 _ORIGINAL_POSITIONS: pytest.StashKey[dict[pytest.Item, int]] = pytest.StashKey()
 
 
@@ -199,19 +153,13 @@ def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[pyt
     """Re-sort collected items so each scenario class's stages run contiguously,
     in stage order.
 
-    A multi-stage scenario is one ordered chain over shared class state, and
-    pytest finalizes class scope every time execution leaves the class —
-    ``Carrier.teardown_class`` resets the chain's saved context. Any sorter
-    that splits a scenario class's items therefore breaks the chain. The main
-    offender is pytest-order itself: every scenario class carries the same
-    ``order(0..n-1)`` stage marks, and its default session-wide group scope
-    stable-sorts equal indices across classes into A0, B0, A1, B1, ...
-
-    Each scenario class's items are pulled together at the position of the
-    class's first item — preserving inter-class order — and sorted back into
-    stage order within the class; ``original_position`` breaks ties so
-    parametrized instances of one stage run in collection order (the last
-    instance's save is what later stages consume).
+    Leaving a class finalizes its scope, and ``Carrier.teardown_class`` resets
+    the chain — so any sorter that interleaves two scenarios breaks both. The
+    main offender is pytest-order: every scenario carries the same
+    ``order(0..n-1)`` marks, which its session-wide scope interleaves into A0,
+    B0, A1, B1. Each class is pulled together at its first item (preserving
+    inter-class order), with ``original_position`` breaking ties so parametrized
+    instances of a stage keep collection order.
     """
     buckets: dict[type, list[pytest.Item]] = {}
     for item in items:
@@ -244,14 +192,10 @@ def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[pyt
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> Any:
     """Enforce chain contiguity after the non-wrapper sorters have run.
 
-    The pre-yield half runs before any non-wrapper implementation: items are
-    still in collection (definition) order, which is recorded as the regroup
-    tiebreaker. The post-yield half runs after all non-wrapper
-    ``pytest_collection_modifyitems`` implementations (pytest-order,
-    pytest-randomly, ...) and regroups scenario chains. Sorters implemented as
-    *tryfirst wrappers* (core cacheprovider's ``--ff``, pytest-order's
-    ``--order-after-ff``) post-yield even later than this hook — those are
-    caught by `pytest_collection_finish` below.
+    Pre-yield the items are still in collection order, which is recorded as the
+    tiebreaker; post-yield runs after pytest-order, pytest-randomly and friends.
+    Sorters written as tryfirst wrappers finish even later — `pytest_collection_finish`
+    catches those.
     """
     config.stash[_ORIGINAL_POSITIONS] = {item: i for i, item in enumerate(items)}
     result = yield
@@ -261,12 +205,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_finish(session: pytest.Session) -> None:
-    """Re-enforce chain contiguity after ALL ``pytest_collection_modifyitems``
-    activity — including tryfirst wrappers whose post-yield runs after this
-    plugin's own wrapper (core cacheprovider's ``--ff`` reorder, pytest-order's
-    ``--order-after-ff``). ``tryfirst`` so this runs before xdist's
-    WorkerInteractor reports collected IDs to the controller: workers must
-    report the final, regrouped order.
+    """Re-enforce chain contiguity after every sorter, including tryfirst
+    wrappers (``--ff``, ``--order-after-ff``). ``tryfirst`` so xdist workers
+    report the final, regrouped order to the controller.
     """
     positions = session.config.stash.get(_ORIGINAL_POSITIONS, {})
     _regroup_carrier_items(session.items, positions)
@@ -274,19 +215,13 @@ def pytest_collection_finish(session: pytest.Session) -> None:
 
 @pytest.hookimpl(optionalhook=True)
 def pytest_configure_node(node) -> None:
-    """xdist controller-side hook: pass the real dist mode to workers.
-
-    Workers cannot see it themselves — xdist resets ``config.option.dist`` to
-    "no" inside workers — so `JsonModule.collect` reads this key instead. The
-    hook only exists when pytest-xdist is installed (hence ``optionalhook``).
-    """
+    """Pass the real dist mode to xdist workers, which cannot see it themselves
+    (xdist resets their own ``dist`` option to "no")."""
     node.workerinput["httpchain_dist"] = node.config.getoption("dist", default="no")
 
 
-# Effective defaults, applied by _get_ini. The options are registered with
-# default=None so that None doubles as the "not explicitly set" sentinel —
-# both ini-file values and -o/--override-ini values surface uniformly through
-# getini(), with no reliance on config.inicfg (deprecated in pytest 9.1).
+# Applied by _get_ini: the options register with default=None, so None doubles
+# as the "not explicitly set" sentinel for both ini-file and -o values.
 _INI_DEFAULTS: dict[ConfigOptions, Any] = {
     ConfigOptions.SUFFIX: "http",
     ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH: 3,
@@ -296,12 +231,7 @@ _INI_DEFAULTS: dict[ConfigOptions, Any] = {
 
 
 def _get_ini(config: pytest.Config, option: ConfigOptions) -> Any:
-    """Read an httpchain ini option: its explicitly-set value, else the
-    default from ``_INI_DEFAULTS``.
-
-    The pre-0.10 un-prefixed aliases were deprecated through the 0.10 series
-    and removed in 0.11.
-    """
+    """An ini option's explicitly-set value, else its ``_INI_DEFAULTS`` entry."""
     value = config.getini(option)
     if value is not None:
         return value
@@ -316,8 +246,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         (ConfigOptions.MAX_PARALLEL_ITERATIONS, "Maximum number of parallel iterations allowed per stage.", "int"),
     ]
     for option, help_text, ini_type in ini_options:
-        # default=None is the "unset" sentinel; the real default lives in
-        # _INI_DEFAULTS and is applied by _get_ini.
         parser.addini(name=option, help=f"{help_text} Default: {_INI_DEFAULTS[option]}.", type=ini_type, default=None)  # ty: ignore[invalid-argument-type]
     parser.addoption(
         "--httpchain-output-dir",
@@ -328,11 +256,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    # Numeric options are registered with type="int", but pytest performs the
-    # int() conversion with a bare int(value) that raises ValueError for a
-    # non-integer ini value — which pytest renders as an INTERNALERROR traceback.
-    # Wrap the read so a garbage value becomes a clean usage error; the range
-    # checks likewise raise pytest.UsageError.
+    # pytest converts type="int" options with a bare int(), whose ValueError it
+    # renders as an INTERNALERROR; wrap it into a clean usage error.
     def _getint(option: ConfigOptions, minimum: int, minimum_message: str, maximum: int | None = None) -> int:
         try:
             value = _get_ini(config, option)
@@ -366,35 +291,24 @@ def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> pytest.Col
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> Any:
-    # pytest 8+ wrapper protocol: `yield` returns the inner hook's result directly
-    # (no Outcome wrapper). We augment the report's sections in place and must
-    # return the (same) result so it propagates to outer wrappers.
+    # The yielded report is augmented in place and returned so it propagates to
+    # outer wrappers.
     report: pytest.TestReport = yield
 
     if call.when == "call":
         if hasattr(item, "instance") and isinstance(item.instance, Carrier):
             carrier = item.instance
 
-            # A scenario-initialization failure (broken auth function, bad
-            # cert, unresolvable scenario substitutions) is scenario-level
-            # breakage, not the stage-level "expected failure" an xfail mark
-            # declares — pre-0.10 it was a hard collection error regardless of
-            # marks and must stay red. This wrapper registers after pytest's
-            # own skipping plugin, so it is OUTERMOST and its post-yield runs
-            # last:
-            # the xfail conversion has already happened by the time the report
-            # arrives here, and flipping it back is seen consistently by every
-            # downstream consumer (Session's failure counter, the terminal,
-            # xdist's worker->controller forwarding). NB: ``wasxfail`` holds
-            # the mark's REASON string (often empty) — presence, not
-            # truthiness, is the signal.
+            # An initialization failure breaks the whole scenario and must stay
+            # red, so undo the xfail conversion pytest's skipping plugin already
+            # applied (this wrapper is outermost, so every consumer sees the
+            # flip). `wasxfail` holds a reason string: presence is the signal.
             if type(carrier)._init_failed is not None and report.skipped and hasattr(report, "wasxfail"):
                 report.outcome = "failed"
                 del report.wasxfail
 
-            # A parallel stage runs many exchanges but the report shows ONE
-            # (the failing iteration, else the last) — say so in the section
-            # title instead of presenting it as the stage's only exchange.
+            # A parallel stage runs many exchanges but shows one; say so rather
+            # than presenting it as the stage's only exchange.
             suffix = ""
             if carrier.last_iterations_attempted > 1:
                 shown = "failing" if report.failed else "last"

@@ -1,24 +1,8 @@
-"""User function handling for pytest-httpchain.
+"""Importing and invoking user functions named ``"module.submodule:func"``.
 
-This module provides utilities for importing and invoking user-defined functions
-from test scenarios. Functions must be specified as explicit module paths in
-"module.submodule:func" format. Bare function names (without a module path) are
-rejected with UserFunctionError.
-
-Example:
-    >>> from pytest_httpchain.userfunc import call_function
-    >>> result = call_function("mymodule:my_auth_handler")
-
-Key Behaviors
--------------
-``wrap_function``'s ``default_kwargs`` are merged with call-time kwargs, with
-call-time kwargs winning on conflicts.
-
-Import failures and runtime call failures append the underlying exception to
-the message (``...: {cause}``) and also chain it as ``__cause__``. Consumers in
-the main plugin render only the message text (stage failures use
-``pytrace=False``; the validator embeds ``str(e)``), so the cause must live in
-the message -- not just the chain -- to be visible.
+Failures raise `UserFunctionError` with the cause appended to the message, not
+just chained: consumers render only the message text (stage failures use
+``pytrace=False``, the validator embeds ``str(e)``).
 """
 
 import importlib
@@ -35,27 +19,16 @@ class UserFunctionError(HttpChainError):
     """Error importing or calling a user-supplied function."""
 
 
-# The grammar lives in constants (bottom layer) so both the models' validator
-# and this importer share one encoding without pinning this module below models.
+# Shared with the models' validator; lives in constants so neither module has to
+# sit below the other.
 NAME_PATTERN = USER_FUNCTION_NAME_PATTERN
 
 
 def import_function(name: str) -> Callable[..., Any]:
-    """Import a function by name.
-
-    Args:
-        name: Function name in "module.path:function_name" format
-
-    Returns:
-        The imported callable function
-
-    Raises:
-        UserFunctionError: If function cannot be found or imported
-    """
+    """Import a ``"module.path:function_name"`` function."""
     match = NAME_PATTERN.match(name)
     if not match:
-        # Keep the actionable hint for the most common mistake — a bare
-        # function name without its module path.
+        # The most common mistake deserves an actionable hint.
         if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", name):
             raise UserFunctionError(f"Module path is required: use 'module:{name}' format instead of '{name}'")
         raise UserFunctionError(f"Invalid function name format: {name}")
@@ -66,9 +39,7 @@ def import_function(name: str) -> Callable[..., Any]:
     try:
         module = importlib.import_module(module_path)
     except Exception as e:
-        # Importing a user module runs its top-level code, which can raise
-        # anything (not just ImportError); wrap all of it so the failure goes
-        # through the curated UserFunctionError path instead of a raw traceback.
+        # Importing runs the module's top-level code, which can raise anything.
         raise UserFunctionError(f"Failed to import module '{module_path}': {e}") from e
 
     if not hasattr(module, function_name):
@@ -82,53 +53,26 @@ def import_function(name: str) -> Callable[..., Any]:
 
 
 def call_function(name: str, /, *args, **kwargs) -> Any:
-    """Import and call a user function.
-
-    Args:
-        name: Function name in "module.path:function_name" format (positional-only)
-        *args: Positional arguments for the function
-        **kwargs: Keyword arguments for the function
-
-    Returns:
-        Result of the function call
-
-    Raises:
-        UserFunctionError: If function cannot be imported or called
-    """
+    """Import and call a user function."""
     func = import_function(name)
 
     try:
         return func(*args, **kwargs)
     except UserFunctionError:
-        # Already curated (e.g. the user function called another httpchain helper);
-        # propagate as-is instead of double-wrapping. Mirrors wrap_function.
+        # Already curated: propagate rather than double-wrap.
         raise
     except Exception as e:
         raise UserFunctionError(f"Error calling function '{name}': {e}") from e
 
 
 def wrap_function(name: str, /, default_kwargs: dict[str, Any] | None = None) -> Callable[..., Any]:
-    """Create a wrapped callable for a user function.
-
-    The wrapped function can be called directly in template expressions.
-    Default kwargs are merged with call-time kwargs (call-time wins).
-
-    Args:
-        name: Function name in "module.path:function_name" format (positional-only)
-        default_kwargs: Optional default keyword arguments
-
-    Returns:
-        A callable that loads and executes the user function
-    """
-    # Normalize to non-None values for type checker
+    """A callable that imports and runs a user function, for use inside template
+    expressions. Call-time kwargs win over ``default_kwargs``."""
     default_kwargs_dict: dict[str, Any] = default_kwargs if default_kwargs is not None else {}
 
     def wrapped(*args, **kwargs):
-        # Import, call and error-wrapping semantics are call_function's — this
-        # only pre-merges the defaults (call-time kwargs win on conflict).
         return call_function(name, *args, **{**default_kwargs_dict, **kwargs})
 
-    # Set a meaningful name for debugging
     wrapped.__name__ = f"wrapped_{name.replace(':', '_').replace('.', '_')}"
     return wrapped
 
@@ -136,10 +80,8 @@ def wrap_function(name: str, /, default_kwargs: dict[str, Any] | None = None) ->
 def call_target(func_call: UserFunctionCall) -> tuple[str, dict[str, Any]]:
     """Destructure a ``UserFunctionCall`` into ``(import name, declared kwargs)``.
 
-    The single dispatch over the call union, shared by `call_user_function` (which
-    invokes it) and the validator's deep checks (which compare the declared
-    kwargs against the imported signature), so a new union variant is handled in
-    one place. Raises ``StageExecutionError`` for an unsupported shape.
+    The single dispatch over the call union, shared by `call_user_function` and
+    the validator's deep checks.
     """
     match func_call:
         case UserFunctionName():
@@ -151,13 +93,10 @@ def call_target(func_call: UserFunctionCall) -> tuple[str, dict[str, Any]]:
 
 
 def call_user_function(func_call: UserFunctionCall, **extra_kwargs: Any) -> object:
-    """Import and call a user function described by a ``UserFunctionCall`` model.
+    """Import and call a user function described by a model.
 
-    Declared kwargs are merged under ``extra_kwargs`` (caller-supplied values win
-    on conflict). Used both for request/scenario auth callables and for
-    verify/save user functions, where ``extra_kwargs`` carries the ``response``.
-    Lives here (not utils) because it dispatches on the model union — this module
-    sits above models exactly so it can own that dispatch.
+    Declared kwargs merge under ``extra_kwargs``, which carries the ``response``
+    for verify/save functions.
     """
     name, kwargs = call_target(func_call)
     return call_function(name, **{**kwargs, **extra_kwargs})

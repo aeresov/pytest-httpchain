@@ -1,37 +1,23 @@
 import re
 
-# Pattern that handles nested braces in expressions
-# Uses negative lookahead (?:(?!\}\}).)+ to match any character
-# that is not followed by }}, allowing single } in dict literals
-# Note: If a dict literal ends with }}, add a space before the closing }}
-# Example: {{ {'key': value} }} instead of {{ {'key': value}}}
-#
-# Single-line only: `.` does not match newlines and the pattern is compiled
-# without re.DOTALL, so an expression that spans newlines (e.g. a multi-line
-# comprehension) is NOT recognised as a template. This is intentional —
-# template values come from individual JSON string scalars, which are
-# single-line in practice, and every consumer (substitution.py, models/types.py,
-# the validator) shares this one pattern, so keeping it single-line keeps their
-# behaviour aligned. Write multi-line logic in a user function instead.
+# The lookahead allows a single `}` inside the expression (dict literals), so
+# `{{ {'k': v} }}` needs the space before the closing braces. Single-line by
+# design: template values are JSON string scalars, and every consumer shares
+# this pattern. Multi-line logic belongs in a user function.
 _TEMPLATE_INNER = r"(?:(?!\}\}).)+"
 TEMPLATE_PATTERN = r"\{\{(?P<expr>" + _TEMPLATE_INNER + r")\}\}"
-# ECMA-262-compatible variant for JSON Schema `pattern` sites (same match
-# semantics, no capture): JSON Schema defines `pattern` as an ECMA-262 regex,
-# and Python's named-group spelling `(?P<` is a SyntaxError in JS engines —
-# VS Code's JSON language service silently drops a pattern it cannot compile.
+# For JSON Schema `pattern` sites: same semantics, no named group, which JS
+# regex engines reject (and VS Code then silently drops the pattern).
 TEMPLATE_PATTERN_ECMA = r"\{\{" + _TEMPLATE_INNER + r"\}\}"
 
 
 def is_complete_template(value: str) -> bool:
-    """Check if a string is a complete template expression."""
-    # Delegate to the single matcher so the "complete template" definition has one
-    # source of truth (predicate and extractor cannot drift apart).
+    """True when the whole string is one ``{{ }}`` expression."""
     return extract_template_expression(value) is not None
 
 
 def extract_template_expression(value: str) -> str | None:
-    """Extract the expression part from a complete template string."""
-    # fullmatch() already anchors both ends, so no leading ^ / trailing $ is needed.
+    """The expression inside a complete template string, else None."""
     if match := re.fullmatch(rf"\s*{TEMPLATE_PATTERN}\s*", value):
         return match.group("expr").strip()
     return None

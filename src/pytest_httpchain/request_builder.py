@@ -1,12 +1,8 @@
-"""Translation of scenario models into httpx call arguments.
+"""Translation of resolved scenario models into httpx call arguments: the
+client's, once per scenario, and a request's, once per iteration.
 
-Two pure builders, both consumed by ``carrier``: `build_client_kwargs` turns a
-scenario's resolved ``ssl``/``auth`` into ``httpx.Client(**kwargs)`` arguments
-once per scenario, and `build_request_kwargs` turns a resolved `Request` into
-``client.request(**kwargs)`` arguments once per iteration. Both take the
-already template-resolved models — walking templates is the carrier's job —
-and the scenario file's directory, against which relative dialect paths
-resolve.
+Both builders take already-resolved models (walking templates is the carrier's
+job) and the scenario's directory, which relative paths resolve against.
 """
 
 import base64
@@ -32,25 +28,19 @@ from pytest_httpchain.utils import resolve_scenario_path
 
 
 def normalize_cert(cert: Any) -> str | tuple[str, ...]:
-    """Stringify SSL client-cert paths for httpx.
-
-    The model stores ``cert`` as ``pathlib.Path`` (single) or a tuple of Paths.
-    httpx builds the SSL context via ``load_cert_chain(*cert)`` for a non-tuple
-    cert, so a bare ``Path`` is unpacked and raises ``TypeError``. Passing string
-    paths avoids that for both the single-path and (cert, key) tuple forms.
-    """
+    """Stringify client-cert paths: httpx unpacks a non-tuple cert into
+    ``load_cert_chain(*cert)``, which a bare ``Path`` does not survive."""
     if isinstance(cert, list | tuple):
         return tuple(str(p) for p in cert)
     return str(cert)
 
 
 def build_client_kwargs(ssl: SSLConfig, auth: UserFunctionCall | None, scenario_dir: Path | None) -> dict[str, Any]:
-    """Arguments for the scenario's shared ``httpx.Client``.
+    """Arguments for the scenario's shared client.
 
-    Both models arrive template-resolved. A Path-valued ``ssl.verify`` is a CA
-    bundle file and, like ``ssl.cert``, is scenario-relative; ``auth`` is
-    invoked here because httpx wants the resulting ``httpx.Auth`` flow, not the
-    call description.
+    A Path-valued ``verify`` is a CA bundle and, like ``cert``, is
+    scenario-relative; ``auth`` is invoked because httpx wants the resulting
+    flow, not the call description.
     """
     verify = ssl.verify
     if isinstance(verify, Path):
@@ -73,11 +63,8 @@ def build_client_kwargs(ssl: SSLConfig, auth: UserFunctionCall | None, scenario_
 
 
 def _read_file(path: Path, declared: Any, missing: str, unreadable: str) -> bytes:
-    """Read a scenario-referenced file, mapping I/O failures to `RequestError`.
-
-    ``declared`` is the path as written in the scenario (the resolved one is an
-    implementation detail of where the scenario file lives), and the two message
-    prefixes keep each body type's wording."""
+    """Read a scenario-referenced file, reporting I/O failures as `RequestError`
+    against the path as written in the scenario."""
     try:
         return path.read_bytes()
     except FileNotFoundError as e:
@@ -135,8 +122,6 @@ def build_request_kwargs(request_model: Request, scenario_dir: Path | None = Non
             request_kwargs["files"] = files_list
 
         case _:
-            # New body-type variant not handled here: a plugin bug — fail
-            # loudly instead of silently sending a request with NO body.
             raise RuntimeError(f"Unhandled request body type: {type(request_model.body).__name__}")
 
     return request_kwargs

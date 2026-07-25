@@ -434,7 +434,7 @@
         }
       ],
       "title": "HeaderMatcher",
-      "description": "Declarative matcher for one expected response header.\n\nAt least one field must be set. An absent header behaves as an empty\nstring, mirroring the body ``contains``/``matches`` semantics (so\n``not_contains``/``not_matches`` pass vacuously for a missing header)."
+      "description": "Matcher for one expected response header; at least one field must be set.\nAn absent header behaves as an empty string, as bodies do."
     },
     "IndividualParameter": {
       "anyOf": [

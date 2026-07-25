@@ -1,17 +1,10 @@
-"""JSON reference resolution for pytest-httpchain.
+"""JSON loading with reference resolution and deep merging.
 
-This package provides JSON loading with reference resolution and deep merging
-support. References use the ``$include``/``$merge`` directives (preferred, they
-avoid conflicts with VS Code's JSON Schema validation) or the legacy ``$ref``;
-all three behave identically. References can point to other local files or to
-JSON pointers within the same document, with security controls for parent
-directory traversal.
+``$include``/``$merge`` (preferred, since VS Code treats ``$ref`` specially) and
+the legacy ``$ref`` behave identically, and point at another local file, a JSON
+pointer within the document, or both — under a parent-traversal sandbox.
 
-Example:
-    >>> from pathlib import Path
-    >>> from pytest_httpchain.jsonref import load_json
-    >>> # base.json contains {"timeout": 30}; the scenario merges it in:
-    >>> #   {"$include": "base.json", "url": "https://example.com"}
+    >>> # {"$include": "base.json", "url": "https://example.com"}
     >>> data = load_json(Path("test_scenario.http.json"))
 """
 

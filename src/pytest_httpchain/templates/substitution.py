@@ -24,13 +24,8 @@ from pytest_httpchain.templates.expressions import TEMPLATE_PATTERN, extract_tem
 
 
 def set_max_comprehension_length(length: int) -> None:
-    """Configure simpleeval's comprehension-length cap.
-
-    simpleeval exposes the cap only as a module global; this is the one
-    sanctioned place that mutates it, so consumers (the plugin's ini option)
-    do not reach into a third-party module this package owns. Process-wide by
-    nature — it affects every simpleeval user in the process.
-    """
+    """Set simpleeval's comprehension-length cap, which it exposes only as a
+    module global — so this is process-wide, and the one place that writes it."""
     simpleeval.MAX_COMPREHENSION_LENGTH = length  # ty: ignore[invalid-assignment]
 
 
@@ -61,42 +56,24 @@ JSON_LITERALS = {
     "null": None,
 }
 
-# Names available inside an expression without the user defining them: the safe
-# builtins, JSON literals, the context helpers added at eval time, and
-# simpleeval's own defaults (int/float/str/rand/randint). The validator imports
-# this to tell a genuinely undefined variable from an engine-provided name.
+# Names an expression gets for free. The validator reads this to tell an
+# undefined variable from an engine-provided name.
 TEMPLATE_BUILTINS = set(SAFE_FUNCTIONS) | set(JSON_LITERALS) | {"exists", "get"} | set(DEFAULT_FUNCTIONS)
 
 
 def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
-    """Evaluate an expression safely using simpleeval with compound types support.
-
-    Args:
-        expr: The expression to evaluate
-        context: Dictionary of variables available in the expression
-
-    Returns:
-        The evaluated result
-
-    Raises:
-        TemplatesError: If variable is not found or expression is invalid
-    """
-    # simpleeval keeps callables and data in two separate maps (functions= vs
-    # names=), so the context is partitioned by callable(): a callable (user
-    # function / factory fixture) goes to functions=, everything else to names=.
+    """Evaluate one expression; every failure becomes a `TemplatesError`."""
+    # simpleeval keeps callables and data in separate maps.
     callables = {key: value for key, value in context.items() if callable(value)}
     names = {key: value for key, value in context.items() if not callable(value)}
 
-    # exists()/get() must see the WHOLE context (callables included), not just the
-    # `names` half, so they are bound to a full copy: `exists(name)` is the copy's
-    # membership test, `get(name, default)` its lookup.
+    # exists()/get() must see the whole context, callables included, so they are
+    # bound to a full copy.
     context_dict = dict(context)
 
-    # Merge order is load-bearing: on a name collision the LAST mapping wins, so
-    # user-supplied `callables` can shadow SAFE_FUNCTIONS/DEFAULT_FUNCTIONS, but the
-    # engine's own `exists`/`get` are merged last and therefore cannot be overridden
-    # by a context value named "exists"/"get". Likewise user `names` override the
-    # JSON literals. Reordering these `|` operands changes which value wins.
+    # Merge order is load-bearing: last wins, so user callables shadow the safe
+    # functions while `exists`/`get` cannot be overridden, and user names shadow
+    # the JSON literals.
     eval_instance = EvalWithCompoundTypes(
         functions=SAFE_FUNCTIONS
         | DEFAULT_FUNCTIONS
@@ -108,9 +85,8 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
         names=JSON_LITERALS | names,
     )
 
-    # Render the expression back in its original {{ … }} form for error messages
-    # (an f-string would otherwise collapse {{ }} to single braces, showing text
-    # that does not appear in the user's scenario).
+    # Rebuilt in its original {{ … }} form: an f-string would collapse the braces
+    # and show text that is not in the user's scenario.
     display = "{{ " + expr + " }}"
     try:
         return eval_instance.eval(expr)
@@ -130,23 +106,17 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
         error_type = type(e).__name__
         raise TemplatesError(f"{error_type} in expression '{display}': {e}") from e
     except Exception as e:
-        # Terminal catch-all: anything a context callable (user function or
-        # factory fixture invoked inside the expression) raises — including
-        # UserFunctionError or arbitrary exceptions — would otherwise escape the
-        # enumerated cases above as a raw traceback, breaking the
-        # all-errors-are-TemplatesError contract.
+        # A context callable can raise anything, and everything out of here must
+        # be a TemplatesError.
         raise TemplatesError(f"Error evaluating expression '{display}': {e}") from e
 
 
 def _sub_string(line: str, context: Mapping[str, Any]) -> Any:
-    # Whole string is a single template expression (surrounding whitespace
-    # allowed) — uses the same predicate the models apply when typing a field
-    # as TemplateExpression, so type preservation is consistent between schema
-    # validation and runtime evaluation.
+    # A whole-string expression keeps its evaluated type; anything else is
+    # interpolated into the string.
     if (expr := extract_template_expression(line)) is not None:
         return _eval_with_context(expr, context)
 
-    # Otherwise, interpolate embedded template expressions into the string.
     def _repl(match: re.Match[str]) -> str:
         return str(_eval_with_context(match.group("expr").strip(), context))
 
@@ -154,7 +124,7 @@ def _sub_string(line: str, context: Mapping[str, Any]) -> Any:
 
 
 def contains_template(obj: Any) -> bool:
-    """Check if an object contains any template strings."""
+    """True when any string anywhere in the structure holds a template."""
     match obj:
         case str():
             return bool(re.search(TEMPLATE_PATTERN, obj))
@@ -171,14 +141,11 @@ def contains_template(obj: Any) -> bool:
 
 
 def walk(obj: Any, context: Mapping[str, Any]) -> Any:
-    """Recursively substitute values in string attributes of an arbitrary object.
+    """Substitute every template in a structure, returning the same shape.
 
-    Args:
-        obj: The object to walk through (can be dict, list, str, BaseModel, SimpleNamespace, etc.)
-        context: Mapping of variables for substitution (dict, ChainMap, etc.)
-
-    Returns:
-        The object with all template expressions substituted
+    A model is dumped, substituted and re-validated (so the result is checked
+    against the real field types), and returned untouched when it holds no
+    template at all.
     """
     match obj:
         case str():

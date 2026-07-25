@@ -1,9 +1,7 @@
-"""Structured stage data-flow analysis for the ``show`` and ``graph`` CLI commands.
+"""Stage data-flow analysis for the ``show`` and ``graph`` CLI commands.
 
-Consumes the same per-stage scope model (``scoping.stage_scopes``) as the
-order-aware validator, but produces a graph instead of diagnostics: which
-variables each stage saves, which it consumes from earlier stages, and the
-producer -> consumer edges between stages.
+Reads the same per-stage scopes as the validator, but produces a graph instead
+of diagnostics: what each stage saves, what it consumes, and the edges between.
 """
 
 from typing import Any
@@ -60,26 +58,18 @@ class DataFlow(BaseModel):
 def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     """Build the stage data-flow graph for a validated scenario.
 
-    A stage *consumes* a variable when one of its templates references a name
-    saved by an earlier stage and not shadowed in that template's phase. Each
-    phase is judged against the shadow set scoping defines for it
-    (`StageScopes.*_shadows`): substitutions and the ``parallel`` config
-    resolve BEFORE iterations exist, so foreach parameters shadow only
-    request/response references; substitution steps resolve in order, so only
-    PRIOR steps' names shadow a step's references; ``always_run`` resolves
-    before stage substitutions exist, so only fixtures and parametrize
-    parameters shadow it. ``parametrize`` values are excluded — they resolve
-    against scenario scope, never saved values.
+    A stage consumes a variable when one of its templates references a name an
+    earlier stage saved and its own phase does not shadow — each phase judged
+    against the shadow set `StageScopes` defines for it. ``parametrize`` values
+    are excluded: they resolve against scenario scope, never saved values.
     """
     raws = raw_stages(test_data)
     scopes = stage_scopes(scenario)
 
     stages: list[StageFlow] = []
     edges: list[DataFlowEdge] = []
-    # The most recent stage (so far) that saved each name. A re-saved variable is
-    # attributed to its LAST writer before the consumer, matching the runtime
-    # ChainMap layering where a later save shadows an earlier one — not the first
-    # writer, which is what the graph used to (incorrectly) draw.
+    # A re-saved variable is attributed to its last writer before the consumer,
+    # matching the runtime layering where a later save shadows an earlier one.
     last_save_stage: dict[str, int] = {}
 
     for i, stage in enumerate(scenario.stages):
@@ -88,19 +78,13 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
 
         consumes: set[str] = set()
 
-        # Substitution steps resolve in order: each step sees only PRIOR
-        # steps' names, so their shadowing accumulates step by step. Only
-        # `vars` values are rendered at seed time (`functions` kwargs are
-        # passed raw), so only they can consume an earlier save.
         for entry_refs, prior_sub_names in substitution_step_refs(raw.get("substitutions")):
             consumes |= _consumed(entry_refs, scope.earlier_saves, scope.always_run_shadows | prior_sub_names)
 
         consumes |= _consumed(extract_template_variables(raw.get("parallel")), scope.earlier_saves, scope.pre_iteration_shadows)
         consumes |= _consumed(extract_template_variables(raw.get("request")), scope.earlier_saves, scope.request_shadows)
-        # Inside response steps the reserved `response` metadata namespace
-        # shadows a same-named earlier save, so a `response` reference there is
-        # NOT a data dependency on the earlier stage (in request/substitutions
-        # templates it still is — no namespace exists in those scopes).
+        # In response steps the `response` namespace shadows a same-named save,
+        # so a reference to it there is not a dependency on the earlier stage.
         consumes |= _consumed(extract_template_variables(raw.get("response")) - {RESPONSE_META_NAME}, scope.earlier_saves, scope.request_shadows)
         consumes |= _consumed(extract_template_variables(raw.get("always_run")), scope.earlier_saves, scope.always_run_shadows)
 
