@@ -17,7 +17,7 @@ from pytest_httpchain.jsonref.plumbing.path import parse_json_pointer, validate_
 # from the document root to a value. Positions are composed across file
 # boundaries: content spliced in via a reference is judged at the reference
 # site's position plus its fragment-relative path.
-OpaquePredicate = Callable[[tuple[str | int, ...]], bool]
+type OpaquePredicate = Callable[[tuple[str | int, ...]], bool]
 
 REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 

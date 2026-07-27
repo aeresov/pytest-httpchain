@@ -371,7 +371,7 @@ class TestWalkErrorMessages:
     """Test error messages with parametrization."""
 
     @pytest.mark.parametrize(
-        "expr,context,expected_match",
+        ("expr", "context", "expected_match"),
         [
             ("{{ missing_var }}", {}, "Undefined variable"),
             ("{{ unknown_func() }}", {}, "Unknown function"),

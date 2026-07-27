@@ -75,7 +75,7 @@ CHAIN_SCENARIOS = [
 
 @pytest.mark.parametrize("mode", ["loadscope", "loadfile", "loadgroup"])
 def test_stage_order_strict_across_scenarios(pytester, mode):
-    """Ordering stress: pytest-order must sequence stages inside each worker.
+    """Ordering stress: the plugin's collection hooks must sequence stages inside each worker.
 
     Three scenarios of six strictly-chained stages each — stage k verifies
     ``x == base + k - 1`` before incrementing, so any stage that runs out of

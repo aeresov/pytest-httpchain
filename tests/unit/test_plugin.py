@@ -4,100 +4,65 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pytest_httpchain.constants import ConfigOptions
-from pytest_httpchain.plugin import pytest_collect_file, pytest_configure
-
-
-def make_config(suffix="http", ref_depth=3, max_comp=50000, max_parallel=10000):
-    # M17: numeric options are registered type="int", so getini returns ints and
-    # range-check failures raise pytest.UsageError (not bare ValueError).
-    # getini(name) returns None for anything not explicitly modeled — matching
-    # the real registration, where default=None is the "unset" sentinel (the
-    # legacy alias names therefore read as unset here).
-    config = MagicMock()
-    values = {
-        str(ConfigOptions.SUFFIX): suffix,
-        str(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH): ref_depth,
-        str(ConfigOptions.MAX_COMPREHENSION_LENGTH): max_comp,
-        str(ConfigOptions.MAX_PARALLEL_ITERATIONS): max_parallel,
-        "addopts": [],
-    }
-    config.getini.side_effect = lambda name: values.get(str(name))
-    config.invocation_params.args = []
-    return config
+from pytest_httpchain.plugin import pytest_collect_file
 
 
 class TestPytestConfigure:
+    """Configuration validation through REAL pytest machinery.
+
+    ``pytester.parseconfigure`` builds a genuine Config from an ini file, so
+    option registration, pytest's type="int" coercion (whose bare ValueError
+    the plugin must wrap into a clean UsageError), and the range checks are
+    exercised end to end instead of emulated on a mock."""
+
+    def test_defaults_configure_cleanly(self, pytester):
+        pytester.parseconfigure()
+
     @pytest.mark.parametrize(
-        "kwargs",
+        ("option", "value"),
         [
-            pytest.param({}, id="defaults"),
-            pytest.param({"suffix": "mytest123"}, id="suffix-alphanumeric"),
-            pytest.param({"suffix": "my_test"}, id="suffix-underscore"),
-            pytest.param({"suffix": "my-test"}, id="suffix-hyphen"),
-            pytest.param({"ref_depth": 0}, id="ref-depth-zero"),
-            pytest.param({"ref_depth": 10}, id="ref-depth-positive"),
-            pytest.param({"max_comp": 1}, id="max-comp-minimum"),
-            pytest.param({"max_comp": 1000000}, id="max-comp-maximum"),
-            pytest.param({"max_parallel": 1}, id="max-parallel-minimum"),
-            pytest.param({"max_parallel": 1000000}, id="max-parallel-maximum"),
+            pytest.param(ConfigOptions.SUFFIX, "mytest123", id="suffix-alphanumeric"),
+            pytest.param(ConfigOptions.SUFFIX, "my_test", id="suffix-underscore"),
+            pytest.param(ConfigOptions.SUFFIX, "my-test", id="suffix-hyphen"),
+            pytest.param(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, 0, id="ref-depth-zero"),
+            pytest.param(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, 10, id="ref-depth-positive"),
+            pytest.param(ConfigOptions.MAX_COMPREHENSION_LENGTH, 1, id="max-comp-minimum"),
+            pytest.param(ConfigOptions.MAX_COMPREHENSION_LENGTH, 1000000, id="max-comp-maximum"),
+            pytest.param(ConfigOptions.MAX_PARALLEL_ITERATIONS, 1, id="max-parallel-minimum"),
+            pytest.param(ConfigOptions.MAX_PARALLEL_ITERATIONS, 1000000, id="max-parallel-maximum"),
         ],
     )
-    def test_valid_config(self, kwargs):
+    def test_valid_config(self, pytester, option, value):
+        pytester.makeini(f"[pytest]\n{option} = {value}\n")
         # Should not raise.
-        pytest_configure(make_config(**kwargs))
+        pytester.parseconfigure()
 
     @pytest.mark.parametrize(
-        ("kwargs", "match"),
+        ("option", "value", "match"),
         [
-            pytest.param({"suffix": "test.http"}, "suffix must contain only alphanumeric", id="suffix-special-chars"),
-            pytest.param({"suffix": "test http"}, "suffix must contain only alphanumeric", id="suffix-spaces"),
-            pytest.param({"suffix": "a" * 33}, "suffix must contain only alphanumeric", id="suffix-too-long"),
-            pytest.param({"suffix": ""}, "suffix must contain only alphanumeric", id="suffix-empty"),
-            pytest.param({"ref_depth": -1}, "must be non-negative", id="ref-depth-negative"),
-            pytest.param({"max_comp": 0}, "must be a positive integer", id="max-comp-zero"),
-            pytest.param({"max_comp": -1}, "must be a positive integer", id="max-comp-negative"),
-            pytest.param({"max_comp": 1000001}, "must not exceed 1,000,000", id="max-comp-too-large"),
-            pytest.param({"max_parallel": 0}, "must be a positive integer", id="max-parallel-zero"),
-            pytest.param({"max_parallel": -1}, "must be a positive integer", id="max-parallel-negative"),
-            pytest.param({"max_parallel": 1000001}, "must not exceed 1,000,000", id="max-parallel-too-large"),
+            pytest.param(ConfigOptions.SUFFIX, "test.http", "suffix must contain only alphanumeric", id="suffix-special-chars"),
+            pytest.param(ConfigOptions.SUFFIX, "test http", "suffix must contain only alphanumeric", id="suffix-spaces"),
+            pytest.param(ConfigOptions.SUFFIX, "a" * 33, "suffix must contain only alphanumeric", id="suffix-too-long"),
+            pytest.param(ConfigOptions.SUFFIX, "", "suffix must contain only alphanumeric", id="suffix-empty"),
+            pytest.param(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, -1, "must be non-negative", id="ref-depth-negative"),
+            pytest.param(ConfigOptions.MAX_COMPREHENSION_LENGTH, 0, "must be a positive integer", id="max-comp-zero"),
+            pytest.param(ConfigOptions.MAX_COMPREHENSION_LENGTH, -1, "must be a positive integer", id="max-comp-negative"),
+            pytest.param(ConfigOptions.MAX_COMPREHENSION_LENGTH, 1000001, "must not exceed 1,000,000", id="max-comp-too-large"),
+            pytest.param(ConfigOptions.MAX_PARALLEL_ITERATIONS, 0, "must be a positive integer", id="max-parallel-zero"),
+            pytest.param(ConfigOptions.MAX_PARALLEL_ITERATIONS, -1, "must be a positive integer", id="max-parallel-negative"),
+            pytest.param(ConfigOptions.MAX_PARALLEL_ITERATIONS, 1000001, "must not exceed 1,000,000", id="max-parallel-too-large"),
+            # pytest's type="int" coercion is a bare int(value) raising
+            # ValueError — the plugin must wrap it into a clean UsageError
+            # instead of letting pytest render an INTERNALERROR traceback.
+            pytest.param(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "notanumber", "must be an integer", id="ref-depth-non-integer"),
+            pytest.param(ConfigOptions.MAX_COMPREHENSION_LENGTH, "notanumber", "must be an integer", id="max-comp-non-integer"),
+            pytest.param(ConfigOptions.MAX_PARALLEL_ITERATIONS, "notanumber", "must be an integer", id="max-parallel-non-integer"),
         ],
     )
-    def test_invalid_config(self, kwargs, match):
+    def test_invalid_config(self, pytester, option, value, match):
+        pytester.makeini(f"[pytest]\n{option} = {value}\n")
         with pytest.raises(pytest.UsageError, match=match):
-            pytest_configure(make_config(**kwargs))
-
-    @pytest.mark.parametrize(
-        "bad_option",
-        [
-            ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH,
-            ConfigOptions.MAX_COMPREHENSION_LENGTH,
-            ConfigOptions.MAX_PARALLEL_ITERATIONS,
-        ],
-    )
-    def test_non_integer_ini_value_raises_usage_error(self, bad_option):
-        """M9: pytest's type="int" handling does a bare int(value) that raises
-        ValueError for a non-integer ini value, which pytest renders as an
-        INTERNALERROR traceback. The plugin must turn it into a clean UsageError."""
-        config = MagicMock()
-        defaults = {
-            ConfigOptions.SUFFIX: "http",
-            ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH: 3,
-            ConfigOptions.MAX_COMPREHENSION_LENGTH: 50000,
-            ConfigOptions.MAX_PARALLEL_ITERATIONS: 10000,
-        }
-
-        def getini(name):
-            if name == bad_option:
-                raise ValueError("invalid literal for int() with base 10: 'notanumber'")
-            if str(name) == "addopts":
-                return []
-            # legacy aliases (and anything unmodeled) read as unset
-            return defaults.get(name)
-
-        config.getini.side_effect = getini
-        config.invocation_params.args = []
-        with pytest.raises(pytest.UsageError, match="must be an integer"):
-            pytest_configure(config)
+            pytester.parseconfigure()
 
 
 class TestPytestCollectFile:

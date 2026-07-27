@@ -16,7 +16,7 @@ from pytest_httpchain.models.entities import (
     Verify,
     VerifyStep,
 )
-from tests.unit.models.conftest import assert_error_types, make_request, make_stage, stage_dict
+from tests.unit.models.helpers import assert_error_types, make_request, make_stage, stage_dict
 
 
 class TestSubstitutionsListFormat:
@@ -46,7 +46,8 @@ class TestSubstitutionsListFormat:
         assert len(stage.substitutions) == 2
         assert all(isinstance(s, VarsSubstitution) for s in stage.substitutions)
         sub0, sub1 = stage.substitutions[0], stage.substitutions[1]
-        assert isinstance(sub0, VarsSubstitution) and isinstance(sub1, VarsSubstitution)
+        assert isinstance(sub0, VarsSubstitution)
+        assert isinstance(sub1, VarsSubstitution)
         assert sub0.vars == {"key1": "value1"}
         assert sub1.vars == {"key2": "value2"}
 

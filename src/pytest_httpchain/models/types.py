@@ -54,35 +54,23 @@ def validate_python_identifier(v: str) -> str:
     return v
 
 
-# Map schema versions to validators
-SCHEMA_VALIDATORS = {
-    "draft-03": jsonschema.Draft3Validator,
-    "draft-3": jsonschema.Draft3Validator,
-    "draft-04": jsonschema.Draft4Validator,
-    "draft-4": jsonschema.Draft4Validator,
-    "draft-06": jsonschema.Draft6Validator,
-    "draft-6": jsonschema.Draft6Validator,
-    "draft-07": jsonschema.Draft7Validator,
-    "draft-7": jsonschema.Draft7Validator,
-    "2019-09": jsonschema.Draft201909Validator,
-    "2020-12": jsonschema.Draft202012Validator,
-}
-
-
 logger = logging.getLogger(__name__)
 
 
+def json_schema_validator_class(schema: dict[str, Any]) -> type[jsonschema.protocols.Validator]:
+    """Resolve the validator class for a schema's declared dialect.
+
+    jsonschema's own ``validator_for`` resolves ``$schema`` (unknown or absent
+    URIs fall back to the default). Draft 2020-12 is pinned as that default —
+    the same dialect ``jsonschema.validate`` would pick — so meta-checking
+    (`check_json_schema`) and instance validation (carrier) always agree.
+    """
+    return jsonschema.validators.validator_for(schema, default=jsonschema.Draft202012Validator)
+
+
 def check_json_schema(schema: dict[str, Any]) -> None:
-    """Check JSON schema validity using appropriate validator version."""
-    schema_uri = schema.get("$schema", "http://json-schema.org/draft-07/schema#")
-
-    validator_class = next((validator for version_key, validator in SCHEMA_VALIDATORS.items() if version_key in schema_uri), None)
-    if validator_class is None:
-        validator_class = jsonschema.Draft7Validator
-        if "$schema" in schema:
-            logger.warning(f"Unrecognized JSON Schema version '{schema_uri}', falling back to Draft 7")
-
-    validator_class.check_schema(schema)
+    """Check JSON schema validity against its declared dialect's meta-schema."""
+    json_schema_validator_class(schema).check_schema(schema)
 
 
 def validate_json_schema_inline(v: dict[str, Any]) -> dict[str, Any]:

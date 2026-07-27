@@ -13,7 +13,7 @@ from pytest_httpchain.models.entities import (
     UserFunctionsSave,
     VarsSubstitution,
 )
-from tests.unit.models.conftest import assert_error_types, make_stage
+from tests.unit.models.helpers import assert_error_types, make_stage
 
 
 class TestJMESPathSave:

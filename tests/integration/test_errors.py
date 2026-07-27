@@ -3,12 +3,10 @@ import sys
 
 import pytest
 
-from tests.integration.conftest import run_scenario
 
-
-def test_verify_failure(pytester):
+def test_verify_failure(run_scenario):
     """Test verification failure reports clearly"""
-    result = run_scenario(pytester, "errors/test_verify_failure.http.json")
+    result = run_scenario("errors/test_verify_failure.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
     # A non-parallel stage failure must surface the real error, not be
     # mislabeled as a parallel-execution failure (M1).
@@ -16,41 +14,41 @@ def test_verify_failure(pytester):
     result.stdout.no_fnmatch_line("*Parallel execution failed*")
 
 
-def test_timeout_error(pytester):
+def test_timeout_error(run_scenario):
     """Test request timeout handling"""
-    result = run_scenario(pytester, "errors/test_timeout_error.http.json")
+    result = run_scenario("errors/test_timeout_error.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
     # Must fail specifically because the request timed out, not for any other reason.
     result.stdout.fnmatch_lines(["*timed out*"])
 
 
-def test_expression_failure(pytester):
+def test_expression_failure(run_scenario):
     """Test expression verification failure"""
-    result = run_scenario(pytester, "errors/test_expression_failure.http.json")
+    result = run_scenario("errors/test_expression_failure.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
     # Must fail specifically on the expression verification, not elsewhere.
     result.stdout.fnmatch_lines(["*Expression*failed*"])
 
 
-def test_header_failure(pytester):
+def test_header_failure(run_scenario):
     """Test header verification failure"""
-    result = run_scenario(pytester, "errors/test_header_failure.http.json")
+    result = run_scenario("errors/test_header_failure.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
     # Must fail specifically on the header mismatch, not elsewhere.
     result.stdout.fnmatch_lines(["*Header*doesn't match*"])
 
 
-def test_parallel_failure(pytester):
+def test_parallel_failure(run_scenario):
     """Test parallel execution failure handling"""
-    result = run_scenario(pytester, "errors/test_parallel_failure.http.json")
+    result = run_scenario("errors/test_parallel_failure.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
     # A genuinely parallel stage keeps the iteration-labeled prefix (M1).
     result.stdout.fnmatch_lines(["*Parallel execution failed at iteration*"])
 
 
-def test_connection_refused(pytester):
+def test_connection_refused(run_scenario):
     """Test connection refused error when server is not running"""
-    result = run_scenario(pytester, "errors/test_connection_refused.http.json")
+    result = run_scenario("errors/test_connection_refused.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
     # A clean connection-level failure of a server that is not running is the
     # guard here. POSIX refuses ("Connection refused"); Windows spells it
@@ -69,7 +67,7 @@ def test_connection_refused(pytester):
 _UNRESOLVABLE_HOST = "this-hostname-definitely-does-not-exist-12345.invalid"
 
 
-def test_invalid_hostname(pytester):
+def test_invalid_hostname(run_scenario):
     """Test error handling for invalid hostname (DNS resolution failure)"""
     # This is the suite's only real-network dependency. Some resolvers (captive
     # portals, ISPs, corporate DNS) wildcard NXDOMAIN and hand back an address
@@ -83,7 +81,7 @@ def test_invalid_hostname(pytester):
     else:
         pytest.skip("resolver wildcards NXDOMAIN; cannot test DNS failure here")
 
-    result = run_scenario(pytester, "errors/test_invalid_hostname.http.json")
+    result = run_scenario("errors/test_invalid_hostname.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
     # Must fail specifically because the host name could not be resolved (DNS),
     # not for an unrelated reason. httpx classifies this as either a ConnectError
@@ -101,16 +99,16 @@ def test_invalid_hostname(pytester):
     assert any(text in out for text in resolver_texts), out
 
 
-def test_malformed_json_save(pytester):
+def test_malformed_json_save(run_scenario):
     """Test error handling when trying to save from malformed JSON response"""
-    result = run_scenario(pytester, "errors/test_malformed_json_save.http.json")
+    result = run_scenario("errors/test_malformed_json_save.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
     result.stdout.fnmatch_lines(["*not valid JSON*"])
 
 
-def test_malformed_json_schema(pytester):
+def test_malformed_json_schema(run_scenario):
     """Test error handling when validating malformed JSON against schema"""
-    result = run_scenario(pytester, "errors/test_malformed_json_schema.http.json")
+    result = run_scenario("errors/test_malformed_json_schema.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
     result.stdout.fnmatch_lines(["*not valid JSON*"])
 

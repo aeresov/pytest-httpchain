@@ -2,8 +2,8 @@
 
 `Carrier` is the base class of the dynamic test classes that
 ``factory.create_test_class`` builds at collection time — one
-``test NN - <stage name>`` method per stage, ordered by the ``order(i)``
-marker so the stages run as a chain. Each scenario gets its own subclass; the
+``test NN - <stage name>`` method per stage, kept contiguous and in stage
+order by the plugin's collection hooks so the stages run as a chain. Each scenario gets its own subclass; the
 per-scenario mutable state (``client``, ``global_context``, ``aborted``,
 ``last_request``/``last_response``, ``active_context_managers``) lives at the
 *class* level and is overridden in the subclass dict, so the stage methods —
@@ -26,6 +26,7 @@ import json
 import logging
 import math
 import re
+import ssl
 import threading
 import warnings
 from collections import ChainMap
@@ -75,6 +76,7 @@ from pytest_httpchain.models import (
     VerifyStep,
     XmlBody,
     check_json_schema,
+    json_schema_validator_class,
 )
 from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
@@ -154,7 +156,7 @@ def _error_request(e: Exception) -> httpx.Request | None:
     return request if isinstance(request, httpx.Request) else None
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class IterationResult:
     """Result of a successful stage iteration (every stage runs at least one;
     a parallel stage runs many). ``started`` is the request's actual start
@@ -226,6 +228,36 @@ class Carrier:
         return cls.scenario_dir / path
 
     @classmethod
+    def _build_ssl_verify(cls, config: SSLConfig) -> bool | ssl.SSLContext:
+        """Translate ``SSLConfig`` into httpx's supported ``verify=`` forms.
+
+        httpx 0.28 deprecates ``verify=<str>`` and ``cert=...``; anything
+        beyond a plain boolean must arrive as a ready ``ssl.SSLContext``. A
+        non-bool ``verify`` — Path from the model, str from a template — is a
+        scenario-relative CA bundle file or directory. A client cert needs a
+        context to be loaded into, so with ``cert`` set a bool ``verify`` is
+        expanded via ``httpx.create_ssl_context`` (public API, deprecation-free
+        for bool input), keeping httpx's own trust-store semantics
+        (certifi / ``SSL_CERT_*`` env) for the True case.
+        """
+        verify = config.verify
+        if not isinstance(verify, bool):
+            ca = cls._resolve_scenario_path(verify)
+            ctx = ssl.create_default_context(capath=ca) if ca.is_dir() else ssl.create_default_context(cafile=ca)
+        elif config.cert is None:
+            return verify
+        else:
+            ctx = httpx.create_ssl_context(verify=verify)
+        if config.cert is not None:
+            cert = config.cert
+            if isinstance(cert, list | tuple):
+                certfile, keyfile = (cls._resolve_scenario_path(p) for p in cert)
+                ctx.load_cert_chain(certfile, keyfile)
+            else:
+                ctx.load_cert_chain(cls._resolve_scenario_path(cert))
+        return ctx
+
+    @classmethod
     def _ensure_initialized(cls) -> None:
         """Resolve scenario substitutions and build the shared httpx client on first use.
 
@@ -258,21 +290,10 @@ class Carrier:
                     cls.global_context = base_global_context(process_substitutions(scenario.substitutions))
 
                 resolved_ssl: SSLConfig = walk(scenario.ssl, cls.global_context)
-                # A Path-valued `verify` is a CA bundle file: scenario-relative.
-                ssl_verify = resolved_ssl.verify
-                if isinstance(ssl_verify, Path):
-                    ssl_verify = str(cls._resolve_scenario_path(ssl_verify))
                 client_kwargs: dict[str, Any] = {
-                    "verify": ssl_verify,
+                    "verify": cls._build_ssl_verify(resolved_ssl),
                     "http2": True,
                 }
-                if resolved_ssl.cert is not None:
-                    cert = resolved_ssl.cert
-                    if isinstance(cert, list | tuple):
-                        cert = tuple(cls._resolve_scenario_path(p) for p in cert)
-                    else:
-                        cert = cls._resolve_scenario_path(cert)
-                    client_kwargs["cert"] = _normalize_cert(cert)
                 if scenario.auth:
                     resolved_auth = walk(scenario.auth, cls.global_context)
                     client_kwargs["auth"] = call_user_function(resolved_auth)
@@ -495,8 +516,18 @@ class Carrier:
         """
         failed_request, failed_response = (failed.request, failed.response) if isinstance(failed, StageExecutionError) else (None, None)
 
-        exchanges: list[tuple[httpx.Request, httpx.Response | None, datetime | None]] = [(r.request, r.response, r.started) for r in completed]
+        exchanges: list[tuple[httpx.Request, httpx.Response | None, datetime | None]] = []
+        for r in completed:
+            # A redirected response carries the full chain on .history, each
+            # hop with its own request attached — expand the hops so the HAR
+            # shows every wire exchange, not just the final one. Hop start
+            # times are not tracked (httpx follows redirects internally);
+            # None makes the HAR writer fall back to write time.
+            exchanges.extend((hop.request, hop, None) for hop in r.response.history)
+            exchanges.append((r.request, r.response, r.started))
         if failed_request is not None:
+            if failed_response is not None:
+                exchanges.extend((hop.request, hop, None) for hop in failed_response.history)
             # The failing exchange's start time is not tracked (the exception
             # carries only request/response); None makes the HAR writer fall
             # back to write time for that one entry.
@@ -757,7 +788,7 @@ class Carrier:
             if isinstance(schema, str | Path):
                 schema_path = cls._resolve_scenario_path(schema)
                 try:
-                    schema = json.loads(schema_path.read_text())
+                    schema = json.loads(schema_path.read_text(encoding="utf-8"))
                     check_json_schema(schema)
                 except (OSError, json.JSONDecodeError) as e:
                     raise VerificationError(f"Error reading body schema file '{schema_path}': {e}") from e
@@ -770,7 +801,13 @@ class Carrier:
                 raise VerificationError(f"Cannot validate schema, response is not valid JSON: {e}") from e
 
             try:
-                jsonschema.validate(instance=response_json, schema=schema)
+                # The schema is already meta-checked (inline schemas at model
+                # validation, file schemas above), so instantiate the dialect's
+                # validator directly instead of jsonschema.validate, which
+                # would re-run check_schema every stage. The validator class
+                # comes from the same selection as check_json_schema, so
+                # checking and validating always use one dialect.
+                json_schema_validator_class(schema)(schema).validate(response_json)
             except jsonschema.ValidationError as e:
                 raise VerificationError(f"Body schema validation failed: {e}") from e
             except jsonschema.SchemaError as e:
@@ -966,16 +1003,3 @@ def _context_dump(data: Mapping[str, Any]) -> str:
         return json.dumps(dict(data), indent=2, default=str)
     except Exception as e:
         return f"<unserializable context: {e}>"
-
-
-def _normalize_cert(cert: Any) -> str | tuple[str, ...]:
-    """Stringify SSL client-cert paths for httpx.
-
-    The model stores ``cert`` as ``pathlib.Path`` (single) or a tuple of Paths.
-    httpx builds the SSL context via ``load_cert_chain(*cert)`` for a non-tuple
-    cert, so a bare ``Path`` is unpacked and raises ``TypeError``. Passing string
-    paths avoids that for both the single-path and (cert, key) tuple forms.
-    """
-    if isinstance(cert, list | tuple):
-        return tuple(str(p) for p in cert)
-    return str(cert)

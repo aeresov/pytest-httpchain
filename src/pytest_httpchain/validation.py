@@ -59,6 +59,7 @@ import inspect
 import json
 import sys
 import warnings
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -99,11 +100,15 @@ from pytest_httpchain.userfunc import UserFunctionError, import_function
 from pytest_httpchain.utils import make_marker, optional_as_list
 from pytest_httpchain.warnings import AmbiguousReferenceWarning
 
-Severity = Literal["error", "warning", "info"]
+type Severity = Literal["error", "warning", "info"]
 
 
-class DiagnosticCode:
-    """Stable diagnostic codes (see module docstring for the full table)."""
+class DiagnosticCode(StrEnum):
+    """Stable diagnostic codes (see module docstring for the full table).
+
+    A ``StrEnum`` so ``Diagnostic.code`` rejects unregistered codes at model
+    validation time; members interpolate as their values in f-strings.
+    """
 
     SCHEMA = "HTTPCHAIN000"
     DUPLICATE_STAGE = "HTTPCHAIN001"
@@ -140,13 +145,13 @@ class DiagnosticCode:
 class Diagnostic(BaseModel):
     """A single validation finding."""
 
-    code: str
+    code: DiagnosticCode
     severity: Severity
     message: str
     location: str | None = None
 
 
-def _diag(code: str, severity: Severity, message: str, location: str | None = None) -> Diagnostic:
+def _diag(code: DiagnosticCode, severity: Severity, message: str, location: str | None = None) -> Diagnostic:
     return Diagnostic(code=code, severity=severity, message=message, location=location)
 
 
@@ -570,7 +575,7 @@ def _check_schema_path(schema: Any, location: str, base_dir: Path | None = None)
     if not path.exists():
         return [_diag(DiagnosticCode.REFERENCED_FILE_NOT_FOUND, "warning", f"Schema file not found: {path}", location)]
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         return [_diag(DiagnosticCode.SCHEMA_FILE_INVALID, "warning", f"Schema file is not valid JSON: {path}: {e}", location)]
     try:
@@ -621,7 +626,7 @@ def _func_name_and_kwargs(call: UserFunctionCall) -> tuple[str | None, dict[str,
             return None, None
 
 
-def _signature_problems(func: Any, provided: set[str]) -> list[tuple[str, str]]:
+def _signature_problems(func: Any, provided: set[str]) -> list[tuple[DiagnosticCode, str]]:
     """Compare the names supplied to a call against the function signature.
 
     ``provided`` is the full set of argument names the runtime supplies (explicit
@@ -642,7 +647,7 @@ def _signature_problems(func: Any, provided: set[str]) -> list[tuple[str, str]]:
     # correctly reported as unexpected.)
     required = {p.name for p in params if p.default is p.empty and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY, p.POSITIONAL_ONLY)}
 
-    problems: list[tuple[str, str]] = []
+    problems: list[tuple[DiagnosticCode, str]] = []
     if not accepts_var_keyword:
         for name in sorted(provided - keyword_acceptable):
             problems.append((DiagnosticCode.UNKNOWN_ARG, f"unexpected argument '{name}'"))

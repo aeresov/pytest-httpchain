@@ -8,15 +8,17 @@ Success cases for body types, verify, and save are covered by integration tests:
 """
 
 import json
+import ssl
 from collections import ChainMap
 from contextlib import contextmanager
 from http import HTTPMethod
 
 import httpx
 import pytest
+import trustme
 from pyrate_limiter import Duration, Limiter, Rate
 
-from pytest_httpchain.carrier import Carrier, _normalize_cert
+from pytest_httpchain.carrier import Carrier, IterationResult
 from pytest_httpchain.errors import RequestError, SaveError, VerificationError
 from pytest_httpchain.models import (
     BinaryBody,
@@ -30,23 +32,6 @@ from pytest_httpchain.models import (
     Verify,
 )
 from pytest_httpchain.models.entities import ResponseBody
-
-
-class TestNormalizeCert:
-    """httpx needs string cert paths; the model stores pathlib.Path. A single
-    Path passed straight to httpx.Client(cert=...) crashes with TypeError."""
-
-    def test_single_path_becomes_str(self):
-        from pathlib import Path
-
-        # Expected values built via str(Path(...)) so the assertion is
-        # platform-native (Windows renders these with backslashes).
-        assert _normalize_cert(Path("/p/client.pem")) == str(Path("/p/client.pem"))
-
-    def test_tuple_of_paths_becomes_tuple_of_str(self):
-        from pathlib import Path
-
-        assert _normalize_cert((Path("/p/c.pem"), Path("/p/k.pem"))) == (str(Path("/p/c.pem")), str(Path("/p/k.pem")))
 
 
 class TestBuildRequestKwargsErrors:
@@ -250,12 +235,15 @@ def _make_carrier_subclass(**attrs) -> type[Carrier]:
 class TestSSLClientWiring:
     """SSLConfig -> httpx.Client kwargs, the ssl branches of _ensure_initialized.
 
-    No real TLS handshake or cert files are needed: httpx.Client is captured so
-    the test asserts exactly what verify/cert the engine hands it. These branches
-    have no runtime coverage otherwise (the mock server used by the integration
-    suite is plain HTTP)."""
+    httpx 0.28 deprecates ``verify=<str>`` and ``cert=...``: bool verify passes
+    through untouched and everything else must arrive as a ready
+    ``ssl.SSLContext``. trustme issues real throwaway PEMs so context
+    construction actually parses certificates; httpx.Client is captured so the
+    tests assert exactly what the engine hands it. The real-client test at the
+    end is the deprecation regression: ``filterwarnings = error`` escalates any
+    DeprecationWarning from a genuine httpx.Client construction."""
 
-    def _client_kwargs_for(self, monkeypatch, ssl: SSLConfig) -> dict:
+    def _client_kwargs_for(self, monkeypatch, ssl_config: SSLConfig) -> dict:
         captured: dict = {}
 
         class FakeClient:
@@ -266,29 +254,72 @@ class TestSSLClientWiring:
         cls = _make_carrier_subclass(
             _initialized=False,
             _context_resolved_at_collection=True,
-            scenario=Scenario(ssl=ssl),
+            scenario=Scenario(ssl=ssl_config),
         )
         cls._ensure_initialized()
         return captured
 
+    def test_verify_true_passed_through(self, monkeypatch):
+        assert self._client_kwargs_for(monkeypatch, SSLConfig(verify=True))["verify"] is True
+
     def test_verify_false_passed_through(self, monkeypatch):
         assert self._client_kwargs_for(monkeypatch, SSLConfig(verify=False))["verify"] is False
 
-    def test_verify_path_resolved_to_str(self, monkeypatch, tmp_path):
-        ca = tmp_path / "ca-bundle.pem"
-        ca.write_text("dummy")
-        assert self._client_kwargs_for(monkeypatch, SSLConfig(verify=ca))["verify"] == str(ca)
+    def test_verify_ca_bundle_file_builds_context(self, monkeypatch, tmp_path):
+        ca_path = tmp_path / "ca.pem"
+        trustme.CA().cert_pem.write_to_path(ca_path)
+        kwargs = self._client_kwargs_for(monkeypatch, SSLConfig(verify=ca_path))
+        assert isinstance(kwargs["verify"], ssl.SSLContext)
 
-    def test_cert_pair_resolved_and_normalized(self, monkeypatch, tmp_path):
-        crt, key = tmp_path / "client.crt", tmp_path / "client.key"
-        crt.write_text("c")
-        key.write_text("k")
-        assert self._client_kwargs_for(monkeypatch, SSLConfig(cert=(crt, key)))["cert"] == (str(crt), str(key))
+    def test_verify_ca_directory_builds_context(self, monkeypatch, tmp_path):
+        kwargs = self._client_kwargs_for(monkeypatch, SSLConfig(verify=tmp_path))
+        assert isinstance(kwargs["verify"], ssl.SSLContext)
 
-    def test_single_cert_resolved_and_normalized(self, monkeypatch, tmp_path):
-        crt = tmp_path / "client.pem"
-        crt.write_text("c")
-        assert self._client_kwargs_for(monkeypatch, SSLConfig(cert=crt))["cert"] == str(crt)
+    def test_cert_pair_loaded_into_context(self, monkeypatch, tmp_path):
+        crt, key = tmp_path / "client.pem", tmp_path / "client.key"
+        client_cert = trustme.CA().issue_cert("client@example.com")
+        client_cert.cert_chain_pems[0].write_to_path(crt)
+        client_cert.private_key_pem.write_to_path(key)
+        kwargs = self._client_kwargs_for(monkeypatch, SSLConfig(cert=(crt, key)))
+        assert isinstance(kwargs["verify"], ssl.SSLContext)
+        assert "cert" not in kwargs
+
+    def test_single_cert_file_loaded_into_context(self, monkeypatch, tmp_path):
+        bundle = tmp_path / "client-bundle.pem"
+        client_cert = trustme.CA().issue_cert("client@example.com")
+        client_cert.private_key_and_cert_chain_pem.write_to_path(bundle)
+        kwargs = self._client_kwargs_for(monkeypatch, SSLConfig(cert=bundle))
+        assert isinstance(kwargs["verify"], ssl.SSLContext)
+        assert "cert" not in kwargs
+
+    def test_verify_false_with_cert_keeps_verification_off(self, monkeypatch, tmp_path):
+        bundle = tmp_path / "client-bundle.pem"
+        trustme.CA().issue_cert("client@example.com").private_key_and_cert_chain_pem.write_to_path(bundle)
+        ctx = self._client_kwargs_for(monkeypatch, SSLConfig(verify=False, cert=bundle))["verify"]
+        assert isinstance(ctx, ssl.SSLContext)
+        assert ctx.verify_mode == ssl.CERT_NONE
+        assert ctx.check_hostname is False
+
+    def test_real_client_construction_emits_no_deprecation(self, tmp_path):
+        """Regression for httpx 0.28: a genuine httpx.Client built from a CA
+        path plus client cert pair must construct without warnings."""
+        ca = trustme.CA()
+        ca_path = tmp_path / "ca.pem"
+        ca.cert_pem.write_to_path(ca_path)
+        crt, key = tmp_path / "client.pem", tmp_path / "client.key"
+        client_cert = ca.issue_cert("client@example.com")
+        client_cert.cert_chain_pems[0].write_to_path(crt)
+        client_cert.private_key_pem.write_to_path(key)
+        cls = _make_carrier_subclass(
+            _initialized=False,
+            _context_resolved_at_collection=True,
+            scenario=Scenario(ssl=SSLConfig(verify=ca_path, cert=(crt, key))),
+        )
+        cls._ensure_initialized()
+        try:
+            assert isinstance(cls.client, httpx.Client)
+        finally:
+            cls.client.close()
 
 
 class TestRateLimiting:
@@ -503,3 +534,44 @@ class TestContextDumpNeverRaises:
 
         out = _context_dump({"a": Poison()})
         assert "unserializable" in out
+
+
+class TestRedirectExchangeRecording:
+    """Redirect hops from response.history become their own exchanges: with
+    HAR recording on, every wire exchange lands in last_exchanges instead of
+    only the post-redirect one."""
+
+    @staticmethod
+    def _redirect_chain():
+        hop_req = httpx.Request("GET", "http://t/a")
+        hop = httpx.Response(302, request=hop_req, headers={"location": "http://t/b"})
+        final_req = httpx.Request("GET", "http://t/b")
+        final = httpx.Response(200, request=final_req, history=[hop])
+        return hop_req, hop, final_req, final
+
+    def test_hops_expanded_when_recording_all(self):
+        from datetime import UTC, datetime
+
+        hop_req, hop, final_req, final = self._redirect_chain()
+        started = datetime.now(UTC)
+        result = IterationResult(saved_context={}, request=final_req, response=final, started=started)
+
+        cls = _make_carrier_subclass(record_all_exchanges=True)
+        cls._record_exchanges([result], None, 1)
+
+        assert cls.last_exchanges == [(hop_req, hop, None), (final_req, final, started)]
+        # The report still shows the final exchange.
+        assert cls.last_request is final_req
+        assert cls.last_response is final
+
+    def test_only_final_exchange_kept_without_har(self):
+        from datetime import UTC, datetime
+
+        _, _, final_req, final = self._redirect_chain()
+        started = datetime.now(UTC)
+        result = IterationResult(saved_context={}, request=final_req, response=final, started=started)
+
+        cls = _make_carrier_subclass()
+        cls._record_exchanges([result], None, 1)
+
+        assert cls.last_exchanges == [(final_req, final, started)]

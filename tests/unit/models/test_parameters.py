@@ -9,7 +9,7 @@ from pytest_httpchain.models.entities import (
     Request,
     Stage,
 )
-from tests.unit.models.conftest import assert_error_types, make_request, make_stage
+from tests.unit.models.helpers import assert_error_types, make_request, make_stage
 
 
 class TestIndividualParameter:

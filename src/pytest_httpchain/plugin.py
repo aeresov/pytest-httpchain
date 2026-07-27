@@ -54,14 +54,28 @@ class JsonModule(pytest.Module):
     to `Carrier` under pytest's runner.
     """
 
+    # Seeded in collect(); consumed by _getobj().
+    _generated_module: types.ModuleType
+
+    def _getobj(self) -> types.ModuleType:
+        """Return the in-memory module built in ``collect``.
+
+        ``Module._getobj`` defaults to importing ``self.path`` as a Python
+        module — a .json file — so it is overridden (the extension point
+        ``_pytest.python.PyobjMixin`` documents) to hand pytest a generated
+        module that already carries the test class.
+        """
+        return self._generated_module
+
     def _reject_chain_splitting_dist_mode(self, scenario: Scenario) -> None:
         """Fail collection when pytest-xdist would scatter a stage chain.
 
         A multi-stage scenario forms one ordered chain over shared class state
-        (Carrier ClassVars), and pytest-order is a no-op across xdist workers —
-        so dist modes that distribute tests individually (load/each/worksteal)
-        would break the chain silently. Class-preserving modes work: loadscope
-        groups by class, loadfile by file, loadgroup by the xdist_group marker
+        (Carrier ClassVars), and no in-worker ordering can reunite a chain
+        scattered across workers — so dist modes that distribute tests
+        individually (load/each/worksteal) would break the chain silently.
+        Class-preserving modes work: loadscope groups by class, loadfile by
+        file, loadgroup by the xdist_group marker
         added in `collect`. Single-stage scenarios have no chain and are safe
         under any mode (a parametrized single stage never consumes its own
         saves), so they are exempt.
@@ -90,7 +104,7 @@ class JsonModule(pytest.Module):
         # CLI uses (validation.load_scenario); only the root path differs, and
         # only in authority: collection has pytest's real rootpath, while the
         # CLI default (validation.resolve_root_path) approximates it.
-        ref_parent_traversal_depth = _get_ini(self.config, ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
+        ref_parent_traversal_depth = self.config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
         try:
             # Record resolver warnings instead of letting them escape raw: under
             # `filterwarnings = error` a bare AmbiguousReferenceWarning would be
@@ -140,7 +154,7 @@ class JsonModule(pytest.Module):
             raise pytest.Collector.CollectError(f"Invalid test scenario in {self.path}:\n{detail}")
 
         # generate python test class
-        max_parallel_iterations = _get_ini(self.config, ConfigOptions.MAX_PARALLEL_ITERATIONS)
+        max_parallel_iterations = self.config.getini(ConfigOptions.MAX_PARALLEL_ITERATIONS)
         try:
             CarrierClass = create_test_class(
                 scenario,
@@ -149,7 +163,7 @@ class JsonModule(pytest.Module):
                 scenario_dir=self.path.parent,
                 # Retaining every parallel iteration's exchange costs memory, so
                 # it is only done when the HAR output that consumes them is on.
-                record_all_exchanges=bool(self.config.getoption("output_dir")),
+                record_all_exchanges=bool(self.config.getoption("httpchain_output_dir")),
             )
         except Exception as e:
             # create_test_class parses stage markers and — only when stage
@@ -160,17 +174,15 @@ class JsonModule(pytest.Module):
             # code otherwise. Surface any failure as a clean collection error,
             # like the sibling load/validate paths above.
             raise pytest.Collector.CollectError(f"Cannot build test class for {self.path}: {e}") from None
-        # Module._getobj() defaults to importtestmodule(self.path), which would try
-        # to import this .json file as a Python module and fail. Bypass it by handing
-        # pytest an in-memory module that already carries the generated test class.
         dummy_module = types.ModuleType("generated")
         setattr(dummy_module, self.name, CarrierClass)
-        self._getobj = lambda: dummy_module  # ty: ignore[invalid-assignment]
+        # Consumed by the _getobj() override below; pytest.Class resolves the
+        # test class via getattr(parent.obj, name).
+        self._generated_module = dummy_module
         json_class = pytest.Class.from_parent(
             self,
             path=self.path,
             name=self.name,
-            obj=CarrierClass,
         )
 
         # Keep all stages of this scenario on one xdist worker under
@@ -202,10 +214,11 @@ def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[pyt
     A multi-stage scenario is one ordered chain over shared class state, and
     pytest finalizes class scope every time execution leaves the class —
     ``Carrier.teardown_class`` resets the chain's saved context. Any sorter
-    that splits a scenario class's items therefore breaks the chain. The main
-    offender is pytest-order itself: every scenario class carries the same
-    ``order(0..n-1)`` stage marks, and its default session-wide group scope
-    stable-sorts equal indices across classes into A0, B0, A1, B1, ...
+    that splits a scenario class's items therefore breaks the chain. A
+    canonical offender is a user-installed pytest-order acting on user-authored
+    ``order(...)`` stage marks: with matching indices across scenarios, its
+    default session-wide group scope stable-sorts them into A0, B0, A1, B1, ...
+    (pytest-randomly's shuffle and core's ``--ff`` are others).
 
     Each scenario class's items are pulled together at the position of the
     class's first item — preserving inter-class order — and sorted back into
@@ -283,45 +296,22 @@ def pytest_configure_node(node) -> None:
     node.workerinput["httpchain_dist"] = node.config.getoption("dist", default="no")
 
 
-# Effective defaults, applied by _get_ini. The options are registered with
-# default=None so that None doubles as the "not explicitly set" sentinel —
-# both ini-file values and -o/--override-ini values surface uniformly through
-# getini(), with no reliance on config.inicfg (deprecated in pytest 9.1).
-_INI_DEFAULTS: dict[ConfigOptions, Any] = {
-    ConfigOptions.SUFFIX: "http",
-    ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH: 3,
-    ConfigOptions.MAX_COMPREHENSION_LENGTH: 50000,
-    ConfigOptions.MAX_PARALLEL_ITERATIONS: 10000,
-}
-
-
-def _get_ini(config: pytest.Config, option: ConfigOptions) -> Any:
-    """Read an httpchain ini option: its explicitly-set value, else the
-    default from ``_INI_DEFAULTS``.
-
-    The pre-0.10 un-prefixed aliases were deprecated through the 0.10 series
-    and removed in 0.11.
-    """
-    value = config.getini(option)
-    if value is not None:
-        return value
-    return _INI_DEFAULTS[option]
-
-
 def pytest_addoption(parser: pytest.Parser) -> None:
-    ini_options: list[tuple[ConfigOptions, str, str]] = [
-        (ConfigOptions.SUFFIX, "File suffix for HTTP test files.", "string"),
-        (ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "Maximum number of parent directory traversals allowed in $ref paths.", "int"),
-        (ConfigOptions.MAX_COMPREHENSION_LENGTH, "Maximum length for list/dict comprehensions in template expressions.", "int"),
-        (ConfigOptions.MAX_PARALLEL_ITERATIONS, "Maximum number of parallel iterations allowed per stage.", "int"),
+    ini_options: list[tuple[ConfigOptions, str, str, Any]] = [
+        (ConfigOptions.SUFFIX, "File suffix for HTTP test files.", "string", "http"),
+        (ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "Maximum number of parent directory traversals allowed in $ref paths.", "int", 3),
+        (ConfigOptions.MAX_COMPREHENSION_LENGTH, "Maximum length for list/dict comprehensions in template expressions.", "int", 50000),
+        (ConfigOptions.MAX_PARALLEL_ITERATIONS, "Maximum number of parallel iterations allowed per stage.", "int", 10000),
     ]
-    for option, help_text, ini_type in ini_options:
-        # default=None is the "unset" sentinel; the real default lives in
-        # _INI_DEFAULTS and is applied by _get_ini.
-        parser.addini(name=option, help=f"{help_text} Default: {_INI_DEFAULTS[option]}.", type=ini_type, default=None)  # ty: ignore[invalid-argument-type]
-    parser.addoption(
+    for option, help_text, ini_type, default in ini_options:
+        # pytest does not render ini defaults in --help, so keep them in the
+        # help text too.
+        parser.addini(name=option, help=f"{help_text} Default: {default}.", type=ini_type, default=default)  # ty: ignore[invalid-argument-type]
+    group = parser.getgroup("httpchain", "HTTP chain scenario testing")
+    group.addoption(
+        # No dest= override: argparse derives httpchain_output_dir, keeping
+        # the plugin prefix in pytest's shared option namespace.
         "--httpchain-output-dir",
-        dest="output_dir",
         default=None,
         help="Directory to write test output files (HAR format for HTTP communications).",
     )
@@ -335,7 +325,7 @@ def pytest_configure(config: pytest.Config) -> None:
     # checks likewise raise pytest.UsageError.
     def _getint(option: ConfigOptions, minimum: int, minimum_message: str, maximum: int | None = None) -> int:
         try:
-            value = _get_ini(config, option)
+            value = config.getini(option)
         except ValueError as e:
             raise pytest.UsageError(f"{option} must be an integer: {e}") from None
         if value < minimum:
@@ -344,7 +334,7 @@ def pytest_configure(config: pytest.Config) -> None:
             raise pytest.UsageError(f"{option} must not exceed {maximum:,}")
         return value
 
-    suffix = str(_get_ini(config, ConfigOptions.SUFFIX))
+    suffix = str(config.getini(ConfigOptions.SUFFIX))
     if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", suffix):
         raise pytest.UsageError(f"{ConfigOptions.SUFFIX} must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
 
@@ -356,7 +346,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> pytest.Collector | None:
-    suffix: str = _get_ini(parent.config, ConfigOptions.SUFFIX)
+    suffix: str = parent.config.getini(ConfigOptions.SUFFIX)
     pattern = re.compile(rf"^test_(?P<name>.+)\.{re.escape(suffix)}\.json$")
     file_match = pattern.match(file_path.name)
     if file_match:
@@ -400,6 +390,13 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
                 shown = "failing" if report.failed else "last"
                 suffix = f" ({shown} of {carrier.last_iterations_attempted} parallel iterations)"
 
+            # The shown request is the FINAL hop's after redirects — say so,
+            # since it may differ from the request the stage authored. The
+            # full chain is in the HAR output (every hop is an exchange).
+            if carrier.last_response is not None and carrier.last_response.history:
+                hops = len(carrier.last_response.history)
+                suffix += f" (after {hops} redirect{'s' if hops != 1 else ''})"
+
             for title, what, exchange, formatter in (
                 ("HTTP Request", "request", carrier.last_request, format_request),
                 ("HTTP Response", "response", carrier.last_response, format_response),
@@ -412,7 +409,7 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
                     body = f"<Error formatting {what}: {e}>"
                 report.sections.append((f"{title}{suffix}", body))
 
-            output_dir = item.config.getoption("output_dir")
+            output_dir = item.config.getoption("httpchain_output_dir")
             if output_dir and carrier.last_exchanges:
                 try:
                     har_path = write_har_file(

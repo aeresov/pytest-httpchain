@@ -60,7 +60,7 @@ class TestInvalidNamePatterns:
     """
 
     @pytest.mark.parametrize(
-        "name,description",
+        ("name", "description"),
         [
             ("", "empty string"),
             ("123func", "leading digit in function"),

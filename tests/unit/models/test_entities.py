@@ -24,7 +24,7 @@ class TestParametrizeValuesContainTemplate:
     """
 
     @pytest.mark.parametrize(
-        "parametrize, expected",
+        ("parametrize", "expected"),
         [
             pytest.param(None, False, id="none"),
             pytest.param([], False, id="empty-list"),

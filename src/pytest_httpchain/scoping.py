@@ -267,7 +267,7 @@ def raw_substitution_entry_templates(entry: Any) -> Any:
 # --------------------------------------------------------------------------- #
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class StageScopes:
     """Statically-known names visible to one stage, per resolution phase.
 
