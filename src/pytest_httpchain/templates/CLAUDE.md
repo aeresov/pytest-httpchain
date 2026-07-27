@@ -9,16 +9,6 @@ This subpackage provides safe template expression evaluation with recursive subs
 - Dictionaries, lists, Pydantic models, and SimpleNamespace objects
 - Python expressions including list/dict comprehensions
 
-## Subpackage Structure
-
-```
-src/pytest_httpchain/templates/
-├── __init__.py          # Public API: walk, is_complete_template, extract_template_expression, TEMPLATE_PATTERN, TEMPLATE_BUILTINS, TemplatesError
-├── substitution.py      # Main walk() function for recursive substitution
-├── expressions.py       # Template pattern matching utilities
-└── exceptions.py        # TemplatesError exception
-```
-
 ## Public API
 
 ```python
@@ -129,18 +119,3 @@ walk("{{ env('HOME', '/tmp') }}", {})  # value of $HOME or "/tmp"
 - `simpleeval` reduces accidental footguns (it rejects `__import__`, `open`, dunder/attribute access, etc.), but it is **not** a hardened sandbox. Upstream explicitly disclaims sandboxing, so do **not** rely on it as a security boundary against hostile expressions.
 - `env()` exposes the entire process environment, and context callables (user functions, factory fixtures) execute arbitrary Python by design.
 - Evaluation errors are raised as `TemplatesError`.
-
-## Running Tests
-
-```bash
-uv run pytest tests/unit/templates -v
-```
-
-## Error Handling
-
-All errors raise `TemplatesError` with descriptive messages:
-- Undefined variable
-- Unknown function
-- Attribute error
-- Invalid expression (syntax errors)
-- Runtime errors (ZeroDivisionError, TypeError, IndexError, KeyError)
