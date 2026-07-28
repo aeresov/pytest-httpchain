@@ -25,7 +25,7 @@ from pytest_httpchain.factory import create_test_class
 from pytest_httpchain.har_writer import write_har_file
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.report_formatter import format_request, format_response
-from pytest_httpchain.templates import set_max_comprehension_length
+from pytest_httpchain.templates import get_max_comprehension_length, set_max_comprehension_length
 from pytest_httpchain.utils import make_marker
 from pytest_httpchain.validation import check_scenario, load_scenario
 from pytest_httpchain.warnings import AmbiguousReferenceWarning, ScenarioValidationWarning
@@ -213,6 +213,38 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     return result
 
 
+def _warn_on_split_chains(items: list[pytest.Item]) -> None:
+    """Warn when selection (``--lf``, ``-k``, ``--deselect``, ``--sw``) dropped
+    earlier stages of a chain while later ones remain.
+
+    Reordering and dist-mode scattering are prevented outright, but pytest's
+    selection mechanisms silently orphan a chain's tail: the surviving stages
+    run without the deselected stages' saved context and fail with misleading
+    undefined-variable errors (or worse, run against un-set-up server state).
+    """
+    selected_indices: dict[type[Carrier], set[int]] = {}
+    for item in items:
+        cls = getattr(item, "cls", None)
+        if cls is not None and issubclass(cls, Carrier):
+            index = getattr(getattr(item, "function", None), "_httpchain_stage_index", 0)
+            selected_indices.setdefault(cls, set()).add(index)
+
+    for cls, indices in selected_indices.items():
+        scenario = cls.scenario
+        if scenario is None or len(scenario.stages) <= 1:
+            continue
+        missing = set(range(max(indices))) - indices
+        if missing:
+            names = [scenario.stages[j].name for j in sorted(missing) if j < len(scenario.stages)]
+            warnings.warn(
+                ScenarioValidationWarning(
+                    f"Scenario '{cls.__name__}': earlier stage(s) {names} were deselected (e.g. by --lf, -k, or --deselect) "
+                    f"while later stages of the chain remain selected; the surviving stages will run without their saved context"
+                ),
+                stacklevel=2,
+            )
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_finish(session: pytest.Session) -> None:
     """Re-enforce chain contiguity after every sorter, including tryfirst
@@ -221,6 +253,7 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     """
     positions = session.config.stash.get(_ORIGINAL_POSITIONS, {})
     _regroup_carrier_items(session.items, positions)
+    _warn_on_split_chains(session.items)
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -250,6 +283,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
+# The cap found at configure time, restored at unconfigure: the setting writes a
+# process-wide simpleeval global, which an in-process pytester run (or any nested
+# pytest session) must not leak to the enclosing process.
+_PREVIOUS_MAX_COMPREHENSION_LENGTH: pytest.StashKey[int] = pytest.StashKey()
+
+
 def pytest_configure(config: pytest.Config) -> None:
     # pytest converts type="int" options with a bare int(), whose ValueError it
     # renders as an INTERNALERROR; wrap it into a clean usage error.
@@ -272,7 +311,14 @@ def pytest_configure(config: pytest.Config) -> None:
     max_comprehension_length = _getint(ConfigOptions.MAX_COMPREHENSION_LENGTH, minimum=1, minimum_message="must be a positive integer", maximum=1_000_000)
     _getint(ConfigOptions.MAX_PARALLEL_ITERATIONS, minimum=1, minimum_message="must be a positive integer", maximum=1_000_000)
 
+    config.stash[_PREVIOUS_MAX_COMPREHENSION_LENGTH] = get_max_comprehension_length()
     set_max_comprehension_length(max_comprehension_length)
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    previous = config.stash.get(_PREVIOUS_MAX_COMPREHENSION_LENGTH, None)
+    if previous is not None:
+        set_max_comprehension_length(previous)
 
 
 def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> pytest.Collector | None:
@@ -303,10 +349,18 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
                 del report.wasxfail
 
             # A parallel stage runs many exchanges but shows one; say so rather
-            # than presenting it as the stage's only exchange.
+            # than presenting it as the stage's only exchange. A failure that
+            # never recorded a request (template error, rate-limit timeout)
+            # shows the last COMPLETED iteration, which must not be labeled as
+            # the failing one.
             suffix = ""
             if carrier.last_iterations_attempted > 1:
-                shown = "failing" if report.failed else "last"
+                if carrier.last_shown_exchange_is_failed:
+                    shown = "failing"
+                elif report.failed:
+                    shown = "last completed"
+                else:
+                    shown = "last"
                 suffix = f" ({shown} of {carrier.last_iterations_attempted} parallel iterations)"
 
             # The shown request is the final hop's, which may differ from what

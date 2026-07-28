@@ -120,8 +120,14 @@ jobs:
             - name: Coverage XML
               run: uv run coverage xml
 
+            # Skipped for fork PRs (GitHub never grants them the OIDC token, so
+            # the upload would hard-fail external contributors' CI) and for the
+            # release-gate workflow_call (coverage of a release run adds nothing).
             - name: Upload coverage to Codecov
-              if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
+              if: >-
+                  matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest' &&
+                  (github.event_name == 'push' ||
+                  (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
               uses: codecov/codecov-action@v7
               with:
                   files: ./coverage.xml

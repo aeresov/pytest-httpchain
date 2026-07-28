@@ -12,6 +12,8 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
+from pytest_httpchain.utils import request_content
+
 
 @functools.cache
 def _get_version() -> str:
@@ -43,16 +45,17 @@ def _format_query_string(url: httpx.URL) -> list[dict[str, str]]:
 
 
 def _format_post_data(request: httpx.Request) -> dict[str, Any] | None:
-    if not request.content:
+    content = request_content(request)
+    if not content:
         return None
 
     content_type = request.headers.get("content-type", "")
     mime_type = content_type.split(";")[0].strip() if content_type else "application/octet-stream"
 
     try:
-        text = request.content.decode("utf-8")
+        text = content.decode("utf-8")
     except UnicodeDecodeError:
-        text = base64.b64encode(request.content).decode("ascii")
+        text = base64.b64encode(content).decode("ascii")
         return {
             "mimeType": mime_type,
             "text": text,
@@ -150,6 +153,11 @@ def request_response_to_har_entry(
             "bodySize": -1,
         }
 
+    # -1 is HAR's "unknown": a streaming (multipart) body was consumed on send
+    # and its bytes are no longer available.
+    content = request_content(request)
+    body_size = -1 if content is None else len(content)
+
     entry: dict[str, Any] = {
         "startedDateTime": started_datetime.isoformat(),
         "time": elapsed_ms,
@@ -161,7 +169,7 @@ def request_response_to_har_entry(
             "headers": _format_headers(request.headers),
             "queryString": _format_query_string(request.url),
             "headersSize": _calculate_headers_size(request.headers),
-            "bodySize": len(request.content) if request.content else 0,
+            "bodySize": body_size,
         },
         "response": response_har,
         "cache": {},

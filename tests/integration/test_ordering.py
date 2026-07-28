@@ -110,3 +110,20 @@ def test_failed_first_keeps_chains_contiguous(pytester):
     first.assert_outcomes(passed=1, failed=1, skipped=1)
     again = pytester.runpytest_subprocess("--ff")
     again.assert_outcomes(passed=1, failed=1, skipped=1)
+
+
+def test_selection_dropping_earlier_stages_warns(pytester):
+    """Reordering is defeated and chain-splitting dist modes are rejected, but
+    pytest's selection mechanisms (-k, --lf, --deselect) can still silently
+    orphan a chain's tail. Selecting only a later stage must warn that the
+    survivors run without the deselected stages' saved context."""
+    pytester.copy_example("conftest.py")
+    pytester.copy_example("save/test_save_jmespath.http.json")
+
+    result = pytester.runpytest("-s", "-k", "use_saved_values")
+    result.stdout.fnmatch_lines(["*were deselected*"])
+
+    # A full run of the same chain must not warn.
+    full = pytester.runpytest("-s")
+    full.assert_outcomes(passed=2)
+    full.stdout.no_fnmatch_line("*were deselected*")

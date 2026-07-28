@@ -101,6 +101,13 @@ def echo_binary():
     return {"base64": base64.b64encode(data).decode(), "size": len(data)}, HTTPStatus.OK
 
 
+@app.post("/echo/multipart")
+def echo_multipart():
+    """Echo multipart field names, filenames, and sizes"""
+    fields = {name: {"filename": f.filename, "size": len(f.read())} for name, f in request.files.items()}
+    return {"fields": fields}, HTTPStatus.OK
+
+
 @app.post("/graphql")
 def graphql():
     """Mock GraphQL endpoint"""
@@ -156,6 +163,32 @@ def increment_counter():
     with _counter_lock:
         _counter += 1
         return {"count": _counter}, HTTPStatus.OK
+
+
+# ============ Redirect Endpoints ============
+
+
+@app.get("/redirect-ok")
+def redirect_ok():
+    """302 to /ok, for redirect-following tests"""
+    from flask import redirect
+
+    return redirect("/ok")
+
+
+@app.get("/redirect-bad")
+def redirect_bad():
+    """302 to /bad, for redirect report-labeling tests"""
+    from flask import redirect
+
+    return redirect("/bad")
+
+
+@app.get("/template-literal")
+def template_literal_body():
+    """Server data that LOOKS like a template expression: the engine must save
+    it literally, never evaluate it (response data is not scenario code)."""
+    return {"tpl": "literal {{ probe }} text"}, HTTPStatus.OK
 
 
 # ============ Verification Endpoints ============

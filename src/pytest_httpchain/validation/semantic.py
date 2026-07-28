@@ -95,10 +95,29 @@ def _fixture_diagnostics(scenario: Scenario, vars_saved: set[str]) -> Iterator[D
 def _scenario_template_diagnostics(test_data: dict[str, Any], fixtures: set[str], scenario_sub_names: set[str]) -> Iterator[Diagnostic]:
     """HTTPCHAIN016/017: scenario-level templates resolve against only the
     scenario substitutions, so a fixture (016) or undefined (017) reference
-    there is a guaranteed crash at scenario initialization."""
+    there is a guaranteed crash at scenario initialization.
+
+    The ``substitutions`` list itself resolves strictly in order (the runtime
+    computes each step's context before that step's names land), so its entries
+    are checked against only PRIOR steps' names — a forward or same-step
+    reference crashes exactly like an undefined one. ``auth``/``ssl`` resolve
+    after the whole list and see every name.
+    """
     for key in SCENARIO_TEMPLATE_FIELDS:
-        scenario_level_refs = extract_template_variables(test_data.get(key))
-        fixture_refs = scenario_level_refs & fixtures
+        if key == "substitutions":
+            refs_and_scopes = [(entry_refs, frozenset(prior_names)) for entry_refs, prior_names in substitution_step_refs(test_data.get(key))]
+        else:
+            refs_and_scopes = [(extract_template_variables(test_data.get(key)), frozenset(scenario_sub_names))]
+
+        fixture_refs: set[str] = set()
+        forward_refs: set[str] = set()
+        undefined_refs: set[str] = set()
+        for entry_refs, in_scope in refs_and_scopes:
+            fixture_refs |= entry_refs & fixtures
+            unavailable = entry_refs - fixtures - in_scope
+            forward_refs |= unavailable & scenario_sub_names
+            undefined_refs |= unavailable - scenario_sub_names
+
         if fixture_refs:
             yield diag(
                 DiagnosticCode.FIXTURE_IN_SCENARIO_TEMPLATE,
@@ -106,7 +125,14 @@ def _scenario_template_diagnostics(test_data: dict[str, Any], fixtures: set[str]
                 f"Fixtures referenced in scenario-level '{key}' templates: {sorted(fixture_refs)} (the scenario-level context never includes fixture values)",
                 location=key,
             )
-        undefined_refs = scenario_level_refs - fixtures - scenario_sub_names
+        if forward_refs:
+            yield diag(
+                DiagnosticCode.SCENARIO_UNDEFINED_VAR,
+                "error",
+                f"Scenario-level '{key}' references name(s) before the substitution step that defines them: {sorted(forward_refs)} "
+                f"(steps resolve strictly in order; this crashes at scenario initialization)",
+                location=key,
+            )
         if undefined_refs:
             yield diag(
                 DiagnosticCode.SCENARIO_UNDEFINED_VAR,
@@ -128,6 +154,15 @@ def _reserved_name_diagnostics(user_names: set[str]) -> Iterator[Diagnostic]:
             f"Name(s) {sorted(reserved_conflicts)} are shadowed by the reserved response metadata namespace inside response steps "
             f"(save/verify templates see the HTTP response there, not your value)",
         )
+
+
+def _parametrize_rendered_values(raw_parametrize: Any) -> Any:
+    """The parametrize subtree minus each step's ``ids``, which pytest uses
+    verbatim for display and never renders (the same carve-out
+    ``models.parametrize_values_contain_template`` encodes)."""
+    if isinstance(raw_parametrize, list):
+        return [{k: v for k, v in entry.items() if k != "ids"} if isinstance(entry, dict) else entry for entry in raw_parametrize]
+    return raw_parametrize
 
 
 def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iterator[Diagnostic]:
@@ -154,7 +189,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iter
         scope = scopes[i]
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
-        for name in sorted(extract_template_variables(raw.get("parametrize"))):
+        for name in sorted(extract_template_variables(_parametrize_rendered_values(raw.get("parametrize")))):
             if name in scope.scenario_substitutions:
                 continue
             yield diag(
@@ -377,7 +412,11 @@ def _marker_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     make_marker(mark)
-            except (ValueError, SyntaxError) as e:
+            except Exception as e:
+                # Broad on purpose: pytest's MarkGenerator raises AttributeError
+                # for reserved names ('_foo'), ast.literal_eval TypeError for
+                # exotic argument nodes — any parse failure must become a
+                # diagnostic, not a validator crash.
                 yield diag(DiagnosticCode.INVALID_MARKER, "error", f"Invalid marker {mark!r}: {e}", location=location)
 
     yield from check(scenario.marks, "marks")

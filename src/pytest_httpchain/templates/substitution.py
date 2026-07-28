@@ -29,6 +29,12 @@ def set_max_comprehension_length(length: int) -> None:
     simpleeval.MAX_COMPREHENSION_LENGTH = length  # ty: ignore[invalid-assignment]
 
 
+def get_max_comprehension_length() -> int:
+    """The current process-wide cap, so ``pytest_unconfigure`` can restore what
+    it found (an in-process pytester run must not leak its cap to the host)."""
+    return simpleeval.MAX_COMPREHENSION_LENGTH
+
+
 SAFE_FUNCTIONS = {
     "bool": bool,
     "len": len,

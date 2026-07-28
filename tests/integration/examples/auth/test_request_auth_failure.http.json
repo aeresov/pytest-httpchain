@@ -1,0 +1,36 @@
+{
+    "stages": [
+        {
+            "name": "auth_factory_raises",
+            "description": "A raising request-level auth function fails the stage cleanly and aborts the chain",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/answer",
+                "auth": {
+                    "name": "auth:raising_auth"
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "skipped_after_abort",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

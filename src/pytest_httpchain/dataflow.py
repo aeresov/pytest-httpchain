@@ -13,6 +13,7 @@ from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     extract_template_variables,
     raw_stages,
+    saved_in_step,
     stage_scopes,
     substitution_names,
     substitution_step_refs,
@@ -59,9 +60,11 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     """Build the stage data-flow graph for a validated scenario.
 
     A stage consumes a variable when one of its templates references a name an
-    earlier stage saved and its own phase does not shadow — each phase judged
-    against the shadow set `StageScopes` defines for it. ``parametrize`` values
-    are excluded: they resolve against scenario scope, never saved values.
+    earlier stage saved and its own phase does not shadow — pre-response phases
+    judged against the shadow sets `StageScopes` defines, response steps in
+    order with the stage's own accumulated saves added as they land.
+    ``parametrize`` values are excluded: they resolve against scenario scope,
+    never saved values.
     """
     raws = raw_stages(test_data)
     scopes = stage_scopes(scenario)
@@ -83,9 +86,20 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
 
         consumes |= _consumed(extract_template_variables(raw.get("parallel")), scope.earlier_saves, scope.pre_iteration_shadows)
         consumes |= _consumed(extract_template_variables(raw.get("request")), scope.earlier_saves, scope.request_shadows)
-        # In response steps the `response` namespace shadows a same-named save,
-        # so a reference to it there is not a dependency on the earlier stage.
-        consumes |= _consumed(extract_template_variables(raw.get("response")) - {RESPONSE_META_NAME}, scope.earlier_saves, scope.request_shadows)
+        # Response steps resolve in order, each save layering its names over the
+        # context (the runtime's per-step with_saves): once a step re-saves a
+        # name, later steps read this stage's fresh value, not the earlier
+        # stage's — so accumulated own saves join the shadow set step by step.
+        # The `response` namespace likewise shadows a same-named save.
+        own_saves: frozenset[str] = frozenset()
+        raw_response = raw.get("response")
+        if not isinstance(raw_response, list):
+            raw_response = []
+        for k, step in enumerate(stage.response):
+            step_raw = raw_response[k] if k < len(raw_response) else None
+            step_refs = extract_template_variables(step_raw) - {RESPONSE_META_NAME}
+            consumes |= _consumed(step_refs, scope.earlier_saves, scope.request_shadows | own_saves)
+            own_saves |= frozenset(saved_in_step(step))
         consumes |= _consumed(extract_template_variables(raw.get("always_run")), scope.earlier_saves, scope.always_run_shadows)
 
         by_producer: dict[int, list[str]] = {}

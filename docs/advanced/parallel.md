@@ -93,7 +93,7 @@ This sends 1000 requests with:
 - Up to 50 concurrent connections
 - Maximum 100 requests per second
 
-The limit is global across all workers. When a request cannot get a slot, it waits up to `max_rate_limit_delay` seconds (default 60); if none frees up in that window the request fails with a `Rate limit exceeded` error.
+The limit is shared by the stage's concurrent iterations, and by them only: each stage execution gets a fresh in-process budget, so consecutive stages, other scenarios, and pytest-xdist workers are not throttled against each other (with `-n 4`, four scenarios using `calls_per_sec: 100` can together reach 400 rps against one API). When a request cannot get a slot, it waits up to `max_rate_limit_delay` seconds (default 60); if none frees up in that window the request fails with a `Rate limit exceeded` error.
 
 ## Foreach with Combinations
 

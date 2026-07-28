@@ -32,3 +32,10 @@ def test_graphql_body(run_scenario):
     """Test GraphQL query with variables"""
     result = run_scenario("body_types/test_graphql_body.http.json")
     result.assert_outcomes(errors=0, failed=0, passed=1)
+
+
+def test_files_body(run_scenario):
+    """Multipart file upload end to end: the httpx `files` kwarg wiring, field
+    names, filenames, and content sizes all reach the server."""
+    result = run_scenario("body_types/test_files_body.http.json", "body_types/upload_a.txt", "body_types/upload_b.bin")
+    result.assert_outcomes(errors=0, failed=0, passed=1)

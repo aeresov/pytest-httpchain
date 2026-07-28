@@ -499,7 +499,11 @@ class ParallelConfigBase(StrictModel):
     )
     calls_per_sec: PositiveInt | NumberOrTemplate | None = Field(
         default=None,
-        description="Maximum number of API calls per second. When set, requests are rate-limited globally across all workers.",
+        description=(
+            "Maximum number of API calls per second, shared by this stage's concurrent iterations. "
+            "The limiter is per stage execution and per process: consecutive stages, other scenarios, "
+            "and pytest-xdist workers each get their own budget."
+        ),
     )
     max_rate_limit_delay: PositiveInt | NumberOrTemplate = Field(
         default=60,

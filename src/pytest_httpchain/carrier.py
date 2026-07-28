@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import threading
+import time
 import warnings
 from collections import ChainMap
 from collections.abc import Callable, Mapping
@@ -42,6 +43,7 @@ from pytest_httpchain.models import (
     SaveStep,
     Scenario,
     Stage,
+    SubstitutionsSave,
     VerifyStep,
 )
 from pytest_httpchain.request_builder import build_client_kwargs, build_request_kwargs
@@ -128,6 +130,7 @@ def fresh_scenario_state() -> dict[str, Any]:
         "last_response": None,
         "last_exchanges": [],
         "last_iterations_attempted": 0,
+        "last_shown_exchange_is_failed": False,
         "active_context_managers": [],
         "_initialized": False,
         "_init_failed": None,
@@ -160,6 +163,7 @@ class Carrier:
     last_response: ClassVar[httpx.Response | None] = None
     last_exchanges: ClassVar[list[tuple[httpx.Request, httpx.Response | None, datetime | None]]] = []
     last_iterations_attempted: ClassVar[int] = 0
+    last_shown_exchange_is_failed: ClassVar[bool] = False
     record_all_exchanges: ClassVar[bool] = False
     global_context: ClassVar[ChainMap[str, Any]] = ChainMap()
     active_context_managers: ClassVar[list[AbstractContextManager]] = []
@@ -223,6 +227,7 @@ class Carrier:
         cls.last_response = None
         cls.last_exchanges = []
         cls.last_iterations_attempted = 0
+        cls.last_shown_exchange_is_failed = False
 
         # Ahead of the always_run machinery: a failed initialization leaves no
         # context and no client, so every stage skips.
@@ -355,19 +360,20 @@ class Carrier:
         holds every iteration only when HAR output is on, so an ordinary run
         never retains more than one response per stage.
         """
-        failed_request, failed_response = (failed.request, failed.response) if isinstance(failed, StageExecutionError) else (None, None)
+        failed_request, failed_response, failed_started = (failed.request, failed.response, failed.started) if isinstance(failed, StageExecutionError) else (None, None, None)
 
         exchanges: list[tuple[httpx.Request, httpx.Response | None, datetime | None]] = []
         for r in completed:
             # A redirect chain lives on .history, each hop carrying its own
-            # request: expand it so the HAR shows every wire exchange. Hop start
-            # times are not tracked, so the writer falls back to write time.
-            exchanges.extend((hop.request, hop, None) for hop in r.response.history)
+            # request: expand it so the HAR shows every wire exchange. Individual
+            # hop start times are not tracked; the iteration's start is the
+            # closest truthful anchor (the first hop IS the request sent then).
+            exchanges.extend((hop.request, hop, r.started) for hop in r.response.history)
             exchanges.append((r.request, r.response, r.started))
         if failed_request is not None:
             if failed_response is not None:
-                exchanges.extend((hop.request, hop, None) for hop in failed_response.history)
-            exchanges.append((failed_request, failed_response, None))
+                exchanges.extend((hop.request, hop, failed_started) for hop in failed_response.history)
+            exchanges.append((failed_request, failed_response, failed_started))
         if not cls.record_all_exchanges:
             exchanges = exchanges[-1:]
 
@@ -376,6 +382,7 @@ class Carrier:
 
         if failed_request is not None:
             cls.last_request, cls.last_response = failed_request, failed_response
+            cls.last_shown_exchange_is_failed = True
         elif exchanges:
             cls.last_request, cls.last_response = exchanges[-1][0], exchanges[-1][1]
 
@@ -413,20 +420,43 @@ class Carrier:
                     first_error = (0, e)
             else:
                 workers = min(max_concurrency, total)
+                cancel = threading.Event()
+                futures: dict[Future[IterationResult], int] = {}
                 with ThreadPoolExecutor(max_workers=workers) as executor:
-                    futures: dict[Future[IterationResult], int] = {}
                     for idx, iter_vars in enumerate(iteration_substitutions):
-                        future = executor.submit(cls._execute_single_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay)
+                        future = executor.submit(cls._execute_single_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel)
                         futures[future] = idx
 
-                    for future in as_completed(futures):
-                        idx = futures[future]
-                        try:
-                            results[idx] = future.result()
-                        except _STAGE_FAILURE_EXCEPTIONS as e:
-                            first_error = (idx, e)
-                            executor.shutdown(wait=False, cancel_futures=True)
-                            break
+                    try:
+                        for future in as_completed(futures):
+                            idx = futures[future]
+                            try:
+                                results[idx] = future.result()
+                            except _STAGE_FAILURE_EXCEPTIONS as e:
+                                first_error = (idx, e)
+                                cancel.set()
+                                executor.shutdown(wait=False, cancel_futures=True)
+                                break
+                    except BaseException:
+                        # KeyboardInterrupt or a plugin bug: without cancelling,
+                        # the executor exit would run every queued iteration to
+                        # completion, making a runaway parallel stage unstoppable.
+                        cancel.set()
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        raise
+
+                # In-flight iterations that completed after the early exit hit
+                # the wire; fold their results in so the HAR reflects actual
+                # traffic. Their failures are secondary to first_error.
+                if first_error is not None:
+                    for future, idx in futures.items():
+                        if results[idx] is None and future.done() and not future.cancelled():
+                            try:
+                                results[idx] = future.result()
+                            except Exception:
+                                # Sibling failures: first_error already represents
+                                # the stage's failure.
+                                pass
         finally:
             # Every Limiter owns a daemon thread that lives until closed.
             if limiter is not None:
@@ -454,12 +484,42 @@ class Carrier:
         except Exception as e:
             raise RequestError(f"Unexpected error during HTTP request: {e}", request=_error_request(e)) from e
 
+    @staticmethod
+    def _acquire_rate_slot(limiter: Limiter, timeout: float, cancel: threading.Event | None) -> bool:
+        """Poll for a rate-limit slot so a pool-wide cancellation interrupts the
+        wait; a blocking ``try_acquire`` would pin the thread (and delay the
+        stage's failure report) for up to the full timeout."""
+        deadline = time.monotonic() + timeout
+        while True:
+            if limiter.try_acquire("api", blocking=False):
+                return True
+            if cancel is not None and cancel.is_set():
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.05, remaining))
+
     @classmethod
     def _execute_single_iteration(
-        cls, stage: Stage, local_context: ChainMap[str, Any], iter_vars: Mapping[str, Any], limiter: Limiter | None = None, max_rate_limit_delay: float = 60
+        cls,
+        stage: Stage,
+        local_context: ChainMap[str, Any],
+        iter_vars: Mapping[str, Any],
+        limiter: Limiter | None = None,
+        max_rate_limit_delay: float = 60,
+        cancel: threading.Event | None = None,
     ) -> IterationResult:
         """Resolve the request against the iteration context, take a rate-limit
-        slot, send it, and run the response steps in order."""
+        slot, send it, and run the response steps in order.
+
+        ``cancel`` is the pool-wide cancellation signal: once another iteration
+        fails (or the run is interrupted), in-flight iterations stop before
+        sending rather than adding side-effecting traffic to a failed stage.
+        """
+        if cancel is not None and cancel.is_set():
+            raise RequestError("Iteration cancelled: the stage already failed")
+
         iter_context = iteration_context(local_context, iter_vars)
 
         # walk() re-validates the model it substitutes into, so no further
@@ -467,13 +527,22 @@ class Carrier:
         request_model = walk(stage.request, iter_context)
         request_kwargs = build_request_kwargs(request_model, cls.scenario_dir)
 
-        if limiter is not None and not limiter.try_acquire("api", blocking=True, timeout=max_rate_limit_delay):
+        if limiter is not None and not cls._acquire_rate_slot(limiter, max_rate_limit_delay, cancel):
+            if cancel is not None and cancel.is_set():
+                raise RequestError("Iteration cancelled while waiting for a rate-limit slot: the stage already failed")
             raise RequestError(f"Rate limit exceeded: could not acquire a request slot within {max_rate_limit_delay}s")
+
+        if cancel is not None and cancel.is_set():
+            raise RequestError("Iteration cancelled: the stage already failed")
 
         # Stamped after the acquire, so it reflects when the request went on the
         # wire; this feeds the HAR entry's startedDateTime.
         started = datetime.now(UTC)
-        response = cls._execute_http_request(request_kwargs)
+        try:
+            response = cls._execute_http_request(request_kwargs)
+        except StageExecutionError as e:
+            e.started = started
+            raise
 
         try:
             saved_context: dict[str, Any] = {}
@@ -482,7 +551,13 @@ class Carrier:
                 step_context = response_step_context(iter_context, response_meta)
                 match step:
                     case SaveStep():
-                        save_model = walk(step.save, step_context)
+                        # A SubstitutionsSave renders its own entries strictly in
+                        # order inside process_save; pre-walking it here would
+                        # evaluate later entries before earlier ones' names exist
+                        # and re-evaluate already-rendered values — so response-
+                        # derived text containing '{{ }}' would be executed as an
+                        # expression.
+                        save_model = step.save if isinstance(step.save, SubstitutionsSave) else walk(step.save, step_context)
                         step_saved = process_save(save_model, response, step_context)
                         # The static HTTPCHAIN027 check cannot see dynamically
                         # produced keys, so the shadowing is surfaced here too.
@@ -511,9 +586,10 @@ class Carrier:
         except StageExecutionError as e:
             e.request = response.request
             e.response = response
+            e.started = started
             raise
         except (TemplatesError, ValidationError) as e:
-            raise StageExecutionError(str(e), request=response.request, response=response) from e
+            raise StageExecutionError(str(e), request=response.request, response=response, started=started) from e
 
         return IterationResult(
             saved_context=saved_context,

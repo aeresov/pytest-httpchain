@@ -2,6 +2,8 @@ import json
 
 import httpx
 
+from pytest_httpchain.utils import request_content
+
 _MAX_BODY_CHARS = 1000
 
 
@@ -21,12 +23,15 @@ def _message_lines(start_line: str, headers: httpx.Headers, body: str | None) ->
 
 def format_request(request: httpx.Request) -> str:
     """Format an httpx Request for display."""
+    content = request_content(request)
     body = None
-    if request.content:
+    if content is None:
+        body = "<Streaming body (e.g. multipart file upload): consumed on send, not captured>"
+    elif content:
         try:
-            decoded = request.content.decode()
+            decoded = content.decode()
         except UnicodeDecodeError:
-            body = f"<Binary content: {len(request.content)} bytes>"
+            body = f"<Binary content: {len(content)} bytes>"
         else:
             # A JSON body that fails to parse is malformed text, not binary.
             if "application/json" in request.headers.get("content-type", ""):

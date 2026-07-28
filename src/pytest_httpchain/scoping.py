@@ -45,7 +45,6 @@ from pytest_httpchain.models import (
     Scenario,
     Stage,
     SubstitutionsSave,
-    UserFunctionsSave,
     VarsSubstitution,
 )
 from pytest_httpchain.templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN
@@ -112,20 +111,25 @@ def substitution_names(substitutions: Any) -> set[str]:
     return names
 
 
+def saved_in_step(response_step: Any) -> set[str]:
+    """Names one response step saves. A ``user_functions`` save returns
+    arbitrary keys, so it contributes none; verify steps save nothing."""
+    if not isinstance(response_step, SaveStep):
+        return set()
+    match response_step.save:
+        case JMESPathSave(jmespath=jmespath):
+            return set(jmespath.keys())
+        case SubstitutionsSave(substitutions=substitutions):
+            return substitution_names(substitutions)
+        case _:
+            return set()
+
+
 def saved_in_stage(stage: Stage) -> set[str]:
-    """Names one stage's response steps save. A ``user_functions`` save returns
-    arbitrary keys, so it contributes none."""
+    """Names one stage's response steps save."""
     saved: set[str] = set()
     for response_step in stage.response:
-        if not isinstance(response_step, SaveStep):
-            continue
-        match response_step.save:
-            case JMESPathSave(jmespath=jmespath):
-                saved.update(jmespath.keys())
-            case SubstitutionsSave(substitutions=substitutions):
-                saved |= substitution_names(substitutions)
-            case UserFunctionsSave():
-                pass
+        saved |= saved_in_step(response_step)
     return saved
 
 
@@ -213,11 +217,19 @@ def _raw_substitution_entry_names(entry: Any) -> set[str]:
 
 
 def _raw_substitution_entry_templates(entry: Any) -> Any:
-    """What the runtime renders at seed time: ``vars`` values only, since
-    ``functions`` kwargs are passed to ``wrap_function`` raw."""
-    if isinstance(entry, dict):
-        return entry.get("vars")
-    return None
+    """What the runtime renders at seed time: ``vars`` values and ``functions``
+    import names; ``functions`` kwargs are passed to ``wrap_function`` raw."""
+    if not isinstance(entry, dict):
+        return None
+    rendered: list[Any] = [entry.get("vars")]
+    functions = entry.get("functions")
+    if isinstance(functions, dict):
+        for func_def in functions.values():
+            if isinstance(func_def, str):
+                rendered.append(func_def)
+            elif isinstance(func_def, dict):
+                rendered.append(func_def.get("name"))
+    return rendered
 
 
 def substitution_step_refs(raw_substitutions: Any) -> Iterator[tuple[set[str], frozenset[str]]]:

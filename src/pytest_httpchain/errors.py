@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import httpx
 
 
@@ -7,17 +9,20 @@ class HttpChainError(Exception):
 
 class StageExecutionError(HttpChainError):
     """A stage failed. Carries the HTTP request/response when one was made, for
-    the failure report and the HAR file."""
+    the failure report and the HAR file; ``started`` is when the request went on
+    the wire, feeding the HAR entry's startedDateTime."""
 
     def __init__(
         self,
         message: str,
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
+        started: datetime | None = None,
     ):
         super().__init__(message)
         self.request = request
         self.response = response
+        self.started = started
 
 
 class RequestError(StageExecutionError):

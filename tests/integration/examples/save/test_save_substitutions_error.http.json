@@ -1,0 +1,30 @@
+{
+    "stages": [
+        {
+            "name": "substitutions_save_error",
+            "description": "A save substitution whose template fails becomes a clean SaveError, not a raw traceback",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "oops": "{{ nonexistent_name + 1 }}"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

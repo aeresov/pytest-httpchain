@@ -557,7 +557,10 @@ class TestRedirectExchangeRecording:
         cls = _make_carrier_subclass(record_all_exchanges=True)
         cls._record_exchanges([result], None, 1)
 
-        assert cls.last_exchanges == [(hop_req, hop, None), (final_req, final, started)]
+        # Hops carry the iteration's start (the first hop IS the request sent
+        # then) rather than None, which the HAR writer would replace with
+        # export time — placing the hop after the response that followed it.
+        assert cls.last_exchanges == [(hop_req, hop, started), (final_req, final, started)]
         # The report still shows the final exchange.
         assert cls.last_request is final_req
         assert cls.last_response is final
@@ -573,3 +576,138 @@ class TestRedirectExchangeRecording:
         cls._record_exchanges([result], None, 1)
 
         assert cls.last_exchanges == [(final_req, final, started)]
+
+
+class TestRedirectKwargsMapping:
+    """The model's allow_redirects must reach httpx as follow_redirects: httpx
+    defaults the kwarg to False, so silently dropping the mapping would flip
+    the plugin's documented follow-by-default behavior with the suite green."""
+
+    def test_default_follows(self):
+        model = Request.model_validate({"url": "http://t/"})
+        assert build_request_kwargs(model, None)["follow_redirects"] is True
+
+    def test_disabled_passes_false(self):
+        model = Request.model_validate({"url": "http://t/", "allow_redirects": False})
+        assert build_request_kwargs(model, None)["follow_redirects"] is False
+
+
+class TestParallelCancellation:
+    """The iteration pool must be cancellable: without it, an escaping
+    exception (KeyboardInterrupt, a plugin bug) reaches the executor exit,
+    which runs every queued iteration to completion — an unstoppable load test."""
+
+    def test_unexpected_error_cancels_queued_iterations(self):
+        calls: list[int] = []
+
+        def fake_iteration(cls, stage, local_context, iter_vars, limiter=None, max_rate_limit_delay=60, cancel=None):
+            calls.append(1)
+            raise RuntimeError("plugin bug")
+
+        cls = _make_carrier_subclass(_execute_single_iteration=classmethod(fake_iteration))
+        config = ParallelRepeatConfig.model_validate({"repeat": 40, "max_concurrency": 1})
+
+        with pytest.raises(RuntimeError, match="plugin bug"):
+            cls._run_iterations(None, ChainMap(), [{} for _ in range(40)], config)
+
+        # The queued iterations were cancelled, not drained. A worker may have
+        # started one or two before the cancel landed; 40 means no cancellation.
+        assert len(calls) < 20, f"{len(calls)} iterations ran after the failure"
+
+    def test_rate_slot_wait_interrupted_by_cancellation(self):
+        import threading
+        import time
+
+        limiter = Limiter(Rate(1, Duration.SECOND))
+        try:
+            assert limiter.try_acquire("api", blocking=False)  # drain the bucket
+            cancel = threading.Event()
+            cancel.set()
+            start = time.monotonic()
+            assert Carrier._acquire_rate_slot(limiter, timeout=30, cancel=cancel) is False
+            # Far below the 30s timeout: the cancellation interrupted the wait.
+            assert time.monotonic() - start < 5
+        finally:
+            limiter.close()
+
+
+class TestFailedExchangeShownFlag:
+    """A failure that never recorded a request (template error, rate-limit
+    timeout) falls back to showing the last COMPLETED exchange, which the
+    report must not label as the failing one."""
+
+    @staticmethod
+    def _completed_result():
+        from datetime import UTC, datetime
+
+        req = httpx.Request("GET", "http://t/x")
+        resp = httpx.Response(200, request=req)
+        return IterationResult(saved_context={}, request=req, response=resp, started=datetime.now(UTC)), req
+
+    def test_failure_without_request_info_not_marked_failing(self):
+        from pytest_httpchain.templates import TemplatesError
+
+        result, req = self._completed_result()
+        cls = _make_carrier_subclass()
+        cls._record_exchanges([result], failed=TemplatesError("undefined variable"), attempted=3)
+
+        assert cls.last_shown_exchange_is_failed is False
+        assert cls.last_request is req
+
+    def test_failure_with_request_info_marked_failing(self):
+        result, _ = self._completed_result()
+        failed_req = httpx.Request("GET", "http://t/failed")
+        failed_resp = httpx.Response(400, request=failed_req)
+        cls = _make_carrier_subclass()
+        cls._record_exchanges([result], failed=RequestError("bad", request=failed_req, response=failed_resp), attempted=3)
+
+        assert cls.last_shown_exchange_is_failed is True
+        assert cls.last_request is failed_req
+
+
+class TestScenarioRerunReset:
+    """teardown_class must return the class to fresh_scenario_state and the
+    pristine base context, so a rerun plugin's second pass actually
+    re-executes the chain instead of replaying stale saves or skipping."""
+
+    def test_execute_teardown_execute_replays_cleanly(self, monkeypatch):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"v": 1})
+
+        monkeypatch.setattr(
+            "pytest_httpchain.carrier.build_client_kwargs",
+            lambda *args, **kwargs: {"transport": httpx.MockTransport(handler)},
+        )
+
+        scenario = Scenario.model_validate(
+            {
+                "substitutions": [{"vars": {"base": 1}}],
+                "stages": [
+                    {
+                        "name": "s",
+                        "request": {"url": "http://mock/ok"},
+                        "response": [{"save": {"jmespath": {"v": "v"}}}, {"verify": {"status": 200}}],
+                    }
+                ],
+            }
+        )
+        cls = _make_carrier_subclass(scenario=scenario, _initialized=False)
+        stage = scenario.stages[0]
+
+        cls.execute_stage(stage, {})
+        first_client = cls.client
+        assert cls._initialized is True
+        assert cls.global_context["v"] == 1
+
+        cls.teardown_class()
+        assert first_client is not None
+        assert first_client.is_closed
+        for name, value in fresh_scenario_state().items():
+            assert getattr(cls, name) == value, f"{name} not reset"
+        # Saves are gone; the pristine scenario context survives.
+        assert dict(cls.global_context) == {"base": 1}
+
+        # The second pass re-initializes (fresh client) and replays the chain.
+        cls.execute_stage(stage, {})
+        assert cls.client is not first_client
+        assert cls.global_context["v"] == 1

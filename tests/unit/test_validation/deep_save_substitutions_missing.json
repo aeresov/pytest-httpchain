@@ -1,0 +1,12 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                { "save": { "substitutions": [ { "functions": { "tok": "nosuchmodule_subsave:fn" } } ] } },
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

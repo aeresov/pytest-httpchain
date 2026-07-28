@@ -1,0 +1,62 @@
+{
+    "stages": [
+        {
+            "name": "fetch_literal",
+            "description": "Response text that looks like a template is saved literally, never evaluated",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/template-literal"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "raw_tpl": "tpl"
+                        }
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "copied_tpl": "{{ raw_tpl }}"
+                                }
+                            }
+                        ]
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ copied_tpl == raw_tpl }}"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "still_literal_next_stage",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ '{' * 2 in copied_tpl }}",
+                            "{{ 'probe' in copied_tpl }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

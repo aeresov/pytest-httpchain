@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from pytest_httpchain.errors import StageExecutionError
@@ -38,6 +39,19 @@ def resolve_scenario_path(scenario_dir: Path | None, value: str | Path) -> Path:
     return scenario_dir / path
 
 
+def request_content(request: httpx.Request) -> bytes | None:
+    """The request body bytes, or None when httpx never buffered them.
+
+    A streaming body — multipart ``files`` on the real transport — is consumed
+    on send without being read into ``.content``, which then raises
+    ``RequestNotRead``; reporting paths must degrade, not error.
+    """
+    try:
+        return request.content
+    except httpx.RequestNotRead:
+        return None
+
+
 def make_marker(mark_str: str) -> pytest.MarkDecorator:
     """Create a pytest marker from a string like 'skip(reason="foo")' or 'geofencing'."""
     tree = ast.parse(mark_str, mode="eval")
@@ -54,6 +68,18 @@ def make_marker(mark_str: str) -> pytest.MarkDecorator:
     raise ValueError(f"unsupported marker expression: {mark_str}")
 
 
+def _resolve_function_name(name: str, context: Mapping[str, Any]) -> str:
+    """Render a templated import name (``mod.{{ x }}:fn``) against the current
+    context; literal names pass through untouched. The model advertises the
+    template form, so it must resolve here — nothing downstream sees a context."""
+    if "{{" not in name:
+        return name
+    resolved = walk(name, context)
+    if not isinstance(resolved, str):
+        raise StageExecutionError(f"Templated function name {name!r} must resolve to a string, got {type(resolved).__name__}")
+    return resolved
+
+
 def process_substitutions(
     substitutions: Sequence[Substitution],
     context: Mapping[str, Any] | None = None,
@@ -61,8 +87,9 @@ def process_substitutions(
     """Resolve substitution steps into a flat ``{name: value}`` dict.
 
     Steps resolve in order, each seeing the earlier steps' values over
-    ``context``: ``functions`` seeds callable aliases, ``vars`` seeds values with
-    their templates rendered.
+    ``context``: ``functions`` seeds callable aliases (their import names
+    rendered, their kwargs passed raw), ``vars`` seeds values with their
+    templates rendered.
     """
     result: dict[str, Any] = {}
     for step in substitutions:
@@ -72,9 +99,9 @@ def process_substitutions(
                 for alias, func_def in step.functions.items():
                     match func_def:
                         case UserFunctionName():
-                            result[alias] = wrap_function(func_def.root)
+                            result[alias] = wrap_function(_resolve_function_name(func_def.root, current_context))
                         case UserFunctionKwargs():
-                            result[alias] = wrap_function(func_def.name.root, default_kwargs=func_def.kwargs)
+                            result[alias] = wrap_function(_resolve_function_name(func_def.name.root, current_context), default_kwargs=func_def.kwargs)
                         case _:
                             raise StageExecutionError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
                     logger.info(f"Seeded {alias} = {result[alias]}")

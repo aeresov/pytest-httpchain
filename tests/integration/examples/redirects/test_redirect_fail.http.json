@@ -1,0 +1,19 @@
+{
+    "stages": [
+        {
+            "name": "fail_after_redirect",
+            "description": "A failure after following a redirect labels the shown exchange with the hop count",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/redirect-bad"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

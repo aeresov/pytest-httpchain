@@ -363,9 +363,11 @@ def test_duplicate_json_key_fails_validation(datadir):
 
 def test_parametrize_template_ids_do_not_emit_phase_info(datadir):
     """`ids` are never substituted, so a template-looking string there must not
-    trigger the HTTPCHAIN025 collection-time-resolution info."""
+    trigger the HTTPCHAIN025 collection-time-resolution info — nor spurious
+    HTTPCHAIN003 undefined-variable warnings for its display-only text."""
     r = validate_scenario(datadir / "parametrize_ids_template_no_info.json")
     assert not any(d.code == DiagnosticCode.PARAMETRIZE_COLLECTION_RESOLUTION for d in r.diagnostics), r.diagnostics
+    assert not any(d.code == DiagnosticCode.UNDEFINED_VAR for d in r.diagnostics), r.diagnostics
 
 
 def test_foreach_value_referencing_stage_scope_ok(datadir):
@@ -399,6 +401,14 @@ def test_deep_import_bad_module_warns(datadir):
 def test_deep_import_ok_no_warning(datadir):
     r = validate_scenario(datadir / "deep_import_ok.json", deep=True, syspaths=[USERFUNCS_DIR])
     assert _codes(r).isdisjoint({DiagnosticCode.IMPORT_FAILED, DiagnosticCode.UNKNOWN_ARG, DiagnosticCode.MISSING_ARG}), r.diagnostics
+
+
+def test_deep_checks_functions_inside_substitutions_save(datadir):
+    """A substitutions-type save step can declare `functions` too; deep
+    validation must import-check them like every other call site (M-review:
+    only UserFunctionsSave and verify steps were collected)."""
+    r = validate_scenario(datadir / "deep_save_substitutions_missing.json", deep=True, syspaths=[USERFUNCS_DIR])
+    assert any(d.code == DiagnosticCode.IMPORT_FAILED and "nosuchmodule_subsave" in d.message for d in r.diagnostics), r.diagnostics
 
 
 def test_deep_signature_missing_required_arg(datadir):

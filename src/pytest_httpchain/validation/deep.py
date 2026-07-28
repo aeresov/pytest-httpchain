@@ -16,6 +16,7 @@ from pytest_httpchain.models import (
     FunctionsSubstitution,
     SaveStep,
     Scenario,
+    SubstitutionsSave,
     UserFunctionCall,
     UserFunctionsSave,
     VerifyStep,
@@ -163,6 +164,8 @@ def _function_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                 case SaveStep(save=UserFunctionsSave(user_functions=calls)):
                     for j, call in enumerate(calls):
                         sites.append((call, {"response"}, True, f"stages[{i}].response[{k}].save.user_functions[{j}]"))
+                case SaveStep(save=SubstitutionsSave(substitutions=substitutions)):
+                    add_substitution_sites(substitutions, f"stages[{i}].response[{k}].save.substitutions")
                 case VerifyStep(verify=verify):
                     for j, call in enumerate(verify.user_functions):
                         sites.append((call, {"response"}, True, f"stages[{i}].response[{k}].verify.user_functions[{j}]"))
