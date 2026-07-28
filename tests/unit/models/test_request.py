@@ -102,7 +102,7 @@ class TestRequestPassThroughDicts:
         assert request.headers == {}
 
     @pytest.mark.parametrize(
-        "params,headers",
+        ("params", "headers"),
         [
             ({"page": 1, "limit": 10}, {"Content-Type": "application/json"}),
             ({"q": "search term", "sort": "asc"}, {"X-Custom-Header": "custom-value"}),

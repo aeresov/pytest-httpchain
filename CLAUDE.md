@@ -32,11 +32,14 @@ uv run pytest-httpchain validate tests/integration/examples/save/test_save_jmesp
 uv run pytest-httpchain validate --deep --syspath tests/integration/examples tests/integration/examples/save/test_save_user_function.http.json
 
 # Run tests with coverage report.
-# Use `coverage run -m pytest` (NOT `pytest --cov`): the plugin is imported via its
-# pytest11 entry point before pytest-cov starts recording, so `--cov` counts every
-# module-level line (model fields, class bodies) as missed and reports a ~20-point-low
-# floor (e.g. models/entities.py at 40% instead of its real 97%). CI uses this form.
+# Use `coverage run -m pytest` (NOT `pytest --cov`, which is not installed): the
+# plugin is imported via its pytest11 entry point before a pytest plugin could start
+# recording, so `--cov` would count every module-level line (model fields, class
+# bodies) as missed and report a ~20-point-low floor. CI uses this form.
+# `parallel` + `patch=subprocess` measure pytester subprocesses too and write
+# pid-suffixed data files — always `combine` before `report`.
 uv run coverage run -m pytest tests/unit
+uv run coverage combine
 uv run coverage report --show-missing
 ```
 

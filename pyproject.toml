@@ -15,7 +15,6 @@ dependencies = [
     "referencing>=0.28.4",
     "pyrate-limiter>=4.2.0",
     "pytest>=9.0",
-    "pytest-order>=1.3.0",
     "simpleeval>=1.0.3",
     "typer>=0.16.0",
 ]
@@ -26,11 +25,11 @@ classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Framework :: Pytest",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
 ]
 
 [project.urls]
@@ -40,14 +39,19 @@ Changelog = "https://github.com/aeresov/pytest-httpchain/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
+    "flask>=3.0",
     "flask-httpauth>=4.8.0",
-    "http-server-mock>=1.7",
     "import-linter>=2.0",
     "ruff>=0.12.1",
-    "pytest-cov>=6.0.0",
-    "coverage[toml]>=7.0",
+    "coverage[toml]>=7.10", # `patch = ["subprocess"]` needs 7.10
+
     "pytest-datadir>=1.7.2",
+    # Not a runtime dependency: the plugin's own collection hooks own stage
+    # ordering. Installed in dev so the ordering regression tests can exercise
+    # the regroup's defense against a user-installed pytest-order.
+    "pytest-order>=1.3.0",
     "pytest-xdist>=3.8.0",
+    "trustme>=1.1.0",
 ]
 docs = [
     "mkdocs>=1.6.1",
@@ -58,7 +62,7 @@ docs = [
 default-groups = ["dev", "docs"]
 
 [build-system]
-requires = ["uv_build>=0.7.21,<0.8.0"]
+requires = ["uv_build>=0.11,<0.12"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -87,6 +91,7 @@ select = [
     "B",  # flake8-bugbear
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
+    "PT", # flake8-pytest-style
     "TID252", # flake8-tidy-imports: ban relative imports
 ]
 ignore = []
@@ -119,6 +124,10 @@ missing-argument = "ignore"
 
 [tool.pytest]
 minversion = "9.0"
+# pytest 9 umbrella: strict_config, strict_markers, strict_xfail,
+# strict_parametrization_ids — unknown ini keys and unregistered markers
+# become errors instead of warnings.
+strict = true
 # Logs are captured and shown only for failing tests (pytest's default). Streaming
 # live INFO for every passing test buried real output ~10-27x; opt back in per-run
 # with `-o log_cli=true --log-cli-level=INFO` when debugging.
@@ -146,6 +155,13 @@ filterwarnings = [
 [tool.coverage.run]
 source = ["src"]
 branch = true
+# Measure pytester subprocess children too (runpytest_subprocess families):
+# `patch` injects startup into every child with this config serialized —
+# data_file/source absolutized, so children report into this project's data
+# files regardless of their CWD. Requires the pid-suffixed parallel data
+# files; run `coverage combine` before `coverage report`.
+parallel = true
+patch = ["subprocess"]
 
 [tool.coverage.report]
 precision = 2

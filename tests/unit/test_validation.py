@@ -277,7 +277,8 @@ def test_contains_not_contains_contradiction_is_error(datadir):
     r = validate_scenario(datadir / "contradiction_contains.json")
     assert r.valid is False
     diag = [d for d in r.diagnostics if d.code == DiagnosticCode.CONTAINS_CONTRADICTION]
-    assert diag and diag[0].severity == "error"
+    assert diag
+    assert diag[0].severity == "error"
     assert "ERROR" in diag[0].message
 
 
@@ -308,7 +309,8 @@ def test_same_stage_request_forward_reference_warns(datadir):
     r = validate_scenario(datadir / "same_stage_forward.json")
     assert r.valid is True
     fwd = [d for d in r.diagnostics if d.code == DiagnosticCode.FORWARD_REF]
-    assert fwd and any("sid" in d.message for d in fwd)
+    assert fwd
+    assert any("sid" in d.message for d in fwd)
 
 
 def test_comprehension_loop_vars_not_flagged(datadir):

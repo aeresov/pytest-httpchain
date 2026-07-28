@@ -6,8 +6,11 @@ job) and the scenario's directory, which relative paths resolve against.
 """
 
 import base64
+import ssl
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from pytest_httpchain.errors import RequestError
 from pytest_httpchain.models import (
@@ -27,38 +30,39 @@ from pytest_httpchain.userfunc import UserFunctionError, call_user_function
 from pytest_httpchain.utils import resolve_scenario_path
 
 
-def normalize_cert(cert: Any) -> str | tuple[str, ...]:
-    """Stringify client-cert paths: httpx unpacks a non-tuple cert into
-    ``load_cert_chain(*cert)``, which a bare ``Path`` does not survive."""
-    if isinstance(cert, list | tuple):
-        return tuple(str(p) for p in cert)
-    return str(cert)
+def build_ssl_verify(config: SSLConfig, scenario_dir: Path | None) -> bool | ssl.SSLContext:
+    """Translate ``SSLConfig`` into httpx's supported ``verify=`` forms.
 
-
-def build_client_kwargs(ssl: SSLConfig, auth: UserFunctionCall | None, scenario_dir: Path | None) -> dict[str, Any]:
-    """Arguments for the scenario's shared client.
-
-    A Path-valued ``verify`` is a CA bundle and, like ``cert``, is
-    scenario-relative; ``auth`` is invoked because httpx wants the resulting
-    flow, not the call description.
+    httpx 0.28 deprecates ``verify=<str>`` and ``cert=``: anything beyond a
+    plain boolean must arrive as a ready context. A non-bool ``verify`` is a
+    scenario-relative CA bundle file or directory; a client cert needs a context
+    to load into, so a bool ``verify`` is expanded via
+    ``httpx.create_ssl_context``, keeping httpx's own trust-store semantics.
     """
-    verify = ssl.verify
-    if isinstance(verify, Path):
-        verify = str(resolve_scenario_path(scenario_dir, verify))
+    verify = config.verify
+    if not isinstance(verify, bool):
+        ca = resolve_scenario_path(scenario_dir, verify)
+        ctx = ssl.create_default_context(capath=ca) if ca.is_dir() else ssl.create_default_context(cafile=ca)
+    elif config.cert is None:
+        return verify
+    else:
+        ctx = httpx.create_ssl_context(verify=verify)
 
-    kwargs: dict[str, Any] = {"verify": verify, "http2": True}
-
-    if ssl.cert is not None:
-        cert = ssl.cert
-        if isinstance(cert, list | tuple):
-            cert = tuple(resolve_scenario_path(scenario_dir, p) for p in cert)
+    if config.cert is not None:
+        if isinstance(config.cert, list | tuple):
+            certfile, keyfile = (resolve_scenario_path(scenario_dir, p) for p in config.cert)
+            ctx.load_cert_chain(certfile, keyfile)
         else:
-            cert = resolve_scenario_path(scenario_dir, cert)
-        kwargs["cert"] = normalize_cert(cert)
+            ctx.load_cert_chain(resolve_scenario_path(scenario_dir, config.cert))
+    return ctx
 
+
+def build_client_kwargs(config: SSLConfig, auth: UserFunctionCall | None, scenario_dir: Path | None) -> dict[str, Any]:
+    """Arguments for the scenario's shared client. ``auth`` is invoked here
+    because httpx wants the resulting flow, not the call description."""
+    kwargs: dict[str, Any] = {"verify": build_ssl_verify(config, scenario_dir), "http2": True}
     if auth is not None:
         kwargs["auth"] = call_user_function(auth)
-
     return kwargs
 
 

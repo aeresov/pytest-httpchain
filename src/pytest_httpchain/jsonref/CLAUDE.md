@@ -16,16 +16,6 @@ Features:
 - Combined references (`"$include": "other.json#/definitions/foo"`)
 - Deep merging of sibling properties with referenced content
 
-## Subpackage Structure
-
-```
-src/pytest_httpchain/jsonref/
-├── __init__.py          # Public API: load_json, ReferenceResolverError
-├── loader.py            # Main entry point: load_json()
-├── exceptions.py        # ReferenceResolverError exception
-└── plumbing/            # Internal implementation
-```
-
 ## Public API
 
 ```python
@@ -80,19 +70,3 @@ When `$include` (or `$ref`) has sibling properties, they are merged **additively
 - External references are tracked by `(file, pointer)` and inherited down the resolution chain, so cross-document cycles (A → B → A) are detected.
 - Internal references (`#/pointer`) are document-local: they are tracked per document and are **not** inherited across a file boundary. Two documents that reuse the same pointer string are not a cycle; a genuine intra-document cycle (`#/a → #/b → #/a`) is still detected.
 - Raises `ReferenceResolverError` on circular dependency detection.
-
-## Running Tests
-
-```bash
-uv run pytest tests/unit/jsonref -v
-```
-
-## Common Patterns
-
-### Error Handling
-All resolution errors raise `ReferenceResolverError` with descriptive messages including:
-- Invalid `$ref` format
-- File not found (shows all paths tried)
-- Invalid JSON pointer
-- Merge conflicts between incompatible types
-- Circular references

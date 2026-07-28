@@ -1,6 +1,7 @@
 """HAR 1.2 export of a test's httpx request/response pairs."""
 
 import base64
+import functools
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -12,7 +13,10 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 
+@functools.cache
 def _get_version() -> str:
+    """Cached: the lookup scans installed-distribution metadata, which cannot
+    change in-process."""
     try:
         return version("pytest-httpchain")
     except Exception:
@@ -216,7 +220,7 @@ def write_har_file(
     if safe_name != test_name:
         # Sanitization is not injective, so a digest keeps distinct tests' files
         # from overwriting each other.
-        safe_name = f"{safe_name}-{hashlib.sha1(test_name.encode()).hexdigest()[:8]}"
+        safe_name = f"{safe_name}-{hashlib.sha1(test_name.encode(), usedforsecurity=False).hexdigest()[:8]}"
     filename = f"{safe_name}.har"
     filepath = output_dir / filename
 

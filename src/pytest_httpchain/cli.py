@@ -1,4 +1,5 @@
 import enum
+import importlib.metadata
 import json
 from pathlib import Path
 from typing import Annotated
@@ -12,7 +13,7 @@ from pytest_httpchain.models import Scenario
 from pytest_httpchain.schema import build_schema
 from pytest_httpchain.validation import ValidateResult, is_inline_schema_position, load_scenario, resolve_root_path, validate_scenario
 
-app = typer.Typer()
+app = typer.Typer(no_args_is_help=True)
 
 
 class OutputFormat(enum.StrEnum):
@@ -30,8 +31,19 @@ RootPath = Annotated[Path | None, typer.Option("--root-path", help="Directory th
 OutputFormatOption = Annotated[OutputFormat, typer.Option("--format", help="Output format: human-readable text or machine-readable JSON.")]
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(importlib.metadata.version("pytest-httpchain"))
+        raise typer.Exit()
+
+
 @app.callback()
-def main() -> None:
+def main(
+    version: Annotated[
+        bool,
+        typer.Option("--version", help="Show the pytest-httpchain version and exit.", callback=_version_callback, is_eager=True),
+    ] = False,
+) -> None:
     """pytest-httpchain command-line tools."""
 
 
@@ -79,7 +91,8 @@ def validate(
                 status = "OK"
             typer.echo(f"{path}: {status}")
             for diagnostic in result.diagnostics:
-                typer.echo(f"  {diagnostic.severity} [{diagnostic.code}]: {diagnostic.message}")
+                at = f" (at {diagnostic.location})" if diagnostic.location else ""
+                typer.echo(f"  {diagnostic.severity} [{diagnostic.code}]: {diagnostic.message}{at}")
 
     raise typer.Exit(0 if all_passed else 1)
 

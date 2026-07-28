@@ -137,5 +137,4 @@ This project was inspired by [Tavern](https://github.com/taverntesting/tavern) a
 [httpx](https://www.python-httpx.org) does comms.
 [Pydantic](https://docs.pydantic.dev) keeps structure.
 [simpleeval](https://github.com/danthedeckie/simpleeval) powers templates.
-[pytest-order](https://github.com/pytest-dev/pytest-order) sorts chain.
 [pytest-datadir](https://github.com/gabrielcnr/pytest-datadir) saved a lot of elbow grease while testing.

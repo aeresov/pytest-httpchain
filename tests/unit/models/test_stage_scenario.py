@@ -15,14 +15,14 @@ from pytest_httpchain.models.entities import (
     UserFunctionName,
     VarsSubstitution,
 )
-from tests.unit.models.conftest import make_request, make_stage
+from tests.unit.models.helpers import make_request, make_stage
 
 
 class TestStageFields:
     """Per-field defaults and round-trips for Stage's simple fields."""
 
     @pytest.mark.parametrize(
-        "attr, default",
+        ("attr", "default"),
         [
             ("description", None),
             ("marks", []),
@@ -38,7 +38,7 @@ class TestStageFields:
         assert Stage(request=make_request()).name == ""
 
     @pytest.mark.parametrize(
-        "field, value",
+        ("field", "value"),
         [
             pytest.param("name", "get-users", id="name-simple"),
             pytest.param("name", "Create new user account", id="name-descriptive"),
@@ -64,7 +64,7 @@ class TestScenarioSimpleFields:
     coerce and discriminate their inputs rather than storing them verbatim.)"""
 
     @pytest.mark.parametrize(
-        "attr, default",
+        ("attr", "default"),
         [
             ("description", None),
             ("marks", []),
@@ -74,7 +74,7 @@ class TestScenarioSimpleFields:
         assert getattr(Scenario(), attr) == default
 
     @pytest.mark.parametrize(
-        "field, value",
+        ("field", "value"),
         [
             pytest.param("description", "Test user authentication flow", id="description"),
             pytest.param("marks", ["smoke", "critical"], id="marks-multiple"),

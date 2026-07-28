@@ -2,15 +2,16 @@ import base64
 import socket
 import threading
 import time
+from contextlib import contextmanager
 from http import HTTPStatus
 
 import pytest
-from flask import request
+from flask import Flask, request
 from flask_httpauth import HTTPBasicAuth
-from http_server_mock import HttpServerMock
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.serving import make_server
 
-app = HttpServerMock(__name__)
+app = Flask(__name__)
 auth = HTTPBasicAuth()
 users = {"user": generate_password_hash("pass")}
 
@@ -58,11 +59,9 @@ def delay(seconds: int):
 
 @app.get("/delay_ms/<int:ms>")
 def delay_ms(ms: int):
-    # Millisecond-granularity delay. The mock server is single-threaded, so a
-    # handler keeps sleeping even after the client has timed out, and teardown
-    # blocks until it returns. Timeout tests should use this (e.g. /delay_ms/600
-    # with a 0.1s client timeout) instead of whole-second /delay to keep the
-    # timeout margin without paying seconds of teardown sleep on every run.
+    # Millisecond-granularity delay for client-timeout tests: /delay_ms/600
+    # with a 0.1s client timeout keeps a comfortable margin without paying
+    # whole seconds of sleep per run.
     time.sleep(ms / 1000)
     return {"delayed_ms": ms}, HTTPStatus.OK
 
@@ -253,12 +252,31 @@ def closed_port():
     return _free_port()
 
 
+@contextmanager
+def _run_app():
+    """Serve the Flask app on an OS-assigned port in a background thread.
+
+    werkzeug's ``make_server`` binds port 0 directly (no bind-then-release
+    race), and its threaded server runs handlers on daemon threads — teardown
+    returns immediately even while a ``/delay`` handler is still sleeping,
+    instead of blocking until the sleep finishes.
+    """
+    http_server = make_server("127.0.0.1", 0, app, threaded=True)
+    thread = threading.Thread(target=http_server.serve_forever, name="examples-http-server")
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{http_server.server_port}"
+    finally:
+        http_server.shutdown()
+        thread.join()
+        http_server.server_close()
+
+
 @pytest.fixture
 def server():
     reset_counter()  # Reset counter before each test
-    port = _free_port()
-    with app.run("localhost", port):
-        yield f"http://localhost:{port}"
+    with _run_app() as url:
+        yield url
 
 
 @pytest.fixture
@@ -270,9 +288,8 @@ def server_keep():
     ``server`` — even though each stage gets its own function-scoped fixture and
     its own ephemeral port (M50).
     """
-    port = _free_port()
-    with app.run("localhost", port):
-        yield f"http://localhost:{port}"
+    with _run_app() as url:
+        yield url
 
 
 @pytest.fixture

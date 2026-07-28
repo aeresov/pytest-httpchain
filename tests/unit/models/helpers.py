@@ -4,10 +4,10 @@ Most of these tests only need a *valid, incidental* Stage or Request as
 scaffolding while they exercise one specific field. These helpers provide that
 minimal object so a call site can pass just the field under test instead of
 re-spelling the whole ``Stage(name=..., request=Request(url=...), ...)``
-boilerplate. Import them directly, mirroring how the integration suite imports
-``run_scenario`` from its conftest::
+boilerplate. A plain helpers module (not conftest.py, which pytest treats as
+a plugin file, not an import target)::
 
-    from tests.unit.models.conftest import make_stage, make_request
+    from tests.unit.models.helpers import make_stage, make_request
 """
 
 from typing import Any

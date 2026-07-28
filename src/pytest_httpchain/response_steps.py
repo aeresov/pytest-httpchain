@@ -26,6 +26,7 @@ from pytest_httpchain.models import (
     UserFunctionsSave,
     Verify,
     check_json_schema,
+    json_schema_validator_class,
 )
 from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.userfunc import UserFunctionError, call_user_function
@@ -127,7 +128,7 @@ def _verify_body_schema(schema: Any, response: httpx.Response, scenario_dir: Pat
     if isinstance(schema, str | Path):
         schema_path = resolve_scenario_path(scenario_dir, schema)
         try:
-            schema = json.loads(schema_path.read_text())
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
             check_json_schema(schema)
         except (OSError, json.JSONDecodeError) as e:
             raise VerificationError(f"Error reading body schema file '{schema_path}': {e}") from e
@@ -140,7 +141,10 @@ def _verify_body_schema(schema: Any, response: httpx.Response, scenario_dir: Pat
         raise VerificationError(f"Cannot validate schema, response is not valid JSON: {e}") from e
 
     try:
-        jsonschema.validate(instance=response_json, schema=schema)
+        # Already meta-checked (inline at model validation, files just above), so
+        # instantiate the dialect's validator instead of jsonschema.validate,
+        # which would re-run check_schema on every stage.
+        json_schema_validator_class(schema)(schema).validate(response_json)
     except jsonschema.ValidationError as e:
         raise VerificationError(f"Body schema validation failed: {e}") from e
     except jsonschema.SchemaError as e:

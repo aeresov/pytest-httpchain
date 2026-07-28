@@ -56,7 +56,7 @@ from pytest_httpchain.models.entities import (
     XmlBody,
     parametrize_values_contain_template,
 )
-from pytest_httpchain.models.types import check_json_schema
+from pytest_httpchain.models.types import check_json_schema, json_schema_validator_class
 
 __all__ = [
     "Scenario",
@@ -101,5 +101,6 @@ __all__ = [
     "UserFunctionKwargs",
     "SSLConfig",
     "check_json_schema",
+    "json_schema_validator_class",
     "parametrize_values_contain_template",
 ]

@@ -15,7 +15,7 @@ from pytest_httpchain.jsonref.plumbing.path import parse_json_pointer, validate_
 
 # Predicate over a document position: the tuple of keys and indices from the
 # root to a value, composed across file boundaries.
-OpaquePredicate = Callable[[tuple[str | int, ...]], bool]
+type OpaquePredicate = Callable[[tuple[str | int, ...]], bool]
 
 REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 

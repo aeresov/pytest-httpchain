@@ -14,7 +14,7 @@ from pytest_httpchain.models.entities import (
     Verify,
     VerifyStep,
 )
-from tests.unit.models.conftest import make_request, make_stage
+from tests.unit.models.helpers import make_request, make_stage
 
 
 class TestVerifyStatus:

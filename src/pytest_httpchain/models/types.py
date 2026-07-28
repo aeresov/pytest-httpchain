@@ -5,7 +5,6 @@ attribute-accessible in templates and JSON-serializable in bodies."""
 
 import base64
 import keyword
-import logging
 import re
 import types
 import xml.etree.ElementTree
@@ -46,34 +45,19 @@ def validate_python_identifier(v: str) -> str:
     return v
 
 
-SCHEMA_VALIDATORS = {
-    "draft-03": jsonschema.Draft3Validator,
-    "draft-3": jsonschema.Draft3Validator,
-    "draft-04": jsonschema.Draft4Validator,
-    "draft-4": jsonschema.Draft4Validator,
-    "draft-06": jsonschema.Draft6Validator,
-    "draft-6": jsonschema.Draft6Validator,
-    "draft-07": jsonschema.Draft7Validator,
-    "draft-7": jsonschema.Draft7Validator,
-    "2019-09": jsonschema.Draft201909Validator,
-    "2020-12": jsonschema.Draft202012Validator,
-}
+def json_schema_validator_class(schema: dict[str, Any]) -> type[jsonschema.protocols.Validator]:
+    """The validator class for a schema's declared dialect.
 
-
-logger = logging.getLogger(__name__)
+    Draft 2020-12 is pinned as the fallback — the dialect
+    ``jsonschema.validate`` would pick — so meta-checking and instance
+    validation always agree.
+    """
+    return jsonschema.validators.validator_for(schema, default=jsonschema.Draft202012Validator)
 
 
 def check_json_schema(schema: dict[str, Any]) -> None:
-    """Check a schema against the meta-schema of its declared draft."""
-    schema_uri = schema.get("$schema", "http://json-schema.org/draft-07/schema#")
-
-    validator_class = next((validator for version_key, validator in SCHEMA_VALIDATORS.items() if version_key in schema_uri), None)
-    if validator_class is None:
-        validator_class = jsonschema.Draft7Validator
-        if "$schema" in schema:
-            logger.warning(f"Unrecognized JSON Schema version '{schema_uri}', falling back to Draft 7")
-
-    validator_class.check_schema(schema)
+    """Check JSON schema validity against its declared dialect's meta-schema."""
+    json_schema_validator_class(schema).check_schema(schema)
 
 
 def validate_json_schema_inline(v: dict[str, Any]) -> dict[str, Any]:

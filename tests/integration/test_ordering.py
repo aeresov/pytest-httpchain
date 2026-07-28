@@ -6,10 +6,12 @@ saved context) every time execution leaves the class. So the engine's ordering
 invariant is: all items of a scenario class run contiguously, in stage order,
 regardless of how other plugins sort the collected items.
 
-The pathological sorter is pytest-order itself: every scenario class carries
-the same ``order(0..n-1)`` stage marks, and pytest-order's default
-session-wide group scope stable-sorts equal indices across classes into
-A0, B0, A1, B1, ... — wiping each chain's context between its own stages.
+The canonical pathological sorter is a user-installed pytest-order (a dev
+dependency here, exactly for these tests) acting on user-authored
+``order(...)`` stage marks: with matching indices across scenarios, its
+default session-wide group scope stable-sorts equal indices across classes
+into A0, B0, A1, B1, ... — wiping each chain's context between its own
+stages.
 
 The scenarios here are the same strictly-chained trio as the xdist stress
 test: six stages each, stage k verifies ``x == base + k - 1`` before
@@ -42,19 +44,28 @@ def test_multiple_scenarios_plain_run(pytester):
     result.assert_outcomes(passed=18)
 
 
-def test_multiple_scenarios_without_pytest_order(pytester):
-    """The invariant must not depend on pytest-order being active."""
-    result = run_chains(pytester, "-p", "no:order")
-    result.assert_outcomes(passed=18)
+def test_user_order_marks_with_pytest_order(pytester):
+    """User-authored ``order(...)`` marks plus active pytest-order cannot split chains.
+
+    Both scenarios mark their stages ``order(0..2)``; pytest-order's default
+    session-wide sort interleaves the classes (A0, B0, A1, B1, ...), and the
+    regroup must restore per-class contiguity.
+    """
+    pytester.copy_example("conftest.py")
+    pytester.copy_example("ordering/test_chain_marks_a.http.json")
+    pytester.copy_example("ordering/test_chain_marks_b.http.json")
+    result = pytester.runpytest_subprocess()
+    result.assert_outcomes(passed=6)
 
 
 def test_items_reordered_by_another_plugin(pytester):
     """Stage order survives arbitrary reordering by other plugins.
 
     A plain hookimpl runs before the plugin's regrouping wrapper; reversing
-    the item list scrambles both inter-class and intra-class order. pytest-order
-    is disabled so nothing repairs the scramble first — this passes only if
-    the regroup itself restores stage order within each class.
+    the item list scrambles both inter-class and intra-class order. The chain
+    scenarios carry no order marks, so nothing repairs the scramble first —
+    this passes only if the regroup itself restores stage order within each
+    class.
     """
     pytester.makepyfile(
         reverser="""
@@ -62,7 +73,7 @@ def test_items_reordered_by_another_plugin(pytester):
             items.reverse()
         """
     )
-    result = run_chains(pytester, "-p", "no:order", "-p", "reverser")
+    result = run_chains(pytester, "-p", "reverser")
     result.assert_outcomes(passed=18)
 
 
@@ -81,7 +92,7 @@ def test_parametrized_stage_instances_keep_order(pytester):
             items.reverse()
         """
     )
-    result = pytester.runpytest_subprocess("-p", "no:order", "-p", "reverser")
+    result = pytester.runpytest_subprocess("-p", "reverser")
     result.assert_outcomes(passed=3)
 
 

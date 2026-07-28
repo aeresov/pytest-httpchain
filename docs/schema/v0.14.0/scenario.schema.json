@@ -1884,5 +1884,5 @@
   "title": "Scenario",
   "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json"
+  "$id": "https://aeresov.github.io/pytest-httpchain/schema/v0.14.0/scenario.schema.json"
 }

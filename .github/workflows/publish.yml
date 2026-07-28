@@ -4,19 +4,21 @@ on:
     release:
         types: [published]
 
+permissions:
+    contents: read
+
 jobs:
     test:
         name: Test
         uses: ./.github/workflows/test.yml
 
-    build-and-publish:
-        name: Build and publish to PyPI
+    # Canonical PyPA split: build in an unprivileged job, hand the dists to a
+    # publish job that holds only the trusted-publishing OIDC grant — checkout
+    # and build backends never run with the credential.
+    build:
+        name: Build distribution
         runs-on: ubuntu-latest
         needs: test
-        environment: pypi
-        permissions:
-            id-token: write # IMPORTANT: mandatory for trusted publishing
-
         steps:
             - uses: actions/checkout@v7
 
@@ -44,6 +46,27 @@ jobs:
                   uv build
                   echo "Built packages:"
                   ls -la dist/
+
+            - name: Upload distribution artifact
+              uses: actions/upload-artifact@v7
+              with:
+                  name: dist
+                  path: dist/
+
+    publish:
+        name: Publish to PyPI
+        runs-on: ubuntu-latest
+        needs: build
+        environment: pypi
+        permissions:
+            id-token: write # IMPORTANT: mandatory for trusted publishing
+
+        steps:
+            - name: Download distribution artifact
+              uses: actions/download-artifact@v8
+              with:
+                  name: dist
+                  path: dist/
 
             - name: Publish distribution to PyPI
               uses: pypa/gh-action-pypi-publish@release/v1

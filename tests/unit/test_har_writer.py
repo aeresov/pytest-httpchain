@@ -233,7 +233,8 @@ class TestFilenameCollisions:
         p1 = write_har_file(tmp_path, "t/x", [(request, response, None)])
         p2 = write_har_file(tmp_path, "t:x", [(request, response, None)])
         assert p1 != p2
-        assert p1.exists() and p2.exists()
+        assert p1.exists()
+        assert p2.exists()
 
     def test_clean_names_keep_plain_filenames(self, tmp_path):
         request, response = _make_pair()

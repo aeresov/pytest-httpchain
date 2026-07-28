@@ -1,0 +1,73 @@
+{
+    "stages": [
+        {
+            "name": "s0",
+            "marks": ["order(0)"],
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "x": 0
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "s1",
+            "marks": ["order(1)"],
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": ["{{ x == 0 }}"]
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "x": "{{ x + 1 }}"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "s2",
+            "marks": ["order(2)"],
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": ["{{ x == 1 }}"]
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -1,7 +1,8 @@
 """Runtime execution engine: the base class of every generated scenario test class.
 
 ``factory.create_test_class`` builds one ``test NN - <stage name>`` method per
-stage on a fresh `Carrier` subclass; the per-scenario state lives at the *class*
+stage on a fresh `Carrier` subclass, which the plugin's collection hooks keep
+contiguous and in stage order; the per-scenario state lives at the *class*
 level, so stage methods share one running context across the chain while
 scenarios stay isolated from each other.
 
@@ -133,7 +134,7 @@ def fresh_scenario_state() -> dict[str, Any]:
     }
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class IterationResult:
     """A successful stage iteration. ``started`` is when the request went on the
     wire, which is what HAR waterfalls are built from."""
@@ -356,10 +357,16 @@ class Carrier:
         """
         failed_request, failed_response = (failed.request, failed.response) if isinstance(failed, StageExecutionError) else (None, None)
 
-        exchanges: list[tuple[httpx.Request, httpx.Response | None, datetime | None]] = [(r.request, r.response, r.started) for r in completed]
+        exchanges: list[tuple[httpx.Request, httpx.Response | None, datetime | None]] = []
+        for r in completed:
+            # A redirect chain lives on .history, each hop carrying its own
+            # request: expand it so the HAR shows every wire exchange. Hop start
+            # times are not tracked, so the writer falls back to write time.
+            exchanges.extend((hop.request, hop, None) for hop in r.response.history)
+            exchanges.append((r.request, r.response, r.started))
         if failed_request is not None:
-            # No start time is tracked for a failure; None makes the HAR writer
-            # fall back to write time for that entry.
+            if failed_response is not None:
+                exchanges.extend((hop.request, hop, None) for hop in failed_response.history)
             exchanges.append((failed_request, failed_response, None))
         if not cls.record_all_exchanges:
             exchanges = exchanges[-1:]

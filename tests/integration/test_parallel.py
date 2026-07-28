@@ -1,15 +1,13 @@
 import pytest
 
-from tests.integration.conftest import run_scenario
 
-
-def test_repeat(pytester):
+def test_repeat(run_scenario):
     """Test repeat mode with max_concurrency"""
-    result = run_scenario(pytester, "parallel/test_repeat.http.json")
+    result = run_scenario("parallel/test_repeat.http.json")
     result.assert_outcomes(errors=0, failed=0, passed=1)
 
 
-def test_repeat_counter(pytester):
+def test_repeat_counter(run_scenario):
     """M50: a parallel `repeat: N` stage must actually fire N requests, not one.
 
     The first stage POSTs to the thread-safe /counter endpoint N times in
@@ -17,47 +15,47 @@ def test_repeat_counter(pytester):
     it equals N. The `server` fixture resets the counter at setup, so a silent
     single execution would yield count==1 and fail the verification.
     """
-    result = run_scenario(pytester, "parallel/test_repeat_counter.http.json")
+    result = run_scenario("parallel/test_repeat_counter.http.json")
     result.assert_outcomes(errors=0, failed=0, passed=2)
 
 
-def test_foreach_individual(pytester):
+def test_foreach_individual(run_scenario):
     """Test foreach with individual parameter values"""
-    result = run_scenario(pytester, "parallel/test_foreach_individual.http.json")
+    result = run_scenario("parallel/test_foreach_individual.http.json")
     result.assert_outcomes(errors=0, failed=0, passed=1)
 
 
-def test_foreach_combinations(pytester):
+def test_foreach_combinations(run_scenario):
     """Test foreach with parameter combinations"""
-    result = run_scenario(pytester, "parallel/test_foreach_combinations.http.json")
+    result = run_scenario("parallel/test_foreach_combinations.http.json")
     result.assert_outcomes(errors=0, failed=0, passed=1)
 
 
-def test_rate_limit(pytester):
+def test_rate_limit(run_scenario):
     """calls_per_sec must construct the limiter and run to completion (M2)."""
-    result = run_scenario(pytester, "parallel/test_rate_limit.http.json")
+    result = run_scenario("parallel/test_rate_limit.http.json")
     result.assert_outcomes(errors=0, failed=0, passed=1)
 
 
-def test_rate_limit_exceeded(pytester):
+def test_rate_limit_exceeded(run_scenario):
     """Exceeding max_rate_limit_delay fails cleanly, not with a raw traceback (M2)."""
-    result = run_scenario(pytester, "parallel/test_rate_limit_exceeded.http.json")
+    result = run_scenario("parallel/test_rate_limit_exceeded.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
     result.stdout.fnmatch_lines(["*Rate limit exceeded*"])
 
 
-def test_parallel_no_partial_save(pytester):
+def test_parallel_no_partial_save(run_scenario):
     """M4: a failing parallel stage commits no saves. The first stage saves `leaked`
     in its passing iterations but fails overall (one iteration hits /bad); the
     always_run second stage confirms `leaked` never reached the global context."""
-    result = run_scenario(pytester, "parallel/test_parallel_no_partial_save.http.json")
+    result = run_scenario("parallel/test_parallel_no_partial_save.http.json")
     # stage 1 fails (an iteration hits /bad -> 400); stage 2 (always_run) passes
     # only because `leaked` was NOT committed. Without M4 it would be failed=2.
     result.assert_outcomes(errors=0, failed=1, passed=1)
 
 
 @pytest.mark.slow
-def test_rate_limiter_threads_not_leaked(pytester):
+def test_rate_limiter_threads_not_leaked(run_scenario):
     """Each rate-limited stage execution used to construct a pyrate-limiter
     Limiter and never dispose it — and each Limiter owns a leaker daemon thread
     that keeps itself alive forever. The limiter must be closed once the
@@ -65,7 +63,7 @@ def test_rate_limiter_threads_not_leaked(pytester):
     import threading
     import time
 
-    result = run_scenario(pytester, "parallel/test_rate_limit.http.json")
+    result = run_scenario("parallel/test_rate_limit.http.json")
     result.assert_outcomes(errors=0, failed=0, passed=1)
 
     def leakers() -> list[str]:

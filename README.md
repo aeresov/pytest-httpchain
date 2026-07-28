@@ -1,6 +1,8 @@
 [![image](https://img.shields.io/pypi/v/pytest-httpchain)](https://pypi.python.org/pypi/pytest-httpchain)
 [![image](https://img.shields.io/pypi/l/pytest-httpchain)](https://github.com/aeresov/pytest-httpchain/blob/main/LICENSE)
 [![image](https://img.shields.io/pypi/pyversions/pytest-httpchain)](https://pypi.python.org/pypi/pytest-httpchain)
+[![Test](https://github.com/aeresov/pytest-httpchain/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/aeresov/pytest-httpchain/actions/workflows/test.yml)
+[![Docs](https://github.com/aeresov/pytest-httpchain/actions/workflows/docs.yml/badge.svg?branch=main)](https://aeresov.github.io/pytest-httpchain/)
 
 # pytest-httpchain
 
@@ -215,7 +217,15 @@ A JSON Schema is published for as-you-type validation and autocomplete. Referenc
 }
 ```
 
-The hosted schema tracks the `main` branch (it is redeployed on every push, so it may describe unreleased changes); to pin the schema matching your installed version (e.g. for CI), emit it locally:
+The hosted schema at the unversioned URL tracks the `main` branch (it is redeployed on every push, so it may describe unreleased changes). To pin the schema for a release, use its versioned URL:
+
+```json
+{
+    "$schema": "https://aeresov.github.io/pytest-httpchain/schema/v0.14.0/scenario.schema.json"
+}
+```
+
+or emit the schema matching your installed version locally:
 
 ```bash
 uvx pytest-httpchain schema > scenario.schema.json
@@ -248,5 +258,4 @@ This project was inspired by [Tavern](https://github.com/taverntesting/tavern) a
 [httpx](https://www.python-httpx.org) does comms.  
 [Pydantic](https://docs.pydantic.dev) keeps structure.  
 [simpleeval](https://github.com/danthedeckie/simpleeval) powers templates.  
-[pytest-order](https://github.com/pytest-dev/pytest-order) sorts chain.  
 [pytest-datadir](https://github.com/gabrielcnr/pytest-datadir) saved me a lot of elbow grease while testing.

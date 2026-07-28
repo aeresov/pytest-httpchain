@@ -102,8 +102,7 @@ def create_test_class(
         # Read by the chain-contiguity hook to restore stage order.
         stage_method._httpchain_stage_index = i  # ty: ignore[unresolved-attribute]
 
-        all_marks = [f"order({i})"] + stage.marks
-        for mark_str in all_marks:
+        for mark_str in stage.marks:
             try:
                 stage_method = make_marker(mark_str)(stage_method)
             except Exception as e:

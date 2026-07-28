@@ -61,8 +61,13 @@ JSON_LITERALS = {
 TEMPLATE_BUILTINS = set(SAFE_FUNCTIONS) | set(JSON_LITERALS) | {"exists", "get"} | set(DEFAULT_FUNCTIONS)
 
 
-def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
-    """Evaluate one expression; every failure becomes a `TemplatesError`."""
+def _build_evaluator(context: Mapping[str, Any]) -> EvalWithCompoundTypes:
+    """Build one evaluator for a whole ``walk()`` traversal.
+
+    simpleeval is meant to be built once and fed many expressions. The maps
+    derive purely from ``context``, so each ``walk()`` builds its own — which
+    also keeps parallel iterations sharing nothing.
+    """
     # simpleeval keeps callables and data in separate maps.
     callables = {key: value for key, value in context.items() if callable(value)}
     names = {key: value for key, value in context.items() if not callable(value)}
@@ -74,7 +79,7 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
     # Merge order is load-bearing: last wins, so user callables shadow the safe
     # functions while `exists`/`get` cannot be overridden, and user names shadow
     # the JSON literals.
-    eval_instance = EvalWithCompoundTypes(
+    return EvalWithCompoundTypes(
         functions=SAFE_FUNCTIONS
         | DEFAULT_FUNCTIONS
         | callables
@@ -85,11 +90,14 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
         names=JSON_LITERALS | names,
     )
 
+
+def _eval_expr(evaluator: EvalWithCompoundTypes, expr: str) -> Any:
+    """Evaluate one expression; every failure becomes a `TemplatesError`."""
     # Rebuilt in its original {{ … }} form: an f-string would collapse the braces
     # and show text that is not in the user's scenario.
     display = "{{ " + expr + " }}"
     try:
-        return eval_instance.eval(expr)
+        return evaluator.eval(expr)
     except NameNotDefined as e:
         raise TemplatesError(f"Undefined variable in expression '{display}': {e}") from e
     except FunctionNotDefined as e:
@@ -111,14 +119,14 @@ def _eval_with_context(expr: str, context: Mapping[str, Any]) -> Any:
         raise TemplatesError(f"Error evaluating expression '{display}': {e}") from e
 
 
-def _sub_string(line: str, context: Mapping[str, Any]) -> Any:
+def _sub_string(line: str, evaluator: EvalWithCompoundTypes) -> Any:
     # A whole-string expression keeps its evaluated type; anything else is
     # interpolated into the string.
     if (expr := extract_template_expression(line)) is not None:
-        return _eval_with_context(expr, context)
+        return _eval_expr(evaluator, expr)
 
     def _repl(match: re.Match[str]) -> str:
-        return str(_eval_with_context(match.group("expr").strip(), context))
+        return str(_eval_expr(evaluator, match.group("expr").strip()))
 
     return re.sub(TEMPLATE_PATTERN, _repl, line)
 
@@ -140,35 +148,39 @@ def contains_template(obj: Any) -> bool:
             return False
 
 
-def walk(obj: Any, context: Mapping[str, Any]) -> Any:
-    """Substitute every template in a structure, returning the same shape.
-
-    A model is dumped, substituted and re-validated (so the result is checked
-    against the real field types), and returned untouched when it holds no
-    template at all.
-    """
+def _walk(obj: Any, evaluator: EvalWithCompoundTypes) -> Any:
     match obj:
         case str():
-            return _sub_string(obj, context)
+            return _sub_string(obj, evaluator)
         case dict():
-            return {key: walk(value, context) for key, value in obj.items()}
+            return {key: _walk(value, evaluator) for key, value in obj.items()}
         case list():
-            return [walk(item, context) for item in obj]
+            return [_walk(item, evaluator) for item in obj]
         case tuple():
-            return tuple(walk(item, context) for item in obj)
+            return tuple(_walk(item, evaluator) for item in obj)
         case BaseModel():
             if not contains_template(obj):
                 return obj
 
             obj_dict = obj.model_dump(mode="python")
-            processed_dict = walk(obj_dict, context)
+            processed_dict = _walk(obj_dict, evaluator)
             return obj.__class__.model_validate(processed_dict)
         case SimpleNamespace():
             if not contains_template(obj):
                 return obj
 
             namespace_dict = vars(obj)
-            processed_dict = walk(namespace_dict, context)
+            processed_dict = _walk(namespace_dict, evaluator)
             return SimpleNamespace(**processed_dict)
         case _:
             return obj
+
+
+def walk(obj: Any, context: Mapping[str, Any]) -> Any:
+    """Substitute every template in a structure, returning the same shape.
+
+    One evaluator serves the whole traversal. A model is dumped, substituted and
+    re-validated (so the result is checked against the real field types), and
+    returned untouched when it holds no template at all.
+    """
+    return _walk(obj, _build_evaluator(context))

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `pytest-httpchain --version` on the console script (standard eager typer callback); a bare invocation now shows help instead of a usage error.
+- `validate` text output includes each diagnostic's model-path location (`... (at stages[0].response[1].verify)`), previously reachable only via `--format json`.
+- HAR output and test reports now cover redirects: every redirect hop from `response.history` becomes its own HAR exchange, and the report labels the shown request with `(after N redirects)` when the final response followed redirects.
+- Versioned editor-schema copies: `docs/schema/v<version>/scenario.schema.json` with an immutable per-release `$id`, accumulated in the repo and published with the docs; the unversioned URL keeps tracking latest. A Lint-job drift check regenerates the schema and fails CI if the committed copies are stale.
+- CI: non-blocking test leg against pytest's main branch; least-privilege workflow `permissions`; per-ref `concurrency` cancellation for superseded PR runs; dependabot for GitHub Actions and uv.lock; codecov upload via OIDC with failures no longer suppressed.
+
+### Changed
+
+- **Breaking (dependency surface):** pytest-order is no longer a runtime dependency and the plugin no longer injects `order(i)` marks — the plugin's own collection hooks have owned stage ordering since 0.12; the regroup still defends against a user-installed pytest-order acting on user-authored `order(...)` stage marks (covered by a new regression test).
+- SSL wiring uses `ssl.SSLContext` instead of httpx-0.28-deprecated `verify=<str>`/`cert=...`: a CA-bundle path (file or directory) becomes `ssl.create_default_context(cafile=/capath=)` and client certs are loaded via `load_cert_chain`; scenarios setting `ssl.verify`/`ssl.cert` no longer trigger `DeprecationWarning` (a hard failure under `filterwarnings = error`). Plain `true`/`false` verify is unchanged.
+- JSON Schema dialect selection is unified through `jsonschema.validators.validator_for` (new shared `json_schema_validator_class`): a schema without `$schema` now meta-checks against Draft 2020-12 — the dialect instance validation already used — instead of Draft 7; unknown `$schema` URIs fall back silently instead of logging; per-stage validation no longer re-runs the schema self-check.
+- `DiagnosticCode` is a `StrEnum` and `Diagnostic.code` is typed with it, so unregistered codes fail at model-validation time; JSON output is unchanged.
+- `--httpchain-output-dir` registers under a named `httpchain` group in `pytest --help` and its option dest is the properly-prefixed `httpchain_output_dir` (was the collision-prone bare `output_dir`); ini options register their real defaults via `addini` instead of a `None`-sentinel indirection.
+- Schema generation converts tagged-union `oneOf`→`anyOf` via a `GenerateJsonSchema` subclass at generation time instead of a post-hoc document walk; pydantic then flattens directly nested `anyOf`s, so the emitted schema is simpler but semantically identical (committed schema regenerated).
+- Template engine builds one simpleeval evaluator per `walk()` traversal instead of one per expression, per simpleeval's reuse guidance.
+- pytest 9's `strict = true` umbrella is enabled; ruff gains the `PT` (flake8-pytest-style) family; coverage measures pytester subprocesses (`patch = ["subprocess"]` + `parallel`, so `coverage combine` before `report`); CI installs with `uv sync --locked`; publish/tombstones workflows split build from the OIDC-privileged publish job; build backend bumped to uv_build 0.11.x; the deprecated `License ::` classifier is dropped (PEP 639 expression only) and `Typing :: Typed` added.
+- Integration test server runs the same Flask app on werkzeug's `make_server(port=0, threaded=True)` in a joined thread, replacing unmaintained http-server-mock — no bind/release port race, no 60-second `requests` busy-poll, and teardown no longer blocks on sleeping handlers. pytest-cov (unused) dropped from dev dependencies; trustme added for real throwaway PEMs in SSL tests.
+- Tombstone placeholder distributions declare PEP 639 license metadata (`MIT` + LICENSE file), bumped to 0.9.2 for republication.
+
+### Fixed
+
+- Two JSON reads (verify-schema files in the carrier and the validator) used the platform locale encoding instead of UTF-8; `generate_schema.py` likewise writes UTF-8 with a stable trailing newline.
+
 ## [0.14.0] - 2026-07-22
 
 ### Added

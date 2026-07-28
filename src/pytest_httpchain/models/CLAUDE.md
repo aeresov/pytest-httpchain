@@ -11,47 +11,12 @@ This subpackage provides strongly-typed Pydantic models for defining HTTP test s
 - Response verification and data extraction
 - Test parameterization and parallel execution
 
-## Subpackage Structure
-
-```
-src/pytest_httpchain/models/
-├── __init__.py     # Public API exports
-├── entities.py     # Pydantic models (Scenario, Stage, Request, etc.)
-└── types.py        # Custom type validators and type aliases
-```
-
 ## Public API
-
-```python
-from pytest_httpchain.models import (
-    # Core models
-    Scenario, Stage, Request,
-    # Body types
-    JsonBody, XmlBody, FormBody, TextBody, Base64Body, BinaryBody, FilesBody, GraphQLBody,
-    # Substitutions
-    Substitution, VarsSubstitution, FunctionsSubstitution,
-    # Response handling
-    Verify, Save, JMESPathSave, SubstitutionsSave, UserFunctionsSave,
-    # Parameterization
-    Parameter, IndividualParameter, CombinationsParameter,
-    # Parallel execution
-    ParallelConfig, ParallelConfigBase, ParallelRepeatConfig, ParallelForeachConfig,
-    # Utilities
-    check_json_schema,
-    parametrize_values_contain_template,
-)
-```
 
 `parametrize_values_contain_template(parametrize)` — True when any parametrize
 VALUE (not `ids`) contains a `{{ }}` template. Single source of truth shared by
 the carrier (decides whether scenario substitutions must resolve at collection
 time) and the validator (reports that as the `HTTPCHAIN025` info diagnostic).
-
-## Running Tests
-
-```bash
-uv run pytest tests/unit/models -v
-```
 
 ## Common Patterns
 
@@ -69,17 +34,3 @@ Substitutions, Responses, and Stages accept either a list OR a name-keyed mappin
 
 ### Two-phase validation
 Models validate twice. First with `{{ }}` template strings treated as opaque (`TemplateExpression` / `PartialTemplateStr` / `Any`), then again after the templates engine renders them at runtime, just before consumption — so the rendered concrete value is validated against the real type.
-
-### Validated string types (types.py)
-`Annotated` aliases that validate a field's contents:
-- `JMESPathExpression` — JMESPath expression
-- `RegexPattern` — regular expression
-- `XMLString` — XML
-- `GraphQLQuery` — GraphQL query
-- `Base64String` — base64 encoding
-- `TemplateExpression` — a complete `{{ ... }}` template (entire string is one expression)
-- `PartialTemplateStr` — a string that may contain `{{ ... }}` templates inline
-- `FunctionImportName` — a dotted function import name
-- `VariableName` — a valid Python identifier
-- `JSONSchemaInline` — an inline JSON Schema dict
-- `SerializablePath` — a `Path` serialized to string

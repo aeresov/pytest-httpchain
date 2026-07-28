@@ -42,7 +42,7 @@ CASES = [
 ]
 
 
-@pytest.mark.parametrize("label,construct", CASES, ids=[c[0] for c in CASES])
+@pytest.mark.parametrize(("label", "construct"), CASES, ids=[c[0] for c in CASES])
 def test_malformed_discriminated_shape_raises_validation_error(label, construct):
     """A malformed shape on any discriminated union raises a proper ValidationError
     (so the CLI/collection/inspection handlers catch it), not a bare ValueError."""

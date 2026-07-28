@@ -1,0 +1,18 @@
+# Keep GitHub Actions refs and uv.lock moving; grouped weekly PRs.
+version: 2
+updates:
+    - package-ecosystem: github-actions
+      directory: /
+      schedule:
+          interval: weekly
+      groups:
+          actions:
+              patterns: ["*"]
+
+    - package-ecosystem: uv
+      directory: /
+      schedule:
+          interval: weekly
+      groups:
+          dependencies:
+              patterns: ["*"]

@@ -81,7 +81,7 @@ def _check_schema_path(schema: Any, location: str, base_dir: Path | None = None)
         yield diag(DiagnosticCode.REFERENCED_FILE_NOT_FOUND, "warning", f"Schema file not found: {path}", location)
         return
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, "warning", f"Schema file is not valid JSON: {path}: {e}", location)
         return
@@ -112,7 +112,7 @@ def _file_diagnostics(scenario: Scenario, base_dir: Path | None = None) -> Itera
                 yield from _check_schema_path(step.verify.body.schema, f"stages[{i}].response[{k}].verify.body.schema", base_dir)
 
 
-def _signature_problems(func: Any, provided: set[str]) -> Iterator[tuple[str, str]]:
+def _signature_problems(func: Any, provided: set[str]) -> Iterator[tuple[DiagnosticCode, str]]:
     """``(code, message)`` for each mismatch between the names a call supplies
     and the function's signature.
 

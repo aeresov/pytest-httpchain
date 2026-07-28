@@ -3,14 +3,18 @@
 Codes are append-only and documented in docs/diagnostics.md.
 """
 
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel
 
-Severity = Literal["error", "warning", "info"]
+type Severity = Literal["error", "warning", "info"]
 
 
-class DiagnosticCode:
+class DiagnosticCode(StrEnum):
+    """A ``StrEnum`` so ``Diagnostic.code`` rejects unregistered codes at
+    validation time; members interpolate as their values."""
+
     SCHEMA = "HTTPCHAIN000"
     DUPLICATE_STAGE = "HTTPCHAIN001"
     FIXTURE_CONFLICT = "HTTPCHAIN002"
@@ -45,7 +49,7 @@ class DiagnosticCode:
 class Diagnostic(BaseModel):
     """A single validation finding."""
 
-    code: str
+    code: DiagnosticCode
     severity: Severity
     message: str
     location: str | None = None
@@ -72,7 +76,7 @@ class ValidateResult(BaseModel):
     scenario_info: ScenarioInfo | None = None
 
 
-def diag(code: str, severity: Severity, message: str, location: str | None = None) -> Diagnostic:
+def diag(code: DiagnosticCode, severity: Severity, message: str, location: str | None = None) -> Diagnostic:
     return Diagnostic(code=code, severity=severity, message=message, location=location)
 
 
