@@ -13,8 +13,8 @@ class ConfigOptions(StrEnum):
     """Ini option names, settable in pytest.ini or [tool.pytest.ini_options].
 
     The ``httpchain_`` prefix is required: pytest ini options share one global
-    namespace across plugins. Defaults live in ``plugin._INI_DEFAULTS``; the HAR
-    output directory is a CLI flag, not an ini option.
+    namespace across plugins. Defaults live in ``plugin.pytest_addoption``; the
+    HAR output directory is a CLI flag, not an ini option.
     """
 
     SUFFIX = "httpchain_suffix"
