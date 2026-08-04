@@ -12,6 +12,7 @@ from pytest_httpchain.models import Scenario
 from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     extract_template_variables,
+    raw_list_entries,
     raw_stages,
     saved_in_step,
     stage_scopes,
@@ -92,9 +93,11 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         # stage's — so accumulated own saves join the shadow set step by step.
         # The `response` namespace likewise shadows a same-named save.
         own_saves: frozenset[str] = frozenset()
-        raw_response = raw.get("response")
-        if not isinstance(raw_response, list):
-            raw_response = []
+        # raw_list_entries, not an isinstance(list) guard: the name-keyed mapping
+        # form of `response` is first-class, and discarding it left every step's
+        # raw text unread — so show/graph reported a consuming stage as
+        # consuming nothing and dropped the dependency edge entirely.
+        raw_response = raw_list_entries(raw.get("response"))
         for k, step in enumerate(stage.response):
             step_raw = raw_response[k] if k < len(raw_response) else None
             step_refs = extract_template_variables(step_raw) - {RESPONSE_META_NAME}

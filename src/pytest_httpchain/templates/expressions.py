@@ -17,7 +17,14 @@ def is_complete_template(value: str) -> bool:
 
 
 def extract_template_expression(value: str) -> str | None:
-    """The expression inside a complete template string, else None."""
+    """The expression inside a complete template string, else None.
+
+    An empty expression (``"{{ }}"``) is not a template: it carries nothing to
+    evaluate and simpleeval raises on the empty parse at runtime. Rejecting it
+    here keeps `is_complete_template` — and so every ``TemplateExpression``
+    field — in agreement with `types.validate_partial_template_str`, which has
+    always refused an empty expression in the partial form.
+    """
     if match := re.fullmatch(rf"\s*{TEMPLATE_PATTERN}\s*", value):
-        return match.group("expr").strip()
+        return expr if (expr := match.group("expr").strip()) else None
     return None

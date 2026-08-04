@@ -47,7 +47,7 @@ from pytest_httpchain.models import (
     VerifyStep,
 )
 from pytest_httpchain.request_builder import build_client_kwargs, build_request_kwargs
-from pytest_httpchain.response_steps import process_save, process_verify
+from pytest_httpchain.response_steps import check_rendered_assertions, process_save, process_verify
 from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     base_global_context,
@@ -234,6 +234,7 @@ class Carrier:
         if cls._init_failed is not None:
             pytest.skip(reason=f"Scenario initialization failed: {cls._init_failed}")
 
+        failure_reason: str | None = None
         try:
             stage_fixtures = cls._build_stage_fixtures(fixture_kwargs)
 
@@ -289,7 +290,15 @@ class Carrier:
             if not is_xfail:
                 logger.error(str(e))
                 cls.aborted = True
-            pytest.fail(reason=str(e), pytrace=False)
+            failure_reason = str(e)
+
+        # Deliberately outside the handler: raising there would set
+        # `Failed.__context__` to the original exception, and pytest's
+        # repr_excinfo walks the whole __cause__/__context__ chain even under
+        # pytrace=False — printing the one message 2-4 times, since plugin
+        # errors and httpx transport errors are themselves chained.
+        if failure_reason is not None:
+            pytest.fail(reason=failure_reason, pytrace=False)
 
     @classmethod
     def _build_stage_fixtures(cls, fixture_kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -579,6 +588,11 @@ class Carrier:
 
                     case VerifyStep():
                         verify_model = walk(step.verify, step_context)
+                        # Compared against the pre-walk step, the only place both
+                        # forms are in scope: process_verify sees the rendered
+                        # model alone and cannot tell an absent assertion from
+                        # one a template rendered away.
+                        check_rendered_assertions(step.verify, verify_model)
                         process_verify(verify_model, response, cls.scenario_dir)
 
                     case _:

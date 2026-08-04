@@ -240,3 +240,26 @@ class TestFilenameCollisions:
         request, response = _make_pair()
         path = write_har_file(tmp_path, "plain_name", [(request, response, None)])
         assert path.name == "plain_name.har"
+
+
+def test_repeated_response_headers_are_not_comma_folded():
+    """httpx.Headers.items() folds repeated names with ", ". RFC 6265 forbids
+    that for Set-Cookie precisely because cookie attributes contain commas, so
+    folding two cookies corrupts both in the HAR export."""
+    request = httpx.Request("GET", "https://example.com/")
+    response = httpx.Response(
+        200,
+        headers=[
+            ("set-cookie", "a=1; Path=/; Expires=Wed, 21 Oct 2026 07:28:00 GMT"),
+            ("set-cookie", "b=2; Path=/"),
+        ],
+        request=request,
+    )
+
+    entry = request_response_to_har_entry(request, response)
+    cookies = [h["value"] for h in entry["response"]["headers"] if h["name"] == "set-cookie"]
+
+    assert len(cookies) == 2
+    assert cookies[0].startswith("a=1")
+    assert cookies[1].startswith("b=2")
+    assert not any(v.startswith("a=1") and "b=2" in v for v in cookies)

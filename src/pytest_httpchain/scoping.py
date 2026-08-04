@@ -189,19 +189,24 @@ def raw_stages(test_data: dict[str, Any]) -> list[Any]:
     return []
 
 
-def _raw_substitution_entries(raw_substitutions: Any) -> list[Any]:
-    """Raw substitution entries in resolution order, mirroring the model's
-    list/mapping normalization."""
-    if isinstance(raw_substitutions, dict):
+def raw_list_entries(raw: Any) -> list[Any]:
+    """Raw entries of a list-or-mapping field in resolution order, mirroring the
+    model's ``_normalize_list_input``: a mapping's list values are extended in
+    and its scalars appended, so entry K pairs with the validated model's K.
+
+    Shared by every raw-JSON reader of these fields — re-deriving the shape with
+    a bare ``isinstance(..., list)`` silently drops the whole mapping form.
+    """
+    if isinstance(raw, dict):
         entries: list[Any] = []
-        for value in raw_substitutions.values():
+        for value in raw.values():
             if isinstance(value, list):
                 entries.extend(value)
             else:
                 entries.append(value)
         return entries
-    if isinstance(raw_substitutions, list):
-        return list(raw_substitutions)
+    if isinstance(raw, list):
+        return list(raw)
     return []
 
 
@@ -240,7 +245,7 @@ def substitution_step_refs(raw_substitutions: Any) -> Iterator[tuple[set[str], f
     addition (validation) and the shadow addition (dataflow) for that step.
     """
     prior_names: frozenset[str] = frozenset()
-    for entry in _raw_substitution_entries(raw_substitutions):
+    for entry in raw_list_entries(raw_substitutions):
         yield extract_template_variables(_raw_substitution_entry_templates(entry)), prior_names
         prior_names |= frozenset(_raw_substitution_entry_names(entry))
 

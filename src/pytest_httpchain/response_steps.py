@@ -73,9 +73,28 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
     return step_saved
 
 
+def check_rendered_assertions(declared: Verify, rendered: Verify) -> None:
+    """Raise when an assertion the scenario declared rendered away to nothing.
+
+    ``status`` and ``body.schema`` are optional, so a template resolving to
+    ``None`` re-validates cleanly and `process_verify` would simply not run that
+    check — turning an upstream mistake (a JMESPath save of a missing key,
+    ``get()`` without a default) into a green stage. "Never declared" and
+    "declared but rendered to nothing" must never look the same to a test runner.
+    """
+    for field, declared_value, rendered_value in (
+        ("status", declared.status, rendered.status),
+        ("body.schema", declared.body.schema, rendered.body.schema),
+    ):
+        if declared_value is not None and rendered_value is None:
+            raise VerificationError(f"Verify '{field}' was declared as {declared_value!r} but rendered to None, which would silently drop the assertion")
+
+
 def process_verify(verify_model: Verify, response: httpx.Response, scenario_dir: Path | None = None) -> None:
     """Run one verify step's assertions, raising `VerificationError` on the first failure."""
-    if verify_model.status and response.status_code != verify_model.status:
+    # `is not None`, not truthiness: a rendered-away assertion must not be
+    # indistinguishable from an undeclared one (see `check_rendered_assertions`).
+    if verify_model.status is not None and response.status_code != verify_model.status:
         raise VerificationError(f"Status code doesn't match: expected {verify_model.status}, got {response.status_code}")
 
     for header_name, expected_value in verify_model.headers.items():
@@ -110,7 +129,7 @@ def process_verify(verify_model: Verify, response: httpx.Response, scenario_dir:
         if not result:
             raise VerificationError(f"Function '{func_item}' verification failed")
 
-    if verify_model.body.schema:
+    if verify_model.body.schema is not None:
         _verify_body_schema(verify_model.body.schema, response, scenario_dir)
 
     verify_text_matchers(
@@ -130,7 +149,10 @@ def _verify_body_schema(schema: Any, response: httpx.Response, scenario_dir: Pat
         try:
             schema = json.loads(schema_path.read_text(encoding="utf-8"))
             check_json_schema(schema)
-        except (OSError, json.JSONDecodeError) as e:
+        # ValueError subsumes both json.JSONDecodeError and UnicodeDecodeError:
+        # a non-UTF-8 schema file must fail the stage cleanly, not escape the
+        # abort machinery as a raw traceback.
+        except (OSError, ValueError) as e:
             raise VerificationError(f"Error reading body schema file '{schema_path}': {e}") from e
         except jsonschema.SchemaError as e:
             raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e}") from e

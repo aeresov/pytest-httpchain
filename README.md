@@ -40,7 +40,7 @@ Each scenario contains 1+ stages executed in order. One stage failure stops the 
 
 ### Common data context
 
-A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use template expressions (`{{ var }}`) anywhere in your requests — substitution happens dynamically before each stage.
+A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use template expressions (`{{ var }}`) in any request **value** — substitution happens dynamically before each stage. (Dict keys are not substituted; `HTTPCHAIN029` flags a template in a key.)
 
 ### Response processing
 
@@ -166,7 +166,7 @@ pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
 
 -   Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`.
     The suffix is configurable via the `httpchain_suffix` pytest ini option, default value is **http**.
--   `$ref` instructions can point to other files using relative paths; absolute paths are rejected for security.
+-   `$ref` instructions can point to other files using relative paths; absolute paths are rejected for security, and every reference must resolve inside the root path (pytest's `rootdir` when collecting; `--root-path` for the CLI).
     You can limit the depth of relative path traversal using the `httpchain_ref_parent_traversal_depth` ini option, default value is **3**.
 -   Template expressions support list/dict comprehensions. You can limit the maximum comprehension length using the `httpchain_max_comprehension_length` ini option, default value is **50000**.
 -   Parallel stage iterations (repeat/foreach) have a safety limit configurable via the `httpchain_max_parallel_iterations` ini option, default value is **10000**.

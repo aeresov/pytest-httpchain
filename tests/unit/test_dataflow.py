@@ -463,3 +463,45 @@ def test_resave_shadows_own_reference_in_later_response_steps():
     flow = analyze_dataflow(Scenario.model_validate(ref_then_resave), ref_then_resave)
     assert flow.stages[1].consumes == ["token"]
     assert any(e.producer == 0 and e.consumer == 1 and e.vars == ["token"] for e in flow.edges), flow.edges
+
+
+def test_mapping_form_response_steps_are_analyzed():
+    """The name-keyed `response` mapping form is first-class. Re-deriving the
+    raw shape with a bare isinstance(list) discarded it, so every reference
+    inside a mapping-form step went unseen: the consuming stage looked like it
+    consumed nothing and the dependency edge vanished from show/graph."""
+    data = {
+        "stages": {
+            "producer": {
+                "request": {"url": "http://server/a", "method": "POST"},
+                "response": {"grab": {"save": {"jmespath": {"token": "t"}}}},
+            },
+            "consumer": {
+                "request": {"url": "http://server/b"},
+                "response": {"check": {"verify": {"expressions": ["{{ token != '' }}"]}}},
+            },
+        }
+    }
+    flow = analyze_dataflow(Scenario.model_validate(data), data)
+
+    assert flow.stages[0].saves == ["token"]
+    assert flow.stages[1].consumes == ["token"]
+    assert [e.model_dump() for e in flow.edges] == [{"producer": 0, "consumer": 1, "vars": ["token"]}]
+
+
+def test_mapping_form_response_step_ordering_matches_list_form():
+    """A mapping whose value is a list flattens in order, so raw step K still
+    pairs with the validated response[K] — the re-save shadowing rule that
+    depends on step order keeps working."""
+    data = {
+        "stages": {
+            "producer": {"request": {"url": "http://server/a"}, "response": [{"save": {"jmespath": {"token": "t"}}}]},
+            "consumer": {
+                "request": {"url": "http://server/b"},
+                "response": {"steps": [{"save": {"jmespath": {"token": "t2"}}}, {"verify": {"expressions": ["{{ token != '' }}"]}}]},
+            },
+        }
+    }
+    flow = analyze_dataflow(Scenario.model_validate(data), data)
+    # The re-save precedes the reference, so the consumer reads its own value.
+    assert flow.stages[1].consumes == []

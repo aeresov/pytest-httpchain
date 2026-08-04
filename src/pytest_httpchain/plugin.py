@@ -236,13 +236,21 @@ def _warn_on_split_chains(items: list[pytest.Item]) -> None:
         missing = set(range(max(indices))) - indices
         if missing:
             names = [scenario.stages[j].name for j in sorted(missing) if j < len(scenario.stages)]
-            warnings.warn(
-                ScenarioValidationWarning(
-                    f"Scenario '{cls.__name__}': earlier stage(s) {names} were deselected (e.g. by --lf, -k, or --deselect) "
-                    f"while later stages of the chain remain selected; the surviving stages will run without their saved context"
-                ),
-                stacklevel=2,
-            )
+            try:
+                warnings.warn(
+                    ScenarioValidationWarning(
+                        f"Scenario '{cls.__name__}': earlier stage(s) {names} were deselected (e.g. by --lf, -k, or --deselect) "
+                        f"while later stages of the chain remain selected; the surviving stages will run without their saved context"
+                    ),
+                    stacklevel=2,
+                )
+            except ScenarioValidationWarning as promoted:
+                # Promoted by filterwarnings=error. Unlike every other warning
+                # site in the plugin, this one runs inside pytest_collection_finish,
+                # which has no warning-to-error recovery — escaping raw would end
+                # the session in an INTERNALERROR traceback. A UsageError keeps
+                # the user's "warnings are errors" policy while failing cleanly.
+                raise pytest.UsageError(str(promoted)) from None
 
 
 @pytest.hookimpl(tryfirst=True)

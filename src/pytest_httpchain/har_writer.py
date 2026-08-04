@@ -36,7 +36,10 @@ def _parse_cookie_header(cookie_header: str) -> list[dict[str, str]]:
 
 
 def _format_headers(headers: httpx.Headers) -> list[dict[str, str]]:
-    return [{"name": name, "value": value} for name, value in headers.items()]
+    # multi_items(), not items(): the latter comma-folds repeated names, which
+    # RFC 6265 forbids for Set-Cookie precisely because cookie attributes
+    # contain commas — folding two cookies corrupts both.
+    return [{"name": name, "value": value} for name, value in headers.multi_items()]
 
 
 def _format_query_string(url: httpx.URL) -> list[dict[str, str]]:
@@ -94,8 +97,9 @@ def _format_response_content(response: httpx.Response) -> dict[str, Any]:
 
 
 def _calculate_headers_size(headers: httpx.Headers) -> int:
-    # ": " (2) + CRLF (2) per header line
-    return sum(len(name) + len(value) + 4 for name, value in headers.items())
+    # ": " (2) + CRLF (2) per header line; multi_items() so repeated headers are
+    # counted as the separate wire lines they are.
+    return sum(len(name) + len(value) + 4 for name, value in headers.multi_items())
 
 
 def _response_elapsed_ms(response: httpx.Response) -> float:

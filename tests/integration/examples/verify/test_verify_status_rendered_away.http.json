@@ -1,0 +1,26 @@
+{
+    "substitutions": [
+        {
+            "vars": {
+                "missing": null
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "status_renders_to_null",
+            "description": "A declared status that renders to null must fail, not silently pass a 400",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/bad"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": "{{ missing }}"
+                    }
+                }
+            ]
+        }
+    ]
+}

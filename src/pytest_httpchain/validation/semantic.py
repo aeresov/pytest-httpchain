@@ -3,10 +3,12 @@
 Each check family is a generator of `Diagnostic`; `check_scenario` composes them.
 """
 
+import re
 import warnings
 from collections import Counter
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import urlparse
 
 from pytest_httpchain.models import HeaderMatcher, Scenario, Verify, VerifyStep, parametrize_values_contain_template
 from pytest_httpchain.scoping import (
@@ -20,7 +22,7 @@ from pytest_httpchain.scoping import (
     substitution_names,
     substitution_step_refs,
 )
-from pytest_httpchain.templates import is_complete_template
+from pytest_httpchain.templates import TEMPLATE_PATTERN, is_complete_template
 from pytest_httpchain.utils import make_marker, optional_as_list
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ScenarioInfo, diag
 
@@ -47,6 +49,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
         *_inline_schema_diagnostics(scenario),
         *_marker_diagnostics(scenario),
         *_parametrize_timing_diagnostics(scenario),
+        *_template_key_diagnostics(test_data),
     ]
 
     scenario_info = ScenarioInfo(
@@ -61,8 +64,13 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
 
 
 def _stage_name_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
-    """HTTPCHAIN001: duplicate stage names."""
-    counts = Counter(stage.name for stage in scenario.stages)
+    """HTTPCHAIN001: duplicate stage names.
+
+    Unnamed stages are excluded: ``Stage.name`` is optional and defaults to ``""``,
+    so counting the default made two stages that simply omit it collide — a hard
+    rejection of schema-valid input, naming a field the author never wrote.
+    """
+    counts = Counter(stage.name for stage in scenario.stages if stage.name)
     duplicates = {name for name, count in counts.items() if count > 1}
     if duplicates:
         yield diag(DiagnosticCode.DUPLICATE_STAGE, "error", f"Duplicate stage names found: {sorted(duplicates)}", location="stages")
@@ -366,6 +374,20 @@ def _inline_schema_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
     """HTTPCHAIN028: scenario reference directives inside an inline JSON Schema,
     which the resolver treats as opaque and therefore never processes."""
 
+    def is_scenario_file_ref(value: str) -> bool:
+        """True for a ``$ref`` naming a scenario file the resolver would have
+        handled, i.e. a relative path to a ``.json`` document.
+
+        JSON Schema ``$ref`` is a URI-reference: absolute URIs (metaschemas and
+        anything the validator's registry serves) and ``$id``-relative
+        references resolve fine through the validator ``response_steps``
+        instantiates, so flagging those is a false positive on a working schema.
+        A one-character scheme is a Windows drive letter, not a URI scheme.
+        """
+        if len(urlparse(value).scheme) > 1:
+            return False
+        return value.split("#", 1)[0].endswith(".json")
+
     def directive_keys(node: Any) -> set[str]:
         # String values only: a schema whose `properties` legitimately declares
         # an "$include" property maps it to a schema object. "$ref" is schema
@@ -376,7 +398,7 @@ def _inline_schema_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                 for key, value in node.items():
                     if key in ("$include", "$merge") and isinstance(value, str):
                         found.add(key)
-                    elif key == "$ref" and isinstance(value, str) and not value.startswith("#"):
+                    elif key == "$ref" and isinstance(value, str) and not value.startswith("#") and is_scenario_file_ref(value):
                         found.add(key)
                     found |= directive_keys(value)
                 return found
@@ -422,6 +444,38 @@ def _marker_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
     yield from check(scenario.marks, "marks")
     for i, stage in enumerate(scenario.stages):
         yield from check(stage.marks, f"stages[{i}].marks")
+
+
+def _template_key_diagnostics(test_data: dict[str, Any]) -> Iterator[Diagnostic]:
+    """HTTPCHAIN029: ``{{ }}`` in a dict KEY, which is never substituted.
+
+    `templates.walk` renders values only, so a templated key reaches the wire
+    verbatim — a header or query parameter literally named ``{{ name }}``. It is
+    equally invisible to `contains_template` and `extract_template_variables`,
+    so without this check nothing anywhere would mention it: no error, no
+    warning, just a wrong request.
+    """
+
+    def templated_keys(node: Any, location: str) -> Iterator[tuple[str, str]]:
+        match node:
+            case dict():
+                for key, value in node.items():
+                    child = f"{location}.{key}" if location else str(key)
+                    if isinstance(key, str) and re.search(TEMPLATE_PATTERN, key):
+                        yield key, location
+                    yield from templated_keys(value, child)
+            case list():
+                for index, item in enumerate(node):
+                    yield from templated_keys(item, f"{location}[{index}]")
+
+    for key, location in templated_keys(test_data, ""):
+        yield diag(
+            DiagnosticCode.TEMPLATE_IN_KEY,
+            "warning",
+            f"Key {key!r} contains a template expression, but only values are substituted — the key is sent literally. "
+            f"Move the dynamic part into the value, or build the object in a user function.",
+            location=location or None,
+        )
 
 
 def _parametrize_timing_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:

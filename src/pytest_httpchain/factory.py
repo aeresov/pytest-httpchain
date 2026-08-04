@@ -5,7 +5,7 @@ import inspect
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -80,13 +80,26 @@ def create_test_class(
         if stage.parametrize:
             for step in stage.parametrize:
                 # Each step reduces to pytest.mark.parametrize's (argnames, argvalues).
+                # The template forms of both parameter kinds skip their model's
+                # own checks ("values/keys unknown until runtime"), and nothing
+                # re-validates the resolved value — so they are fed back through
+                # the model here. Without it, heterogeneous combinations silently
+                # drop the keys missing from the first one, or fail with a bare
+                # KeyError naming neither the index nor the problem.
                 match step:
                     case IndividualParameter(individual=individual) if individual:
                         param_names = [next(iter(individual))]
-                        param_values = walk(individual[param_names[0]], scenario_context)
+                        declared_values = individual[param_names[0]]
+                        param_values = walk(declared_values, scenario_context)
+                        if isinstance(declared_values, str):
+                            revalidated = IndividualParameter.model_validate({"individual": {param_names[0]: param_values}, "ids": step.ids})
+                            param_values = revalidated.individual[param_names[0]]
 
                     case CombinationsParameter(combinations=combinations) if combinations:
                         resolved_combinations = [vars(item) if isinstance(item, SimpleNamespace) else item for item in walk(combinations, scenario_context)]
+                        if isinstance(combinations, str):
+                            revalidated_combos = CombinationsParameter.model_validate({"combinations": resolved_combinations, "ids": step.ids})
+                            resolved_combinations = cast(list[dict[str, Any]], revalidated_combos.combinations)
                         param_names = list(resolved_combinations[0].keys())
                         param_values = [tuple(combo[name] for name in param_names) for combo in resolved_combinations]
 
@@ -101,6 +114,13 @@ def create_test_class(
 
         # Read by the chain-contiguity hook to restore stage order.
         stage_method._httpchain_stage_index = i  # ty: ignore[unresolved-attribute]
+
+        # The generated name ("test NN - <stage>") satisfies pytest's default
+        # `python_functions` only via its bare "test" prefix rule — the space
+        # defeats every glob form, so a narrowed `python_functions = test_*`
+        # would collect ZERO stages and leave CI green. __test__ is honored by
+        # pytest's istestfunction regardless of the name filter.
+        stage_method.__test__ = True  # ty: ignore[unresolved-attribute]
 
         for mark_str in stage.marks:
             try:

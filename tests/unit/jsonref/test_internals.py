@@ -202,16 +202,18 @@ class TestRefPathFunctions:
             )
 
     def test_validate_ref_path_outside_root(self, tmp_path):
-        """Path outside root_path should raise."""
+        """A path that exists but escapes root_path is rejected as a containment
+        refusal, not as "not found" — the file is right there on disk."""
         root = tmp_path / "root"
         root.mkdir()
         outside = tmp_path / "outside.json"
         outside.write_text("{}")
 
-        with pytest.raises(ReferenceResolverError, match="not found"):
+        with pytest.raises(ReferenceResolverError, match="resolves outside the reference root") as excinfo:
             validate_ref_path(
                 "../outside.json",
                 root,
                 root,
                 max_parent_traversal_depth=3,
             )
+        assert "not found" not in str(excinfo.value)

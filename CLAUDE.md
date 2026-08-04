@@ -38,9 +38,16 @@ uv run pytest-httpchain validate --deep --syspath tests/integration/examples tes
 # bodies) as missed and report a ~20-point-low floor. CI uses this form.
 # `parallel` + `patch=subprocess` measure pytester subprocesses too and write
 # pid-suffixed data files — always `combine` before `report`.
-uv run coverage run -m pytest tests/unit
+# Run the WHOLE suite: `fail_under = 88` applies to every `coverage report`, and
+# unit tests alone reach ~85, so `tests/unit` here would always exit non-zero.
+uv run coverage run -m pytest tests
 uv run coverage combine
 uv run coverage report --show-missing
+
+# Unit-only variant (faster, but below the project floor — opt out of the gate)
+uv run coverage run -m pytest tests/unit
+uv run coverage combine
+uv run coverage report --show-missing --fail-under=0
 ```
 
 ## Architecture

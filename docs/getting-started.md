@@ -129,7 +129,7 @@ pytest-httpchain maintains a key-value store throughout scenario execution. This
 -   pytest fixtures
 -   Values saved from responses
 
-Use Jinja-style `{{ expression }}` syntax to reference context values anywhere in your requests.
+Use Jinja-style `{{ expression }}` syntax to reference context values in any request value. Only values are substituted — a template in a dict *key* is sent literally, and is reported as `HTTPCHAIN029`.
 
 ### Execution Flow
 

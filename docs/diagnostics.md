@@ -47,6 +47,7 @@ not free their numbers for reuse.
 | `HTTPCHAIN026` | warning | `$ref` path matches files under both lookup bases (ambiguous) |
 | `HTTPCHAIN027` | warning | User-defined name shadowed by the reserved `response` namespace |
 | `HTTPCHAIN028` | warning | Scenario directive (`$include`/`$merge`, or file-path `$ref`) inside an inline JSON Schema — not resolved there |
+| `HTTPCHAIN029` | warning | Template expression in a dict **key** — only values are substituted, so the key is sent literally |
 
 ## Deep (opt-in) checks
 

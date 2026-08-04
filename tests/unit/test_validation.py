@@ -680,6 +680,122 @@ class TestReviewRegressionsBatch2:
 
         assert resolve_root_path(scenario) == tmp_path / "bundle" / "tests"
 
+    def test_real_pytest_config_beats_nearer_bare_marker(self, tmp_path):
+        """A sub-package's plain pyproject.toml is not a pytest rootdir.
+
+        Preferring it would shrink the CLI's root below pytest's, so `validate`
+        would reject $ref targets that collection resolves fine — a red CI on a
+        working scenario.
+        """
+        (tmp_path / "pyproject.toml").write_text('[tool.pytest.ini_options]\ntestpaths = ["tests"]\n')
+        package = tmp_path / "packages" / "api"
+        package.mkdir(parents=True)
+        (package / "pyproject.toml").write_text('[project]\nname = "api"\n')
+        scenario = package / "test_x.http.json"
+        scenario.write_text("{}")
+
+        assert resolve_root_path(scenario) == tmp_path
+
+    def test_bare_marker_still_used_when_no_pytest_config_anywhere(self, tmp_path):
+        """The marker fallback is unchanged when nothing carries a pytest section."""
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "solo"\n')
+        scenario = tmp_path / "test_x.http.json"
+        scenario.write_text("{}")
+
+        assert resolve_root_path(scenario) == tmp_path
+
+    def test_templated_dict_key_is_reported(self, tmp_path):
+        """HTTPCHAIN029: only values are substituted, so a templated key would
+        otherwise reach the wire verbatim with nothing anywhere mentioning it."""
+        (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+        scenario = tmp_path / "test_k.http.json"
+        scenario.write_text(
+            json.dumps(
+                {
+                    "substitutions": [{"vars": {"hname": "X-Trace"}}],
+                    "stages": [
+                        {
+                            "name": "s",
+                            "request": {"url": "http://server/x", "headers": {"{{ hname }}": "v"}},
+                            "response": [{"verify": {"status": 200}}],
+                        }
+                    ],
+                }
+            )
+        )
+        result = validate_scenario(scenario)
+        assert result.valid is True  # a warning, not an error
+        assert DiagnosticCode.TEMPLATE_IN_KEY in _codes(result)
+
+    def test_unnamed_stages_are_not_duplicates(self, tmp_path):
+        """`name` is optional and defaults to "": two stages that omit it are
+        schema-valid input and must not be rejected as duplicates."""
+        (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+        scenario = tmp_path / "test_u.http.json"
+        scenario.write_text(
+            json.dumps(
+                {
+                    "stages": [
+                        {"request": {"url": "http://server/a"}, "response": [{"verify": {"status": 200}}]},
+                        {"request": {"url": "http://server/b"}, "response": [{"verify": {"status": 200}}]},
+                    ]
+                }
+            )
+        )
+        result = validate_scenario(scenario)
+        assert result.valid is True, result.errors
+        assert DiagnosticCode.DUPLICATE_STAGE not in _codes(result)
+
+    def test_named_duplicates_still_reported(self, tmp_path):
+        """The check still fires for real duplicate names."""
+        (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+        scenario = tmp_path / "test_d.http.json"
+        scenario.write_text(
+            json.dumps(
+                {
+                    "stages": [
+                        {"name": "same", "request": {"url": "http://server/a"}, "response": [{"verify": {"status": 200}}]},
+                        {"name": "same", "request": {"url": "http://server/b"}, "response": [{"verify": {"status": 200}}]},
+                    ]
+                }
+            )
+        )
+        assert DiagnosticCode.DUPLICATE_STAGE in _codes(validate_scenario(scenario))
+
+    def test_absolute_uri_ref_in_inline_schema_not_flagged(self, tmp_path):
+        """HTTPCHAIN028 targets scenario file references. An absolute-URI $ref is
+        JSON Schema vocabulary the validator's registry resolves, so flagging it
+        warns on a schema that works."""
+        (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+        scenario = tmp_path / "test_s.http.json"
+        scenario.write_text(
+            json.dumps(
+                {
+                    "stages": [
+                        {
+                            "name": "s",
+                            "request": {"url": "http://server/x"},
+                            "response": [
+                                {
+                                    "verify": {
+                                        "body": {
+                                            "schema": {
+                                                "$id": "https://example.com/s",
+                                                "type": "object",
+                                                "properties": {"a": {"$ref": "https://example.com/s#/$defs/a"}},
+                                                "$defs": {"a": {"type": "string"}},
+                                            }
+                                        }
+                                    }
+                                }
+                            ],
+                        }
+                    ]
+                }
+            )
+        )
+        assert DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE not in _codes(validate_scenario(scenario))
+
 
 def test_inline_schema_standard_json_schema_kept(datadir):
     """$ref/$defs inside verify.body.schema are JSON Schema vocabulary, not

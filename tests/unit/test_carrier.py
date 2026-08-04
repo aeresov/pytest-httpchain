@@ -33,7 +33,7 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.models.entities import ResponseBody
 from pytest_httpchain.request_builder import build_request_kwargs
-from pytest_httpchain.response_steps import process_save, process_verify
+from pytest_httpchain.response_steps import check_rendered_assertions, process_save, process_verify
 
 
 class TestBuildRequestKwargsErrors:
@@ -162,6 +162,55 @@ class TestProcessVerifyStepErrors:
 
         # Should not raise
         process_verify(verify, response)
+
+    def test_verify_status_zero_is_not_treated_as_absent(self):
+        """The status gate is `is not None`, not truthiness."""
+        response = httpx.Response(200, json={})
+        verify = Verify.model_construct(status=0, headers={}, expressions=[], user_functions=[], body=ResponseBody())
+
+        with pytest.raises(VerificationError, match="Status code doesn't match"):
+            process_verify(verify, response)
+
+    def test_rendered_away_status_is_rejected(self):
+        """A declared status that a template rendered to None must fail loudly.
+
+        Both models re-validate cleanly, so without this the assertion would be
+        silently dropped and a 500 would pass green.
+        """
+        declared = Verify(status="{{ expected }}")
+        rendered = Verify(status=None)
+
+        with pytest.raises(VerificationError, match="rendered to None"):
+            check_rendered_assertions(declared, rendered)
+
+    def test_rendered_away_body_schema_is_rejected(self):
+        declared = Verify(body=ResponseBody(schema="{{ schema_path }}"))
+        rendered = Verify(body=ResponseBody(schema=None))
+
+        with pytest.raises(VerificationError, match="body.schema.*rendered to None"):
+            check_rendered_assertions(declared, rendered)
+
+    def test_undeclared_assertions_are_not_flagged(self):
+        """An assertion that was never declared is not a rendered-away one."""
+        check_rendered_assertions(Verify(), Verify())
+
+    def test_rendered_status_that_survives_is_not_flagged(self):
+        check_rendered_assertions(Verify(status="{{ expected }}"), Verify(status=200))
+
+    def test_verify_body_schema_non_utf8_file(self, tmp_path):
+        """A non-UTF-8 schema file must fail the stage cleanly.
+
+        UnicodeDecodeError is a ValueError, not a JSONDecodeError, so a narrower
+        except let it escape past the chain-abort machinery as a raw traceback.
+        """
+        schema_path = tmp_path / "schema.json"
+        schema_path.write_bytes(b'{"type": "\xff\xfe object"}')
+
+        response = httpx.Response(200, json={"id": 1})
+        verify = Verify(body=ResponseBody(schema=str(schema_path)))
+
+        with pytest.raises(VerificationError, match="Error reading body schema file"):
+            process_verify(verify, response)
 
     def test_verify_expressions_falsy_values(self):
         """Test that falsy expression values fail verification."""

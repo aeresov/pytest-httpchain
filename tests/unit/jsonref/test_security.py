@@ -59,8 +59,10 @@ class TestSecurity:
         inside_file = root_dir / "inside.json"
         inside_file.write_text('{"data": {"$ref": "../outside.json#/secret"}}')
 
-        # With root_path set to root_dir, this should fail
-        with pytest.raises(ReferenceResolverError, match="not found"):
+        # With root_path set to root_dir, this should fail — and say why: the
+        # target exists, so reporting it as "not found" would send the user
+        # hunting for a typo instead of the sandbox boundary.
+        with pytest.raises(ReferenceResolverError, match="resolves outside the reference root"):
             load_json(inside_file, root_path=root_dir)
 
     def test_root_path_allows_internal_references(self, tmp_path):

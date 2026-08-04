@@ -27,27 +27,31 @@ def validate_ref_path(ref_path: str, base_path: Path, root_path: Path, max_paren
     root_path_resolved = root_path.resolve()
     base_path_resolved = base_path.resolve()
 
-    def is_valid_and_exists(resolved: Path) -> bool:
-        if not resolved.exists():
-            return False
-        try:
-            resolved.relative_to(root_path_resolved)
-            return True
-        except ValueError:
-            return False
-
     # No CWD fallback: resolution must not depend on where the tool was launched.
     paths_to_try = [base_path]
     if root_path_resolved != base_path_resolved:
         paths_to_try.append(root_path)
 
-    candidates = []
+    # The two rejection causes are tracked apart: a file that exists but escapes
+    # the root is a sandbox refusal, not a typo, and reporting both as "not
+    # found" named files the user could plainly see on disk.
+    candidates: list[Path] = []
+    outside_root: list[Path] = []
     for base in paths_to_try:
         resolved = (base / ref_path).resolve()
-        if is_valid_and_exists(resolved) and resolved not in candidates:
-            candidates.append(resolved)
+        if not resolved.exists():
+            continue
+        target = candidates if resolved.is_relative_to(root_path_resolved) else outside_root
+        if resolved not in target:
+            target.append(resolved)
 
     if not candidates:
+        if outside_root:
+            paths_msg = "\n  - ".join(str(path) for path in outside_root)
+            raise ReferenceResolverError(
+                f"Reference path '{ref_path}' resolves outside the reference root {root_path_resolved}:\n  - {paths_msg}\n"
+                f"References must stay within the root; move the file inside it, or set the root explicitly (--root-path)."
+            )
         tried_paths = [str((base / ref_path).resolve()) for base in paths_to_try]
         paths_msg = "\n  - ".join(tried_paths)
         raise ReferenceResolverError(f"Reference path '{ref_path}' not found. Tried:\n  - {paths_msg}")

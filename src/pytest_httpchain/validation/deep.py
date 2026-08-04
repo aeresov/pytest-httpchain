@@ -83,7 +83,9 @@ def _check_schema_path(schema: Any, location: str, base_dir: Path | None = None)
         return
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+    # ValueError subsumes json.JSONDecodeError and UnicodeDecodeError, matching
+    # the runtime read in response_steps._verify_body_schema.
+    except (OSError, ValueError) as e:
         yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, "warning", f"Schema file is not valid JSON: {path}: {e}", location)
         return
     try:

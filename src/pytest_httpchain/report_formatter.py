@@ -15,7 +15,9 @@ def _is_textual_content_type(content_type: str) -> bool:
 
 def _message_lines(start_line: str, headers: httpx.Headers, body: str | None) -> str:
     """Assemble one HTTP message: start line, headers, blank line, optional body."""
-    lines = [start_line, *(f"{name}: {value}" for name, value in headers.items()), ""]
+    # multi_items() so a repeated header (notably Set-Cookie, which must never be
+    # comma-folded) prints as the separate wire lines it was sent as.
+    lines = [start_line, *(f"{name}: {value}" for name, value in headers.multi_items()), ""]
     if body is not None:
         lines.append(body)
     return "\n".join(lines)

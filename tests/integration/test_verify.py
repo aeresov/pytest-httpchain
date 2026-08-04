@@ -82,3 +82,28 @@ def test_verify_body_matches(run_scenario):
     """Test body regex matching"""
     result = run_scenario("verify/test_verify_body_matches.http.json")
     result.assert_outcomes(errors=0, failed=0, passed=1)
+
+
+def test_verify_status_rendered_away_fails(run_scenario):
+    """A `status` template that resolves to null must fail the stage.
+
+    Both the pre-walk and post-walk models validate cleanly (`status` is
+    optional), so a truthiness gate silently dropped the only assertion and the
+    stage passed green against a 400 — the one outcome a test runner must never
+    produce.
+    """
+    result = run_scenario("verify/test_verify_status_rendered_away.http.json")
+    result.assert_outcomes(errors=0, failed=1, passed=0)
+    result.stdout.fnmatch_lines(["*rendered to None*"])
+
+
+def test_stage_failure_message_is_not_duplicated(run_scenario):
+    """pytest.fail raised from inside the except block set Failed.__context__,
+    and pytest walks the whole __cause__/__context__ chain even under
+    pytrace=False — printing one failure 2-4 times."""
+    result = run_scenario("verify/test_verify_user_function_false.http.json", "verify.py")
+    result.assert_outcomes(errors=0, failed=1, passed=0)
+
+    failures = result.stdout.str().split("=== FAILURES ===")[-1].split("short test summary")[0]
+    assert failures.count("The above exception was the direct cause") == 0
+    assert failures.count("During handling of the above exception") == 0
