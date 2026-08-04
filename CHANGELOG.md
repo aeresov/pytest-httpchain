@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-08-04
+
 ### Added
 
 - `HTTPCHAIN029`: a `{{ }}` expression in a dict **key** (a header name, query parameter, or JSON body key). Only values are substituted, so a templated key went out on the wire verbatim — and it was equally invisible to `contains_template` and the data-flow scan, so nothing anywhere reported it. The four docs pages that promised template expressions "anywhere in your requests" now say values.
@@ -489,7 +491,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.2...HEAD
+[0.14.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.12.0...v0.13.0
