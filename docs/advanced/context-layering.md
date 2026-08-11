@@ -42,7 +42,7 @@ base = {"url": "https://api.example.com", "timeout": 30}
 stage = {"timeout": 10}  # Override
 context = ChainMap(stage, base)
 
-context["url"]      # "https://api.example.com" (from base)
+context["url"]  # "https://api.example.com" (from base)
 context["timeout"]  # 10 (from stage, shadows base)
 ```
 

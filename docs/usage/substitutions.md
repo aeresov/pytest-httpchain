@@ -119,8 +119,10 @@ Bind a name to a Python function so it can be **called** from templates:
 # mymodule.py
 from datetime import datetime
 
+
 def get_timestamp() -> str:
     return datetime.now().isoformat()
+
 
 def load_config() -> dict:
     return {"environment": "test", "debug": True}
@@ -299,9 +301,11 @@ Pytest fixtures are added to context when listed:
 import pytest
 import os
 
+
 @pytest.fixture
 def api_key():
     return os.environ.get("API_KEY", "test-key")
+
 
 @pytest.fixture
 def test_user():

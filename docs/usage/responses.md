@@ -162,6 +162,7 @@ Response facets beyond the metadata — e.g. the raw body text — can be captur
 # checks.py
 import httpx
 
+
 def body_meta(response: httpx.Response) -> dict:
     return {
         "body_text": response.text,
@@ -288,9 +289,11 @@ pass through unchanged.
 # mymodule.py
 import httpx
 
+
 def check_response(response: httpx.Response) -> bool:
     data = response.json()
     return data.get("status") == "ok"
+
 
 def check_with_args(response: httpx.Response, expected_value: str) -> bool:
     return response.json().get("value") == expected_value
@@ -345,6 +348,7 @@ The template evaluator does not expose `datetime`, so provide values like timest
 import pytest
 from datetime import datetime
 
+
 @pytest.fixture
 def now_utc():
     return datetime.now()
@@ -375,12 +379,11 @@ Extract data using custom functions:
 import httpx
 from typing import Any
 
+
 def extract_data(response: httpx.Response) -> dict[str, Any]:
     data = response.json()
-    return {
-        "user_id": data["user"]["id"],
-        "token": response.headers.get("X-Auth-Token")
-    }
+    return {"user_id": data["user"]["id"], "token": response.headers.get("X-Auth-Token")}
+
 
 def extract_with_args(response: httpx.Response, key: str) -> dict[str, Any]:
     return {key: response.json().get(key)}
