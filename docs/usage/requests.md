@@ -238,8 +238,10 @@ Absolute paths pass through unchanged.
 # mymodule.py
 import httpx
 
+
 def get_auth() -> httpx.Auth:
     return httpx.BasicAuth("user", "password")
+
 
 def special_auth(role: str) -> httpx.Auth:
     # Custom auth logic based on role

@@ -186,9 +186,11 @@ Fixtures are loaded into the common data context:
 # conftest.py
 import pytest
 
+
 @pytest.fixture
 def api_token():
     return "secret-token-123"
+
 
 @pytest.fixture
 def base_url():
