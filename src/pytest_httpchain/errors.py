@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import httpx
 
 
@@ -6,20 +8,21 @@ class HttpChainError(Exception):
 
 
 class StageExecutionError(HttpChainError):
-    """Base exception for stage execution errors.
-
-    Optionally carries HTTP request/response for debugging failed stages.
-    """
+    """A stage failed. Carries the HTTP request/response when one was made, for
+    the failure report and the HAR file; ``started`` is when the request went on
+    the wire, feeding the HAR entry's startedDateTime."""
 
     def __init__(
         self,
         message: str,
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
+        started: datetime | None = None,
     ):
         super().__init__(message)
         self.request = request
         self.response = response
+        self.started = started
 
 
 class RequestError(StageExecutionError):
@@ -29,14 +32,10 @@ class RequestError(StageExecutionError):
 
 
 class SaveError(StageExecutionError):
-    """A response ``save`` step failed: the body was not the expected JSON,
-    a JMESPath expression errored, a substitutions save failed to resolve, a
-    save user function raised or returned a non-dict, or the reserved-name
-    (HTTPCHAIN027) runtime warning was promoted under ``filterwarnings =
-    error``."""
+    """A response ``save`` step failed: unusable body, failed extraction, or a
+    save function that raised or returned a non-dict."""
 
 
 class VerificationError(StageExecutionError):
-    """A response ``verify`` step failed: status/header/body expectation not
-    met, schema validation failed (or the schema itself was unusable), an
-    expression was falsy, or a verify user function raised/returned falsy."""
+    """A response ``verify`` step failed: an expectation was not met, an
+    expression was falsy, or a verify function raised or returned falsy."""

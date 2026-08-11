@@ -1,19 +1,10 @@
-"""Annotated string/dict type aliases (with validators) for the scenario models.
-
-Most aliases are ``Annotated[str, AfterValidator(...)]`` that validate a field's
-contents (JMESPath, regex, XML, GraphQL, base64, a complete vs. partial template,
-a function import name, a Python-identifier variable name, an inline JSON Schema,
-a serializable path).
-
-Two aliases handle a ``SimpleNamespace``<->``dict`` round-trip: user-supplied
-``vars`` become attribute-accessible inside ``{{ }}`` templates (dict ->
-SimpleNamespace), and values headed back into a request body are normalized to
-plain dicts so they stay JSON-serializable (SimpleNamespace -> dict).
-"""
+"""Validated type aliases for the scenario models: content validators (JMESPath,
+regex, XML, GraphQL, base64, templates, import names, identifiers, schemas,
+paths) and the ``SimpleNamespace``<->``dict`` round-trip that makes ``vars``
+attribute-accessible in templates and JSON-serializable in bodies."""
 
 import base64
 import keyword
-import logging
 import re
 import types
 import xml.etree.ElementTree
@@ -54,16 +45,12 @@ def validate_python_identifier(v: str) -> str:
     return v
 
 
-logger = logging.getLogger(__name__)
-
-
 def json_schema_validator_class(schema: dict[str, Any]) -> type[jsonschema.protocols.Validator]:
-    """Resolve the validator class for a schema's declared dialect.
+    """The validator class for a schema's declared dialect.
 
-    jsonschema's own ``validator_for`` resolves ``$schema`` (unknown or absent
-    URIs fall back to the default). Draft 2020-12 is pinned as that default —
-    the same dialect ``jsonschema.validate`` would pick — so meta-checking
-    (`check_json_schema`) and instance validation (carrier) always agree.
+    Draft 2020-12 is pinned as the fallback — the dialect
+    ``jsonschema.validate`` would pick — so meta-checking and instance
+    validation always agree.
     """
     return jsonschema.validators.validator_for(schema, default=jsonschema.Draft202012Validator)
 
@@ -74,10 +61,7 @@ def check_json_schema(schema: dict[str, Any]) -> None:
 
 
 def validate_json_schema_inline(v: dict[str, Any]) -> dict[str, Any]:
-    """Validate inline JSON schema dictionary using JSON Schema meta-schema.
-
-    This is a Pydantic validator that wraps check_json_schema for use in models.
-    """
+    """`check_json_schema` as a pydantic validator."""
     try:
         check_json_schema(v)
     except jsonschema.SchemaError as e:
@@ -88,7 +72,6 @@ def validate_json_schema_inline(v: dict[str, Any]) -> dict[str, Any]:
     return v
 
 
-# Use the validator factory for simple validation cases
 validate_jmespath_expression = create_string_validator(jmespath.compile, "Invalid JMESPath expression")
 
 validate_regex_pattern = create_string_validator(re.compile, "Invalid regular expression")
@@ -118,12 +101,8 @@ def validate_partial_template_str(v: str) -> str:
 
 
 def validate_function_import_name(v: str) -> str:
-    """Validate function import name format.
-
-    Format: module.path:function_name — the module path is required, matching
-    the grammar the importer accepts, so a bare name fails here (at
-    validation/collection) instead of only at runtime import.
-    """
+    """Validate a ``module.path:function_name`` against the grammar the importer
+    accepts, so a bare name fails here rather than at runtime import."""
     if not USER_FUNCTION_NAME_PATTERN.match(v):
         if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", v):
             raise ValueError(f"Module path is required: use 'module:{v}' format instead of '{v}'")
@@ -132,30 +111,31 @@ def validate_function_import_name(v: str) -> str:
 
 
 def convert_dict_to_namespace(v: Any) -> Any:
-    """Recursively turn dicts into ``SimpleNamespace`` so ``{{ var.attr }}`` attribute
-    access works in templates (used by ``VarsSubstitution.vars`` via ``NamespaceFromDict``)."""
-    if isinstance(v, dict):
-        return types.SimpleNamespace(**{key: convert_dict_to_namespace(value) for key, value in v.items()})
-    elif isinstance(v, list):
-        return [convert_dict_to_namespace(item) for item in v]
-    else:
-        return v
+    """Recursively turn dicts into ``SimpleNamespace``, so ``{{ var.attr }}``
+    works in templates."""
+    match v:
+        case dict():
+            return types.SimpleNamespace(**{key: convert_dict_to_namespace(value) for key, value in v.items()})
+        case list():
+            return [convert_dict_to_namespace(item) for item in v]
+        case _:
+            return v
 
 
 def convert_namespace_to_dict(v: Any) -> Any:
-    """Recursively normalize any ``SimpleNamespace`` back to a plain dict so the value
-    is JSON-serializable (used by ``JsonBody.json`` and GraphQL variables via ``NamespaceOrDict``)."""
-    if isinstance(v, types.SimpleNamespace):
-        return {key: convert_namespace_to_dict(value) for key, value in vars(v).items()}
-    elif isinstance(v, list):
-        return [convert_namespace_to_dict(item) for item in v]
-    elif isinstance(v, dict):
-        return {key: convert_namespace_to_dict(value) for key, value in v.items()}
-    else:
-        return v
+    """Recursively normalize ``SimpleNamespace`` back to dicts, so the value is
+    JSON-serializable."""
+    match v:
+        case types.SimpleNamespace():
+            return {key: convert_namespace_to_dict(value) for key, value in vars(v).items()}
+        case list():
+            return [convert_namespace_to_dict(item) for item in v]
+        case dict():
+            return {key: convert_namespace_to_dict(value) for key, value in v.items()}
+        case _:
+            return v
 
 
-# Type aliases with validators
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
 FunctionImportName = Annotated[str, AfterValidator(validate_function_import_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
@@ -167,40 +147,27 @@ GraphQLQuery = Annotated[str, AfterValidator(validate_graphql_query)]
 TemplateExpression = Annotated[str, AfterValidator(validate_template_expression)]
 PartialTemplateStr = Annotated[str, AfterValidator(validate_partial_template_str)]
 
-# JSON-schema patterns for the published editor schema. Runtime validation is
-# unchanged (still `validate_template_expression`); these only tighten the
-# `string` branch the schema emits for `concrete | template` fields, so an
-# editor flags a non-template string that is also not a valid value for the
-# concrete type (e.g. timeout "abc"), without rejecting templates, concrete
-# values, or the stringified concretes the runtime coerces.
-# Built on TEMPLATE_PATTERN_ECMA, not TEMPLATE_PATTERN: JSON Schema `pattern`
-# is an ECMA-262 regex, and JS engines (VS Code's JSON language service)
-# reject Python's `(?P<` named-group spelling.
+# Editor-schema only: these tighten the `string` branch of `concrete | template`
+# fields so an editor flags e.g. timeout "abc", without affecting runtime
+# validation. ECMA-262 spelling, since JSON Schema `pattern` is a JS regex.
 _COMPLETE_TEMPLATE_PATTERN = rf"^\s*{TEMPLATE_PATTERN_ECMA}\s*$"
 _NUMBER_OR_TEMPLATE_PATTERN = rf"(?:{_COMPLETE_TEMPLATE_PATTERN})|(?:^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)$)"
 
-# Whole-value template where the concrete type's valid strings are already
-# covered by the union's other (enum/bool) branch — so the string branch may be
-# template-only (used for `method`, `allow_redirects`, `always_run`).
+# For fields whose concrete strings are covered by an enum/bool branch already.
 TemplateExpressionOnly = Annotated[
     str,
     AfterValidator(validate_template_expression),
     WithJsonSchema({"type": "string", "pattern": _COMPLETE_TEMPLATE_PATTERN}),
 ]
-# Whole-value template for a numeric concrete type, whose stringified form the
-# runtime coerces (e.g. "30" -> 30.0, "200" -> 200) — so the string branch
-# accepts a template OR a numeric literal (used for timeout, status, repeat,
-# max_concurrency, calls_per_sec, max_rate_limit_delay).
+# For numeric fields, whose stringified form the runtime coerces ("30" -> 30.0).
 NumberOrTemplate = Annotated[
     str,
     AfterValidator(validate_template_expression),
     WithJsonSchema({"type": "string", "pattern": _NUMBER_OR_TEMPLATE_PATTERN}),
 ]
 
-# Any RFC 9110 token is a legal HTTP method (httpx sends arbitrary methods), so
-# non-enum verbs — WebDAV's PROPFIND/REPORT, cache PURGE, vendor methods — are
-# representable. Sits AFTER the stdlib ``HTTPMethod`` branch in unions so the
-# common verbs still normalize to the enum (and editors keep its autocomplete).
+# Any RFC 9110 token is a legal method (PROPFIND, PURGE, vendor verbs). Sits
+# after the ``HTTPMethod`` branch so common verbs still normalize to the enum.
 _HTTP_METHOD_TOKEN_PATTERN = r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$"
 
 
@@ -217,12 +184,10 @@ HttpMethodToken = Annotated[
     WithJsonSchema({"type": "string", "pattern": _HTTP_METHOD_TOKEN_PATTERN}),
 ]
 
-# Any int in the registered HTTP status range, so nonstandard codes (nginx 499,
-# 599, vendor codes) can be asserted. Sits AFTER the stdlib ``HTTPStatus``
-# branch in unions so standard codes still normalize to the enum.
+# Nonstandard codes (nginx 499) must be assertable. Sits after ``HTTPStatus``.
 StatusCode = Annotated[int, Field(ge=100, le=599)]
 
 Base64String = Annotated[str, AfterValidator(validate_base64)]
 NamespaceFromDict = Annotated[Any, AfterValidator(convert_dict_to_namespace)]
-# NamespaceOrDict ACCEPTS a SimpleNamespace or a dict on input and always yields a dict.
+# Accepts a SimpleNamespace or a dict; always yields a dict.
 NamespaceOrDict = Annotated[dict[str, JsonValue], BeforeValidator(convert_namespace_to_dict)]

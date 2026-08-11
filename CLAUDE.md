@@ -38,9 +38,16 @@ uv run pytest-httpchain validate --deep --syspath tests/integration/examples tes
 # bodies) as missed and report a ~20-point-low floor. CI uses this form.
 # `parallel` + `patch=subprocess` measure pytester subprocesses too and write
 # pid-suffixed data files — always `combine` before `report`.
-uv run coverage run -m pytest tests/unit
+# Run the WHOLE suite: `fail_under = 88` applies to every `coverage report`, and
+# unit tests alone reach ~85, so `tests/unit` here would always exit non-zero.
+uv run coverage run -m pytest tests
 uv run coverage combine
 uv run coverage report --show-missing
+
+# Unit-only variant (faster, but below the project floor — opt out of the gate)
+uv run coverage run -m pytest tests/unit
+uv run coverage combine
+uv run coverage report --show-missing --fail-under=0
 ```
 
 ## Architecture
@@ -50,14 +57,16 @@ The plugin is a single distribution; domain subpackages (models, templates, json
 ```
 src/pytest_httpchain/
 ├── cli.py                     # Typer CLI (validate, schema, resolve, show, graph)
-├── validation.py              # Shared validator (CLI + collection-time): coded Diagnostic objects (HTTPCHAINxxx) for semantic checks incl. order-aware data-flow; plus opt-in `check_scenario_deep` (imports/signatures/files) used only by `validate --deep`
+├── validation/                # Shared validator (CLI + collection-time), a package: diagnostics (codes/result types), loader ($ref + model validation), semantic (checks incl. order-aware data-flow), deep (imports/signatures/files, `validate --deep` only), validate (file-level entry point)
 ├── dataflow.py                # DataFlow model + analyze_dataflow() (stage data-flow analysis, used by show/graph)
 ├── scoping.py                 # Single encoding of the scope/visibility rules: StageScopes static name sets (used by validation + dataflow) and runtime ChainMap context builders (used by carrier)
 ├── schema.py                  # build_schema() — JSON Schema generation shared by the schema command
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule), chain-contiguity ordering hooks
 ├── factory.py                 # Collection-time test-class factory (create_test_class)
-├── carrier.py                 # Runtime execution engine (Carrier class)
-├── utils.py                   # Marker construction, substitution processing, small shared helpers
+├── carrier.py                 # Runtime execution engine (Carrier class): chain state, iteration matrix, threading, reporting
+├── request_builder.py         # Resolved models -> httpx kwargs (build_client_kwargs, build_request_kwargs)
+├── response_steps.py          # Meaning of a single verify/save step (process_verify, process_save) — pure, no chain state
+├── utils.py                   # Marker construction, substitution processing, scenario-relative path resolution
 ├── report_formatter.py        # HTTP request/response formatting for test reports
 ├── har_writer.py              # HAR file export for HTTP request/response logging
 ├── constants.py               # ConfigOptions enum for pytest.ini settings + the shared user-function name grammar
@@ -76,14 +85,16 @@ Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix config
 
 ## Key Execution Flow
 
-1. **Collection**: `plugin.py:JsonModule.collect()` loads JSON, resolves `$ref`, validates against `Scenario` model, then runs `validation.py:check_scenario()` which returns coded `Diagnostic` objects — error-severity → `CollectError`, warning-severity → `ScenarioValidationWarning`
+1. **Collection**: `plugin.py:JsonModule.collect()` loads JSON, resolves `$ref`, validates against `Scenario` model, then runs `validation.check_scenario()` which returns coded `Diagnostic` objects — error-severity → `CollectError`, warning-severity → `ScenarioValidationWarning`
 2. **Class generation**: `factory.py:create_test_class()` creates dynamic test class with stage methods
 3. **Execution**: Each stage method calls `Carrier.execute_stage()` which:
    - Processes substitutions into context
-   - Walks request model through template engine
+   - Walks request model through template engine, then `request_builder.build_request_kwargs()`
    - Executes HTTP request via httpx
-   - Processes response steps (verify/save)
+   - Processes response steps via `response_steps.process_verify()` / `process_save()`
    - Updates global context with saved values
+
+Per-scenario mutable class state (client, abort flag, exchange bookkeeping) is defined once in `carrier.fresh_scenario_state()`; the factory seeds each generated subclass with it and `teardown_class` re-applies it.
 
 ## Integration Tests
 

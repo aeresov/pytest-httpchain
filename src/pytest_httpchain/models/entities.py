@@ -1,27 +1,10 @@
-"""Pydantic models for pytest-httpchain HTTP test scenarios.
+"""The scenario models.
 
-Two-phase validation lifecycle
-------------------------------
-These models are validated twice against the same scenario data.
-
-1. At collection time, while ``{{ }}`` template strings are still unrendered. A
-   field that may legitimately hold a template is typed to accept the template
-   as opaque text — ``TemplateExpression`` (the whole value is one ``{{ ... }}``
-   expression), ``PartialTemplateStr`` (a string with inline ``{{ ... }}``), or
-   plain ``Any`` (e.g. ``Verify.expressions``, which are evaluated as boolean
-   conditions later). At this phase the template is NOT yet a concrete value, so
-   the model only checks that it is a well-formed template, not that it matches
-   the field's runtime type.
-
-2. At runtime, after the templates engine renders the ``{{ }}`` expressions into
-   concrete values (just before the value is consumed — e.g. a request is built
-   or a response is verified). The rendered structure is re-validated through the
-   same model, so the concrete value is finally checked against the real type
-   (e.g. an ``HTTPStatus`` int, a ``PositiveFloat`` timeout, a URL).
-
-Because of this, several fields are typed as a union of the concrete type and a
-template type. The concrete branch matches in phase 2; the template branch keeps
-phase 1 from rejecting a not-yet-rendered ``{{ }}`` string.
+Every model is validated twice: at collection, while ``{{ }}`` strings are still
+unrendered, and again after the engine renders them, when the concrete value is
+finally checked against the real type. Hence the ``concrete | template`` unions
+— the template branch is what keeps phase one from rejecting an unrendered
+value.
 """
 
 import warnings
@@ -57,23 +40,12 @@ from pytest_httpchain.templates import contains_template
 
 
 def _create_discriminator(class_to_tag: dict[type, str]) -> Callable[[Any], str]:
-    """Factory function to create Pydantic discriminator functions.
+    """Build a discriminator from a ``{model class: tag}`` mapping (keyed by
+    class, so a rename breaks statically rather than at runtime).
 
-    Args:
-        class_to_tag: Mapping from model classes to discriminator tags. Keyed
-            by the class OBJECTS (not name strings) so a model rename is caught
-            statically instead of breaking re-validation at runtime.
-
-    Returns:
-        A discriminator function that can be used with Pydantic's Discriminator.
-
-    When the input matches no known variant, the function returns an
-    *unrecognized* tag (the offending key, or a marker for empty/non-object
-    input) rather than raising. Pydantic then raises a clean, field-located
-    ``union_tag_invalid`` ``ValidationError`` that lists the valid tags — which
-    the ``except ValidationError`` handlers in the validator CLI, pytest
-    collection, and the show/graph inspection commands all catch. Raising a bare
-    ``ValueError`` here would instead escape those handlers as a raw traceback.
+    Unrecognized input yields an invalid tag rather than raising, so pydantic
+    reports a located ``union_tag_invalid`` error listing the valid tags — which
+    every caller's ``except ValidationError`` already handles.
     """
     tag_fields = set(class_to_tag.values())
 
@@ -81,14 +53,11 @@ def _create_discriminator(class_to_tag: dict[type, str]) -> Callable[[Any], str]
         if isinstance(v, dict):
             found = tag_fields & v.keys()
             if found:
-                # Tie-break: if a dict carries several tag keys (e.g. both "json"
-                # and "xml"), pick the alphabetically smallest tag deterministically.
-                # The chosen variant's model then rejects the surplus keys under
-                # extra="forbid", surfacing the ambiguity as a validation error.
+                # Several tag keys: pick deterministically and let the chosen
+                # variant reject the surplus under extra="forbid".
                 return min(found)
 
-            # No recognized type key: surface the first (offending) key as an
-            # invalid tag so the validation error names it.
+            # Name the offending key, so the validation error points at it.
             return next(iter(v), "(empty object)")  # ty: ignore[invalid-return-type]
 
         tag = class_to_tag.get(type(v))
@@ -102,15 +71,8 @@ def _create_discriminator(class_to_tag: dict[type, str]) -> Callable[[Any], str]
 
 @contextmanager
 def _suppress_field_shadow_warning(field_name: str):
-    """Locally silence Pydantic's "field shadows a BaseModel attribute" warning.
-
-    Fields "json" (``JsonBody``) and "schema" (``ResponseBody``) are intentional
-    domain-specific names that collide with ``BaseModel.json``/``BaseModel.schema``.
-    Pydantic emits the warning at class-definition time. Using
-    ``warnings.catch_warnings()`` here means the filter is scoped to the single
-    ``class`` statement it wraps, so merely importing this module has no
-    process-wide effect on the warnings filter.
-    """
+    """Silence pydantic's shadowed-attribute warning for the one class statement
+    it wraps: "json" and "schema" are intentional domain names."""
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
@@ -121,18 +83,8 @@ def _suppress_field_shadow_warning(field_name: str):
 
 
 def _normalize_list_input(v: Any) -> Any:
-    """Normalize list-or-dict input to a flat list.
-
-    Accepts:
-    - list: returned as-is
-    - dict: values flattened (list values extended, others appended)
-    - other: passed through for Pydantic to handle
-
-    Examples:
-        [a, b] -> [a, b]
-        {"x": a, "y": b} -> [a, b]
-        {"x": [a, b], "y": c} -> [a, b, c]
-    """
+    """Flatten the name-keyed mapping form into a list, preserving order:
+    ``{"x": [a, b], "y": c}`` -> ``[a, b, c]``. Anything else passes through."""
     if isinstance(v, list):
         return v
 
@@ -149,41 +101,26 @@ def _normalize_list_input(v: Any) -> Any:
 
 
 def _normalize_stages_input(v: Any) -> Any:
-    """Normalize stages from dict format to list format.
-
-    For dict input, the key becomes the stage's 'name' field (overrides any explicit name).
-
-    Examples:
-        [{"name": "a", ...}] -> [{"name": "a", ...}]
-        {"stage1": {...}, "stage2": {...}} -> [{"name": "stage1", ...}, {"name": "stage2", ...}]
-    """
+    """Flatten the ``{name: stage}`` form into a list, the key becoming (and
+    overriding) each stage's ``name``."""
     if isinstance(v, list):
         return v
 
     if isinstance(v, dict):
         result = []
         for name, stage_data in v.items():
-            if isinstance(stage_data, dict):
-                # Dict key takes precedence over any explicit name in stage_data
-                stage_with_name = {**stage_data, "name": name}
-                result.append(stage_with_name)
-            else:
-                # Let Pydantic handle validation errors
-                result.append(stage_data)
+            result.append({**stage_data, "name": name} if isinstance(stage_data, dict) else stage_data)
         return result
 
     return v
 
 
 class StrictModel(BaseModel):
-    """Base for all scenario models: unknown keys are rejected, so a typo'd
-    field name fails validation instead of silently changing behavior.
+    """Base for all scenario models: unknown keys are rejected, so a typo fails
+    validation instead of silently changing behavior.
 
-    The one exception is "$schema" — editor metadata that may legitimately sit
-    at the root of a scenario file, or of any fragment pulled in by reference
-    into a model position — which is dropped before validation. "$schema" keys
-    inside plain dict values (e.g. an inline response-body JSON Schema) are
-    untouched, since no model consumes those dicts.
+    The exception is "$schema" (editor metadata), dropped before validation.
+    Inside plain dict values — an inline JSON Schema — it is untouched.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -411,11 +348,8 @@ with _suppress_field_shadow_warning("schema"):
 
 
 class HeaderMatcher(StrictModel):
-    """Declarative matcher for one expected response header.
-
-    At least one field must be set. An absent header behaves as an empty
-    string, mirroring the body ``contains``/``matches`` semantics (so
-    ``not_contains``/``not_matches`` pass vacuously for a missing header)."""
+    """Matcher for one expected response header; at least one field must be set.
+    An absent header behaves as an empty string, as bodies do."""
 
     contains: str | PartialTemplateStr | None = Field(default=None, description="Substring the header value must contain.")
     not_contains: str | PartialTemplateStr | None = Field(default=None, description="Substring the header value must NOT contain.")
@@ -494,8 +428,7 @@ class IndividualParameter(StrictModel):
     def validate_ids_match_values(self) -> Self:
         if self.ids and self.individual:
             values = next(iter(self.individual.values()))
-            # Skip validation if values is a template string
-            if isinstance(values, str):
+            if isinstance(values, str):  # template form: count unknown until runtime
                 return self
             if len(self.ids) != len(values):
                 raise ValueError(f"Number of ids ({len(self.ids)}) must match number of values ({len(values)})")
@@ -510,10 +443,8 @@ class CombinationsParameter(StrictModel):
 
     @model_validator(mode="after")
     def validate_combinations(self) -> Self:
-        # Skip validation if combinations is a template string
-        if isinstance(self.combinations, str):
+        if isinstance(self.combinations, str):  # template form: keys unknown until runtime
             return self
-        # Ensure all combinations have the same keys (if there are multiple)
         if len(self.combinations) > 1:
             first_keys = set(self.combinations[0].keys())
             for i, combo in enumerate(self.combinations[1:], 1):
@@ -521,7 +452,6 @@ class CombinationsParameter(StrictModel):
                 if combo_keys != first_keys:
                     raise ValueError(f"Combination {i} has different parameters than combination 0")
 
-        # Validate ids match combinations count
         if self.ids and self.combinations:
             if len(self.ids) != len(self.combinations):
                 raise ValueError(f"Number of ids ({len(self.ids)}) must match number of combinations ({len(self.combinations)})")
@@ -543,16 +473,11 @@ Parameters = list[Parameter]
 
 
 def parametrize_values_contain_template(parametrize: Parameters | None) -> bool:
-    """True if any parametrize VALUE contains a ``{{ }}`` template.
+    """True if any parametrize VALUE holds a ``{{ }}`` template — ``ids`` are
+    never rendered, so a template-looking string there must not count.
 
-    Only the values are inspected — ``ids`` are never walked through the
-    template engine, so a template-looking string there must not count.
-
-    Single source of truth shared by the carrier (to decide whether scenario
-    substitutions must resolve at collection time, since pytest needs concrete
-    parameter values to generate test items) and the validator (which surfaces
-    that decision as the HTTPCHAIN025 info diagnostic) — keeping the runtime
-    behavior and the static analysis in agreement by construction.
+    Shared by the factory (which must then resolve at collection time) and the
+    validator (which reports that as HTTPCHAIN025), so the two agree.
     """
     for step in parametrize or []:
         match step:
@@ -574,7 +499,11 @@ class ParallelConfigBase(StrictModel):
     )
     calls_per_sec: PositiveInt | NumberOrTemplate | None = Field(
         default=None,
-        description="Maximum number of API calls per second. When set, requests are rate-limited globally across all workers.",
+        description=(
+            "Maximum number of API calls per second, shared by this stage's concurrent iterations. "
+            "The limiter is per stage execution and per process: consecutive stages, other scenarios, "
+            "and pytest-xdist workers each get their own budget."
+        ),
     )
     max_rate_limit_delay: PositiveInt | NumberOrTemplate = Field(
         default=60,

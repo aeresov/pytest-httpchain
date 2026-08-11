@@ -1,0 +1,38 @@
+{
+    "stages": [
+        {
+            "name": "failing_save",
+            "description": "A raising save function fails the stage cleanly and aborts the chain",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/user/1"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "user_functions": ["save:save_raises"]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "skipped_after_abort",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

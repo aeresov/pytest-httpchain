@@ -37,6 +37,20 @@ class TestPytestConfigure:
         # Should not raise.
         pytester.parseconfigure()
 
+    def test_comprehension_cap_restored_on_unconfigure(self, pytester):
+        """The cap is a process-wide simpleeval global: an in-process pytester
+        run (or any nested session) must put back what it found, or its value
+        leaks into the enclosing process's template engine (M-review)."""
+        import simpleeval
+
+        before = simpleeval.MAX_COMPREHENSION_LENGTH
+        pytester.makeini(f"[pytest]\n{ConfigOptions.MAX_COMPREHENSION_LENGTH} = 7\n")
+        config = pytester.parseconfigure()
+        assert simpleeval.MAX_COMPREHENSION_LENGTH == 7
+
+        config._ensure_unconfigure()
+        assert simpleeval.MAX_COMPREHENSION_LENGTH == before
+
     @pytest.mark.parametrize(
         ("option", "value", "match"),
         [

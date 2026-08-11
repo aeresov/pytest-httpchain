@@ -1,12 +1,6 @@
-"""Build the JSON Schema for pytest-httpchain scenario files.
-
-Shared by the ``pytest-httpchain schema`` CLI command and
-``scripts/generate_schema.py``. The schema is derived from the Pydantic
-``Scenario`` model and augmented so editors accept pytest-httpchain's
-``$ref``/``$include``/``$merge`` reference directives wherever a named type
-(a ``$defs`` entry) or a root-level scenario property is expected. Inline,
-anonymous nested schemas are not wrapped.
-"""
+"""The JSON Schema for scenario files: the ``Scenario`` model's schema, widened
+so editors accept a reference directive wherever a named type or a root-level
+property is expected."""
 
 from typing import Any
 
@@ -22,13 +16,9 @@ SCHEMA_ID = "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.j
 class _AnyOfTaggedUnions(GenerateJsonSchema):
     """Emit tagged unions as ``anyOf`` instead of pydantic's ``oneOf``.
 
-    A reference object matches the JsonRef branch of EVERY union member (each
-    ``$defs`` entry is wrapped in ``_add_jsonref_support``), which ``oneOf``
-    counts as "valid under more than one" and rejects. ``anyOf`` keeps the
-    same accept set otherwise: members forbid each other's tag fields, so a
-    non-reference object can never match two branches. Overriding the
-    generator hook scopes the rename to exactly the tagged-union sites,
-    instead of a blanket post-hoc walk over the emitted document.
+    A reference object matches the JsonRef branch of every member, which
+    ``oneOf`` rejects as "valid under more than one". ``anyOf`` keeps the same
+    accept set otherwise, since members forbid each other's tag fields.
     """
 
     def tagged_union_schema(self, schema: core_schema.TaggedUnionSchema) -> JsonSchemaValue:
@@ -39,16 +29,11 @@ class _AnyOfTaggedUnions(GenerateJsonSchema):
 
 
 def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
-    """Allow ``$include``/``$merge``/``$ref`` objects as alternatives at named
-    type and root-property sites.
+    """Accept reference objects at named-type and root-property sites.
 
-    pytest_httpchain.jsonref can substitute any element at runtime, but wrapping
-    *every* inline subschema would balloon the schema, so only each ``$defs``
-    definition and each root-level scenario property is wrapped in an ``anyOf``
-    that also accepts a reference object — otherwise editors flag missing
-    required properties when a reference is used at one of those sites. Inline,
-    anonymous nested schemas are left untouched; a reference used there is still
-    resolved at runtime but is not described to the editor.
+    The resolver can substitute any element, but wrapping every inline subschema
+    would balloon the output, so anonymous nested schemas are left untouched: a
+    reference still resolves there at runtime, it is just not described.
     """
     if "$defs" not in schema:
         schema["$defs"] = {}
@@ -97,19 +82,13 @@ def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
         if "description" in prop_def:
             schema["properties"][prop_name]["description"] = prop_def.get("description")
 
-    # The Scenario model forbids extra keys, so the root carries
-    # additionalProperties: false. Keys that are legitimate in a scenario
-    # *file* but handled before model validation must be declared explicitly:
-    # "$schema" (editor metadata, stripped by the loader) and the reference
-    # directives (resolved by the loader, supported at the document root).
+    # The root forbids extra keys, so keys handled before model validation must
+    # be declared: "$schema" and the directives the loader resolves.
     schema.setdefault("properties", {})
     schema["properties"]["$schema"] = {
         "type": "string",
         "description": "URL of this schema, for editor as-you-type validation. Dropped during model validation.",
     }
-    # The loop copies all three directive properties ($include/$merge/$ref)
-    # verbatim from the JsonRef definition — including $ref's legacy-alias
-    # description.
     for directive, directive_def in schema["$defs"]["JsonRef"]["properties"].items():
         schema["properties"][directive] = directive_def
 

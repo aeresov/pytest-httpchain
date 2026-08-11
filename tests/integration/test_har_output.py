@@ -191,3 +191,28 @@ def test_har_entries_carry_real_start_times(pytester):
     times = sorted(datetime.fromisoformat(e["startedDateTime"]) for e in entries)
     spread = (times[-1] - times[0]).total_seconds()
     assert spread >= 0.4, f"start times span only {spread}s — fabricated at export time?"
+
+
+def test_multipart_upload_writes_har_and_report(pytester):
+    """A multipart (files) body is a streaming httpx request whose bytes are
+    consumed on send; the HAR and report paths must degrade to 'body not
+    captured' instead of erroring — previously the whole HAR file was silently
+    dropped and the request section showed a formatting error."""
+    har_dir = pytester.path / "har_out"
+
+    pytester.copy_example("conftest.py")
+    pytester.copy_example("body_types/upload_a.txt")
+    pytester.copy_example("body_types/upload_b.bin")
+    pytester.copy_example("body_types/test_files_body.http.json")
+    result = pytester.runpytest("-s", "-rA", "--httpchain-output-dir", str(har_dir))
+
+    result.assert_outcomes(errors=0, failed=0, passed=1)
+
+    har_files = list(har_dir.glob("*.har"))
+    assert len(har_files) == 1, f"expected exactly one .har under {har_dir}"
+    entries = json.loads(har_files[0].read_text(encoding="utf-8"))["log"]["entries"]
+    assert len(entries) == 1
+    # -1 is HAR's "unknown size": the streaming body is gone after the send.
+    assert entries[0]["request"]["bodySize"] == -1
+    assert "postData" not in entries[0]["request"]
+    assert entries[0]["response"]["status"] == 200

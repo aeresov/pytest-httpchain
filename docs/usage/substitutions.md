@@ -147,7 +147,13 @@ returns a dict is accessed with subscript (`config()['environment']`).
 
 ## Template Expressions
 
-Use `{{ expression }}` syntax anywhere in requests. Expressions support Python syntax via simpleeval.
+Use `{{ expression }}` syntax in any request value. Expressions support Python syntax via simpleeval.
+
+!!! note
+    Only **values** are substituted. A template in a dict *key* — a header name,
+    a query parameter name, a JSON body key — is never rendered and is sent
+    literally; the validator reports it as `HTTPCHAIN029`. Move the dynamic part
+    into the value, or build the object in a user function.
 
 ### Basic Variable Access
 

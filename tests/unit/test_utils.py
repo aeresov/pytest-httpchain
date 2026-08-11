@@ -121,6 +121,30 @@ class TestProcessSubstitutions:
 
         assert result["key"] == "second"
 
+    def test_functions_substitution_templated_name_rendered(self):
+        """A templated import name — the form the model itself advertises
+        ('module.{{ submodule_name }}:funcname') — resolves against the current
+        context at seed time; nothing downstream ever sees a context."""
+        substitutions = [
+            VarsSubstitution(vars={"mod": "tests.unit.test_utils"}),
+            FunctionsSubstitution(functions={"my_func": UserFunctionName("{{ mod }}:sample_func")}),
+        ]
+        result = process_substitutions(substitutions)
+
+        assert result["my_func"]() == "sample_result"
+
+    def test_functions_substitution_templated_name_with_kwargs_rendered(self):
+        func_def = UserFunctionKwargs(
+            name=UserFunctionName("{{ mod }}:func_with_args"),
+            kwargs={"a": 1, "b": 2},
+        )
+        substitutions = [
+            FunctionsSubstitution(functions={"my_func": func_def}),
+        ]
+        result = process_substitutions(substitutions, {"mod": "tests.unit.test_utils"})
+
+        assert result["my_func"](c=3) == {"a": 1, "b": 2, "c": 3}
+
 
 class TestCallUserFunction:
     def test_call_with_simple_name(self):

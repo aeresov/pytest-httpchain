@@ -1,0 +1,53 @@
+{
+    "stages": [
+        {
+            "name": "save_sequential",
+            "description": "Entries within one save step resolve in order, each seeing the previous entry's names",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "vars": {
+                                    "seq_a": "{{ 2 + 3 }}"
+                                }
+                            },
+                            {
+                                "vars": {
+                                    "seq_b": "{{ seq_a * 10 }}"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "use_sequential",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ seq_a == 5 }}",
+                            "{{ seq_b == 50 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

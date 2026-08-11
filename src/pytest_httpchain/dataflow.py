@@ -1,9 +1,7 @@
-"""Structured stage data-flow analysis for the ``show`` and ``graph`` CLI commands.
+"""Stage data-flow analysis for the ``show`` and ``graph`` CLI commands.
 
-Consumes the same per-stage scope model (``scoping.stage_scopes``) as the
-order-aware validator, but produces a graph instead of diagnostics: which
-variables each stage saves, which it consumes from earlier stages, and the
-producer -> consumer edges between stages.
+Reads the same per-stage scopes as the validator, but produces a graph instead
+of diagnostics: what each stage saves, what it consumes, and the edges between.
 """
 
 from typing import Any
@@ -14,12 +12,12 @@ from pytest_httpchain.models import Scenario
 from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     extract_template_variables,
+    raw_list_entries,
     raw_stages,
-    raw_substitution_entries,
-    raw_substitution_entry_names,
-    raw_substitution_entry_templates,
+    saved_in_step,
     stage_scopes,
     substitution_names,
+    substitution_step_refs,
 )
 
 
@@ -62,26 +60,20 @@ class DataFlow(BaseModel):
 def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     """Build the stage data-flow graph for a validated scenario.
 
-    A stage *consumes* a variable when one of its templates references a name
-    saved by an earlier stage and not shadowed in that template's phase. Each
-    phase is judged against the shadow set scoping defines for it
-    (`StageScopes.*_shadows`): substitutions and the ``parallel`` config
-    resolve BEFORE iterations exist, so foreach parameters shadow only
-    request/response references; substitution steps resolve in order, so only
-    PRIOR steps' names shadow a step's references; ``always_run`` resolves
-    before stage substitutions exist, so only fixtures and parametrize
-    parameters shadow it. ``parametrize`` values are excluded — they resolve
-    against scenario scope, never saved values.
+    A stage consumes a variable when one of its templates references a name an
+    earlier stage saved and its own phase does not shadow — pre-response phases
+    judged against the shadow sets `StageScopes` defines, response steps in
+    order with the stage's own accumulated saves added as they land.
+    ``parametrize`` values are excluded: they resolve against scenario scope,
+    never saved values.
     """
     raws = raw_stages(test_data)
     scopes = stage_scopes(scenario)
 
     stages: list[StageFlow] = []
     edges: list[DataFlowEdge] = []
-    # The most recent stage (so far) that saved each name. A re-saved variable is
-    # attributed to its LAST writer before the consumer, matching the runtime
-    # ChainMap layering where a later save shadows an earlier one — not the first
-    # writer, which is what the graph used to (incorrectly) draw.
+    # A re-saved variable is attributed to its last writer before the consumer,
+    # matching the runtime layering where a later save shadows an earlier one.
     last_save_stage: dict[str, int] = {}
 
     for i, stage in enumerate(scenario.stages):
@@ -90,22 +82,27 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
 
         consumes: set[str] = set()
 
-        # Substitution steps resolve in order: each step sees only PRIOR
-        # steps' names, so their shadowing accumulates step by step. Only
-        # `vars` values are rendered at seed time (`functions` kwargs are
-        # passed raw), so only they can consume an earlier save.
-        prior_sub_names: frozenset[str] = frozenset()
-        for entry in raw_substitution_entries(raw.get("substitutions")):
-            consumes |= _consumed(extract_template_variables(raw_substitution_entry_templates(entry)), scope.earlier_saves, scope.always_run_shadows | prior_sub_names)
-            prior_sub_names |= frozenset(raw_substitution_entry_names(entry))
+        for entry_refs, prior_sub_names in substitution_step_refs(raw.get("substitutions")):
+            consumes |= _consumed(entry_refs, scope.earlier_saves, scope.always_run_shadows | prior_sub_names)
 
         consumes |= _consumed(extract_template_variables(raw.get("parallel")), scope.earlier_saves, scope.pre_iteration_shadows)
         consumes |= _consumed(extract_template_variables(raw.get("request")), scope.earlier_saves, scope.request_shadows)
-        # Inside response steps the reserved `response` metadata namespace
-        # shadows a same-named earlier save, so a `response` reference there is
-        # NOT a data dependency on the earlier stage (in request/substitutions
-        # templates it still is — no namespace exists in those scopes).
-        consumes |= _consumed(extract_template_variables(raw.get("response")) - {RESPONSE_META_NAME}, scope.earlier_saves, scope.request_shadows)
+        # Response steps resolve in order, each save layering its names over the
+        # context (the runtime's per-step with_saves): once a step re-saves a
+        # name, later steps read this stage's fresh value, not the earlier
+        # stage's — so accumulated own saves join the shadow set step by step.
+        # The `response` namespace likewise shadows a same-named save.
+        own_saves: frozenset[str] = frozenset()
+        # raw_list_entries, not an isinstance(list) guard: the name-keyed mapping
+        # form of `response` is first-class, and discarding it left every step's
+        # raw text unread — so show/graph reported a consuming stage as
+        # consuming nothing and dropped the dependency edge entirely.
+        raw_response = raw_list_entries(raw.get("response"))
+        for k, step in enumerate(stage.response):
+            step_raw = raw_response[k] if k < len(raw_response) else None
+            step_refs = extract_template_variables(step_raw) - {RESPONSE_META_NAME}
+            consumes |= _consumed(step_refs, scope.earlier_saves, scope.request_shadows | own_saves)
+            own_saves |= frozenset(saved_in_step(step))
         consumes |= _consumed(extract_template_variables(raw.get("always_run")), scope.earlier_saves, scope.always_run_shadows)
 
         by_producer: dict[int, list[str]] = {}

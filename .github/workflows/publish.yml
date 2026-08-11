@@ -10,6 +10,12 @@ permissions:
 jobs:
     test:
         name: Test
+        # test.yml's test job requests id-token: write (Codecov OIDC upload); a
+        # called workflow can never exceed its caller's grant, so without this
+        # the release gate fails at plan time and blocks every release.
+        permissions:
+            contents: read
+            id-token: write
         uses: ./.github/workflows/test.yml
 
     # Canonical PyPA split: build in an unprivileged job, hand the dists to a
@@ -23,7 +29,7 @@ jobs:
             - uses: actions/checkout@v7
 
             - name: Install uv
-              uses: astral-sh/setup-uv@v8.3.2
+              uses: astral-sh/setup-uv@v9.0.0
               with:
                   enable-cache: true
                   cache-dependency-glob: "uv.lock"

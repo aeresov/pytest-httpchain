@@ -792,28 +792,32 @@
             "body": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/JsonBody"
-                },
-                {
-                  "$ref": "#/$defs/XmlBody"
-                },
-                {
-                  "$ref": "#/$defs/FormBody"
-                },
-                {
-                  "$ref": "#/$defs/TextBody"
-                },
-                {
-                  "$ref": "#/$defs/Base64Body"
-                },
-                {
-                  "$ref": "#/$defs/BinaryBody"
-                },
-                {
-                  "$ref": "#/$defs/FilesBody"
-                },
-                {
-                  "$ref": "#/$defs/GraphQLBody"
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/JsonBody"
+                    },
+                    {
+                      "$ref": "#/$defs/XmlBody"
+                    },
+                    {
+                      "$ref": "#/$defs/FormBody"
+                    },
+                    {
+                      "$ref": "#/$defs/TextBody"
+                    },
+                    {
+                      "$ref": "#/$defs/Base64Body"
+                    },
+                    {
+                      "$ref": "#/$defs/BinaryBody"
+                    },
+                    {
+                      "$ref": "#/$defs/FilesBody"
+                    },
+                    {
+                      "$ref": "#/$defs/GraphQLBody"
+                    }
+                  ]
                 },
                 {
                   "type": "null"
@@ -1039,6 +1043,8 @@
           "additionalProperties": false,
           "properties": {
             "save": {
+              "description": "Save configuration.",
+              "title": "Save",
               "anyOf": [
                 {
                   "$ref": "#/$defs/JMESPathSave"
@@ -1049,9 +1055,7 @@
                 {
                   "$ref": "#/$defs/UserFunctionsSave"
                 }
-              ],
-              "description": "Save configuration.",
-              "title": "Save"
+              ]
             }
           },
           "required": [
@@ -1134,10 +1138,14 @@
                   "additionalProperties": {
                     "anyOf": [
                       {
-                        "$ref": "#/$defs/VarsSubstitution"
-                      },
-                      {
-                        "$ref": "#/$defs/FunctionsSubstitution"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/VarsSubstitution"
+                          },
+                          {
+                            "$ref": "#/$defs/FunctionsSubstitution"
+                          }
+                        ]
                       },
                       {
                         "items": {
@@ -1209,10 +1217,14 @@
             "parallel": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/ParallelRepeatConfig"
-                },
-                {
-                  "$ref": "#/$defs/ParallelForeachConfig"
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ParallelRepeatConfig"
+                    },
+                    {
+                      "$ref": "#/$defs/ParallelForeachConfig"
+                    }
+                  ]
                 },
                 {
                   "type": "null"
@@ -1245,10 +1257,14 @@
                   "additionalProperties": {
                     "anyOf": [
                       {
-                        "$ref": "#/$defs/SaveStep"
-                      },
-                      {
-                        "$ref": "#/$defs/VerifyStep"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/SaveStep"
+                          },
+                          {
+                            "$ref": "#/$defs/VerifyStep"
+                          }
+                        ]
                       },
                       {
                         "items": {
@@ -1320,10 +1336,14 @@
                   "additionalProperties": {
                     "anyOf": [
                       {
-                        "$ref": "#/$defs/VarsSubstitution"
-                      },
-                      {
-                        "$ref": "#/$defs/FunctionsSubstitution"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/VarsSubstitution"
+                          },
+                          {
+                            "$ref": "#/$defs/FunctionsSubstitution"
+                          }
+                        ]
                       },
                       {
                         "items": {
@@ -1834,10 +1854,14 @@
               "additionalProperties": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/VarsSubstitution"
-                  },
-                  {
-                    "$ref": "#/$defs/FunctionsSubstitution"
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/VarsSubstitution"
+                      },
+                      {
+                        "$ref": "#/$defs/FunctionsSubstitution"
+                      }
+                    ]
                   },
                   {
                     "items": {

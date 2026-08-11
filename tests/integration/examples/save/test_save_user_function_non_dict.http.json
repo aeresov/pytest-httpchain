@@ -1,0 +1,24 @@
+{
+    "stages": [
+        {
+            "name": "non_dict_save",
+            "description": "A save function returning a non-dict is rejected, not coerced",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/user/1"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "user_functions": ["save:save_returns_non_dict"]
+                    }
+                }
+            ]
+        }
+    ]
+}

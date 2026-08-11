@@ -318,6 +318,26 @@ With depth 3, these are valid:
 This would fail:
 - `../../../../file.json`
 
+### The root path is a containment boundary
+
+The traversal depth is not the only constraint. Every resolved reference must
+also stay **inside the root path** — the directory `root_path` names above. A
+reference that resolves outside it is rejected even when the file exists and the
+`../` count is within the limit; symlinks are resolved *before* the check, so a
+link pointing out of the tree is rejected too. Absolute paths are refused
+outright.
+
+The root is pytest's `rootdir` during collection. For the CLI it is inferred
+from the nearest ancestor holding a real pytest config, and `--root-path` sets
+it explicitly:
+
+```bash
+pytest-httpchain validate --root-path . tests/test_login.http.json
+```
+
+A reference rejected this way says so specifically — `resolves outside the
+reference root <dir>` — rather than reporting the file as missing.
+
 ## Circular Reference Detection
 
 pytest-httpchain detects and prevents circular references:

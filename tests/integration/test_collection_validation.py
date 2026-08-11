@@ -145,3 +145,18 @@ def test_ambiguous_ref_surfaces_as_diagnostic_warning_at_collection(pytester):
     output = result_strict.stdout.str()
     assert "HTTPCHAIN026" in output
     assert "Failed to parse JSON file" not in output
+
+
+def test_stages_collected_under_narrowed_python_functions(pytester):
+    """Stage methods are named "test NN - <stage>", which satisfies pytest's
+    default python_functions only via its bare "test" prefix rule — the space
+    defeats every glob. Without __test__ = True a narrowed (and very common)
+    `python_functions = test_*` collected ZERO stages and left CI green."""
+    pytester.copy_example("conftest.py")
+    pytester.copy_example("save/test_save_jmespath.http.json")
+    pytester.makeini("[pytest]\npython_functions = test_*\n")
+
+    result = pytester.runpytest("--collect-only", "-q")
+
+    result.stdout.fnmatch_lines(["*test_save_jmespath*"])
+    assert "no tests ran" not in result.stdout.str()

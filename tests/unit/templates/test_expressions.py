@@ -69,6 +69,14 @@ class TestExtractTemplateExpression:
     def test_returns_none_for_empty_string(self):
         assert extract_template_expression("") is None
 
+    def test_returns_none_for_empty_expression(self):
+        """ "{{ }}" carries nothing to evaluate and simpleeval raises on it at
+        runtime, so it must not pass as a complete template — matching
+        validate_partial_template_str, which has always refused the empty form."""
+        for value in ("{{}}", "{{ }}", "  {{   }}  "):
+            assert extract_template_expression(value) is None, value
+            assert is_complete_template(value) is False, value
+
     def test_preserves_dict_literal_expression(self):
         # Dict literals with space before closing
         result = extract_template_expression("{{ {'key': value} }}")

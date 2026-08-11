@@ -16,3 +16,13 @@ def compute_values(value: int) -> dict:
         "doubled": value * 2,
         "squared": value**2,
     }
+
+
+def save_raises(response: httpx.Response) -> dict:
+    """A save function that raises; must surface as a clean save failure."""
+    raise ValueError("boom in save function")
+
+
+def save_returns_non_dict(response: httpx.Response):
+    """A save function that returns a non-dict, which must be rejected."""
+    return "not a dict"

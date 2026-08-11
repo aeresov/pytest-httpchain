@@ -45,16 +45,22 @@ def main():
     # Versioned copy with an immutable-per-release $id under /schema/v<version>/.
     # Copies accumulate in the repo, so every released schema URL stays
     # resolvable while the unversioned URL tracks latest; on a version bump the
-    # CI drift check flags the new directory until it is committed.
+    # CI drift check flags the new directory until it is committed. An existing
+    # versioned copy is never rewritten: the pyproject version stays at the last
+    # release while main accumulates unreleased schema changes, so regenerating
+    # it would silently repoint a "pinned" release URL at unreleased content.
     version = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     versioned_path = schema_dir / f"v{version}" / "scenario.schema.json"
-    versioned_path.parent.mkdir(parents=True, exist_ok=True)
-    versioned_schema = dict(schema)
-    versioned_schema["$id"] = schema["$id"].replace("/schema/", f"/schema/v{version}/")
-    versioned_path.write_text(json.dumps(versioned_schema, indent=2) + "\n", encoding="utf-8")
+    if versioned_path.exists():
+        print(f"Versioned copy exists, left untouched: {versioned_path}")
+    else:
+        versioned_path.parent.mkdir(parents=True, exist_ok=True)
+        versioned_schema = dict(schema)
+        versioned_schema["$id"] = schema["$id"].replace("/schema/", f"/schema/v{version}/")
+        versioned_path.write_text(json.dumps(versioned_schema, indent=2) + "\n", encoding="utf-8")
+        print(f"Versioned copy: {versioned_path}")
 
     print(f"Schema written to: {output_path}")
-    print(f"Versioned copy: {versioned_path}")
     print(f"Schema has {len(schema.get('$defs', {}))} definitions")
 
 

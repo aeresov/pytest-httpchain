@@ -1,10 +1,5 @@
-"""Warning types emitted by the plugin.
-
-Kept in a leaf module (imports only pytest) so that the package ``__init__``
-can re-export the user-facing name without pulling in the plugin/execution
-machinery — importing any subpackage (e.g. ``pytest_httpchain.models``) must
-not load ``plugin``/``carrier``.
-"""
+"""Warning types. A leaf module, so the package ``__init__`` can re-export the
+user-facing name without loading the plugin/execution machinery."""
 
 import pytest
 
@@ -14,12 +9,9 @@ class ScenarioValidationWarning(pytest.PytestWarning):
 
 
 class AmbiguousReferenceWarning(UserWarning):
-    """A ``$ref``/``$include`` path matches an existing file under BOTH lookup
-    bases (the referencing file's directory and the root path). The
-    file-relative candidate wins; the shadowed root-relative file is ignored —
-    worth a warning, because adding a file next to a scenario can silently
-    change which fragment a reference resolves to.
+    """A ``$ref`` path matches a file under both lookup bases; the file-relative
+    one wins and the other is silently ignored, so adding a file next to a
+    scenario can change what a reference means.
 
-    Not a ``pytest.PytestWarning``: the jsonref resolver that raises it also
-    runs outside pytest (the ``pytest-httpchain`` CLI maps it to the
-    ``HTTPCHAIN026`` diagnostic)."""
+    Not a ``PytestWarning``: the resolver also runs outside pytest, where the
+    CLI maps this to the HTTPCHAIN026 diagnostic."""

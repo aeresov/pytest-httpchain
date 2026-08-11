@@ -38,7 +38,7 @@ Each scenario contains 1+ stages executed in order. One stage failure stops the 
 
 ### Common Data Context
 
-A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use Jinja-style expressions (`{{ var }}`) anywhere in your requests.
+A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use Jinja-style expressions (`{{ var }}`) in any request value.
 
 ### Response Processing
 

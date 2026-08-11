@@ -1,0 +1,26 @@
+{
+    "stages": [
+        {
+            "name": "jmespath_runtime_error",
+            "description": "An expression that compiles but errors at search time (abs of an array) fails the save cleanly",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/users"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "bad": "abs(users)"
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -1,25 +1,18 @@
-"""Shared helpers for building pytest markers, resolving substitutions, and
-invoking user functions.
+"""Small helpers shared by the collection and runtime paths: markers,
+substitution resolution, and scenario-relative paths.
 
-These helpers are used from both the collection path (``factory.create_test_class``
-and ``plugin.JsonModule.collect`` resolve scenario-level substitutions and markers
-while building the test class) and the runtime path (``Carrier.execute_stage``
-resolves stage-level substitutions during a request).
-
-Naming oddity: ``process_substitutions`` raises
-``StageExecutionError`` on a malformed function definition, but
-``process_substitutions(scenario.substitutions)`` is invoked at *collection* time
-by ``create_test_class``. So a ``StageExecutionError`` can surface before any
-stage runs; the collection caller catches it and re-wraps it into a pytest
-``CollectError``. The exception name is kept for consistency with the runtime
-path rather than introducing a second error type for the same malformed input.
+``process_substitutions`` raises ``StageExecutionError`` even when called at
+collection time (the collection caller re-wraps it into a ``CollectError``)
+rather than introducing a second error type for the same malformed input.
 """
 
 import ast
 import logging
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from pytest_httpchain.errors import StageExecutionError
@@ -31,10 +24,32 @@ logger = logging.getLogger(__name__)
 
 
 def optional_as_list(value: Any) -> list[Any]:
-    """None -> [], anything else -> [value]. Adapts HeaderMatcher's optional
-    single-value fields to list-based shared checks (the carrier's matcher
-    checks and the validator's contradiction checks share this adapter)."""
+    """None -> [], anything else -> [value]: adapts HeaderMatcher's optional
+    single-value fields to the list-based shared checks."""
     return [] if value is None else [value]
+
+
+def resolve_scenario_path(scenario_dir: Path | None, value: str | Path) -> Path:
+    """Resolve a scenario-relative file path against the scenario's directory,
+    matching ``$ref`` rather than the invocation CWD. Absolute paths pass
+    through, as does everything when no ``scenario_dir`` is known."""
+    path = Path(value)
+    if path.is_absolute() or scenario_dir is None:
+        return path
+    return scenario_dir / path
+
+
+def request_content(request: httpx.Request) -> bytes | None:
+    """The request body bytes, or None when httpx never buffered them.
+
+    A streaming body — multipart ``files`` on the real transport — is consumed
+    on send without being read into ``.content``, which then raises
+    ``RequestNotRead``; reporting paths must degrade, not error.
+    """
+    try:
+        return request.content
+    except httpx.RequestNotRead:
+        return None
 
 
 def make_marker(mark_str: str) -> pytest.MarkDecorator:
@@ -53,21 +68,28 @@ def make_marker(mark_str: str) -> pytest.MarkDecorator:
     raise ValueError(f"unsupported marker expression: {mark_str}")
 
 
+def _resolve_function_name(name: str, context: Mapping[str, Any]) -> str:
+    """Render a templated import name (``mod.{{ x }}:fn``) against the current
+    context; literal names pass through untouched. The model advertises the
+    template form, so it must resolve here — nothing downstream sees a context."""
+    if "{{" not in name:
+        return name
+    resolved = walk(name, context)
+    if not isinstance(resolved, str):
+        raise StageExecutionError(f"Templated function name {name!r} must resolve to a string, got {type(resolved).__name__}")
+    return resolved
+
+
 def process_substitutions(
     substitutions: Sequence[Substitution],
     context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Resolve a list of substitution steps into a flat ``{name: value}`` dict.
+    """Resolve substitution steps into a flat ``{name: value}`` dict.
 
-    Steps are processed in order and each step sees the values produced by the
-    earlier steps layered over ``context`` (later steps may reference earlier
-    ones). ``FunctionsSubstitution`` seeds callable aliases (wrapped user
-    functions, optionally with default kwargs); ``VarsSubstitution`` seeds plain
-    values, rendering any ``{{ }}`` templates against the running context.
-
-    Raises ``StageExecutionError`` on a malformed function definition — note this
-    runs at collection time when resolving scenario-level substitutions (see the
-    module docstring).
+    Steps resolve in order, each seeing the earlier steps' values over
+    ``context``: ``functions`` seeds callable aliases (their import names
+    rendered, their kwargs passed raw), ``vars`` seeds values with their
+    templates rendered.
     """
     result: dict[str, Any] = {}
     for step in substitutions:
@@ -77,9 +99,9 @@ def process_substitutions(
                 for alias, func_def in step.functions.items():
                     match func_def:
                         case UserFunctionName():
-                            result[alias] = wrap_function(func_def.root)
+                            result[alias] = wrap_function(_resolve_function_name(func_def.root, current_context))
                         case UserFunctionKwargs():
-                            result[alias] = wrap_function(func_def.name.root, default_kwargs=func_def.kwargs)
+                            result[alias] = wrap_function(_resolve_function_name(func_def.name.root, current_context), default_kwargs=func_def.kwargs)
                         case _:
                             raise StageExecutionError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
                     logger.info(f"Seeded {alias} = {result[alias]}")
@@ -91,8 +113,6 @@ def process_substitutions(
                     logger.info(f"Seeded {key} = {resolved_value}")
 
             case _:
-                # New substitution variant not handled here: a plugin bug — fail
-                # loudly instead of silently seeding nothing.
                 raise RuntimeError(f"Unhandled substitution type: {type(step).__name__}")
 
     return result

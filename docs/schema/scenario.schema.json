@@ -434,7 +434,7 @@
         }
       ],
       "title": "HeaderMatcher",
-      "description": "Declarative matcher for one expected response header.\n\nAt least one field must be set. An absent header behaves as an empty\nstring, mirroring the body ``contains``/``matches`` semantics (so\n``not_contains``/``not_matches`` pass vacuously for a missing header)."
+      "description": "Matcher for one expected response header; at least one field must be set.\nAn absent header behaves as an empty string, as bodies do."
     },
     "IndividualParameter": {
       "anyOf": [
@@ -594,7 +594,7 @@
                 }
               ],
               "default": null,
-              "description": "Maximum number of API calls per second. When set, requests are rate-limited globally across all workers.",
+              "description": "Maximum number of API calls per second, shared by this stage's concurrent iterations. The limiter is per stage execution and per process: consecutive stages, other scenarios, and pytest-xdist workers each get their own budget.",
               "title": "Calls Per Sec"
             },
             "max_rate_limit_delay": {
@@ -676,7 +676,7 @@
                 }
               ],
               "default": null,
-              "description": "Maximum number of API calls per second. When set, requests are rate-limited globally across all workers.",
+              "description": "Maximum number of API calls per second, shared by this stage's concurrent iterations. The limiter is per stage execution and per process: consecutive stages, other scenarios, and pytest-xdist workers each get their own budget.",
               "title": "Calls Per Sec"
             },
             "max_rate_limit_delay": {

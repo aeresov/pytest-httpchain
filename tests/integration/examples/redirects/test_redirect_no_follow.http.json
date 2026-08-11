@@ -1,0 +1,25 @@
+{
+    "stages": [
+        {
+            "name": "keep_redirect_response",
+            "description": "allow_redirects: false surfaces the 302 itself",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/redirect-ok",
+                "allow_redirects": false
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 302,
+                        "headers": {
+                            "Location": {
+                                "contains": "/ok"
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

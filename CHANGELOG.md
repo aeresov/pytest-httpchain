@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-08-04
+
+### Added
+
+- `HTTPCHAIN029`: a `{{ }}` expression in a dict **key** (a header name, query parameter, or JSON body key). Only values are substituted, so a templated key went out on the wire verbatim — and it was equally invisible to `contains_template` and the data-flow scan, so nothing anywhere reported it. The four docs pages that promised template expressions "anywhere in your requests" now say values.
+
+### Fixed
+
+- A `verify.status` (or `verify.body.schema`) template that renders to `null` no longer silently drops the assertion. Both the pre- and post-render models validate cleanly because the fields are optional, and the check was gated on truthiness — so a stage whose only assertion rendered away **passed green against a 500**. Rendered-away assertions are now a stage failure naming the field; "never declared" and "declared but rendered to nothing" are no longer indistinguishable.
+- Stage methods carry `__test__ = True`, so collection no longer depends on the user's `python_functions` ini. The generated `"test NN - <stage>"` names matched pytest's default only via its bare `test` prefix rule — the space defeats every glob — so a narrowed `python_functions = test_*` collected **zero** stages and left CI green with nothing tested.
+- The split-chain selection warning no longer takes down the session. It is emitted from `pytest_collection_finish`, which — unlike every other warning site in the plugin — has no warning-to-error recovery, so under `filterwarnings = error` any `-k`/`--lf`/`--deselect` that orphaned a chain ended the run in an INTERNALERROR traceback with exit code 3. It now raises a clean `UsageError`, honoring the user's policy without crashing pytest.
+- Stage failures print their message once instead of two to four times: `pytest.fail` was called from inside the `except` block, which set `Failed.__context__` to the original exception, and pytest walks the whole `__cause__`/`__context__` chain even under `pytrace=False` — and plugin errors and httpx transport errors are themselves chained.
+- `validate` no longer disagrees with collection about the reference root. `resolve_root_path` took the *nearest* ancestor with any project marker, so a sub-package's bare `pyproject.toml` (a monorepo, a nested package) shrank the CLI's root below pytest's `rootdir` and rejected `$ref` targets that collection resolves fine — a red CI on a working scenario, given the README sells the command as a CI gate. A directory now counts only when it holds a file pytest would accept as its inifile (`pytest.ini`, or a `pyproject.toml`/`tox.ini`/`setup.cfg` carrying a real pytest section), with the old marker scan as fallback.
+- `show` and `graph` see the name-keyed `response` mapping form. The raw steps were re-derived with a bare `isinstance(..., list)` instead of the model's own normalizer, so the whole mapping form was discarded: a consuming stage was reported as consuming nothing and its dependency edge vanished from the flowchart, making a genuine chain look safely reorderable. The normalization is now shared (`scoping.raw_list_entries`).
+- A `$ref` rejected for escaping the root path says so, instead of reporting "not found" for a file that plainly exists on disk. The two rejection causes were folded into one boolean and one message.
+- A non-UTF-8 JSON Schema file fails the stage cleanly. `UnicodeDecodeError` is a `ValueError`, not a `JSONDecodeError`, so it escaped the narrower `except` and passed untouched through the chain-abort machinery as a raw traceback — leaving the chain running, with no HTTP sections in the report. Same widening in `validate --deep`.
+- `HTTPCHAIN028` no longer false-positives on standards-compliant inline JSON Schemas: any `$ref` not starting with `#` was flagged as a misplaced scenario directive, but JSON Schema `$ref` is a URI-reference, and absolute-URI and `$id`-relative refs resolve fine through the validator the runtime instantiates. Only relative `.json` file paths — what the scenario resolver would have handled — are flagged now.
+- `HTTPCHAIN001` no longer fires on stages that simply omit the optional `name`: the model defaults it to `""`, so two unnamed stages collided on the default and schema-valid input was rejected with an error naming a field the author never wrote.
+- HAR exports and failure reports no longer comma-fold repeated response headers. `httpx.Headers.items()` folds them, which RFC 6265 forbids for `Set-Cookie` precisely because cookie attributes contain commas — two cookies were corrupted into one unusable value.
+- The template forms of `parametrize.individual` and `parametrize.combinations` are re-validated after resolving. Their model checks bail out ("values/keys unknown until runtime") and nothing re-checked the result, so heterogeneous combinations silently dropped every key missing from the first one, or failed with a bare `KeyError` naming neither the index nor the problem.
+- `"{{ }}"` is no longer accepted as a complete template expression. It carries nothing to evaluate and simpleeval raises on the empty parse at runtime, while `validate` reported OK — and the partial-template validator had always rejected the same empty form.
+- The coverage recipe in CLAUDE.md ran `coverage run -m pytest tests/unit`, but `fail_under = 88` applies to every `coverage report` and unit tests alone reach ~85 — so the documented sequence always exited non-zero on a clean checkout. It now runs the whole suite (as CI does), with an explicit `--fail-under=0` variant for the fast unit-only loop.
+
+## [0.14.1] - 2026-07-28
+
 ### Added
 
 - `pytest-httpchain --version` on the console script (standard eager typer callback); a bare invocation now shows help instead of a usage error.
@@ -14,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HAR output and test reports now cover redirects: every redirect hop from `response.history` becomes its own HAR exchange, and the report labels the shown request with `(after N redirects)` when the final response followed redirects.
 - Versioned editor-schema copies: `docs/schema/v<version>/scenario.schema.json` with an immutable per-release `$id`, accumulated in the repo and published with the docs; the unversioned URL keeps tracking latest. A Lint-job drift check regenerates the schema and fails CI if the committed copies are stale.
 - CI: non-blocking test leg against pytest's main branch; least-privilege workflow `permissions`; per-ref `concurrency` cancellation for superseded PR runs; dependabot for GitHub Actions and uv.lock; codecov upload via OIDC with failures no longer suppressed.
+- Collection warns when pytest selection (`--lf`, `-k`, `--deselect`, `--sw`) drops earlier stages of a chain while later ones stay selected — the survivors run without the deselected stages' saved context, previously failing with a bare undefined-variable error and no hint why.
+- Templated function import names (`"module.{{ x }}:funcname"`) now actually work in `functions` substitutions: the name renders against the current context at seed time. The model has always advertised the form, but this call site passed it raw to the importer, so every invocation failed with `Invalid function name format`; the order-aware validator now also checks references inside these names.
+- Integration coverage for previously untested documented features: multipart `files` upload (success path, report, and HAR), real end-to-end redirects (follow, `allow_redirects: false`, and the `(after N redirects)` report label), the four save-side error branches (raising/non-dict save functions, jmespath runtime errors, failing save substitutions), a raising request-level auth function, and the `teardown_class` re-run reset contract.
 
 ### Changed
 
@@ -30,6 +58,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Save-step `substitutions` were template-rendered twice: the carrier pre-walked the whole save model and `process_substitutions` then rendered each `vars` value again. This broke the documented strictly-in-order entry resolution within one save step (an entry referencing the previous entry's name failed with a misleading `Undefined variable`), and — worse — re-evaluated already-rendered values, so HTTP response text containing `{{ }}` (external data, not scenario code) was executed as a template expression with `env()` and every context callable in scope. Saves now render exactly once, in order; server data that looks like a template is saved literally.
+- A multipart (`files`) request body no longer breaks reporting: httpx consumes the streaming body on send without buffering it, and reading `request.content` afterwards raises `RequestNotRead` — which degraded the report's request section to a formatting error and silently skipped the test's entire HAR file. Both paths now report the body as not captured (HAR `bodySize: -1`).
+- A parallel stage is now cancellable: `KeyboardInterrupt` (or any unexpected error) escaping the iteration loop previously reached the executor exit, which ran **every queued iteration to completion** — a runaway `repeat: 10000` load test could only be stopped with SIGKILL. Queued iterations are now cancelled and in-flight ones stop before sending. Rate-limited iterations wait in an interruptible poll instead of a blocking acquire, so a stage failure no longer waits up to `max_rate_limit_delay` per in-flight thread while firing further side-effecting requests at the target; iterations that did complete after the failure are folded into the HAR so it reflects actual wire traffic.
+- Scenario-level substitution templates are validated the way they resolve — strictly in order, entry by entry: a forward or same-entry reference (a guaranteed crash at scenario initialization that poisons every stage) is now reported as HTTPCHAIN017 instead of passing validation, and template-looking text inside `functions` **kwargs** (dead text, never rendered) no longer produces a collection-blocking false-positive error.
+- The validator no longer crashes on markers pytest itself rejects with other exception types (e.g. the reserved `_name` → `AttributeError`): every parse failure becomes a clean HTTPCHAIN019 diagnostic.
+- Parametrize `ids` are excluded from the data-flow template scan, matching the collection-timing predicate that already knew they are display-only — a template-looking id no longer emits spurious HTTPCHAIN003 warnings.
+- `validate --deep` now import-checks user functions declared inside a substitutions-type save step, previously the one call-site family it skipped entirely.
+- The failure report for a parallel stage no longer labels a successful iteration's exchange as `(failing of N ...)` when the failure carried no request info (template error, rate-limit timeout): it now says `(last completed of N ...)`.
+- HAR `startedDateTime` is no longer fabricated at export time for redirect hops and the failed exchange — hops inherit their iteration's start and stage errors carry the real send time, so a failed request no longer appears to start after every successful one ended.
+- Data-flow analysis (`show`/`graph`) tracks response steps in order with the stage's own saves shadowing as they land, matching the runtime's per-step layering: re-saving a variable and then referencing it no longer draws a phantom dependency edge on the earlier stage.
+- `pytest_unconfigure` restores simpleeval's process-wide `MAX_COMPREHENSION_LENGTH` to what configure found, so in-process pytester runs (and nested sessions) no longer leak their cap into the enclosing process.
+- Release gate unblocked: `publish.yml` grants its `test` caller job the `id-token: write` that the reusable test workflow's Codecov OIDC upload requests — a called workflow can never exceed its caller's grant, so every release run would have failed at plan time. The Codecov step is also skipped for fork PRs (GitHub never grants them OIDC; `fail_ci_if_error` made every external contribution red) and for the release-gate `workflow_call`.
+- Versioned editor schemas are actually pinned: `generate_schema.py` no longer rewrites an existing `docs/schema/v<version>/` copy on every run (the pyproject version lags main between releases, so the "immutable" v0.14.0 URL had been silently repointed at unreleased content); the committed v0.14.0 copy is restored to the schema actually shipped in 0.14.0.
+- `calls_per_sec` documentation (field description, generated schema, and the parallel guide) no longer claims the limit is "global across all workers": the limiter is per stage execution and per process, so consecutive stages, other scenarios, and pytest-xdist workers each get their own budget.
 - Two JSON reads (verify-schema files in the carrier and the validator) used the platform locale encoding instead of UTF-8; `generate_schema.py` likewise writes UTF-8 with a stable trailing newline.
 
 ## [0.14.0] - 2026-07-22
@@ -449,7 +491,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.2...HEAD
+[0.14.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.1...v0.14.2
+[0.14.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.11.0...v0.12.0

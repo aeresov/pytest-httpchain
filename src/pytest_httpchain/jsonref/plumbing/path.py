@@ -8,29 +8,17 @@ from pytest_httpchain.warnings import AmbiguousReferenceWarning
 
 
 def validate_ref_path(ref_path: str, base_path: Path, root_path: Path, max_parent_traversal_depth: int) -> Path:
-    """Validate and resolve a reference path.
+    """Resolve a reference path against its lookup bases, or raise.
 
-    Args:
-        ref_path: The reference path to validate
-        base_path: The base path to resolve relative references from
-        root_path: The root path that references should not escape
-        max_parent_traversal_depth: Maximum allowed parent directory traversals
-
-    Returns:
-        The resolved absolute path
-
-    Raises:
-        ReferenceResolverError: If the path is invalid or violates security constraints
+    Tried in order: the referencing file's directory, then ``root_path``. The
+    result must exist and stay inside ``root_path``.
     """
-    # Reject absolute ref file paths: they bypass the traversal limit (no "..")
-    # and `base / "/abs"` collapses to "/abs", escaping the sandbox. Scenario
-    # files are portable artifacts, so judge "absolute" under BOTH path
-    # flavors — the host's Path alone would let "/etc/passwd" through on
-    # Windows (rooted but not absolute there) and "C:\\x" through on POSIX.
+    # Absolute paths bypass the traversal limit and escape the sandbox, and
+    # scenario files are portable — so judge "absolute" under both flavors: the
+    # host's Path alone lets "/etc/passwd" through on Windows and "C:\\x" on POSIX.
     if PurePosixPath(ref_path).is_absolute() or PureWindowsPath(ref_path).is_absolute() or ref_path.startswith(("/", "\\")):
         raise ReferenceResolverError(f"Absolute reference paths are not allowed: {ref_path}")
 
-    # Count parent traversals before resolution
     parent_traversals = sum(1 for part in Path(ref_path).parts if part == "..")
 
     if parent_traversals > max_parent_traversal_depth:
@@ -39,41 +27,36 @@ def validate_ref_path(ref_path: str, base_path: Path, root_path: Path, max_paren
     root_path_resolved = root_path.resolve()
     base_path_resolved = base_path.resolve()
 
-    def is_valid_and_exists(resolved: Path) -> bool:
-        """Check if path exists and is within allowed directory tree."""
-        if not resolved.exists():
-            return False
-        try:
-            resolved.relative_to(root_path_resolved)
-            return True
-        except ValueError:
-            return False
-
-    # Candidate base paths, in order of preference: the referencing file's
-    # directory first, then the configured root_path. Resolution is a pure
-    # function of the file tree + root_path (no CWD fallback), so it does
-    # not depend on where the tool was launched.
+    # No CWD fallback: resolution must not depend on where the tool was launched.
     paths_to_try = [base_path]
-
-    # Add root_path if it's different from base_path
     if root_path_resolved != base_path_resolved:
         paths_to_try.append(root_path)
 
-    candidates = []
+    # The two rejection causes are tracked apart: a file that exists but escapes
+    # the root is a sandbox refusal, not a typo, and reporting both as "not
+    # found" named files the user could plainly see on disk.
+    candidates: list[Path] = []
+    outside_root: list[Path] = []
     for base in paths_to_try:
         resolved = (base / ref_path).resolve()
-        if is_valid_and_exists(resolved) and resolved not in candidates:
-            candidates.append(resolved)
+        if not resolved.exists():
+            continue
+        target = candidates if resolved.is_relative_to(root_path_resolved) else outside_root
+        if resolved not in target:
+            target.append(resolved)
 
-    # If no existing file found, raise an error showing what paths were tried
     if not candidates:
+        if outside_root:
+            paths_msg = "\n  - ".join(str(path) for path in outside_root)
+            raise ReferenceResolverError(
+                f"Reference path '{ref_path}' resolves outside the reference root {root_path_resolved}:\n  - {paths_msg}\n"
+                f"References must stay within the root; move the file inside it, or set the root explicitly (--root-path)."
+            )
         tried_paths = [str((base / ref_path).resolve()) for base in paths_to_try]
         paths_msg = "\n  - ".join(tried_paths)
         raise ReferenceResolverError(f"Reference path '{ref_path}' not found. Tried:\n  - {paths_msg}")
 
-    # Both lookup bases have a matching file: the file-relative candidate
-    # wins, but silently shadowing the root-relative one is surprising —
-    # adding a file next to a scenario could change what a reference means.
+    # File-relative wins, but shadowing the other silently is surprising.
     if len(candidates) > 1:
         warnings.warn(
             AmbiguousReferenceWarning(
@@ -88,22 +71,11 @@ def validate_ref_path(ref_path: str, base_path: Path, root_path: Path, max_paren
 
 
 def parse_json_pointer(pointer: str) -> list[str]:
-    """Parse a JSON pointer into path components.
-
-    Args:
-        pointer: JSON pointer string (e.g., "/path/to/node")
-
-    Returns:
-        List of path components
-
-    Raises:
-        ReferenceResolverError: If the pointer is invalid
-    """
+    """Split a JSON pointer into its unescaped components."""
     if not pointer:
         return []
 
     if not pointer.startswith("/"):
         raise ReferenceResolverError(f"Invalid JSON pointer: {pointer} (must start with '/')")
 
-    # Split by / and unescape the JSON pointer escape sequences
     return [part.replace("~1", "/").replace("~0", "~") for part in pointer[1:].split("/")]

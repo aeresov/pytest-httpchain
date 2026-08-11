@@ -13,27 +13,21 @@ from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, ReferenceReso
 from pytest_httpchain.jsonref.plumbing.circular import CircularDependencyTracker
 from pytest_httpchain.jsonref.plumbing.path import parse_json_pointer, validate_ref_path
 
-# Predicate over a document position — the tuple of dict keys / list indices
-# from the document root to a value. Positions are composed across file
-# boundaries: content spliced in via a reference is judged at the reference
-# site's position plus its fragment-relative path.
+# Predicate over a document position: the tuple of keys and indices from the
+# root to a value, composed across file boundaries.
 type OpaquePredicate = Callable[[tuple[str | int, ...]], bool]
 
 REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 
-# Supported reference keys: $include/$merge (preferred, avoids VS Code conflicts) and $ref (legacy)
 REF_KEYS = ("$include", "$merge", "$ref")
 
 
 def _raise_on_conflict(config: Any, path: list[Any], base: Any, nxt: Any) -> Any:
-    """deepmerge strategy: allow equal values, raise on any real conflict.
+    """deepmerge strategy: keep equal values, raise on any real conflict.
 
-    Serves as both the fallback strategy (same-type values that aren't dicts
-    or lists) and the type-conflict strategy, so the no-last-wins promise
-    holds for every type combination — including a null on either side (null
-    is a value, not an override or a hole). Equality is judged in JSON terms:
-    Python's ``True == 1`` must not smuggle a bool/number pair through as
-    "equal" — in JSON those are different types and different values.
+    Used as both the fallback and the type-conflict strategy, so no-last-wins
+    holds for every combination, nulls included. Equality is judged in JSON
+    terms, where Python's ``True == 1`` must not pass as equal.
     """
     if isinstance(base, bool) == isinstance(nxt, bool) and base == nxt:
         return base
@@ -41,9 +35,8 @@ def _raise_on_conflict(config: Any, path: list[Any], base: Any, nxt: Any) -> Any
     raise ReferenceResolverError(f"Merge conflict at {location}")
 
 
-# The single encoding of the sibling-merge policy: nested dicts merge
-# recursively, lists concatenate, and any other overlap must be equal —
-# otherwise it is a conflict and resolution fails loudly.
+# The sibling-merge policy: dicts merge recursively, lists concatenate, and any
+# other overlap must be equal.
 _SIBLING_MERGER = Merger(
     [(list, "append"), (dict, "merge")],
     [_raise_on_conflict],
@@ -52,15 +45,11 @@ _SIBLING_MERGER = Merger(
 
 
 def _build_opaque_aware_merger(opaque: "OpaquePredicate", base_path: tuple[str | int, ...]) -> Merger:
-    """Sibling merger that treats opaque positions as atomic values.
+    """Sibling merger treating opaque positions as atomic: two opaque subtrees
+    must be equal or conflict, never blend.
 
-    An opaque subtree is verbatim foreign vocabulary, so the recursive dict
-    merge must not blend two of them into one: at an opaque position the
-    whole values must be equal (kept) or it is a merge conflict — the same
-    no-silent-contradiction rule scalars already follow. ``base_path`` is the
-    reference site's document position; deepmerge's per-strategy ``path`` is
-    relative to the merge root, so their concatenation is the absolute
-    position the ``opaque`` predicate expects.
+    ``base_path`` is the reference site's position, since deepmerge's ``path`` is
+    relative to the merge root.
     """
 
     def atomic_at_opaque(config: Any, path: list[Any], base: Any, nxt: Any) -> Any:
@@ -78,14 +67,9 @@ def _build_opaque_aware_merger(opaque: "OpaquePredicate", base_path: tuple[str |
 def _parse_json_rejecting_duplicates(path: Path) -> Any:
     """Parse a JSON file, rejecting duplicate object keys.
 
-    Plain ``json.loads`` silently keeps the LAST duplicate key — in scenario
-    terms that silently deletes a step (e.g. a duplicated response-step key
-    drops a verify) and weakens the test with no diagnostic. Scenario files
-    are code; a duplicate key is an author error worth failing on.
-
-    Raised as ``DuplicateKeyError`` (with the offending key and file) in
-    this tight scope so it propagates through the callers' narrower
-    ``except (OSError, json.JSONDecodeError)`` blocks unwrapped.
+    ``json.loads`` keeps the last one, which in a scenario silently drops a step
+    and weakens the test. `DuplicateKeyError` propagates unwrapped through the
+    callers' narrower except blocks.
     """
 
     def pairs_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -100,15 +84,10 @@ def _parse_json_rejecting_duplicates(path: Path) -> Any:
 
 
 class ReferenceResolver:
-    """Resolves JSON reference directives ($include/$merge, or legacy $ref) in documents.
+    """Resolves reference directives in a document.
 
-    ``opaque`` (optional) marks document positions whose values are not the
-    resolver's to process: a subtree at a position the predicate matches is
-    passed through verbatim — no directive resolution, no merging — even when
-    it contains ``$ref``/``$include``/``$merge`` keys. The consumer supplies
-    the predicate because only it knows which positions hold foreign
-    vocabulary (e.g. inline JSON Schemas, where ``$ref`` belongs to the
-    schema validator).
+    ``opaque`` marks positions that are not the resolver's to process: those
+    subtrees pass through verbatim, directives and all.
     """
 
     def __init__(self, max_parent_traversal_depth: int = 3, root_path: Path | None = None, opaque: OpaquePredicate | None = None):
@@ -119,51 +98,27 @@ class ReferenceResolver:
         self.opaque = opaque
 
     def resolve_document(self, data: dict[str, Any], base_path: Path, root_path: Path | None = None) -> dict[str, Any]:
-        """Resolve all references in a document.
-
-        Args:
-            data: The document data to resolve references in
-            base_path: The base path for resolving relative references
-            root_path: The root path references must not escape. Defaults to
-                self.root_path (or base_path) when not supplied.
-
-        Returns:
-            The document with all references resolved
-
-        Raises:
-            ReferenceResolverError: If resolution fails
-        """
+        """Resolve every reference in a document. ``root_path`` (which
+        references must not escape) defaults to the resolver's, then to
+        ``base_path``."""
         self.base_path = base_path
         effective_root = root_path if root_path is not None else self.root_path
         return self._resolve_refs(data, base_path, root_data=data, root_path=effective_root or base_path, doc_path=())
 
     def resolve_file(self, path: Path) -> dict[str, Any]:
-        """Load a JSON file and resolve all references.
-
-        Args:
-            path: Path to the JSON file to load
-
-        Returns:
-            The loaded document with all references resolved
-
-        Raises:
-            ReferenceResolverError: If the file cannot be loaded or references cannot be resolved
-        """
+        """Load a JSON file and resolve its references."""
         try:
             data = _parse_json_rejecting_duplicates(path)
 
-            # Compute the effective root locally rather than mutating self.root_path,
-            # so the resolver is not single-use (a second call would otherwise be
-            # validated against the first file's derived root).
+            # Derived locally, not stored: mutating self.root_path would validate
+            # a second call against the first file's root.
             root_path = self.root_path
             if not root_path:
-                # If root_path wasn't provided, find a suitable one by going up the
-                # directory tree up to max_parent_traversal_depth levels.
                 root_path = path.parent
                 for _ in range(self.max_parent_traversal_depth):
                     parent = root_path.parent
                     if parent == root_path:
-                        break  # Reached filesystem root
+                        break
                     root_path = parent
 
             return self.resolve_document(data, path.parent, root_path)
@@ -192,11 +147,7 @@ class ReferenceResolver:
                 return data
 
     def _get_ref_key(self, data: dict[str, Any]) -> str | None:
-        """Get the reference key ($include/$merge/$ref) if present in data.
-
-        Raises:
-            ReferenceResolverError: If more than one directive key is present.
-        """
+        """The reference key present in ``data``, or None; several is an error."""
         present = [key for key in REF_KEYS if key in data]
         if len(present) > 1:
             raise ReferenceResolverError(f"Multiple reference directives in one object: {', '.join(present)}")
@@ -223,8 +174,8 @@ class ReferenceResolver:
         file_path = match.group("file")
         pointer = match.group("pointer") or ""
 
-        # The referenced content lands at the reference site, so it is resolved
-        # at the site's document position (doc_path), not its source position.
+        # The content lands at the reference site, so it resolves at the site's
+        # position, not its source's.
         if file_path:
             referenced_data = self._resolve_external_ref(file_path, pointer, current_path, root_path, doc_path)
         else:
@@ -282,10 +233,8 @@ class ReferenceResolver:
 
         def navigate_step(obj: Any, key: str) -> Any:
             if isinstance(obj, list):
-                # RFC 6901: an array index is digit-only ("-1", "+1", " 1" are
-                # invalid pointers — Python's int() would accept them and its
-                # negative indexing would silently return wrong-end elements),
-                # with no leading zeros (except "0" itself).
+                # RFC 6901 indices are digit-only without leading zeros; int()
+                # would accept "-1" and silently index from the wrong end.
                 if not (key.isascii() and key.isdigit()):
                     raise ValueError(f"Array index '{key}' is not a valid RFC 6901 index")
                 if len(key) > 1 and key.startswith("0"):
@@ -313,8 +262,6 @@ class ReferenceResolver:
         if not siblings:
             return referenced_data
 
-        # siblings is non-empty here (early return above), so a non-dict
-        # referenced value can never be merged with them.
         if not isinstance(referenced_data, dict):
             raise ReferenceResolverError("Cannot merge non-dict reference with sibling properties")
 
@@ -324,11 +271,10 @@ class ReferenceResolver:
         return merger.merge(referenced_data, resolved_siblings)
 
     def _load_json_file(self, path: Path) -> dict[str, Any]:
-        """Load JSON file content."""
         return _parse_json_rejecting_duplicates(path)
 
     def _create_child_resolver(self, root_path: Path) -> Self:
-        """Create a child resolver with inherited state."""
+        """A resolver for another document, inheriting the cycle tracker."""
         child_resolver = type(self)(self.max_parent_traversal_depth, root_path, opaque=self.opaque)
         child_resolver.tracker = self.tracker.create_child_tracker()
         return child_resolver

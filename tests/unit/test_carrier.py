@@ -18,7 +18,7 @@ import pytest
 import trustme
 from pyrate_limiter import Duration, Limiter, Rate
 
-from pytest_httpchain.carrier import Carrier, IterationResult
+from pytest_httpchain.carrier import Carrier, IterationResult, fresh_scenario_state
 from pytest_httpchain.errors import RequestError, SaveError, VerificationError
 from pytest_httpchain.models import (
     BinaryBody,
@@ -32,6 +32,8 @@ from pytest_httpchain.models import (
     Verify,
 )
 from pytest_httpchain.models.entities import ResponseBody
+from pytest_httpchain.request_builder import build_request_kwargs
+from pytest_httpchain.response_steps import check_rendered_assertions, process_save, process_verify
 
 
 class TestBuildRequestKwargsErrors:
@@ -45,7 +47,7 @@ class TestBuildRequestKwargsErrors:
         )
 
         with pytest.raises(RequestError, match="Binary file not found"):
-            Carrier._build_request_kwargs(request)
+            build_request_kwargs(request)
 
     def test_files_body_file_not_found(self):
         request = Request(
@@ -55,7 +57,7 @@ class TestBuildRequestKwargsErrors:
         )
 
         with pytest.raises(RequestError, match="File not found for upload"):
-            Carrier._build_request_kwargs(request)
+            build_request_kwargs(request)
 
     def test_binary_body_unreadable_path(self, tmp_path):
         # A directory raises IsADirectoryError, an OSError that is NOT a
@@ -67,7 +69,7 @@ class TestBuildRequestKwargsErrors:
         )
 
         with pytest.raises(RequestError, match="Cannot read binary file"):
-            Carrier._build_request_kwargs(request)
+            build_request_kwargs(request)
 
     def test_files_body_unreadable_path(self, tmp_path):
         request = Request(
@@ -77,7 +79,7 @@ class TestBuildRequestKwargsErrors:
         )
 
         with pytest.raises(RequestError, match="Cannot read file for upload"):
-            Carrier._build_request_kwargs(request)
+            build_request_kwargs(request)
 
 
 class TestBuildRequestKwargsParams:
@@ -90,7 +92,7 @@ class TestBuildRequestKwargsParams:
             method=HTTPMethod.GET,
         )
 
-        kwargs = Carrier._build_request_kwargs(request)
+        kwargs = build_request_kwargs(request)
         assert kwargs["params"] is None
 
     def test_non_empty_params_passed_through(self):
@@ -100,7 +102,7 @@ class TestBuildRequestKwargsParams:
             params={"key": "value"},
         )
 
-        kwargs = Carrier._build_request_kwargs(request)
+        kwargs = build_request_kwargs(request)
         assert kwargs["params"] == {"key": "value"}
 
 
@@ -117,7 +119,7 @@ class TestProcessSaveStepErrors:
         context = ChainMap()
 
         with pytest.raises(SaveError, match="response is not valid JSON"):
-            Carrier._process_save_step(save_model, response, context)
+            process_save(save_model, response, context)
 
 
 class TestProcessVerifyStepErrors:
@@ -128,7 +130,7 @@ class TestProcessVerifyStepErrors:
         verify = Verify(body=ResponseBody(schema="/nonexistent/schema.json"))
 
         with pytest.raises(VerificationError, match="Error reading body schema file"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_body_schema_invalid_json_response(self):
         response = httpx.Response(
@@ -140,7 +142,7 @@ class TestProcessVerifyStepErrors:
         verify = Verify(body=ResponseBody(schema=schema))
 
         with pytest.raises(VerificationError, match="response is not valid JSON"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_body_schema_from_file(self, tmp_path):
         """Test schema loaded from file path - unique to unit tests."""
@@ -159,7 +161,56 @@ class TestProcessVerifyStepErrors:
         verify = Verify(body=ResponseBody(schema=str(schema_path)))
 
         # Should not raise
-        Carrier._process_verify_step(verify, response)
+        process_verify(verify, response)
+
+    def test_verify_status_zero_is_not_treated_as_absent(self):
+        """The status gate is `is not None`, not truthiness."""
+        response = httpx.Response(200, json={})
+        verify = Verify.model_construct(status=0, headers={}, expressions=[], user_functions=[], body=ResponseBody())
+
+        with pytest.raises(VerificationError, match="Status code doesn't match"):
+            process_verify(verify, response)
+
+    def test_rendered_away_status_is_rejected(self):
+        """A declared status that a template rendered to None must fail loudly.
+
+        Both models re-validate cleanly, so without this the assertion would be
+        silently dropped and a 500 would pass green.
+        """
+        declared = Verify(status="{{ expected }}")
+        rendered = Verify(status=None)
+
+        with pytest.raises(VerificationError, match="rendered to None"):
+            check_rendered_assertions(declared, rendered)
+
+    def test_rendered_away_body_schema_is_rejected(self):
+        declared = Verify(body=ResponseBody(schema="{{ schema_path }}"))
+        rendered = Verify(body=ResponseBody(schema=None))
+
+        with pytest.raises(VerificationError, match="body.schema.*rendered to None"):
+            check_rendered_assertions(declared, rendered)
+
+    def test_undeclared_assertions_are_not_flagged(self):
+        """An assertion that was never declared is not a rendered-away one."""
+        check_rendered_assertions(Verify(), Verify())
+
+    def test_rendered_status_that_survives_is_not_flagged(self):
+        check_rendered_assertions(Verify(status="{{ expected }}"), Verify(status=200))
+
+    def test_verify_body_schema_non_utf8_file(self, tmp_path):
+        """A non-UTF-8 schema file must fail the stage cleanly.
+
+        UnicodeDecodeError is a ValueError, not a JSONDecodeError, so a narrower
+        except let it escape past the chain-abort machinery as a raw traceback.
+        """
+        schema_path = tmp_path / "schema.json"
+        schema_path.write_bytes(b'{"type": "\xff\xfe object"}')
+
+        response = httpx.Response(200, json={"id": 1})
+        verify = Verify(body=ResponseBody(schema=str(schema_path)))
+
+        with pytest.raises(VerificationError, match="Error reading body schema file"):
+            process_verify(verify, response)
 
     def test_verify_expressions_falsy_values(self):
         """Test that falsy expression values fail verification."""
@@ -167,7 +218,7 @@ class TestProcessVerifyStepErrors:
         verify = Verify(expressions=[True, False, True])
 
         with pytest.raises(VerificationError, match="Expression.*failed"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_expressions_empty_string_fails(self):
         """Test that empty string expression fails."""
@@ -175,31 +226,31 @@ class TestProcessVerifyStepErrors:
         verify = Verify(expressions=[""])
 
         with pytest.raises(VerificationError, match="Expression.*failed"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_body_contains_failure(self):
         response = httpx.Response(200, content=b"hello world")
         verify = Verify(body=ResponseBody(contains=["goodbye"]))
         with pytest.raises(VerificationError, match="Body doesn't contain 'goodbye'"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_body_not_contains_failure(self):
         response = httpx.Response(200, content=b"hello world")
         verify = Verify(body=ResponseBody(not_contains=["hello"]))
         with pytest.raises(VerificationError, match="Body contains 'hello' while it shouldn't"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_body_matches_failure(self):
         response = httpx.Response(200, content=b"hello world")
         verify = Verify(body=ResponseBody(matches=["z{3}"]))
         with pytest.raises(VerificationError, match="Body doesn't match 'z"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
     def test_verify_body_not_matches_failure(self):
         response = httpx.Response(200, content=b"hello world")
         verify = Verify(body=ResponseBody(not_matches=["wor"]))
         with pytest.raises(VerificationError, match="Body matches 'wor' while it shouldn't"):
-            Carrier._process_verify_step(verify, response)
+            process_verify(verify, response)
 
 
 def _make_stage(**kwargs) -> Stage:
@@ -219,13 +270,9 @@ def _make_carrier_subclass(**attrs) -> type[Carrier]:
     `_initialized` is True: the subclass is hand-built (no `scenario` model), so
     the lazy scenario initialization in execute_stage must not run."""
     defaults = {
-        "client": None,
-        "aborted": False,
-        "last_request": None,
-        "last_response": None,
+        **fresh_scenario_state(),
         "global_context": ChainMap(),
         "_initialized": True,
-        "active_context_managers": [],
         "max_parallel_iterations": 10_000,
     }
     defaults.update(attrs)
@@ -559,7 +606,10 @@ class TestRedirectExchangeRecording:
         cls = _make_carrier_subclass(record_all_exchanges=True)
         cls._record_exchanges([result], None, 1)
 
-        assert cls.last_exchanges == [(hop_req, hop, None), (final_req, final, started)]
+        # Hops carry the iteration's start (the first hop IS the request sent
+        # then) rather than None, which the HAR writer would replace with
+        # export time — placing the hop after the response that followed it.
+        assert cls.last_exchanges == [(hop_req, hop, started), (final_req, final, started)]
         # The report still shows the final exchange.
         assert cls.last_request is final_req
         assert cls.last_response is final
@@ -575,3 +625,138 @@ class TestRedirectExchangeRecording:
         cls._record_exchanges([result], None, 1)
 
         assert cls.last_exchanges == [(final_req, final, started)]
+
+
+class TestRedirectKwargsMapping:
+    """The model's allow_redirects must reach httpx as follow_redirects: httpx
+    defaults the kwarg to False, so silently dropping the mapping would flip
+    the plugin's documented follow-by-default behavior with the suite green."""
+
+    def test_default_follows(self):
+        model = Request.model_validate({"url": "http://t/"})
+        assert build_request_kwargs(model, None)["follow_redirects"] is True
+
+    def test_disabled_passes_false(self):
+        model = Request.model_validate({"url": "http://t/", "allow_redirects": False})
+        assert build_request_kwargs(model, None)["follow_redirects"] is False
+
+
+class TestParallelCancellation:
+    """The iteration pool must be cancellable: without it, an escaping
+    exception (KeyboardInterrupt, a plugin bug) reaches the executor exit,
+    which runs every queued iteration to completion — an unstoppable load test."""
+
+    def test_unexpected_error_cancels_queued_iterations(self):
+        calls: list[int] = []
+
+        def fake_iteration(cls, stage, local_context, iter_vars, limiter=None, max_rate_limit_delay=60, cancel=None):
+            calls.append(1)
+            raise RuntimeError("plugin bug")
+
+        cls = _make_carrier_subclass(_execute_single_iteration=classmethod(fake_iteration))
+        config = ParallelRepeatConfig.model_validate({"repeat": 40, "max_concurrency": 1})
+
+        with pytest.raises(RuntimeError, match="plugin bug"):
+            cls._run_iterations(None, ChainMap(), [{} for _ in range(40)], config)
+
+        # The queued iterations were cancelled, not drained. A worker may have
+        # started one or two before the cancel landed; 40 means no cancellation.
+        assert len(calls) < 20, f"{len(calls)} iterations ran after the failure"
+
+    def test_rate_slot_wait_interrupted_by_cancellation(self):
+        import threading
+        import time
+
+        limiter = Limiter(Rate(1, Duration.SECOND))
+        try:
+            assert limiter.try_acquire("api", blocking=False)  # drain the bucket
+            cancel = threading.Event()
+            cancel.set()
+            start = time.monotonic()
+            assert Carrier._acquire_rate_slot(limiter, timeout=30, cancel=cancel) is False
+            # Far below the 30s timeout: the cancellation interrupted the wait.
+            assert time.monotonic() - start < 5
+        finally:
+            limiter.close()
+
+
+class TestFailedExchangeShownFlag:
+    """A failure that never recorded a request (template error, rate-limit
+    timeout) falls back to showing the last COMPLETED exchange, which the
+    report must not label as the failing one."""
+
+    @staticmethod
+    def _completed_result():
+        from datetime import UTC, datetime
+
+        req = httpx.Request("GET", "http://t/x")
+        resp = httpx.Response(200, request=req)
+        return IterationResult(saved_context={}, request=req, response=resp, started=datetime.now(UTC)), req
+
+    def test_failure_without_request_info_not_marked_failing(self):
+        from pytest_httpchain.templates import TemplatesError
+
+        result, req = self._completed_result()
+        cls = _make_carrier_subclass()
+        cls._record_exchanges([result], failed=TemplatesError("undefined variable"), attempted=3)
+
+        assert cls.last_shown_exchange_is_failed is False
+        assert cls.last_request is req
+
+    def test_failure_with_request_info_marked_failing(self):
+        result, _ = self._completed_result()
+        failed_req = httpx.Request("GET", "http://t/failed")
+        failed_resp = httpx.Response(400, request=failed_req)
+        cls = _make_carrier_subclass()
+        cls._record_exchanges([result], failed=RequestError("bad", request=failed_req, response=failed_resp), attempted=3)
+
+        assert cls.last_shown_exchange_is_failed is True
+        assert cls.last_request is failed_req
+
+
+class TestScenarioRerunReset:
+    """teardown_class must return the class to fresh_scenario_state and the
+    pristine base context, so a rerun plugin's second pass actually
+    re-executes the chain instead of replaying stale saves or skipping."""
+
+    def test_execute_teardown_execute_replays_cleanly(self, monkeypatch):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"v": 1})
+
+        monkeypatch.setattr(
+            "pytest_httpchain.carrier.build_client_kwargs",
+            lambda *args, **kwargs: {"transport": httpx.MockTransport(handler)},
+        )
+
+        scenario = Scenario.model_validate(
+            {
+                "substitutions": [{"vars": {"base": 1}}],
+                "stages": [
+                    {
+                        "name": "s",
+                        "request": {"url": "http://mock/ok"},
+                        "response": [{"save": {"jmespath": {"v": "v"}}}, {"verify": {"status": 200}}],
+                    }
+                ],
+            }
+        )
+        cls = _make_carrier_subclass(scenario=scenario, _initialized=False)
+        stage = scenario.stages[0]
+
+        cls.execute_stage(stage, {})
+        first_client = cls.client
+        assert cls._initialized is True
+        assert cls.global_context["v"] == 1
+
+        cls.teardown_class()
+        assert first_client is not None
+        assert first_client.is_closed
+        for name, value in fresh_scenario_state().items():
+            assert getattr(cls, name) == value, f"{name} not reset"
+        # Saves are gone; the pristine scenario context survives.
+        assert dict(cls.global_context) == {"base": 1}
+
+        # The second pass re-initializes (fresh client) and replays the chain.
+        cls.execute_stage(stage, {})
+        assert cls.client is not first_client
+        assert cls.global_context["v"] == 1

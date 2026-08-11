@@ -1,8 +1,4 @@
-"""HAR (HTTP Archive) format writer for pytest-httpchain.
-
-This module converts httpx Request/Response objects to HAR 1.2 format
-and writes them to files for external analysis.
-"""
+"""HAR 1.2 export of a test's httpx request/response pairs."""
 
 import base64
 import functools
@@ -16,11 +12,13 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
+from pytest_httpchain.utils import request_content
+
 
 @functools.cache
 def _get_version() -> str:
-    """Get pytest-httpchain version for HAR creator info (cached: the lookup
-    scans installed-distribution metadata and cannot change in-process)."""
+    """Cached: the lookup scans installed-distribution metadata, which cannot
+    change in-process."""
     try:
         return version("pytest-httpchain")
     except Exception:
@@ -28,40 +26,39 @@ def _get_version() -> str:
 
 
 def _format_cookies(cookies: httpx.Cookies) -> list[dict[str, str]]:
-    """Convert httpx Cookies to HAR cookie format."""
     return [{"name": name, "value": value} for name, value in cookies.items()]
 
 
 def _parse_cookie_header(cookie_header: str) -> list[dict[str, str]]:
-    """Parse Cookie header string into HAR cookie format."""
     # An empty header splits to [""], which carries no "=" and so yields nothing.
     pairs = (pair.partition("=") for pair in cookie_header.split(";"))
     return [{"name": name.strip(), "value": value.strip()} for name, separator, value in pairs if separator]
 
 
 def _format_headers(headers: httpx.Headers) -> list[dict[str, str]]:
-    """Convert httpx Headers to HAR header format."""
-    return [{"name": name, "value": value} for name, value in headers.items()]
+    # multi_items(), not items(): the latter comma-folds repeated names, which
+    # RFC 6265 forbids for Set-Cookie precisely because cookie attributes
+    # contain commas — folding two cookies corrupts both.
+    return [{"name": name, "value": value} for name, value in headers.multi_items()]
 
 
 def _format_query_string(url: httpx.URL) -> list[dict[str, str]]:
-    """Extract query string parameters from URL."""
     params = parse_qs(urlparse(str(url)).query, keep_blank_values=True)
     return [{"name": name, "value": value} for name, values in params.items() for value in values]
 
 
 def _format_post_data(request: httpx.Request) -> dict[str, Any] | None:
-    """Format request body as HAR postData."""
-    if not request.content:
+    content = request_content(request)
+    if not content:
         return None
 
     content_type = request.headers.get("content-type", "")
     mime_type = content_type.split(";")[0].strip() if content_type else "application/octet-stream"
 
     try:
-        text = request.content.decode("utf-8")
+        text = content.decode("utf-8")
     except UnicodeDecodeError:
-        text = base64.b64encode(request.content).decode("ascii")
+        text = base64.b64encode(content).decode("ascii")
         return {
             "mimeType": mime_type,
             "text": text,
@@ -81,7 +78,6 @@ def _format_post_data(request: httpx.Request) -> dict[str, Any] | None:
 
 
 def _format_response_content(response: httpx.Response) -> dict[str, Any]:
-    """Format response body as HAR content."""
     content_type = response.headers.get("content-type", "")
     mime_type = content_type.split(";")[0].strip() if content_type else "application/octet-stream"
 
@@ -101,18 +97,14 @@ def _format_response_content(response: httpx.Response) -> dict[str, Any]:
 
 
 def _calculate_headers_size(headers: httpx.Headers) -> int:
-    """Calculate approximate size of headers in bytes."""
-    # ": " (2) + CRLF (2) per header line
-    return sum(len(name) + len(value) + 4 for name, value in headers.items())
+    # ": " (2) + CRLF (2) per header line; multi_items() so repeated headers are
+    # counted as the separate wire lines they are.
+    return sum(len(name) + len(value) + 4 for name, value in headers.multi_items())
 
 
 def _response_elapsed_ms(response: httpx.Response) -> float:
-    """Return the response's elapsed time in milliseconds, or 0 if unavailable.
-
-    httpx populates ``response.elapsed`` (a timedelta) once the response has been
-    read; accessing it before then raises RuntimeError. Guard against that and
-    against the attribute being absent on mock/synthetic responses.
-    """
+    """Elapsed milliseconds, or 0 when httpx has not recorded them (reading
+    ``elapsed`` too early raises, and synthetic responses may lack it)."""
     try:
         elapsed = response.elapsed
     except (RuntimeError, AttributeError):
@@ -126,20 +118,11 @@ def request_response_to_har_entry(
     started_datetime: datetime | None = None,
     elapsed_ms: float | None = None,
 ) -> dict[str, Any]:
-    """Convert an httpx Request/Response pair to a HAR entry.
+    """One HAR entry for a request and its response.
 
-    Args:
-        request: The httpx Request object.
-        response: The httpx Response object, or ``None`` when no response was
-            received (timeout, connection error). Following the convention
-            browser HAR exports use for aborted requests, the entry then
-            carries a synthesized response with ``status: 0``.
-        started_datetime: When the request started (defaults to now).
-        elapsed_ms: Total elapsed time in milliseconds. When ``None`` (the
-            default), the value is derived from ``response.elapsed``.
-
-    Returns:
-        A dictionary representing a HAR entry.
+    ``response`` is None when none was received (timeout, connection error); the
+    entry then carries a synthesized ``status: 0`` response, as browser exports
+    do for aborted requests.
     """
     if started_datetime is None:
         started_datetime = datetime.now(UTC)
@@ -162,8 +145,6 @@ def request_response_to_har_entry(
             "bodySize": len(response.content) if response.content else 0,
         }
     else:
-        # No response received: status 0 with empty fields, the same shape
-        # browsers write for aborted/failed requests.
         response_har = {
             "status": 0,
             "statusText": "",
@@ -176,6 +157,11 @@ def request_response_to_har_entry(
             "bodySize": -1,
         }
 
+    # -1 is HAR's "unknown": a streaming (multipart) body was consumed on send
+    # and its bytes are no longer available.
+    content = request_content(request)
+    body_size = -1 if content is None else len(content)
+
     entry: dict[str, Any] = {
         "startedDateTime": started_datetime.isoformat(),
         "time": elapsed_ms,
@@ -187,7 +173,7 @@ def request_response_to_har_entry(
             "headers": _format_headers(request.headers),
             "queryString": _format_query_string(request.url),
             "headersSize": _calculate_headers_size(request.headers),
-            "bodySize": len(request.content) if request.content else 0,
+            "bodySize": body_size,
         },
         "response": response_har,
         "cache": {},
@@ -209,15 +195,7 @@ def request_response_to_har_entry(
 
 
 def create_har_log(entries: list[dict[str, Any]], comment: str | None = None) -> dict[str, Any]:
-    """Create a complete HAR log structure.
-
-    Args:
-        entries: List of HAR entry dictionaries.
-        comment: Optional comment to include in the log.
-
-    Returns:
-        A complete HAR log dictionary.
-    """
+    """Wrap HAR entries in the log envelope."""
     har: dict[str, Any] = {
         "log": {
             "version": "1.2",
@@ -242,33 +220,18 @@ def write_har_file(
     started_datetime: datetime | None = None,
     elapsed_ms: float | None = None,
 ) -> Path:
-    """Write a HAR file for a single test.
+    """Write one test's exchanges to a HAR file and return its path.
 
-    Args:
-        output_dir: Directory to write the HAR file to.
-        test_name: Name of the test (used for filename).
-        exchanges: The test's HTTP exchanges in execution order — one
-            ``(request, response, started)`` triple per exchange. A parallel
-            stage contributes one exchange per iteration; a response is
-            ``None`` when none was received (timeout, connection error);
-            ``started`` is the request's actual start time (HAR waterfalls
-            are built from ``startedDateTime``), or ``None`` when unknown —
-            the entry then falls back to ``started_datetime``/write time.
-        started_datetime: Fallback start time for exchanges without their own.
-        elapsed_ms: Total elapsed time in milliseconds (applied to every
-            entry). When ``None`` (the default), each entry's value is derived
-            from its response's ``elapsed``.
-
-    Returns:
-        Path to the written HAR file.
+    ``exchanges`` are ``(request, response, started)`` triples in execution
+    order — one per iteration for a parallel stage. A ``started`` of None falls
+    back to ``started_datetime``, then to write time.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = test_name.replace("/", "_").replace("\\", "_").replace(":", "_")
     if safe_name != test_name:
-        # Sanitization is not injective ("t/x" and "t:x" both map to "t_x"):
-        # a short digest of the original name keeps distinct tests' files
-        # distinct instead of silently overwriting each other.
+        # Sanitization is not injective, so a digest keeps distinct tests' files
+        # from overwriting each other.
         safe_name = f"{safe_name}-{hashlib.sha1(test_name.encode(), usedforsecurity=False).hexdigest()[:8]}"
     filename = f"{safe_name}.har"
     filepath = output_dir / filename

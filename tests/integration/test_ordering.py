@@ -110,3 +110,38 @@ def test_failed_first_keeps_chains_contiguous(pytester):
     first.assert_outcomes(passed=1, failed=1, skipped=1)
     again = pytester.runpytest_subprocess("--ff")
     again.assert_outcomes(passed=1, failed=1, skipped=1)
+
+
+def test_selection_dropping_earlier_stages_warns(pytester):
+    """Reordering is defeated and chain-splitting dist modes are rejected, but
+    pytest's selection mechanisms (-k, --lf, --deselect) can still silently
+    orphan a chain's tail. Selecting only a later stage must warn that the
+    survivors run without the deselected stages' saved context."""
+    pytester.copy_example("conftest.py")
+    pytester.copy_example("save/test_save_jmespath.http.json")
+
+    result = pytester.runpytest("-s", "-k", "use_saved_values")
+    result.stdout.fnmatch_lines(["*were deselected*"])
+
+    # A full run of the same chain must not warn.
+    full = pytester.runpytest("-s")
+    full.assert_outcomes(passed=2)
+    full.stdout.no_fnmatch_line("*were deselected*")
+
+
+def test_split_chain_warning_survives_filterwarnings_error(pytester):
+    """The split-chain warning fires from pytest_collection_finish, which has no
+    warning-to-error recovery: under `filterwarnings = error` an escaping
+    warning ended the session in an INTERNALERROR traceback. It must fail
+    cleanly instead, honoring the user's policy without crashing pytest."""
+    pytester.copy_example("conftest.py")
+    pytester.copy_example("save/test_save_jmespath.http.json")
+    pytester.makeini("[pytest]\nfilterwarnings =\n    error\n")
+
+    result = pytester.runpytest_subprocess("-k", "use_saved_values")
+
+    result.stdout.no_fnmatch_line("*INTERNALERROR*")
+    # A UsageError: pytest renders it on stderr and exits 4, rather than the
+    # pluggy traceback and exit 3 an escaping warning produced.
+    result.stderr.fnmatch_lines(["*were deselected*"])
+    assert result.ret == pytest.ExitCode.USAGE_ERROR

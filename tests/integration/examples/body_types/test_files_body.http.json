@@ -1,0 +1,43 @@
+{
+    "stages": [
+        {
+            "name": "files_body",
+            "description": "Multipart file upload: the httpx `files` kwarg wiring end to end",
+            "fixtures": ["server"],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/echo/multipart",
+                "body": {
+                    "files": {
+                        "file_a": "upload_a.txt",
+                        "file_b": "upload_b.bin"
+                    }
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "fields": "fields"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ fields['file_a']['filename'] == 'upload_a.txt' }}",
+                            "{{ fields['file_a']['size'] == 12 }}",
+                            "{{ fields['file_b']['filename'] == 'upload_b.bin' }}",
+                            "{{ fields['file_b']['size'] == 4 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

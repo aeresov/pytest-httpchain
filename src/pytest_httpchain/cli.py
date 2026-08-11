@@ -26,8 +26,6 @@ class GraphDirection(enum.StrEnum):
     LR = "LR"
 
 
-# Shared options, reused by validate/resolve/show/graph so each one's help text
-# and default stay in one place.
 RefParentTraversalDepth = Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")]
 RootPath = Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: auto-detected project root).")]
 OutputFormatOption = Annotated[OutputFormat, typer.Option("--format", help="Output format: human-readable text or machine-readable JSON.")]
@@ -75,9 +73,8 @@ def validate(
     all_passed = all(passed(result) for _, result in results)
 
     if output_format is OutputFormat.json:
-        # Top-level `valid` is the GATE result (validity, plus warnings under
-        # --strict) — it matches the exit code. Each file's `result.valid` is
-        # pure validity; `strict` says which gate produced the top-level value.
+        # Top-level `valid` is the gate result and matches the exit code; each
+        # file's own `valid` is pure validity.
         payload = {
             "valid": all_passed,
             "strict": strict,
@@ -117,9 +114,8 @@ def resolve(
 ) -> None:
     """Resolve $ref/$include/$merge and print the merged scenario JSON to stdout."""
     try:
-        # Same opacity as the load pipeline (load_scenario), so the printed
-        # document is exactly what collection sees: inline verify schemas are
-        # standard JSON Schema and stay untouched.
+        # Same opacity as load_scenario, so the printed document is what
+        # collection sees.
         data = load_json(
             scenario,
             max_parent_traversal_depth=ref_parent_traversal_depth,

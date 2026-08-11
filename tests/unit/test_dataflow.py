@@ -350,3 +350,158 @@ def test_later_substitution_step_does_not_shadow_earlier_step_ref():
     flow = analyze_dataflow(sc, data)
     assert flow.stages[1].consumes == ["t"]
     assert [e.model_dump() for e in flow.edges] == [{"producer": 0, "consumer": 1, "vars": ["t"]}]
+
+
+def test_scenario_substitution_forward_ref_is_error():
+    """A scenario-level entry referencing a name only a LATER entry defines
+    validates the way it runs: steps resolve strictly in order, so this is a
+    guaranteed crash at scenario initialization (M-review false negative)."""
+    data = {
+        "substitutions": [{"vars": {"a": "{{ b }}"}}, {"vars": {"b": "hello"}}],
+        "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
+    }
+    sc = Scenario.model_validate(data)
+    diags, _ = check_scenario(sc, data)
+    assert any(d.code == DiagnosticCode.SCENARIO_UNDEFINED_VAR and d.severity == "error" and "before the substitution step" in d.message for d in diags), [d.message for d in diags]
+
+
+def test_scenario_substitution_same_entry_ref_is_error():
+    """The runtime computes each entry's context before that entry's own vars
+    land, so a same-entry reference crashes exactly like a forward one."""
+    data = {
+        "substitutions": [{"vars": {"a": "x", "b": "{{ a }}"}}],
+        "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
+    }
+    sc = Scenario.model_validate(data)
+    diags, _ = check_scenario(sc, data)
+    assert any(d.code == DiagnosticCode.SCENARIO_UNDEFINED_VAR and d.severity == "error" for d in diags), [d.message for d in diags]
+
+
+def test_scenario_functions_kwargs_are_dead_text_no_error():
+    """`functions` kwargs are passed to wrap_function raw — never rendered — so
+    template-looking text inside them must not produce a collection-blocking
+    error (M-review false positive; the stage-level check already knew this)."""
+    data = {
+        "substitutions": [{"functions": {"tok": {"name": "somemod:make_token", "kwargs": {"payload": "literal {{ not_a_var }} text"}}}}],
+        "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
+    }
+    sc = Scenario.model_validate(data)
+    diags, _ = check_scenario(sc, data)
+    assert DiagnosticCode.SCENARIO_UNDEFINED_VAR not in _codes(diags), [d.message for d in diags]
+
+
+def test_scenario_functions_templated_name_is_checked():
+    """Templated function import names ARE rendered at seed time, so their
+    references participate in the order-aware check: a prior-step name is fine,
+    an unknown one is the same guaranteed init crash as in a vars value."""
+    ok = {
+        "substitutions": [{"vars": {"mod": "x"}}, {"functions": {"f": "{{ mod }}:fn"}}],
+        "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
+    }
+    diags, _ = check_scenario(Scenario.model_validate(ok), ok)
+    assert DiagnosticCode.SCENARIO_UNDEFINED_VAR not in _codes(diags), [d.message for d in diags]
+
+    bad = {
+        "substitutions": [{"functions": {"f": "{{ missing_mod }}:fn"}}],
+        "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
+    }
+    diags, _ = check_scenario(Scenario.model_validate(bad), bad)
+    assert DiagnosticCode.SCENARIO_UNDEFINED_VAR in _codes(diags), [d.message for d in diags]
+
+
+def test_reserved_marker_name_is_diagnostic_not_crash():
+    """pytest's MarkGenerator raises AttributeError for underscore-prefixed
+    names; the validator must report INVALID_MARKER, not blow up (M-review:
+    only ValueError/SyntaxError were caught)."""
+    data = {
+        "stages": [{"name": "s", "marks": ["_foo"], "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
+    }
+    sc = Scenario.model_validate(data)
+    diags, _ = check_scenario(sc, data)
+    assert any(d.code == DiagnosticCode.INVALID_MARKER and d.severity == "error" for d in diags), [d.message for d in diags]
+
+
+def test_resave_shadows_own_reference_in_later_response_steps():
+    """Once a stage re-saves a name, later response steps read the stage's own
+    fresh value (per-step with_saves layering), so no dependency edge on the
+    earlier saver exists; a reference BEFORE the re-save still depends on it."""
+    base_stage = {
+        "name": "producer",
+        "request": {"url": "http://server/a"},
+        "response": [{"save": {"jmespath": {"token": "t"}}}],
+    }
+
+    resave_then_ref = {
+        "stages": [
+            base_stage,
+            {
+                "name": "consumer",
+                "request": {"url": "http://server/b"},
+                "response": [
+                    {"save": {"jmespath": {"token": "t2"}}},
+                    {"verify": {"expressions": ["{{ token != '' }}"]}},
+                ],
+            },
+        ]
+    }
+    flow = analyze_dataflow(Scenario.model_validate(resave_then_ref), resave_then_ref)
+    assert flow.stages[1].consumes == [], flow.edges
+
+    ref_then_resave = {
+        "stages": [
+            base_stage,
+            {
+                "name": "consumer",
+                "request": {"url": "http://server/b"},
+                "response": [
+                    {"verify": {"expressions": ["{{ token != '' }}"]}},
+                    {"save": {"jmespath": {"token": "t2"}}},
+                ],
+            },
+        ]
+    }
+    flow = analyze_dataflow(Scenario.model_validate(ref_then_resave), ref_then_resave)
+    assert flow.stages[1].consumes == ["token"]
+    assert any(e.producer == 0 and e.consumer == 1 and e.vars == ["token"] for e in flow.edges), flow.edges
+
+
+def test_mapping_form_response_steps_are_analyzed():
+    """The name-keyed `response` mapping form is first-class. Re-deriving the
+    raw shape with a bare isinstance(list) discarded it, so every reference
+    inside a mapping-form step went unseen: the consuming stage looked like it
+    consumed nothing and the dependency edge vanished from show/graph."""
+    data = {
+        "stages": {
+            "producer": {
+                "request": {"url": "http://server/a", "method": "POST"},
+                "response": {"grab": {"save": {"jmespath": {"token": "t"}}}},
+            },
+            "consumer": {
+                "request": {"url": "http://server/b"},
+                "response": {"check": {"verify": {"expressions": ["{{ token != '' }}"]}}},
+            },
+        }
+    }
+    flow = analyze_dataflow(Scenario.model_validate(data), data)
+
+    assert flow.stages[0].saves == ["token"]
+    assert flow.stages[1].consumes == ["token"]
+    assert [e.model_dump() for e in flow.edges] == [{"producer": 0, "consumer": 1, "vars": ["token"]}]
+
+
+def test_mapping_form_response_step_ordering_matches_list_form():
+    """A mapping whose value is a list flattens in order, so raw step K still
+    pairs with the validated response[K] — the re-save shadowing rule that
+    depends on step order keeps working."""
+    data = {
+        "stages": {
+            "producer": {"request": {"url": "http://server/a"}, "response": [{"save": {"jmespath": {"token": "t"}}}]},
+            "consumer": {
+                "request": {"url": "http://server/b"},
+                "response": {"steps": [{"save": {"jmespath": {"token": "t2"}}}, {"verify": {"expressions": ["{{ token != '' }}"]}}]},
+            },
+        }
+    }
+    flow = analyze_dataflow(Scenario.model_validate(data), data)
+    # The re-save precedes the reference, so the consumer reads its own value.
+    assert flow.stages[1].consumes == []

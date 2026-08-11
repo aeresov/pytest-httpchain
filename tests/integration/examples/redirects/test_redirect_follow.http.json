@@ -1,0 +1,19 @@
+{
+    "stages": [
+        {
+            "name": "follow_redirect",
+            "description": "Redirects are followed by default (allow_redirects: true)",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/redirect-ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

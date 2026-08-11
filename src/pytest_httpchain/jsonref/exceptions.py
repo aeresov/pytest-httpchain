@@ -6,9 +6,5 @@ class ReferenceResolverError(HttpChainError):
 
 
 class DuplicateKeyError(ReferenceResolverError):
-    """A JSON object contains the same key twice.
-
-    A distinct subclass so consumers (the validator) can report it as a JSON
-    *content* problem (``HTTPCHAIN014``) instead of a $ref-resolution one — no
-    reference is involved in a duplicated key.
-    """
+    """A JSON object contains the same key twice. Its own subclass so the
+    validator can report it as a JSON content problem, not a $ref one."""
