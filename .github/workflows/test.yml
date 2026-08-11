@@ -188,5 +188,14 @@ jobs:
               run: uv pip install --upgrade "pytest @ git+https://github.com/pytest-dev/pytest"
 
             # --no-sync so uv run does not restore the locked pytest.
+            #
+            # -p no:anyio because anyio ships a pytest11 entry point that is
+            # auto-loaded purely because httpx pulls anyio in transitively — the
+            # suite never uses it. Its plugin imports the CallSpec2 alias, which
+            # pytest main renamed, and `filterwarnings = error` promotes that
+            # deprecation to a hard error during load_setuptools_entrypoints.
+            # Without this flag the job dies before collecting a single test, so
+            # it silently warns about nothing. Drop the flag once anyio releases
+            # a build that imports CallSpec instead.
             - name: Run tests
-              run: uv run --no-sync pytest tests -v
+              run: uv run --no-sync pytest tests -v -p no:anyio

@@ -298,8 +298,10 @@ _PREVIOUS_MAX_COMPREHENSION_LENGTH: pytest.StashKey[int] = pytest.StashKey()
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    # pytest converts type="int" options with a bare int(), whose ValueError it
-    # renders as an INTERNALERROR; wrap it into a clean usage error.
+    # Through pytest 9, type="int" options are converted with a bare int() whose
+    # ValueError is rendered as an INTERNALERROR; wrap it into a clean usage
+    # error. pytest 10 raises a UsageError itself, so the except branch stops
+    # firing there — keep it until the floor moves past 9.
     def _getint(option: ConfigOptions, minimum: int, minimum_message: str, maximum: int | None = None) -> int:
         try:
             value = config.getini(option)

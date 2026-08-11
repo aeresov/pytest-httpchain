@@ -65,12 +65,17 @@ class TestPytestConfigure:
             pytest.param(ConfigOptions.MAX_PARALLEL_ITERATIONS, 0, "must be a positive integer", id="max-parallel-zero"),
             pytest.param(ConfigOptions.MAX_PARALLEL_ITERATIONS, -1, "must be a positive integer", id="max-parallel-negative"),
             pytest.param(ConfigOptions.MAX_PARALLEL_ITERATIONS, 1000001, "must not exceed 1,000,000", id="max-parallel-too-large"),
-            # pytest's type="int" coercion is a bare int(value) raising
-            # ValueError — the plugin must wrap it into a clean UsageError
-            # instead of letting pytest render an INTERNALERROR traceback.
-            pytest.param(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "notanumber", "must be an integer", id="ref-depth-non-integer"),
-            pytest.param(ConfigOptions.MAX_COMPREHENSION_LENGTH, "notanumber", "must be an integer", id="max-comp-non-integer"),
-            pytest.param(ConfigOptions.MAX_PARALLEL_ITERATIONS, "notanumber", "must be an integer", id="max-parallel-non-integer"),
+            # A non-integer must surface as a clean UsageError rather than an
+            # INTERNALERROR traceback, but the wording depends on who wraps it.
+            # Through pytest 9 the coercion is a bare int(value) whose ValueError
+            # the plugin catches and re-raises as "<option> must be an integer:
+            # <ValueError>"; pytest 10 raises the UsageError itself and the
+            # plugin's handler never runs, leaving the bare ValueError text. Both
+            # embed int()'s own message, so match on that and let either wrapper
+            # win — the type assertion below is what actually pins the behavior.
+            pytest.param(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "notanumber", "invalid literal for int", id="ref-depth-non-integer"),
+            pytest.param(ConfigOptions.MAX_COMPREHENSION_LENGTH, "notanumber", "invalid literal for int", id="max-comp-non-integer"),
+            pytest.param(ConfigOptions.MAX_PARALLEL_ITERATIONS, "notanumber", "invalid literal for int", id="max-parallel-non-integer"),
         ],
     )
     def test_invalid_config(self, pytester, option, value, match):
