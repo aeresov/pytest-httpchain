@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-08-11
+
+### Fixed
+
+- The non-blocking pytest-main CI leg collects tests again. anyio ships a `pytest11` entry point that is auto-loaded purely because httpx pulls anyio in transitively; its plugin imports the `CallSpec2` alias that pytest main renamed, and `filterwarnings = error` promoted that deprecation to a hard error inside `load_setuptools_entrypoints` — so the job died before collection and had been reporting on **zero tests**. The suite never uses anyio's plugin, so the leg now runs with `-p no:anyio`.
+- The three non-integer ini cases in `test_invalid_config` accept either wrapper's wording. Through pytest 9 the `type="int"` coercion is a bare `int()` whose `ValueError` the plugin catches and re-raises; pytest 10 raises the `UsageError` itself, so the plugin's handler never runs. Both embed `int()`'s own message, and `pytest.raises(pytest.UsageError)` still pins what matters — a clean usage error rather than an INTERNALERROR traceback.
+
+### Changed
+
+- No runtime behavior changes: the installed package is functionally identical to 0.14.2, the only edit under `src/` being a comment correcting a note about pytest's int-coercion handling.
+
 ## [0.14.2] - 2026-08-04
 
 ### Added
@@ -491,7 +502,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.2...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.3...HEAD
+[0.14.3]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.13.0...v0.14.0
