@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chain aborts now follow pytest's final item outcome rather than trying to predict it inside the stage body. Fixture setup/teardown errors and strict XPASS failures now stop later stages, false string `xfail` conditions no longer let genuine failures through, and skips plus genuine expected failures still continue as documented.
 - HAR export preserves same-name response cookies with different domain/path scopes instead of raising `httpx.CookieConflict` and silently dropping the test's HAR file.
+- Repeated URL-encoded form fields are emitted as separate scalar HAR `postData.params` entries, preserving their wire order and producing valid HAR instead of an array-valued parameter.
 
 ## [0.14.3] - 2026-08-11
 

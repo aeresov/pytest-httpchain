@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlparse
 
 import httpx
 
@@ -92,8 +92,9 @@ def _format_post_data(request: httpx.Request) -> dict[str, Any] | None:
     }
 
     if "application/x-www-form-urlencoded" in content_type:
-        params = parse_qs(text, keep_blank_values=True)
-        post_data["params"] = [{"name": k, "value": v[0] if len(v) == 1 else v} for k, v in params.items()]
+        # HAR params are repeated scalar name/value records, not one record with
+        # an array value. parse_qsl also preserves the body's original ordering.
+        post_data["params"] = [{"name": name, "value": value} for name, value in parse_qsl(text, keep_blank_values=True)]
 
     return post_data
 
