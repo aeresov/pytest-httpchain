@@ -79,8 +79,10 @@ def _rewrite_marks(pytester, marks):
     [
         ['xfail(False, reason="disabled condition")'],
         ['xfail(condition=False, reason="disabled condition")'],
+        ['xfail("False", reason="disabled string condition")'],
+        ['xfail(condition="False", reason="disabled string condition")'],
     ],
-    ids=["positional", "kwarg"],
+    ids=["positional-bool", "kwarg-bool", "positional-string", "kwarg-string"],
 )
 def test_inactive_xfail_aborts_chain(pytester, marks):
     """An INACTIVE xfail — falsy condition, in either the positional or the
@@ -101,5 +103,15 @@ def test_multi_condition_active_xfail_does_not_abort(pytester):
     pytester.copy_example("conftest.py")
     pytester.copy_example("marks/test_xfail_false_condition.http.json")
     _rewrite_marks(pytester, ['xfail(True, False, reason="one truthy condition")'])
+    result = pytester.runpytest("-s")
+    result.assert_outcomes(errors=0, failed=0, passed=1, xfailed=1)
+
+
+def test_active_string_xfail_does_not_abort(pytester):
+    """Let pytest evaluate string conditions; a true one is still expected and
+    must preserve the documented continue-after-xfail behavior."""
+    pytester.copy_example("conftest.py")
+    pytester.copy_example("marks/test_xfail_false_condition.http.json")
+    _rewrite_marks(pytester, ['xfail("True", reason="active string condition")'])
     result = pytester.runpytest("-s")
     result.assert_outcomes(errors=0, failed=0, passed=1, xfailed=1)
