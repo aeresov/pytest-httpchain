@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- HAR export preserves same-name response cookies with different domain/path scopes instead of raising `httpx.CookieConflict` and silently dropping the test's HAR file.
+
 ## [0.14.3] - 2026-08-11
 
 ### Fixed

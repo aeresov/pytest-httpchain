@@ -207,6 +207,17 @@ def get_headers():
     return resp
 
 
+@app.get("/scoped-cookies")
+def scoped_cookies():
+    """Return two valid same-name cookies with different path scopes."""
+    from flask import make_response
+
+    resp = make_response({})
+    resp.set_cookie("session", "root", path="/")
+    resp.set_cookie("session", "admin", path="/admin")
+    return resp
+
+
 @app.get("/schema-test")
 def schema_test():
     """Return data for JSON schema validation"""
