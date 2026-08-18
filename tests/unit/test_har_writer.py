@@ -195,6 +195,18 @@ class TestSerializationFamilies:
         assert {"name": "k1", "value": "v1"} in post["params"]
         assert {"name": "k2", "value": "v2"} in post["params"]
 
+    def test_repeated_form_values_are_separate_scalar_params(self):
+        req = httpx.Request("POST", "https://x.com", content=b"tag=one&tag=two&empty=", headers={"content-type": "application/x-www-form-urlencoded"})
+
+        params = request_response_to_har_entry(req, httpx.Response(200, request=req))["request"]["postData"]["params"]
+
+        assert params == [
+            {"name": "tag", "value": "one"},
+            {"name": "tag", "value": "two"},
+            {"name": "empty", "value": ""},
+        ]
+        assert all(isinstance(param["value"], str) for param in params)
+
     def test_binary_request_body_base64_encoded(self):
         raw = b"\xff\xfe\x00"
         req = httpx.Request("POST", "https://x.com", content=raw, headers={"content-type": "application/octet-stream"})

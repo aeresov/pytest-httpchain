@@ -29,6 +29,41 @@ def test_har_file_written(pytester):
     assert har["log"]["entries"], "HAR log must contain at least one entry"
 
 
+def test_har_form_repeats_are_separate_scalar_params(pytester):
+    har_dir = pytester.path / "har_out"
+    pytester.copy_example("conftest.py")
+    (pytester.path / "test_repeated_form.http.json").write_text(
+        json.dumps(
+            {
+                "stages": [
+                    {
+                        "name": "repeated_form",
+                        "fixtures": ["server"],
+                        "request": {
+                            "url": "{{ server }}/echo/form",
+                            "method": "POST",
+                            "body": {"form": {"tag": ["one", "two"], "empty": ""}},
+                        },
+                        "response": [{"verify": {"status": 200}}],
+                    }
+                ]
+            }
+        )
+    )
+
+    result = pytester.runpytest("-s", "--httpchain-output-dir", str(har_dir))
+
+    result.assert_outcomes(errors=0, failed=0, passed=1)
+    har_files = list(har_dir.glob("*.har"))
+    assert len(har_files) == 1
+    params = json.loads(har_files[0].read_text(encoding="utf-8"))["log"]["entries"][0]["request"]["postData"]["params"]
+    assert params == [
+        {"name": "tag", "value": "one"},
+        {"name": "tag", "value": "two"},
+        {"name": "empty", "value": ""},
+    ]
+
+
 def test_parallel_stage_har_contains_every_iteration(pytester):
     """A parallel stage's HAR must hold one entry per iteration, not a single
     arbitrary iteration presented as the stage's only exchange. The report

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Repeated URL-encoded form fields are emitted as separate scalar HAR `postData.params` entries, preserving their wire order and producing valid HAR instead of an array-valued parameter.
+
 ## [0.14.3] - 2026-08-11
 
 ### Fixed
