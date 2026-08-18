@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import pytest_httpchain.validation.loader as validation_loader
 from pytest_httpchain.validation import DiagnosticCode, resolve_root_path, validate_scenario
 
 # A stable importable directory so `userfuncs:<name>` refs resolve under --syspath.
@@ -11,6 +12,12 @@ USERFUNCS_DIR = Path(__file__).parent / "test_validation_userfuncs"
 
 def _codes(result):
     return {d.code for d in result.diagnostics}
+
+
+def _hide_ancestor_project_markers(monkeypatch):
+    """Make markerless-root tests independent of TMPDIR's real ancestors."""
+    monkeypatch.setattr(validation_loader, "_ROOT_MARKERS", ())
+    monkeypatch.setattr(validation_loader, "_holds_pytest_config", lambda directory: False)
 
 
 def test_template_builtins_is_single_source():
@@ -478,7 +485,8 @@ class TestRootPathDefault:
 
         assert resolve_root_path(scenario) == tmp_path
 
-    def test_falls_back_to_file_parent(self, tmp_path):
+    def test_falls_back_to_file_parent(self, tmp_path, monkeypatch):
+        _hide_ancestor_project_markers(monkeypatch)
         nested = tmp_path / "a" / "b"
         nested.mkdir(parents=True)
         scenario = nested / "test_x.http.json"
@@ -670,9 +678,10 @@ class TestReviewRegressionsBatch2:
         assert DiagnosticCode.AMBIGUOUS_REF in codes
         assert DiagnosticCode.REF_ERROR in codes
 
-    def test_markerless_tree_falls_back_to_tests_ancestor(self, tmp_path):
+    def test_markerless_tree_falls_back_to_tests_ancestor(self, tmp_path, monkeypatch):
         """Without any project marker, the pre-marker default (nearest tests/
         ancestor) still applies, so exported bundles keep their sandbox."""
+        _hide_ancestor_project_markers(monkeypatch)
         suite = tmp_path / "bundle" / "tests" / "api"
         suite.mkdir(parents=True)
         scenario = suite / "test_x.http.json"
