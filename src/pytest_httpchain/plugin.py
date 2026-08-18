@@ -340,21 +340,24 @@ def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> pytest.Col
     return None
 
 
-@pytest.hookimpl(wrapper=True)
+@pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> Any:
-    # The yielded report is augmented in place and returned so it propagates to
-    # outer wrappers.
+    # tryfirst makes this the outermost wrapper: its post-yield half sees the
+    # final outcome after pytest has applied skip/xfail/strict semantics.
     report: pytest.TestReport = yield
 
+    item_cls = getattr(item, "cls", None)
+    carrier_class = item_cls if isinstance(item_cls, type) and issubclass(item_cls, Carrier) else None
+
     if call.when == "call":
-        if hasattr(item, "instance") and isinstance(item.instance, Carrier):
-            carrier = item.instance
+        if carrier_class is not None:
+            carrier = carrier_class
 
             # An initialization failure breaks the whole scenario and must stay
             # red, so undo the xfail conversion pytest's skipping plugin already
             # applied (this wrapper is outermost, so every consumer sees the
             # flip). `wasxfail` holds a reason string: presence is the signal.
-            if type(carrier)._init_failed is not None and report.skipped and hasattr(report, "wasxfail"):
+            if carrier._init_failed is not None and report.skipped and hasattr(report, "wasxfail"):
                 report.outcome = "failed"
                 del report.wasxfail
 
@@ -386,7 +389,7 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
                 if exchange is None:
                     continue
                 try:
-                    body = formatter(exchange)  # ty: ignore[invalid-argument-type]
+                    body = formatter(exchange)
                 except Exception as e:
                     body = f"<Error formatting {what}: {e}>"
                 report.sections.append((f"{title}{suffix}", body))
@@ -402,5 +405,12 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
                     report.sections.append(("HAR File", str(har_path)))
                 except Exception as e:
                     logger.warning(f"Failed to write HAR file for {item.nodeid}: {e}")
+
+    # The report, not the stage body, is the source of truth. Fixture setup and
+    # teardown can fail without execute_stage running, and strict XPASS plus
+    # string xfail conditions are classified only by pytest. Expected xfails and
+    # ordinary skips are `skipped`, so they deliberately leave the chain healthy.
+    if carrier_class is not None and report.failed:
+        carrier_class.aborted = True
 
     return report

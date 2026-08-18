@@ -58,7 +58,7 @@ from pytest_httpchain.scoping import (
     with_stage_substitutions,
 )
 from pytest_httpchain.templates import TemplatesError, walk
-from pytest_httpchain.utils import make_marker, process_substitutions
+from pytest_httpchain.utils import process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
 
 logger = logging.getLogger(__name__)
@@ -85,22 +85,6 @@ def _response_meta(response: httpx.Response) -> SimpleNamespace:
         headers=response.headers,
         elapsed_ms=elapsed_ms,
     )
-
-
-def _is_active_xfail(mark: pytest.MarkDecorator) -> bool:
-    """True when the mark is an xfail that will actually apply to the item.
-
-    Mirrors pytest's ``evaluate_xfail_marks``: no conditions means unconditional,
-    otherwise any truthy one activates it. An inactive xfail means pytest counts
-    the failure as genuine, so the abort machinery must too; string conditions
-    (which pytest evaluates itself) are conservatively treated as active.
-    """
-    if mark.name != "xfail":
-        return False
-    conditions = (mark.kwargs["condition"],) if "condition" in mark.kwargs else mark.args
-    if not conditions:
-        return True
-    return any(isinstance(condition, str) or bool(condition) for condition in conditions)
 
 
 def _error_request(e: Exception) -> httpx.Request | None:
@@ -218,8 +202,10 @@ class Carrier:
         Gates on the abort/``always_run`` flow, layers the stage context, runs
         the iteration matrix, and on full success commits the collected saves as
         a new global-context layer. A failure is reported via ``pytest.fail``
-        and aborts the chain unless the stage is marked xfail; a failing stage
-        commits no saves, so the context never carries a timing-dependent subset.
+        and commits no saves, so the context never carries a timing-dependent
+        subset. The report hook owns chain-abort classification because only
+        pytest's final report knows whether xfail/strict and setup/teardown made
+        the item a genuine failure.
         """
         # Reset before anything can fail or skip: a stage that never records an
         # exchange must report nothing, not the previous stage's.
@@ -283,13 +269,6 @@ class Carrier:
                 raise exc
 
         except _STAGE_FAILURE_EXCEPTIONS as e:
-            # Structural detection, so `skip(reason="...xfail...")` or a custom
-            # `my_xfail` marker is not misclassified. An xfail stage's failure is
-            # expected and must not abort the chain.
-            is_xfail = any(_is_active_xfail(make_marker(mark)) for mark in stage.marks)
-            if not is_xfail:
-                logger.error(str(e))
-                cls.aborted = True
             failure_reason = str(e)
 
         # Deliberately outside the handler: raising there would set

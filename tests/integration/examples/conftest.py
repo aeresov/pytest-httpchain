@@ -348,6 +348,19 @@ def request_id():
     return _make_id
 
 
+@pytest.fixture
+def fixture_setup_error():
+    """Fail before a generated stage method can enter Carrier.execute_stage."""
+    raise RuntimeError("fixture setup failed")
+
+
+@pytest.fixture
+def fixture_teardown_error():
+    """Fail after the stage body passed, before pytest advances the chain."""
+    yield
+    raise RuntimeError("fixture teardown failed")
+
+
 # ============ Error Testing Endpoints ============
 
 

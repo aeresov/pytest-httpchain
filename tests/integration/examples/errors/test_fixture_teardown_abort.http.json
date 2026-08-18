@@ -1,0 +1,16 @@
+{
+    "stages": [
+        {
+            "name": "teardown_error",
+            "fixtures": ["server", "fixture_teardown_error"],
+            "request": {"url": "{{ server }}/ok"},
+            "response": [{"verify": {"status": 200}}]
+        },
+        {
+            "name": "must_not_run",
+            "fixtures": ["server"],
+            "request": {"url": "{{ server }}/ok"},
+            "response": [{"verify": {"status": 200}}]
+        }
+    ]
+}

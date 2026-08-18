@@ -1,0 +1,16 @@
+{
+    "stages": [
+        {
+            "name": "setup_error",
+            "fixtures": ["fixture_setup_error"],
+            "request": {"url": "https://x.test/"},
+            "response": [{"verify": {"status": 200}}]
+        },
+        {
+            "name": "must_not_run",
+            "fixtures": ["server"],
+            "request": {"url": "{{ server }}/ok"},
+            "response": [{"verify": {"status": 200}}]
+        }
+    ]
+}
