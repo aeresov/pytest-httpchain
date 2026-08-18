@@ -29,6 +29,38 @@ def test_har_file_written(pytester):
     assert har["log"]["entries"], "HAR log must contain at least one entry"
 
 
+def test_har_preserves_same_name_cookies_with_different_paths(pytester):
+    """A valid response may scope the same cookie name to several paths;
+    exporting it must not raise httpx.CookieConflict and drop the HAR file."""
+    har_dir = pytester.path / "har_out"
+    pytester.copy_example("conftest.py")
+    (pytester.path / "test_scoped_cookies.http.json").write_text(
+        json.dumps(
+            {
+                "stages": [
+                    {
+                        "name": "scoped_cookies",
+                        "fixtures": ["server"],
+                        "request": {"url": "{{ server }}/scoped-cookies"},
+                        "response": [{"verify": {"status": 200}}],
+                    }
+                ]
+            }
+        )
+    )
+
+    result = pytester.runpytest("-s", "--httpchain-output-dir", str(har_dir))
+
+    result.assert_outcomes(errors=0, failed=0, passed=1)
+    har_files = list(har_dir.glob("*.har"))
+    assert len(har_files) == 1
+    cookies = json.loads(har_files[0].read_text(encoding="utf-8"))["log"]["entries"][0]["response"]["cookies"]
+    assert {(cookie["name"], cookie["value"], cookie["path"]) for cookie in cookies} == {
+        ("session", "root", "/"),
+        ("session", "admin", "/admin"),
+    }
+
+
 def test_parallel_stage_har_contains_every_iteration(pytester):
     """A parallel stage's HAR must hold one entry per iteration, not a single
     arbitrary iteration presented as the stage's only exchange. The report

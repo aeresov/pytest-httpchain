@@ -175,7 +175,36 @@ class TestSerializationFamilies:
         req = httpx.Request("GET", "https://x.com/p")
         resp = httpx.Response(200, headers={"set-cookie": "session=xyz; Path=/"}, request=req)
         entry = request_response_to_har_entry(req, resp)
-        assert entry["response"]["cookies"] == [{"name": "session", "value": "xyz"}]
+        assert entry["response"]["cookies"] == [
+            {
+                "name": "session",
+                "value": "xyz",
+                "secure": False,
+                "httpOnly": False,
+                "path": "/",
+                "domain": "x.com",
+            }
+        ]
+
+    def test_same_name_response_cookies_keep_distinct_scopes(self):
+        req = httpx.Request("GET", "https://x.com/")
+        resp = httpx.Response(
+            200,
+            headers=[
+                ("set-cookie", "session=root; Path=/; Secure; HttpOnly"),
+                ("set-cookie", "session=admin; Path=/admin"),
+            ],
+            request=req,
+        )
+
+        cookies = request_response_to_har_entry(req, resp)["response"]["cookies"]
+
+        assert [(cookie["name"], cookie["value"], cookie["path"]) for cookie in cookies] == [
+            ("session", "root", "/"),
+            ("session", "admin", "/admin"),
+        ]
+        assert cookies[0]["secure"] is True
+        assert cookies[0]["httpOnly"] is True
 
     def test_query_string_extracted(self):
         req = httpx.Request("GET", "https://x.com/p?a=1&b=2&a=3")

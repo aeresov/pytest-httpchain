@@ -25,8 +25,29 @@ def _get_version() -> str:
         return "unknown"
 
 
-def _format_cookies(cookies: httpx.Cookies) -> list[dict[str, str]]:
-    return [{"name": name, "value": value} for name, value in cookies.items()]
+def _format_cookies(cookies: httpx.Cookies) -> list[dict[str, Any]]:
+    """Serialize jar entries without collapsing cookies by name.
+
+    ``httpx.Cookies.items()`` performs a name-only lookup and raises
+    ``CookieConflict`` when the same name exists at different paths/domains — a
+    valid and common response. Iterating the jar preserves each scoped cookie.
+    """
+    result: list[dict[str, Any]] = []
+    for cookie in cookies.jar:
+        item: dict[str, Any] = {
+            "name": cookie.name,
+            "value": cookie.value or "",
+            "secure": bool(cookie.secure),
+            "httpOnly": cookie.has_nonstandard_attr("HttpOnly"),
+        }
+        if cookie.path:
+            item["path"] = cookie.path
+        if cookie.domain:
+            item["domain"] = cookie.domain
+        if cookie.expires is not None:
+            item["expires"] = datetime.fromtimestamp(cookie.expires, UTC).isoformat()
+        result.append(item)
+    return result
 
 
 def _parse_cookie_header(cookie_header: str) -> list[dict[str, str]]:
