@@ -54,6 +54,7 @@ from pytest_httpchain.models.entities import (
     Verify,
     VerifyStep,
     XmlBody,
+    normalize_list_input,
     parametrize_values_contain_template,
 )
 from pytest_httpchain.models.types import check_json_schema, json_schema_validator_class
@@ -103,4 +104,5 @@ __all__ = [
     "check_json_schema",
     "json_schema_validator_class",
     "parametrize_values_contain_template",
+    "normalize_list_input",
 ]

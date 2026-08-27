@@ -6,12 +6,11 @@ just chained: consumers render only the message text (stage failures use
 """
 
 import importlib
-import re
 from collections.abc import Callable
 from typing import Any
 
-from pytest_httpchain.constants import USER_FUNCTION_NAME_PATTERN
-from pytest_httpchain.errors import HttpChainError, StageExecutionError
+from pytest_httpchain.constants import USER_FUNCTION_NAME_PATTERN, user_function_name_problem
+from pytest_httpchain.errors import HttpChainError
 from pytest_httpchain.models import UserFunctionCall, UserFunctionKwargs, UserFunctionName
 
 
@@ -26,12 +25,11 @@ NAME_PATTERN = USER_FUNCTION_NAME_PATTERN
 
 def import_function(name: str) -> Callable[..., Any]:
     """Import a ``"module.path:function_name"`` function."""
+    if (problem := user_function_name_problem(name)) is not None:
+        raise UserFunctionError(problem)
+
     match = NAME_PATTERN.match(name)
-    if not match:
-        # The most common mistake deserves an actionable hint.
-        if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", name):
-            raise UserFunctionError(f"Module path is required: use 'module:{name}' format instead of '{name}'")
-        raise UserFunctionError(f"Invalid function name format: {name}")
+    assert match is not None, "user_function_name_problem() returns None only for names NAME_PATTERN matches"
 
     module_path = match.group("module")
     function_name = match.group("function")
@@ -89,7 +87,7 @@ def call_target(func_call: UserFunctionCall) -> tuple[str, dict[str, Any]]:
         case UserFunctionKwargs():
             return str(func_call.name.root), dict(func_call.kwargs)
         case _:
-            raise StageExecutionError(f"Invalid function call format: {func_call}")
+            raise RuntimeError(f"Unhandled function call: {type(func_call).__name__}")
 
 
 def call_user_function(func_call: UserFunctionCall, **extra_kwargs: Any) -> object:

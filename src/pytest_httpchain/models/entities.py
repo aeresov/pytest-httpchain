@@ -82,9 +82,14 @@ def _suppress_field_shadow_warning(field_name: str):
         yield
 
 
-def _normalize_list_input(v: Any) -> Any:
+def normalize_list_input(v: Any) -> Any:
     """Flatten the name-keyed mapping form into a list, preserving order:
-    ``{"x": [a, b], "y": c}`` -> ``[a, b, c]``. Anything else passes through."""
+    ``{"x": [a, b], "y": c}`` -> ``[a, b, c]``. Anything else passes through.
+
+    Shared, not private: raw-JSON readers in ``scoping`` index their entries
+    positionally against the validated models, so the two must derive the list
+    the same way.
+    """
     if isinstance(v, list):
         return v
 
@@ -300,7 +305,7 @@ SubstitutionsInput = list[Substitution] | dict[str, Substitution | list[Substitu
 
 Substitutions = Annotated[
     list[Substitution],
-    BeforeValidator(_normalize_list_input, json_schema_input_type=SubstitutionsInput),
+    BeforeValidator(normalize_list_input, json_schema_input_type=SubstitutionsInput),
 ]
 
 
@@ -413,7 +418,7 @@ ResponsesInput = list[ResponseStep] | dict[str, ResponseStep | list[ResponseStep
 
 Responses = Annotated[
     list[ResponseStep],
-    BeforeValidator(_normalize_list_input, json_schema_input_type=ResponsesInput),
+    BeforeValidator(normalize_list_input, json_schema_input_type=ResponsesInput),
 ]
 
 

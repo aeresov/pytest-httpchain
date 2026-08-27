@@ -1,6 +1,5 @@
 import pytest
 
-from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain.userfunc import call_user_function
 from pytest_httpchain.utils import process_substitutions
@@ -188,10 +187,11 @@ class TestCallUserFunction:
         assert result == {"a": 10, "b": 20, "c": 30}
 
     def test_invalid_function_call_format(self):
-        # Pass something that's neither UserFunctionName nor UserFunctionKwargs
-        with pytest.raises(StageExecutionError, match="Invalid function call format"):
+        # Neither UserFunctionName nor UserFunctionKwargs: unreachable from a
+        # validated scenario, so it surfaces as a plugin bug, not a stage failure.
+        with pytest.raises(RuntimeError, match="Unhandled function call: str"):
             call_user_function("invalid_string")
 
     def test_invalid_function_call_none(self):
-        with pytest.raises(StageExecutionError, match="Invalid function call format"):
+        with pytest.raises(RuntimeError, match="Unhandled function call: NoneType"):
             call_user_function(None)

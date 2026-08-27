@@ -103,14 +103,17 @@ def process_substitutions(
                         case UserFunctionKwargs():
                             result[alias] = wrap_function(_resolve_function_name(func_def.name.root, current_context), default_kwargs=func_def.kwargs)
                         case _:
-                            raise StageExecutionError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
-                    logger.info(f"Seeded {alias} = {result[alias]}")
+                            raise RuntimeError(f"Unhandled function definition for '{alias}': {type(func_def).__name__}")
+                    logger.debug("Seeded %s", alias)
 
             case VarsSubstitution():
                 for key, value in step.vars.items():
                     resolved_value = walk(value, current_context)
                     result[key] = resolved_value
-                    logger.info(f"Seeded {key} = {resolved_value}")
+                    # Names only, at DEBUG: a substituted value can be an auth
+                    # token, and pytest attaches captured logs to failure
+                    # reports. Same boundary as the carrier's context dumps.
+                    logger.debug("Seeded %s", key)
 
             case _:
                 raise RuntimeError(f"Unhandled substitution type: {type(step).__name__}")

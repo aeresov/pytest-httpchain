@@ -76,15 +76,6 @@ class TestWriteHarFile:
         assert entry["time"] == 123.5
         assert entry["timings"]["wait"] == 123.5
 
-    def test_elapsed_ms_override(self, tmp_path):
-        # An explicit elapsed_ms takes precedence over response.elapsed.
-        request, response = _make_pair(elapsed_ms=999.0)
-        path = write_har_file(tmp_path, "test_users", [(request, response, None)], elapsed_ms=42.0)
-
-        entry = json.loads(path.read_text(encoding="utf-8"))["log"]["entries"][0]
-
-        assert entry["time"] == 42.0
-
     def test_missing_elapsed_is_handled(self, tmp_path):
         # When response.elapsed is unavailable (unread response), timing falls
         # back to 0 without raising.

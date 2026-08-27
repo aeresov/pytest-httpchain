@@ -138,7 +138,6 @@ def request_response_to_har_entry(
     request: httpx.Request,
     response: httpx.Response | None,
     started_datetime: datetime | None = None,
-    elapsed_ms: float | None = None,
 ) -> dict[str, Any]:
     """One HAR entry for a request and its response.
 
@@ -149,8 +148,7 @@ def request_response_to_har_entry(
     if started_datetime is None:
         started_datetime = datetime.now(UTC)
 
-    if elapsed_ms is None:
-        elapsed_ms = _response_elapsed_ms(response) if response is not None else 0
+    elapsed_ms = _response_elapsed_ms(response) if response is not None else 0
 
     http_version = (response.http_version if response is not None else None) or "HTTP/1.1"
 
@@ -239,14 +237,12 @@ def write_har_file(
     output_dir: Path,
     test_name: str,
     exchanges: list[tuple[httpx.Request, httpx.Response | None, datetime | None]],
-    started_datetime: datetime | None = None,
-    elapsed_ms: float | None = None,
 ) -> Path:
     """Write one test's exchanges to a HAR file and return its path.
 
     ``exchanges`` are ``(request, response, started)`` triples in execution
     order — one per iteration for a parallel stage. A ``started`` of None falls
-    back to ``started_datetime``, then to write time.
+    back to write time.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -258,7 +254,7 @@ def write_har_file(
     filename = f"{safe_name}.har"
     filepath = output_dir / filename
 
-    entries = [request_response_to_har_entry(request, response, started or started_datetime, elapsed_ms) for request, response, started in exchanges]
+    entries = [request_response_to_har_entry(request, response, started) for request, response, started in exchanges]
     har = create_har_log(entries, comment=f"Test: {test_name}")
 
     filepath.write_text(json.dumps(har, indent=2, ensure_ascii=False), encoding="utf-8")

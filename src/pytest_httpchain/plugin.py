@@ -13,7 +13,7 @@ import types
 import warnings
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pydantic import ValidationError
@@ -272,7 +272,7 @@ def pytest_configure_node(node) -> None:
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    ini_options: list[tuple[ConfigOptions, str, str, Any]] = [
+    ini_options: list[tuple[ConfigOptions, str, Literal["string", "int"], Any]] = [
         (ConfigOptions.SUFFIX, "File suffix for HTTP test files.", "string", "http"),
         (ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "Maximum number of parent directory traversals allowed in $ref paths.", "int", 3),
         (ConfigOptions.MAX_COMPREHENSION_LENGTH, "Maximum length for list/dict comprehensions in template expressions.", "int", 50000),
@@ -280,7 +280,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     ]
     for option, help_text, ini_type, default in ini_options:
         # pytest does not render ini defaults in --help, so repeat them there.
-        parser.addini(name=option, help=f"{help_text} Default: {default}.", type=ini_type, default=default)  # ty: ignore[invalid-argument-type]
+        parser.addini(name=option, help=f"{help_text} Default: {default}.", type=ini_type, default=default)
     group = parser.getgroup("httpchain", "HTTP chain scenario testing")
     group.addoption(
         # No dest= override: argparse derives httpchain_output_dir, keeping the
@@ -349,62 +349,59 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
     item_cls = getattr(item, "cls", None)
     carrier_class = item_cls if isinstance(item_cls, type) and issubclass(item_cls, Carrier) else None
 
-    if call.when == "call":
-        if carrier_class is not None:
-            carrier = carrier_class
+    if call.when == "call" and carrier_class is not None:
+        # An initialization failure breaks the whole scenario and must stay
+        # red, so undo the xfail conversion pytest's skipping plugin already
+        # applied (this wrapper is outermost, so every consumer sees the
+        # flip). `wasxfail` holds a reason string: presence is the signal.
+        if carrier_class._init_failed is not None and report.skipped and hasattr(report, "wasxfail"):
+            report.outcome = "failed"
+            del report.wasxfail
 
-            # An initialization failure breaks the whole scenario and must stay
-            # red, so undo the xfail conversion pytest's skipping plugin already
-            # applied (this wrapper is outermost, so every consumer sees the
-            # flip). `wasxfail` holds a reason string: presence is the signal.
-            if carrier._init_failed is not None and report.skipped and hasattr(report, "wasxfail"):
-                report.outcome = "failed"
-                del report.wasxfail
+        # A parallel stage runs many exchanges but shows one; say so rather
+        # than presenting it as the stage's only exchange. A failure that
+        # never recorded a request (template error, rate-limit timeout)
+        # shows the last COMPLETED iteration, which must not be labeled as
+        # the failing one.
+        suffix = ""
+        if carrier_class.last_iterations_attempted > 1:
+            if carrier_class.last_shown_exchange_is_failed:
+                shown = "failing"
+            elif report.failed:
+                shown = "last completed"
+            else:
+                shown = "last"
+            suffix = f" ({shown} of {carrier_class.last_iterations_attempted} parallel iterations)"
 
-            # A parallel stage runs many exchanges but shows one; say so rather
-            # than presenting it as the stage's only exchange. A failure that
-            # never recorded a request (template error, rate-limit timeout)
-            # shows the last COMPLETED iteration, which must not be labeled as
-            # the failing one.
-            suffix = ""
-            if carrier.last_iterations_attempted > 1:
-                if carrier.last_shown_exchange_is_failed:
-                    shown = "failing"
-                elif report.failed:
-                    shown = "last completed"
-                else:
-                    shown = "last"
-                suffix = f" ({shown} of {carrier.last_iterations_attempted} parallel iterations)"
+        # The shown request is the final hop's, which may differ from what
+        # the stage authored; the full chain is in the HAR output.
+        if carrier_class.last_response is not None and carrier_class.last_response.history:
+            hops = len(carrier_class.last_response.history)
+            suffix += f" (after {hops} redirect{'s' if hops != 1 else ''})"
 
-            # The shown request is the final hop's, which may differ from what
-            # the stage authored; the full chain is in the HAR output.
-            if carrier.last_response is not None and carrier.last_response.history:
-                hops = len(carrier.last_response.history)
-                suffix += f" (after {hops} redirect{'s' if hops != 1 else ''})"
+        for title, what, exchange, formatter in (
+            ("HTTP Request", "request", carrier_class.last_request, format_request),
+            ("HTTP Response", "response", carrier_class.last_response, format_response),
+        ):
+            if exchange is None:
+                continue
+            try:
+                body = formatter(exchange)
+            except Exception as e:
+                body = f"<Error formatting {what}: {e}>"
+            report.sections.append((f"{title}{suffix}", body))
 
-            for title, what, exchange, formatter in (
-                ("HTTP Request", "request", carrier.last_request, format_request),
-                ("HTTP Response", "response", carrier.last_response, format_response),
-            ):
-                if exchange is None:
-                    continue
-                try:
-                    body = formatter(exchange)
-                except Exception as e:
-                    body = f"<Error formatting {what}: {e}>"
-                report.sections.append((f"{title}{suffix}", body))
-
-            output_dir = item.config.getoption("httpchain_output_dir")
-            if output_dir and carrier.last_exchanges:
-                try:
-                    har_path = write_har_file(
-                        output_dir=Path(output_dir),
-                        test_name=item.nodeid,
-                        exchanges=carrier.last_exchanges,
-                    )
-                    report.sections.append(("HAR File", str(har_path)))
-                except Exception as e:
-                    logger.warning(f"Failed to write HAR file for {item.nodeid}: {e}")
+        output_dir = item.config.getoption("httpchain_output_dir")
+        if output_dir and carrier_class.last_exchanges:
+            try:
+                har_path = write_har_file(
+                    output_dir=Path(output_dir),
+                    test_name=item.nodeid,
+                    exchanges=carrier_class.last_exchanges,
+                )
+                report.sections.append(("HAR File", str(har_path)))
+            except Exception as e:
+                logger.warning(f"Failed to write HAR file for {item.nodeid}: {e}")
 
     # The report, not the stage body, is the source of truth. Fixture setup and
     # teardown can fail without execute_stage running, and strict XPASS plus
