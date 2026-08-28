@@ -220,7 +220,13 @@ The limit is shared by the stage's concurrent iterations, and by them only: each
 
 - Parallel execution runs within a single stage
 - Response verification applies to all parallel requests
-- Save operations may behave differently in parallel mode (last write wins)
+- Saves merge in **iteration order**, not completion order: when several
+  iterations save the same key, the highest iteration index wins, whichever
+  iteration finished first
+- Saves are **all or nothing**: if any iteration fails, the stage commits no
+  saves at all, so the context never carries a timing-dependent subset
+- Iterations do not see one another's saves; each resolves against the stage
+  context plus its own parameters
 - Use rate limiting to avoid overwhelming servers or hitting rate limits
 - Monitor memory usage with very high concurrency values
 

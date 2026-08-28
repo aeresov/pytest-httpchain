@@ -122,6 +122,24 @@ Stages execute in order. If one fails, subsequent stages are skipped unless `alw
 
 The `cleanup` stage runs even if `setup` or `test` fails.
 
+### The shared HTTP client
+
+Every stage in a scenario uses one `httpx.Client`, built lazily on the first
+stage that runs and closed when the scenario finishes. Three consequences worth
+knowing:
+
+-   **Cookies persist across stages.** A `Set-Cookie` from one stage is sent by
+    every later stage automatically — no `save` step needed. Because the client
+    is per test *class*, this also holds across the runs of a parametrized
+    scenario, so a scenario that depends on starting cookie-free should not rely
+    on parametrization to isolate it.
+-   **Connections are pooled**, so a chain against one host reuses the same
+    connection rather than reconnecting per stage.
+-   **HTTP/2 is offered** and used whenever the server negotiates it.
+
+Each scenario gets its own client, so scenarios never share cookies or
+connections with each other.
+
 `always_run` also accepts a template expression, evaluated (with Python truthiness) at the moment a stage is about to be skipped after a failure. In scope are fixtures, parametrize parameters, scenario-level substitutions, and variables saved by earlier stages — but *not* the stage's own substitutions, which are only processed once the stage actually runs:
 
 ```json

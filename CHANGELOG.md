@@ -7,11 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Substituted values are no longer logged at INFO. `process_substitutions` logged `Seeded <name> = <value>` for every `vars` entry and every `functions` alias, so a `--log-cli-level=INFO` run wrote auth tokens (and anything else a substitution produces) into the captured-log section pytest attaches to failure reports — while the carrier's context dumps, which carry the same data, were deliberately guarded behind DEBUG. Names only, at DEBUG, with a regression test next to the existing context-dump ones.
+
+### Added
+
+- A CLI reference page in the docs (`Command Line`), covering all five commands and the previously undocumented `--direction`, `--version` and `--ref-parent-traversal-depth` options. `show`, `graph` and `resolve` had appeared exactly once on the whole site, under a heading about AI agents.
+- `verify.expressions` carries a JSON Schema (a complete-template string) instead of emitting `items: {}`, so editors flag the mistake that matters most there — forgetting the `{{ }}`, which makes the assertion a non-empty and therefore always-truthy string. The runtime type is unchanged and the `HTTPCHAIN018` warning still covers files authored without a `$schema` key.
+
 ### Fixed
 
+- pytest collection and `validate` no longer describe the same broken file differently. Both now report load failures through one taxonomy, so a malformed scenario is `[HTTPCHAIN014] Invalid JSON syntax` in either surface; collection used to answer with an uncoded "Cannot load JSON file", contradicting the diagnostics page's claim that only `HTTPCHAIN020`-`024` are CLI-only.
+- `Diagnostic.location` is an indexed JSON path everywhere. Eight sites emitted the bare stage name, which is `""` for an unnamed stage — so `--format json` carried an empty string and the text output silently dropped the location. Now `stages[0].request`, `stages[0].response[1].verify.body.schema`, and so on, matching the sites that already did this.
+- `HTTPCHAIN003` names the phase, not just the stage: "stage 's': substitutions references potentially undefined variable(s): ['wid']". A foreach parameter referenced from stage substitutions is the common case, and it *is* defined a few lines below — the phase is the whole explanation, and without it the warning reads as a typo report.
+- `show` prints `fixtures: server, db` rather than the Python list repr `fixtures: ['server', 'db']`.
+- `validate` no longer prints a schema diagnostic's location twice (once inside the message, once as the `(at ...)` suffix).
+- The response half of a failure report calls a binary body `<Binary content: N bytes>`, matching the request half; the two sections are printed back to back and used two different spellings.
 - Chain aborts now follow pytest's final item outcome rather than trying to predict it inside the stage body. Fixture setup/teardown errors and strict XPASS failures now stop later stages, false string `xfail` conditions no longer let genuine failures through, and skips plus genuine expected failures still continue as documented.
 - HAR export preserves same-name response cookies with different domain/path scopes instead of raising `httpx.CookieConflict` and silently dropping the test's HAR file.
 - Repeated URL-encoded form fields are emitted as separate scalar HAR `postData.params` entries, preserving their wire order and producing valid HAR instead of an array-valued parameter.
+
+### Changed
+
+- A diagnostic code's severity is declared once, in a `SEVERITY` map beside the `DiagnosticCode` enum, instead of being re-typed at all 37 `diag()` call sites. Tests assert the map covers every code and agrees with the table in `docs/diagnostics.md`, so a stray `"error"` can no longer promote a documented warning into a collection failure.
+- Documented the scenario-scoped `httpx.Client`: cookies persist across stages with no `save` step (and across a parametrized scenario's runs, since the client is per test class), connections are pooled, and HTTP/2 is used when negotiated. Pinned with an integration example.
+- Documented the real parallel-`save` semantics. The page said saves "may behave differently in parallel mode (last write wins)"; they merge in *iteration* order regardless of completion order, and a failing iteration commits nothing at all — a stronger guarantee than the hedge implied.
+- `docs/diagnostics.md` no longer describes `HTTPCHAIN007`/`008` as body-only; both also fire on header matchers.
+- The README leads with `$include`/`$merge` and names `$ref` as the legacy alias, matching the code and the rest of the docs — it previously documented only `$ref` and then recommended the VS Code `$schema` integration that `$ref` interferes with. Its Quick Start also opens with the JSON rather than a `conftest.py`.
+- `CLAUDE.md` records all five commands CI's Lint job runs; it claimed four and omitted the committed-schema drift check, so any model change passed the documented checks and then reddened CI.
+- Removed a completed implementation plan (and the `exclude_docs` rule whose only job was hiding it) from `docs/`, so the tree means "the published site" again.
 
 ## [0.14.3] - 2026-08-11
 

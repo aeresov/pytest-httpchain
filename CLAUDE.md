@@ -16,11 +16,15 @@ uv run pytest
 uv run pytest tests/integration/test_primer.py -v
 uv run pytest tests/unit/test_foo.py::test_specific -v
 
-# Lint — CI's Lint job runs ALL FOUR of these; run them all before pushing
+# Lint — CI's Lint job runs ALL FIVE of these; run them all before pushing
 uv run ruff check .
 uv run ruff format --check .
 uvx ty@0.0.49 check     # type check (pin matches CI)
 uv run lint-imports     # import layering contracts (exhaustive: new modules fail until placed)
+# Regenerate the committed JSON Schema after ANY pydantic model change: CI's
+# Lint job runs this and fails on `git diff --exit-code docs/schema`, so a model
+# change that skips it reddens CI on a generated file you never edited.
+uv run python scripts/generate_schema.py
 
 # Format
 uv run ruff format .
