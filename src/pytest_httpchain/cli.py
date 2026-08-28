@@ -91,7 +91,12 @@ def validate(
                 status = "OK"
             typer.echo(f"{path}: {status}")
             for diagnostic in result.diagnostics:
-                at = f" (at {diagnostic.location})" if diagnostic.location else ""
+                # Some diagnostics already name the location inside the
+                # message; repeating it makes the suffix look untrustworthy
+                # everywhere else. The field itself stays — it is the
+                # machine-readable form of what the message spells out in prose,
+                # so a JSON consumer can route on it without parsing English.
+                at = f" (at {diagnostic.location})" if diagnostic.location and diagnostic.location not in diagnostic.message else ""
                 typer.echo(f"  {diagnostic.severity} [{diagnostic.code}]: {diagnostic.message}{at}")
 
     raise typer.Exit(0 if all_passed else 1)
@@ -151,9 +156,9 @@ def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[st
     lines: list[str] = [scenario.description or path.name]
     summary = f"{len(flow.stages)} stage(s)"
     if all_fixtures:
-        summary += f" · fixtures: {all_fixtures}"
+        summary += f" · fixtures: {', '.join(all_fixtures)}"
     if flow.scenario_vars:
-        summary += f" · vars: {flow.scenario_vars}"
+        summary += f" · vars: {', '.join(flow.scenario_vars)}"
     lines.append(summary)
     lines.append("")
 

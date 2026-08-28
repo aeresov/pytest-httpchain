@@ -7,33 +7,20 @@ The schema is written to docs/schema/scenario.schema.json
 """
 
 import json
-import subprocess
 import tomllib
 from pathlib import Path
 
 from pytest_httpchain.schema import build_schema
 
-
-def find_project_root() -> Path:
-    """Find project root by looking for pyproject.toml."""
-    try:
-        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True)
-        return Path(result.stdout.strip())
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-
-    current = Path.cwd()
-    while current != current.parent:
-        if (current / "pyproject.toml").exists():
-            return current
-        current = current.parent
-
-    raise RuntimeError("Could not find project root (no pyproject.toml found)")
+# This script lives in <root>/scripts/, so the root is one level up. Deriving it
+# from __file__ rather than the CWD or `git rev-parse` keeps regeneration
+# independent of where it is invoked from — and of which checkout is current.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
     schema = build_schema()
-    project_root = find_project_root()
+    project_root = PROJECT_ROOT
     schema_dir = project_root / "docs" / "schema"
     schema_dir.mkdir(parents=True, exist_ok=True)
 

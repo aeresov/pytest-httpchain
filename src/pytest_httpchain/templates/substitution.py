@@ -116,13 +116,11 @@ def _eval_expr(evaluator: EvalWithCompoundTypes, expr: str) -> Any:
         raise TemplatesError(f"Expression too complex '{display}': {e}") from e
     except (InvalidExpression, SyntaxError) as e:
         raise TemplatesError(f"Invalid expression '{display}': {e}") from e
-    except (ValueError, TypeError, KeyError, IndexError, ZeroDivisionError) as e:
-        error_type = type(e).__name__
-        raise TemplatesError(f"{error_type} in expression '{display}': {e}") from e
     except Exception as e:
         # A context callable can raise anything, and everything out of here must
-        # be a TemplatesError.
-        raise TemplatesError(f"Error evaluating expression '{display}': {e}") from e
+        # be a TemplatesError. Naming the type is what makes the message useful,
+        # so every remaining error gets it — not just a hand-picked tuple.
+        raise TemplatesError(f"{type(e).__name__} in expression '{display}': {e}") from e
 
 
 def _sub_string(line: str, evaluator: EvalWithCompoundTypes) -> Any:

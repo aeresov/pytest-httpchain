@@ -60,7 +60,7 @@ def format_response(response: httpx.Response) -> str:
         elif _is_textual_content_type(content_type):
             body = _format_body_text(response.text)
         else:
-            body = f"<binary {len(response.content)} bytes>"
+            body = f"<Binary content: {len(response.content)} bytes>"
 
     http_version = response.http_version or "HTTP/1.1"
     return _message_lines(f"{http_version} {response.status_code} {response.reason_phrase}", response.headers, body)

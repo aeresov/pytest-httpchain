@@ -1569,7 +1569,10 @@
                   "{{ 'json' in response.headers['content-type'] }}"
                 ]
               ],
-              "items": {},
+              "items": {
+                "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                "type": "string"
+              },
               "title": "Expressions",
               "type": "array"
             },

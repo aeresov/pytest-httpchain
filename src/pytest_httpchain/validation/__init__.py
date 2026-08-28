@@ -11,12 +11,13 @@ adds the semantic checks a JSON Schema cannot express. Every finding is a
 """
 
 from pytest_httpchain.validation.deep import check_scenario_deep
-from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ScenarioInfo, Severity, ValidateResult
-from pytest_httpchain.validation.loader import is_inline_schema_position, load_scenario, resolve_root_path
-from pytest_httpchain.validation.semantic import check_scenario
+from pytest_httpchain.validation.diagnostics import SEVERITY, Diagnostic, DiagnosticCode, ScenarioInfo, Severity, ValidateResult
+from pytest_httpchain.validation.loader import is_inline_schema_position, load_scenario, load_with_diagnostics, resolve_root_path
+from pytest_httpchain.validation.semantic import check_scenario, describe_scenario
 from pytest_httpchain.validation.validate import validate_scenario
 
 __all__ = [
+    "SEVERITY",
     "Diagnostic",
     "DiagnosticCode",
     "ScenarioInfo",
@@ -24,8 +25,10 @@ __all__ = [
     "ValidateResult",
     "check_scenario",
     "check_scenario_deep",
+    "describe_scenario",
     "is_inline_schema_position",
     "load_scenario",
+    "load_with_diagnostics",
     "resolve_root_path",
     "validate_scenario",
 ]

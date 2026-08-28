@@ -176,7 +176,7 @@ class TestFormatResponse:
         result = format_response(response)
 
         assert "200" in result
-        assert f"<binary {len(binary_data)} bytes>" in result
+        assert f"<Binary content: {len(binary_data)} bytes>" in result
 
     def test_response_with_binary_content_uses_placeholder(self):
         # Genuinely undecodable bytes under a non-textual content type: the
@@ -194,7 +194,7 @@ class TestFormatResponse:
         result = format_response(response)
 
         assert "200" in result
-        assert f"<binary {len(binary_data)} bytes>" in result
+        assert f"<Binary content: {len(binary_data)} bytes>" in result
 
     def test_response_with_headers(self):
         response = httpx.Response(

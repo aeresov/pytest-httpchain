@@ -30,9 +30,9 @@ Testing HTTP APIs with plain pytest often leads to these pain points:
 
 Test scenarios are JSON documents that describe _what_ to test, not _how_. No setup code to scroll through — the request and assertions are right there.
 
-### `$ref` with deep merging
+### `$include` / `$merge` with deep merging
 
-Reuse arbitrary parts of your scenarios with JSONRef. Properties merge with type checking, so you can compose scenarios from shared fragments (auth flows, common headers, base URLs).
+Reuse arbitrary parts of your scenarios with JSONRef. Properties merge with type checking, so you can compose scenarios from shared fragments (auth flows, common headers, base URLs). `$ref` is a legacy alias that still works, but prefer `$include`/`$merge`: VS Code gives `$ref` its own JSON Schema handling, which fights the editor integration below.
 
 ### Multi-stage execution
 
@@ -55,17 +55,6 @@ Markers, fixtures, parametrization, and other plugins work as expected. You're n
 ## Quick Start
 
 Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix is `http`):
-
-```python
-# conftest.py
-import pytest
-from datetime import datetime
-
-
-@pytest.fixture
-def now_utc():
-    return datetime.now()
-```
 
 ```json
 {
@@ -129,6 +118,19 @@ def now_utc():
 }
 ```
 
+The one stage above that needs Python is `update_user`, which asks for a `now_utc` fixture — ordinary pytest fixtures, resolved from your `conftest.py`:
+
+```python
+# conftest.py
+import pytest
+from datetime import datetime
+
+
+@pytest.fixture
+def now_utc():
+    return datetime.now()
+```
+
 Scenario we created:
 
 -   common data context is seeded with the first variable `user_id`
@@ -147,7 +149,7 @@ Scenario we created:
     finalizing call meant for graceful exit  
     `always_run` parameter means this stage will be executed regardless of errors in previous stages
 
-For detailed usage guide see the [full documentation](https://aeresov.github.io/pytest-httpchain).
+For detailed usage guide see the [full documentation](https://aeresov.github.io/pytest-httpchain), and the [CLI reference](https://aeresov.github.io/pytest-httpchain/cli/) for the offline authoring commands.
 
 ## Installation
 
@@ -167,7 +169,7 @@ pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
 
 -   Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`.
     The suffix is configurable via the `httpchain_suffix` pytest ini option, default value is **http**.
--   `$ref` instructions can point to other files using relative paths; absolute paths are rejected for security, and every reference must resolve inside the root path (pytest's `rootdir` when collecting; `--root-path` for the CLI).
+-   `$include`/`$merge` instructions (and their legacy alias `$ref`) can point to other files using relative paths; absolute paths are rejected for security, and every reference must resolve inside the root path (pytest's `rootdir` when collecting; `--root-path` for the CLI).
     You can limit the depth of relative path traversal using the `httpchain_ref_parent_traversal_depth` ini option, default value is **3**.
 -   Template expressions support list/dict comprehensions. You can limit the maximum comprehension length using the `httpchain_max_comprehension_length` ini option, default value is **50000**.
 -   Parallel stage iterations (repeat/foreach) have a safety limit configurable via the `httpchain_max_parallel_iterations` ini option, default value is **10000**.

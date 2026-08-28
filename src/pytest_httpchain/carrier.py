@@ -388,25 +388,31 @@ class Carrier:
         ``max_concurrency`` with an optional global rate limiter. The first
         expected failure cancels the pool.
         """
-        # The numeric fields are `PositiveInt | NumberOrTemplate`, but the config
-        # arrives walk()-resolved.
-        max_concurrency = int(parallel_config.max_concurrency) if parallel_config else 1
-        calls_per_sec = int(parallel_config.calls_per_sec) if parallel_config and parallel_config.calls_per_sec else None
-        max_rate_limit_delay = float(parallel_config.max_rate_limit_delay) if parallel_config else 60.0
-
         total = len(iteration_substitutions)
         results: list[IterationResult | None] = [None] * total
         first_error: tuple[int, Exception] | None = None
-        # A single iteration cannot block on a fresh bucket, so it needs no limiter.
-        limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec and total > 1 else None
+        limiter: Limiter | None = None
 
         try:
             if total == 1:
+                # No limiter and no delay budget: a single iteration cannot block
+                # on a fresh bucket, so the pool's rate-limiting arguments have
+                # nothing to do here.
                 try:
-                    results[0] = cls._execute_single_iteration(stage, local_context, iteration_substitutions[0], limiter, max_rate_limit_delay)
+                    results[0] = cls._execute_single_iteration(stage, local_context, iteration_substitutions[0])
                 except _STAGE_FAILURE_EXCEPTIONS as e:
                     first_error = (0, e)
             else:
+                # Only a parallel config can yield more than one iteration:
+                # `_build_iteration_substitutions(None, ...)` returns exactly one.
+                assert parallel_config is not None, "more than one iteration implies a parallel config"
+                # The numeric fields are `PositiveInt | NumberOrTemplate`, but the
+                # config arrives walk()-resolved.
+                max_concurrency = int(parallel_config.max_concurrency)
+                calls_per_sec = int(parallel_config.calls_per_sec) if parallel_config.calls_per_sec else None
+                max_rate_limit_delay = float(parallel_config.max_rate_limit_delay)
+                limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec else None
+
                 workers = min(max_concurrency, total)
                 cancel = threading.Event()
                 futures: dict[Future[IterationResult], int] = {}

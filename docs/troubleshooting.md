@@ -69,6 +69,12 @@ This references the `login_stage` key in `common/auth.json` relative to the curr
 -   Check that fixtures are listed in the `fixtures` array
 -   Variables from `save` steps are only available in subsequent stages
 
+You do not have to check these by hand: `pytest-httpchain validate` reports an
+undefined name as [`HTTPCHAIN003`](diagnostics.md) and a name used before it is
+saved as `HTTPCHAIN004`, naming the stage *and* the phase it appears in.
+`pytest-httpchain show` prints where each consumed variable comes from — see the
+[CLI reference](cli.md).
+
 ### Syntax Errors
 
 -   Template expressions use Python syntax inside `{{ }}`

@@ -130,6 +130,8 @@ uvx pytest-httpchain show tests/test_login.http.json
 uvx pytest-httpchain graph tests/test_login.http.json
 ```
 
+Every command and option is documented in the [CLI reference](cli.md).
+
 ## Thanks
 
 This project was inspired by [Tavern](https://github.com/taverntesting/tavern) and [pytest-play](https://github.com/davidemoro/pytest-play).

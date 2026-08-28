@@ -7,6 +7,7 @@ rather than introducing a second error type for the same malformed input.
 """
 
 import ast
+import json
 import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Any
 import httpx
 import pytest
 
-from pytest_httpchain.errors import StageExecutionError
+from pytest_httpchain.errors import SchemaFileError, StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, Substitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain.templates import walk
 from pytest_httpchain.userfunc import wrap_function
@@ -50,6 +51,22 @@ def request_content(request: httpx.Request) -> bytes | None:
         return request.content
     except httpx.RequestNotRead:
         return None
+
+
+def read_json_schema_file(path: Path) -> Any:
+    """Parse a referenced JSON Schema file, or raise `SchemaFileError`.
+
+    The catch is the load-bearing part and must not be re-derived per caller:
+    ``ValueError`` subsumes both ``json.JSONDecodeError`` and
+    ``UnicodeDecodeError``, so a non-UTF-8 schema file fails cleanly instead of
+    escaping the abort machinery as a raw traceback. The meta-check stays with
+    the callers, which report an unparseable file and an invalid schema
+    differently.
+    """
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise SchemaFileError(str(e)) from e
 
 
 def make_marker(mark_str: str) -> pytest.MarkDecorator:
@@ -103,14 +120,17 @@ def process_substitutions(
                         case UserFunctionKwargs():
                             result[alias] = wrap_function(_resolve_function_name(func_def.name.root, current_context), default_kwargs=func_def.kwargs)
                         case _:
-                            raise StageExecutionError(f"Invalid function definition for '{alias}': expected UserFunctionName or UserFunctionKwargs")
-                    logger.info(f"Seeded {alias} = {result[alias]}")
+                            raise RuntimeError(f"Unhandled function definition for '{alias}': {type(func_def).__name__}")
+                    logger.debug("Seeded %s", alias)
 
             case VarsSubstitution():
                 for key, value in step.vars.items():
                     resolved_value = walk(value, current_context)
                     result[key] = resolved_value
-                    logger.info(f"Seeded {key} = {resolved_value}")
+                    # Names only, at DEBUG: a substituted value can be an auth
+                    # token, and pytest attaches captured logs to failure
+                    # reports. Same boundary as the carrier's context dumps.
+                    logger.debug("Seeded %s", key)
 
             case _:
                 raise RuntimeError(f"Unhandled substitution type: {type(step).__name__}")

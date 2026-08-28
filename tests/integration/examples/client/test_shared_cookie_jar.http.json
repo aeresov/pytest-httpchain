@@ -1,0 +1,36 @@
+{
+    "description": "One httpx.Client per scenario, so a Set-Cookie carries to later stages with no save step",
+    "stages": [
+        {
+            "name": "receive_cookie",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/scoped-cookies"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "cookie_is_sent_back",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/headers"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "contains": ["session=root"]
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

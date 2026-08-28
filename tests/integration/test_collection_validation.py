@@ -147,6 +147,41 @@ def test_ambiguous_ref_surfaces_as_diagnostic_warning_at_collection(pytester):
     assert "Failed to parse JSON file" not in output
 
 
+def test_load_failures_are_coded_the_same_way_as_the_cli(pytester):
+    """Collection and `validate` share one load-failure taxonomy.
+
+    They used to have two: the same malformed file produced
+    `[HTTPCHAIN014] Invalid JSON syntax` from the CLI and an uncoded
+    "Cannot load JSON file" from pytest, contradicting docs/diagnostics.md,
+    which carves out only 020-024 as CLI-only.
+    """
+    from pytest_httpchain.validation import validate_scenario
+
+    path = pytester.path / "test_broken.http.json"
+    path.write_text('{"stages": {"s": {"request": {"url": "http://x"}},}}')
+
+    cli = validate_scenario(path)
+    assert [d.code for d in cli.diagnostics] == ["HTTPCHAIN014"], cli.diagnostics
+    assert "Illegal trailing comma" in cli.diagnostics[0].message
+
+    result = pytester.runpytest("--collect-only")
+
+    assert result.ret != 0
+    # The same code AND the same wording, not merely "some error either way".
+    result.stdout.fnmatch_lines(["*[[]HTTPCHAIN014[]]*Illegal trailing comma*"])
+
+
+def test_schema_failures_are_coded_at_collection(pytester):
+    """A model-validation failure is HTTPCHAIN000 in both surfaces, and still
+    names the offending key (the `headerz` typo case)."""
+    _write(pytester, "test_typo.http.json", {"stages": [{"name": "s", "request": {"url": "https://x.test"}, "response": [{"verify": {"headerz": {}}}]}]})
+
+    result = pytester.runpytest("--collect-only")
+
+    assert result.ret != 0
+    result.stdout.fnmatch_lines(["*HTTPCHAIN000*headerz*Extra inputs are not permitted*"])
+
+
 def test_stages_collected_under_narrowed_python_functions(pytester):
     """Stage methods are named "test NN - <stage>", which satisfies pytest's
     default python_functions only via its bare "test" prefix rule — the space

@@ -93,17 +93,13 @@ class ReferenceResolver:
     def __init__(self, max_parent_traversal_depth: int = 3, root_path: Path | None = None, opaque: OpaquePredicate | None = None):
         self.max_parent_traversal_depth = max_parent_traversal_depth
         self.tracker = CircularDependencyTracker()
-        self.base_path: Path | None = None
         self.root_path = root_path
         self.opaque = opaque
 
-    def resolve_document(self, data: dict[str, Any], base_path: Path, root_path: Path | None = None) -> dict[str, Any]:
-        """Resolve every reference in a document. ``root_path`` (which
-        references must not escape) defaults to the resolver's, then to
-        ``base_path``."""
-        self.base_path = base_path
-        effective_root = root_path if root_path is not None else self.root_path
-        return self._resolve_refs(data, base_path, root_data=data, root_path=effective_root or base_path, doc_path=())
+    def resolve_document(self, data: dict[str, Any], base_path: Path, root_path: Path) -> dict[str, Any]:
+        """Resolve every reference in a document, relative to ``base_path`` and
+        sandboxed under ``root_path``."""
+        return self._resolve_refs(data, base_path, root_data=data, root_path=root_path, doc_path=())
 
     def resolve_file(self, path: Path) -> dict[str, Any]:
         """Load a JSON file and resolve its references."""
@@ -179,7 +175,7 @@ class ReferenceResolver:
         if file_path:
             referenced_data = self._resolve_external_ref(file_path, pointer, current_path, root_path, doc_path)
         else:
-            referenced_data = self._resolve_internal_ref(pointer, root_data, root_path, doc_path)
+            referenced_data = self._resolve_internal_ref(pointer, current_path, root_data, root_path, doc_path)
 
         return self._merge_with_siblings(data, referenced_data, current_path, root_data, root_path, doc_path)
 
@@ -196,13 +192,11 @@ class ReferenceResolver:
         self.tracker.check_external_ref(resolved_path, pointer)
 
         try:
-            full_external_data = self._load_json_file(resolved_path)
+            full_external_data = _parse_json_rejecting_duplicates(resolved_path)
             external_data = self._navigate_pointer(full_external_data, pointer, source=resolved_path) if pointer else full_external_data
 
             child_resolver = self._create_child_resolver(root_path)
-            child_resolver.base_path = resolved_path.parent
-            result = child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data, root_path=root_path, doc_path=doc_path)
-            return result
+            return child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data, root_path=root_path, doc_path=doc_path)
 
         except (OSError, json.JSONDecodeError) as e:
             raise ReferenceResolverError(f"Failed to load external reference {file_path}: {e}") from e
@@ -212,6 +206,7 @@ class ReferenceResolver:
     def _resolve_internal_ref(
         self,
         pointer: str,
+        current_path: Path,
         root_data: Any,
         root_path: Path,
         doc_path: tuple[str | int, ...],
@@ -220,8 +215,7 @@ class ReferenceResolver:
 
         try:
             referenced_data = self._navigate_pointer(root_data, pointer)
-            assert self.base_path is not None
-            return self._resolve_refs(referenced_data, self.base_path, root_data, root_path, doc_path)
+            return self._resolve_refs(referenced_data, current_path, root_data, root_path, doc_path)
         finally:
             self.tracker.clear_internal_ref(pointer)
 
@@ -269,9 +263,6 @@ class ReferenceResolver:
 
         merger = _SIBLING_MERGER if self.opaque is None else _build_opaque_aware_merger(self.opaque, doc_path)
         return merger.merge(referenced_data, resolved_siblings)
-
-    def _load_json_file(self, path: Path) -> dict[str, Any]:
-        return _parse_json_rejecting_duplicates(path)
 
     def _create_child_resolver(self, root_path: Path) -> Self:
         """A resolver for another document, inheriting the cycle tracker."""

@@ -7,6 +7,12 @@ class HttpChainError(Exception):
     """Base exception for all pytest-httpchain errors."""
 
 
+class SchemaFileError(HttpChainError):
+    """A referenced JSON Schema file could not be read or parsed. Raised by
+    ``utils.read_json_schema_file`` so the validator and the runtime can word
+    the failure their own way without re-deriving what counts as one."""
+
+
 class StageExecutionError(HttpChainError):
     """A stage failed. Carries the HTTP request/response when one was made, for
     the failure report and the HAR file; ``started`` is when the request went on

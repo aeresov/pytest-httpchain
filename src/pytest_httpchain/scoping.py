@@ -41,11 +41,14 @@ from pytest_httpchain.models import (
     ParallelConfig,
     ParallelForeachConfig,
     Parameters,
+    ResponseStep,
     SaveStep,
     Scenario,
     Stage,
+    Substitutions,
     SubstitutionsSave,
     VarsSubstitution,
+    normalize_list_input,
 )
 from pytest_httpchain.templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN
 
@@ -99,10 +102,10 @@ def extract_template_variables(obj: Any) -> set[str]:
             return set()
 
 
-def substitution_names(substitutions: Any) -> set[str]:
+def substitution_names(substitutions: Substitutions) -> set[str]:
     """Names introduced by ``vars``/``functions`` substitution entries."""
     names: set[str] = set()
-    for sub in substitutions or []:
+    for sub in substitutions:
         match sub:
             case VarsSubstitution():
                 names.update(sub.vars.keys())
@@ -111,7 +114,7 @@ def substitution_names(substitutions: Any) -> set[str]:
     return names
 
 
-def saved_in_step(response_step: Any) -> set[str]:
+def saved_in_step(response_step: ResponseStep) -> set[str]:
     """Names one response step saves. A ``user_functions`` save returns
     arbitrary keys, so it contributes none; verify steps save nothing."""
     if not isinstance(response_step, SaveStep):
@@ -190,24 +193,17 @@ def raw_stages(test_data: dict[str, Any]) -> list[Any]:
 
 
 def raw_list_entries(raw: Any) -> list[Any]:
-    """Raw entries of a list-or-mapping field in resolution order, mirroring the
-    model's ``_normalize_list_input``: a mapping's list values are extended in
-    and its scalars appended, so entry K pairs with the validated model's K.
+    """Raw entries of a list-or-mapping field in resolution order, so entry K
+    pairs with the validated model's K.
 
     Shared by every raw-JSON reader of these fields — re-deriving the shape with
-    a bare ``isinstance(..., list)`` silently drops the whole mapping form.
+    a bare ``isinstance(..., list)`` silently drops the whole mapping form. The
+    ``isinstance`` guard is what makes this different from the model's own use:
+    the validator passes unrecognized input through for pydantic to reject,
+    while a raw reader has no validator behind it and must degrade to ``[]``.
     """
-    if isinstance(raw, dict):
-        entries: list[Any] = []
-        for value in raw.values():
-            if isinstance(value, list):
-                entries.extend(value)
-            else:
-                entries.append(value)
-        return entries
-    if isinstance(raw, list):
-        return list(raw)
-    return []
+    entries = normalize_list_input(raw)
+    return list(entries) if isinstance(entries, list) else []
 
 
 def _raw_substitution_entry_names(entry: Any) -> set[str]:

@@ -17,7 +17,7 @@ import jmespath.exceptions
 import jsonschema
 import referencing.exceptions
 
-from pytest_httpchain.errors import SaveError, VerificationError
+from pytest_httpchain.errors import SaveError, SchemaFileError, VerificationError
 from pytest_httpchain.models import (
     HeaderMatcher,
     JMESPathSave,
@@ -30,7 +30,7 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.userfunc import UserFunctionError, call_user_function
-from pytest_httpchain.utils import optional_as_list, process_substitutions, resolve_scenario_path
+from pytest_httpchain.utils import optional_as_list, process_substitutions, read_json_schema_file, resolve_scenario_path
 
 
 def process_save(save_model: Save, response: httpx.Response, context: ChainMap[str, Any]) -> dict[str, Any]:
@@ -147,13 +147,11 @@ def _verify_body_schema(schema: Any, response: httpx.Response, scenario_dir: Pat
     if isinstance(schema, str | Path):
         schema_path = resolve_scenario_path(scenario_dir, schema)
         try:
-            schema = json.loads(schema_path.read_text(encoding="utf-8"))
-            check_json_schema(schema)
-        # ValueError subsumes both json.JSONDecodeError and UnicodeDecodeError:
-        # a non-UTF-8 schema file must fail the stage cleanly, not escape the
-        # abort machinery as a raw traceback.
-        except (OSError, ValueError) as e:
+            schema = read_json_schema_file(schema_path)
+        except SchemaFileError as e:
             raise VerificationError(f"Error reading body schema file '{schema_path}': {e}") from e
+        try:
+            check_json_schema(schema)
         except jsonschema.SchemaError as e:
             raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e}") from e
 

@@ -25,8 +25,8 @@ not free their numbers for reuse.
 | `HTTPCHAIN004` | warning | Variable referenced before it is saved or defined — saved by a later stage, or defined by a later substitution step (ordering / data-flow) |
 | `HTTPCHAIN005` | warning | Stage has no verify step (no response validation) |
 | `HTTPCHAIN006` | warning | Verify step asserts nothing (no-op) |
-| `HTTPCHAIN007` | error | Body `contains`/`not_contains` list the same substring |
-| `HTTPCHAIN008` | error | Body `matches`/`not_matches` list the same pattern |
+| `HTTPCHAIN007` | error | Body or header matcher `contains`/`not_contains` list the same substring |
+| `HTTPCHAIN008` | error | Body or header matcher `matches`/`not_matches` list the same pattern |
 | `HTTPCHAIN009` | warning | Saved variable is shadowed by a scenario-level fixture |
 | `HTTPCHAIN010` | error | File not found |
 | `HTTPCHAIN011` | error | Path is not a file |
