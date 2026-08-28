@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.4] - 2026-08-28
+
 ### Security
 
 - Substituted values are no longer logged at INFO. `process_substitutions` logged `Seeded <name> = <value>` for every `vars` entry and every `functions` alias, so a `--log-cli-level=INFO` run wrote auth tokens (and anything else a substitution produces) into the captured-log section pytest attaches to failure reports — while the carrier's context dumps, which carry the same data, were deliberately guarded behind DEBUG. Names only, at DEBUG, with a regression test next to the existing context-dump ones.
@@ -533,7 +535,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.3...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.4...HEAD
+[0.14.4]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.0...v0.14.1
