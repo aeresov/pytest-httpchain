@@ -26,7 +26,14 @@ def test_context_not_dumped_at_info(pytester):
 _SEEDING_EXAMPLE = "templates/test_template_expressions.http.json"
 
 
-def test_seeded_values_not_logged_at_info(pytester):
+# These test names deliberately avoid the word this file greps for. `fnmatch` is
+# CASE-INSENSITIVE on Windows (it normalizes case via os.path.normcase), and
+# pytester prints a `rootdir:` line containing a temp directory named after the
+# running test — so a test called `..._seeded_...` makes `no_fnmatch_line`
+# ("*Seeded*") match the harness's own output and fail on Windows only.
+
+
+def test_substitution_values_not_logged_at_info(pytester):
     """The same boundary, one level down: `process_substitutions` used to log
     every seeded value at INFO — including the result of a token-minting
     function — while the context dumps above were carefully guarded."""
@@ -37,7 +44,7 @@ def test_seeded_values_not_logged_at_info(pytester):
     result.stdout.no_fnmatch_line("*hello world*")
 
 
-def test_seeded_names_logged_at_debug(pytester):
+def test_substitution_names_logged_at_debug(pytester):
     """Names still get logged, so the DEBUG trace stays useful."""
     result = run_with_log_level(pytester, "DEBUG", _SEEDING_EXAMPLE)
     result.assert_outcomes(passed=1)

@@ -16,7 +16,10 @@ dependencies = [
     "pyrate-limiter>=4.2.0",
     "pytest>=9.0",
     "simpleeval>=1.0.3",
-    "typer>=0.16.0",
+    # 0.26.0 is the first release that stopped importing the deprecated
+    # `click.utils.get_binary_stream`; with `filterwarnings = error` any older
+    # typer fails collection against current click.
+    "typer>=0.26.0",
 ]
 keywords = ["testing", "pytest", "httpx", "http", "api", "integration-testing"]
 license = "MIT"

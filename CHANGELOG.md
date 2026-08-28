@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.14.4] - 2026-08-28
 
+### Changed
+
+- Minimum `typer` is now 0.26.0 (was 0.16.0). Older typer imports
+  `click.utils.get_binary_stream`, which current click deprecates — and since the suite runs under
+  `filterwarnings = error`, that made the declared floor a claim the lowest-floors CI leg could no
+  longer satisfy. 0.26.0 is the first release that stopped using it.
+
 ### Security
 
 - Substituted values are no longer logged at INFO. `process_substitutions` logged `Seeded <name> = <value>` for every `vars` entry and every `functions` alias, so a `--log-cli-level=INFO` run wrote auth tokens (and anything else a substitution produces) into the captured-log section pytest attaches to failure reports — while the carrier's context dumps, which carry the same data, were deliberately guarded behind DEBUG. Names only, at DEBUG, with a regression test next to the existing context-dump ones.
