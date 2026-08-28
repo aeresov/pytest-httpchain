@@ -324,7 +324,7 @@ def test_show_reports_scenario_fixtures_and_vars(tmp_path):
     scenario.write_text(
         json.dumps(
             {
-                "fixtures": ["server"],
+                "fixtures": ["server", "db"],
                 "substitutions": [{"vars": {"base_url": "https://x.test", "api_key": "k"}}],
                 "stages": [{"name": "s", "request": {"url": "{{ base_url }}/u"}, "response": [{"verify": {"status": 200}}]}],
             }
@@ -332,13 +332,15 @@ def test_show_reports_scenario_fixtures_and_vars(tmp_path):
     )
     result = runner.invoke(app, ["show", str(scenario)])
     assert result.exit_code == 0, result.output
-    assert "server" in result.output
-    assert "base_url" in result.output
-    assert "api_key" in result.output
+    # The rendered form, not just the names: `show` exists to be read, so the
+    # summary must join these rather than print the Python list repr.
+    assert "fixtures: db, server" in result.output
+    assert "vars: api_key, base_url" in result.output
+    assert "[" not in result.output
 
     rj = runner.invoke(app, ["show", "--format", "json", str(scenario)])
     data = json.loads(rj.output)
-    assert data["scenario_fixtures"] == ["server"]
+    assert data["scenario_fixtures"] == ["db", "server"]
     assert data["scenario_vars"] == ["api_key", "base_url"]
 
 

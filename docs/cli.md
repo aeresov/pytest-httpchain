@@ -1,8 +1,11 @@
 # Command line
 
-Installing `pytest-httpchain` also installs a `pytest-httpchain` command. Every
-subcommand is read-only: nothing here runs your tests or makes an HTTP request,
-so all of it is safe against a production scenario file.
+Installing `pytest-httpchain` also installs a `pytest-httpchain` command. None
+of it runs your tests or makes an HTTP request — the commands read scenario
+files and report on them. The one exception to "reads only" is
+`validate --deep`, which imports the modules your `module:func` references name,
+and therefore executes their top-level code; that is why it is opt-in and never
+runs at pytest collection time.
 
 If you only want to try one, `uvx pytest-httpchain --help` needs no install:
 
@@ -69,7 +72,7 @@ Summarize a scenario: its stages, what each one saves, and where each consumed
 variable comes from.
 
 ```console
-$ pytest-httpchain show tests/test_save_jmespath.http.json
+$ pytest-httpchain show tests/integration/examples/save/test_save_jmespath.http.json
 test_save_jmespath.http.json
 2 stage(s) · fixtures: server
 
@@ -77,7 +80,7 @@ test_save_jmespath.http.json
     saves:    first_user, first_user_name, user_count
 2 · use_saved_values    GET {{ server }}/user/{{ first_user.id }}
     saves:    fetched_name
-    consumes: first_user (from #1 save_jmespath), first_user_name (from #1 save_jmespath)
+    consumes: first_user (from #1 save_jmespath), first_user_name (from #1 save_jmespath), user_count (from #1 save_jmespath)
 ```
 
 The first line is the scenario's `description`, or the file name when it has
@@ -92,7 +95,7 @@ Render the stage data-flow as a [Mermaid](https://mermaid.js.org) flowchart.
 Edges are labelled with the variables that create the dependency.
 
 ```console
-$ pytest-httpchain graph tests/test_save_jmespath.http.json
+$ pytest-httpchain graph tests/integration/examples/save/test_save_jmespath.http.json
 flowchart TD
     S0["1 · save_jmespath"]
     S1["2 · use_saved_values"]

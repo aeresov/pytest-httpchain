@@ -161,12 +161,14 @@ def test_load_failures_are_coded_the_same_way_as_the_cli(pytester):
     path.write_text('{"stages": {"s": {"request": {"url": "http://x"}},}}')
 
     cli = validate_scenario(path)
-    assert [(d.code, d.message) for d in cli.diagnostics] == [("HTTPCHAIN014", cli.diagnostics[0].message)]
+    assert [d.code for d in cli.diagnostics] == ["HTTPCHAIN014"], cli.diagnostics
+    assert "Illegal trailing comma" in cli.diagnostics[0].message
 
     result = pytester.runpytest("--collect-only")
 
     assert result.ret != 0
-    result.stdout.fnmatch_lines([f"*[[]{cli.diagnostics[0].code}[]]*"])
+    # The same code AND the same wording, not merely "some error either way".
+    result.stdout.fnmatch_lines(["*[[]HTTPCHAIN014[]]*Illegal trailing comma*"])
 
 
 def test_schema_failures_are_coded_at_collection(pytester):

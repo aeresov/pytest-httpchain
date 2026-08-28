@@ -91,11 +91,11 @@ def validate(
                 status = "OK"
             typer.echo(f"{path}: {status}")
             for diagnostic in result.diagnostics:
-                # Schema diagnostics already name the location inside the
+                # Some diagnostics already name the location inside the
                 # message; repeating it makes the suffix look untrustworthy
-                # everywhere else. The field itself stays — `errors[]` in the
-                # JSON output drops `location`, so it is the only place a
-                # pydantic `extra_forbidden` carries the offending key name.
+                # everywhere else. The field itself stays — it is the
+                # machine-readable form of what the message spells out in prose,
+                # so a JSON consumer can route on it without parsing English.
                 at = f" (at {diagnostic.location})" if diagnostic.location and diagnostic.location not in diagnostic.message else ""
                 typer.echo(f"  {diagnostic.severity} [{diagnostic.code}]: {diagnostic.message}{at}")
 

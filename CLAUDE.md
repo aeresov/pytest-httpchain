@@ -21,10 +21,11 @@ uv run ruff check .
 uv run ruff format --check .
 uvx ty@0.0.49 check     # type check (pin matches CI)
 uv run lint-imports     # import layering contracts (exhaustive: new modules fail until placed)
-# Regenerate the committed JSON Schema after ANY pydantic model change: CI's
-# Lint job runs this and fails on `git diff --exit-code docs/schema`, so a model
-# change that skips it reddens CI on a generated file you never edited.
-uv run python scripts/generate_schema.py
+# Regenerate the committed JSON Schema after ANY pydantic model change. The
+# generator always exits 0, so the `git diff` is the actual gate — without it a
+# model change passes locally and then reddens CI on a generated file you never
+# edited. Commit the regenerated files.
+uv run python scripts/generate_schema.py && git add -N docs/schema && git diff --exit-code docs/schema
 
 # Format
 uv run ruff format .

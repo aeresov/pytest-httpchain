@@ -391,7 +391,6 @@ class TestRateLimiting:
             Carrier._execute_single_iteration(stage, ChainMap(), {}, limiter=limiter, max_rate_limit_delay=0.2)
 
     def test_limiter_blocks_until_timeout_elapses(self):
-
         limiter = Limiter(Rate(1, Duration.SECOND))
         assert limiter.try_acquire("api", blocking=True, timeout=2)
 
@@ -517,11 +516,9 @@ class TestContextDump:
     """Context dumps feed DEBUG logging only; they must never break a stage."""
 
     def test_serializes_plain_context(self):
-
         assert '"a": 1' in _context_dump({"a": 1})
 
     def test_circular_context_degrades_to_placeholder(self):
-
         circular: dict = {}
         circular["self"] = circular
         out = _context_dump(circular)
@@ -535,13 +532,11 @@ class TestIterationCapBeforeMaterialization:
     completing quickly (no 10^9 allocations) is the point."""
 
     def test_huge_repeat_rejected_before_allocation(self):
-
         config = ParallelRepeatConfig(repeat=10**9)
         with pytest.raises(StageExecutionError, match="exceeds maximum"):
             Carrier._build_iteration_substitutions(config, max_parallel_iterations=10)
 
     def test_huge_foreach_product_rejected_before_expansion(self):
-
         config = ParallelForeachConfig(
             foreach=[
                 IndividualParameter(individual={"a": list(range(5000))}),
@@ -552,7 +547,6 @@ class TestIterationCapBeforeMaterialization:
             Carrier._build_iteration_substitutions(config, max_parallel_iterations=10)
 
     def test_small_configs_still_expand(self):
-
         result = Carrier._build_iteration_substitutions(ParallelRepeatConfig(repeat=3), max_parallel_iterations=10)
         assert result == [{}, {}, {}]
 
@@ -565,12 +559,10 @@ class TestContextDumpNeverRaises:
     whatever a user-function save put into the context."""
 
     def test_tuple_keyed_dict_degrades(self):
-
         out = _context_dump({"a": {(1, 2): 3}})
         assert "unserializable" in out
 
     def test_poison_str_degrades(self):
-
         class Poison:
             def __str__(self):
                 raise RuntimeError("boom")
@@ -593,7 +585,6 @@ class TestRedirectExchangeRecording:
         return hop_req, hop, final_req, final
 
     def test_hops_expanded_when_recording_all(self):
-
         hop_req, hop, final_req, final = self._redirect_chain()
         started = datetime.now(UTC)
         result = IterationResult(saved_context={}, request=final_req, response=final, started=started)
@@ -610,7 +601,6 @@ class TestRedirectExchangeRecording:
         assert cls.last_response is final
 
     def test_only_final_exchange_kept_without_har(self):
-
         _, _, final_req, final = self._redirect_chain()
         started = datetime.now(UTC)
         result = IterationResult(saved_context={}, request=final_req, response=final, started=started)
@@ -658,7 +648,6 @@ class TestParallelCancellation:
         assert len(calls) < 20, f"{len(calls)} iterations ran after the failure"
 
     def test_rate_slot_wait_interrupted_by_cancellation(self):
-
         limiter = Limiter(Rate(1, Duration.SECOND))
         try:
             assert limiter.try_acquire("api", blocking=False)  # drain the bucket
@@ -679,13 +668,11 @@ class TestFailedExchangeShownFlag:
 
     @staticmethod
     def _completed_result():
-
         req = httpx.Request("GET", "http://t/x")
         resp = httpx.Response(200, request=req)
         return IterationResult(saved_context={}, request=req, response=resp, started=datetime.now(UTC)), req
 
     def test_failure_without_request_info_not_marked_failing(self):
-
         result, req = self._completed_result()
         cls = _make_carrier_subclass()
         cls._record_exchanges([result], failed=TemplatesError("undefined variable"), attempted=3)
