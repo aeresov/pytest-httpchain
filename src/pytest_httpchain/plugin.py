@@ -16,9 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pytest
-from pydantic import ValidationError
 
-import pytest_httpchain.jsonref
 from pytest_httpchain.carrier import Carrier
 from pytest_httpchain.constants import ConfigOptions
 from pytest_httpchain.factory import create_test_class
@@ -27,8 +25,8 @@ from pytest_httpchain.models import Scenario
 from pytest_httpchain.report_formatter import format_request, format_response
 from pytest_httpchain.templates import get_max_comprehension_length, set_max_comprehension_length
 from pytest_httpchain.utils import make_marker
-from pytest_httpchain.validation import check_scenario, load_scenario
-from pytest_httpchain.warnings import AmbiguousReferenceWarning, ScenarioValidationWarning
+from pytest_httpchain.validation import check_scenario, load_with_diagnostics
+from pytest_httpchain.warnings import ScenarioValidationWarning
 
 logger = logging.getLogger(__name__)
 
@@ -76,41 +74,20 @@ class JsonModule(pytest.Module):
 
     def collect(self) -> Iterable[pytest.Item | pytest.Collector]:
         ref_parent_traversal_depth = self.config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
-        try:
-            # Recorded, not raised: under `filterwarnings = error` an escaping
-            # resolver warning would land in the generic handler below as a
-            # misleading "Failed to parse JSON file". They are re-emitted after
-            # the load in the same [HTTPCHAINxxx] form as the diagnostics.
-            with warnings.catch_warnings(record=True) as caught_warnings:
-                warnings.simplefilter("always")
-                scenario, test_data = load_scenario(
-                    self.path,
-                    root_path=Path(self.config.rootpath),
-                    ref_parent_traversal_depth=ref_parent_traversal_depth,
-                )
-        except pytest_httpchain.jsonref.ReferenceResolverError as e:
-            raise pytest.Collector.CollectError(f"Cannot load JSON file {self.path}: {e}") from None
-        except ValidationError as e:
-            error_details = []
-            for error in e.errors():
-                loc = " -> ".join(str(x) for x in error["loc"])
-                msg = error["msg"]
-                error_details.append(f"  - {loc}: {msg}")
 
-            full_error_msg = f"Cannot parse test scenario in {self.path}:\n" + "\n".join(error_details)
-            raise pytest.Collector.CollectError(full_error_msg) from None
-        except Exception as e:
-            raise pytest.Collector.CollectError(f"Failed to parse JSON file {self.path}: {e}") from None
+        # Load failures arrive as coded diagnostics, the same ones `validate`
+        # reports, and go through the one partition below — so a broken file is
+        # described identically by the CLI and by collection.
+        loaded, diagnostics = load_with_diagnostics(
+            self.path,
+            root_path=Path(self.config.rootpath),
+            ref_parent_traversal_depth=ref_parent_traversal_depth,
+        )
+        if loaded is not None:
+            scenario, test_data = loaded
+            self._reject_chain_splitting_dist_mode(scenario)
+            diagnostics += check_scenario(scenario, test_data)
 
-        for caught in caught_warnings:
-            if isinstance(caught.message, AmbiguousReferenceWarning):
-                warnings.warn(ScenarioValidationWarning(f"{self.path}: [HTTPCHAIN026] {caught.message}"), stacklevel=2)
-            else:
-                warnings.warn_explicit(caught.message, caught.category, caught.filename, caught.lineno)
-
-        self._reject_chain_splitting_dist_mode(scenario)
-
-        diagnostics, _ = check_scenario(scenario, test_data)
         for diagnostic in diagnostics:
             if diagnostic.severity == "warning":
                 warnings.warn(ScenarioValidationWarning(f"{self.path}: [{diagnostic.code}] {diagnostic.message}"), stacklevel=2)
@@ -118,6 +95,7 @@ class JsonModule(pytest.Module):
         if error_diagnostics:
             detail = "\n".join(f"  - [{d.code}] {d.message}" for d in error_diagnostics)
             raise pytest.Collector.CollectError(f"Invalid test scenario in {self.path}:\n{detail}")
+        assert loaded is not None, "a failed load always yields at least one error diagnostic"
 
         max_parallel_iterations = self.config.getini(ConfigOptions.MAX_PARALLEL_ITERATIONS)
         try:

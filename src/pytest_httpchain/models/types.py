@@ -157,6 +157,15 @@ TemplateExpressionOnly = Annotated[
     AfterValidator(validate_template_expression),
     WithJsonSchema({"type": "string", "pattern": _COMPLETE_TEMPLATE_PATTERN}),
 ]
+# For `Any`-typed template fields: the runtime type stays permissive (a verify
+# expression re-validates as a boolean after rendering), while the editor schema
+# says what the field actually accepts. Without it the field emits `items: {}`
+# and an editor cannot flag the mistake that matters most here — forgetting the
+# `{{ }}`, which makes the assertion a non-empty (always truthy) string.
+TemplateExpressionSchema = Annotated[
+    Any,
+    WithJsonSchema({"type": "string", "pattern": _COMPLETE_TEMPLATE_PATTERN}),
+]
 # For numeric fields, whose stringified form the runtime coerces ("30" -> 30.0).
 NumberOrTemplate = Annotated[
     str,

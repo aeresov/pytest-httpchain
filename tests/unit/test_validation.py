@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest_httpchain.validation.loader as validation_loader
-from pytest_httpchain.validation import DiagnosticCode, resolve_root_path, validate_scenario
+from pytest_httpchain.validation import SEVERITY, DiagnosticCode, resolve_root_path, validate_scenario
 
 # A stable importable directory so `userfuncs:<name>` refs resolve under --syspath.
 USERFUNCS_DIR = Path(__file__).parent / "test_validation_userfuncs"
@@ -895,6 +895,39 @@ def test_all_diagnostic_codes_published_in_docs():
         assert code in page, f"{code} is not documented in docs/diagnostics.md"
     for code in set(re.findall(r"HTTPCHAIN\d{3}", page)):
         assert code in registry, f"docs/diagnostics.md documents unknown code {code}"
+
+
+def test_every_code_declares_a_severity():
+    """`diag()` looks the severity up by code, so a newly appended code must
+    fail here rather than at its first call site."""
+    assert set(SEVERITY) == set(DiagnosticCode), {
+        "missing_from_map": sorted(set(DiagnosticCode) - set(SEVERITY)),
+        "unknown_in_map": sorted(set(SEVERITY) - set(DiagnosticCode)),
+    }
+
+
+def test_documented_severities_match_the_registry():
+    """The docs table is the third place a severity is written down; keep it
+    honest against SEVERITY, including the page's "deep findings are always
+    warnings" claim."""
+    import re
+
+    page = (Path(__file__).resolve().parents[2] / "docs" / "diagnostics.md").read_text()
+    documented = dict(re.findall(r"^\| `(HTTPCHAIN\d{3})` \| (\w+) \|", page, re.M))
+
+    assert documented, "no severity rows parsed from docs/diagnostics.md — did the table format change?"
+    assert set(documented) == {str(code) for code in DiagnosticCode}, "docs table rows and DiagnosticCode disagree"
+    mismatched = {code: (severity, SEVERITY[DiagnosticCode(code)]) for code, severity in documented.items() if severity != SEVERITY[DiagnosticCode(code)]}
+    assert not mismatched, f"documented severity != SEVERITY (code: (docs, code)): {mismatched}"
+
+    deep_codes = (
+        DiagnosticCode.REFERENCED_FILE_NOT_FOUND,
+        DiagnosticCode.SCHEMA_FILE_INVALID,
+        DiagnosticCode.IMPORT_FAILED,
+        DiagnosticCode.UNKNOWN_ARG,
+        DiagnosticCode.MISSING_ARG,
+    )
+    assert all(SEVERITY[code] == "warning" for code in deep_codes), "docs say deep findings are always warnings"
 
 
 def test_function_kwargs_templates_are_dead_text_no_warn(datadir):

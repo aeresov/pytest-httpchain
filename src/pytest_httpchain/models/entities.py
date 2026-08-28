@@ -32,6 +32,7 @@ from pytest_httpchain.models.types import (
     StatusCode,
     TemplateExpression,
     TemplateExpressionOnly,
+    TemplateExpressionSchema,
     VariableName,
     XMLString,
     convert_namespace_to_dict,
@@ -377,7 +378,7 @@ class Verify(Descripted):
         default_factory=dict,
         description="Expected response headers: a string (exact match) or a matcher object (contains/not_contains/matches/not_matches) per key.",
     )
-    expressions: list[Any] = Field(
+    expressions: list[TemplateExpressionSchema] = Field(
         default_factory=list,
         description=(
             "Template expressions evaluated as boolean conditions against the context "

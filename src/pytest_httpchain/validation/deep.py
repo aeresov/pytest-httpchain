@@ -4,12 +4,12 @@ Never run at collection time; every finding is a warning.
 """
 
 import inspect
-import json
 import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from pytest_httpchain.errors import SchemaFileError
 from pytest_httpchain.models import (
     BinaryBody,
     FilesBody,
@@ -23,7 +23,7 @@ from pytest_httpchain.models import (
     check_json_schema,
 )
 from pytest_httpchain.userfunc import UserFunctionError, call_target, import_function
-from pytest_httpchain.utils import resolve_scenario_path
+from pytest_httpchain.utils import read_json_schema_file, resolve_scenario_path
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, diag
 
 
@@ -69,7 +69,7 @@ def _check_path_value(value: Any, location: str, base_dir: Path | None = None) -
         return
     path = _literal_path(value)
     if path is not None and not resolve_scenario_path(base_dir, path).exists():
-        yield diag(DiagnosticCode.REFERENCED_FILE_NOT_FOUND, "warning", f"Referenced file not found: {path}", location)
+        yield diag(DiagnosticCode.REFERENCED_FILE_NOT_FOUND, f"Referenced file not found: {path}", location)
 
 
 def _check_schema_path(schema: Any, location: str, base_dir: Path | None = None) -> Iterator[Diagnostic]:
@@ -79,19 +79,17 @@ def _check_schema_path(schema: Any, location: str, base_dir: Path | None = None)
         return
     path = resolve_scenario_path(base_dir, path)
     if not path.exists():
-        yield diag(DiagnosticCode.REFERENCED_FILE_NOT_FOUND, "warning", f"Schema file not found: {path}", location)
+        yield diag(DiagnosticCode.REFERENCED_FILE_NOT_FOUND, f"Schema file not found: {path}", location)
         return
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    # ValueError subsumes json.JSONDecodeError and UnicodeDecodeError, matching
-    # the runtime read in response_steps._verify_body_schema.
-    except (OSError, ValueError) as e:
-        yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, "warning", f"Schema file is not valid JSON: {path}: {e}", location)
+        data = read_json_schema_file(path)
+    except SchemaFileError as e:
+        yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, f"Schema file is not valid JSON: {path}: {e}", location)
         return
     try:
         check_json_schema(data)
     except Exception as e:
-        yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, "warning", f"Schema file is not a valid JSON Schema: {path}: {e}", location)
+        yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, f"Schema file is not a valid JSON Schema: {path}: {e}", location)
 
 
 def _file_diagnostics(scenario: Scenario, base_dir: Path | None = None) -> Iterator[Diagnostic]:
@@ -179,9 +177,9 @@ def _function_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
         try:
             func = import_function(name)
         except UserFunctionError as e:
-            yield diag(DiagnosticCode.IMPORT_FAILED, "warning", f"Cannot import function '{name}': {e}", location)
+            yield diag(DiagnosticCode.IMPORT_FAILED, f"Cannot import function '{name}': {e}", location)
             continue
         if not check_signature:
             continue
         for code, problem in _signature_problems(func, injected | kwargs.keys()):
-            yield diag(code, "warning", f"Function '{name}': {problem}", location)
+            yield diag(code, f"Function '{name}': {problem}", location)

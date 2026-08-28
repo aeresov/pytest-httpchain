@@ -27,19 +27,24 @@ from pytest_httpchain.utils import make_marker, optional_as_list
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ScenarioInfo, diag
 
 
-def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[Diagnostic], ScenarioInfo]:
+def _scenario_fixtures(scenario: Scenario) -> list[str]:
+    """Every fixture name the scenario or any stage requests."""
+    return sorted({*scenario.fixtures, *(name for stage in scenario.stages for name in stage.fixtures)})
+
+
+def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagnostic]:
     """Semantic checks on an already-loaded, schema-valid scenario.
 
     Takes the parsed ``test_data`` alongside the validated model so template
     references can be read from the raw text. The composition order below is the
     reported order.
     """
-    fixtures = sorted({*scenario.fixtures, *(name for stage in scenario.stages for name in stage.fixtures)})
+    fixtures = _scenario_fixtures(scenario)
     vars_defined = extract_defined_variables(scenario)
     vars_saved = extract_saved_variables(scenario)
     scenario_sub_names = set(substitution_names(scenario.substitutions))
 
-    diagnostics: list[Diagnostic] = [
+    return [
         *_stage_name_diagnostics(scenario),
         *_fixture_diagnostics(scenario, vars_saved),
         *_scenario_template_diagnostics(test_data, set(fixtures), scenario_sub_names),
@@ -52,15 +57,21 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> tuple[list[
         *_template_key_diagnostics(test_data),
     ]
 
-    scenario_info = ScenarioInfo(
+
+def describe_scenario(scenario: Scenario, test_data: dict[str, Any]) -> ScenarioInfo:
+    """Structural summary for the CLI's ``--format json`` payload.
+
+    Separate from `check_scenario` because only the CLI wants it: pytest
+    collection needs the diagnostics alone, and used to discard this as ``_``.
+    """
+    return ScenarioInfo(
         num_stages=len(scenario.stages),
         stage_names=[stage.name for stage in scenario.stages],
         vars_referenced=sorted(extract_template_variables(test_data)),
-        vars_saved=sorted(vars_saved),
-        vars_defined=sorted(vars_defined),
-        fixtures=fixtures,
+        vars_saved=sorted(extract_saved_variables(scenario)),
+        vars_defined=sorted(extract_defined_variables(scenario)),
+        fixtures=_scenario_fixtures(scenario),
     )
-    return diagnostics, scenario_info
 
 
 def _stage_name_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
@@ -73,7 +84,7 @@ def _stage_name_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
     counts = Counter(stage.name for stage in scenario.stages if stage.name)
     duplicates = {name for name, count in counts.items() if count > 1}
     if duplicates:
-        yield diag(DiagnosticCode.DUPLICATE_STAGE, "error", f"Duplicate stage names found: {sorted(duplicates)}", location="stages")
+        yield diag(DiagnosticCode.DUPLICATE_STAGE, f"Duplicate stage names found: {sorted(duplicates)}", location="stages")
 
 
 def _fixture_diagnostics(scenario: Scenario, vars_saved: set[str]) -> Iterator[Diagnostic]:
@@ -89,13 +100,12 @@ def _fixture_diagnostics(scenario: Scenario, vars_saved: set[str]) -> Iterator[D
         vars_in_stage = scope.scenario_substitutions | scope.stage_substitutions | scope.parametrize_params | scope.foreach_params
         var_conflicts |= fixtures_in_stage & vars_in_stage
     if var_conflicts:
-        yield diag(DiagnosticCode.FIXTURE_CONFLICT, "error", f"Conflicting fixtures and vars with same names: {sorted(var_conflicts)}")
+        yield diag(DiagnosticCode.FIXTURE_CONFLICT, f"Conflicting fixtures and vars with same names: {sorted(var_conflicts)}")
 
     shadowed_saves = set(scenario.fixtures) & vars_saved
     if shadowed_saves:
         yield diag(
             DiagnosticCode.FIXTURE_SHADOWS_SAVE,
-            "warning",
             f"Saved variables shadowed by scenario-level fixtures: {sorted(shadowed_saves)} (fixture values win in every stage; these saves can never be read)",
         )
 
@@ -129,14 +139,12 @@ def _scenario_template_diagnostics(test_data: dict[str, Any], fixtures: set[str]
         if fixture_refs:
             yield diag(
                 DiagnosticCode.FIXTURE_IN_SCENARIO_TEMPLATE,
-                "error",
                 f"Fixtures referenced in scenario-level '{key}' templates: {sorted(fixture_refs)} (the scenario-level context never includes fixture values)",
                 location=key,
             )
         if forward_refs:
             yield diag(
                 DiagnosticCode.SCENARIO_UNDEFINED_VAR,
-                "error",
                 f"Scenario-level '{key}' references name(s) before the substitution step that defines them: {sorted(forward_refs)} "
                 f"(steps resolve strictly in order; this crashes at scenario initialization)",
                 location=key,
@@ -144,7 +152,6 @@ def _scenario_template_diagnostics(test_data: dict[str, Any], fixtures: set[str]
         if undefined_refs:
             yield diag(
                 DiagnosticCode.SCENARIO_UNDEFINED_VAR,
-                "error",
                 f"Undefined variable(s) in scenario-level '{key}' templates: {sorted(undefined_refs)} (resolved against only scenario substitutions, before any stage runs)",
                 location=key,
             )
@@ -158,7 +165,6 @@ def _reserved_name_diagnostics(user_names: set[str]) -> Iterator[Diagnostic]:
     if reserved_conflicts:
         yield diag(
             DiagnosticCode.RESERVED_NAME,
-            "warning",
             f"Name(s) {sorted(reserved_conflicts)} are shadowed by the reserved response metadata namespace inside response steps "
             f"(save/verify templates see the HTTP response there, not your value)",
         )
@@ -202,9 +208,8 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iter
                 continue
             yield diag(
                 DiagnosticCode.UNDEFINED_VAR,
-                "warning",
                 f"Stage '{stage.name}': parametrize value references '{name}' — only scenario-level substitutions are in scope when values are resolved",
-                location=stage.name,
+                location=f"stages[{i}].parametrize",
             )
 
         for name in sorted(extract_template_variables(raw.get("always_run"))):
@@ -216,60 +221,61 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iter
                     msg = f"Stage '{stage.name}': always_run references '{name}', which is only saved in this stage's response — always_run is evaluated before the stage runs"
                 else:
                     msg = f"Stage '{stage.name}': always_run references '{name}' before it is saved (saved in stage '{scenario.stages[j].name}')"
-                yield diag(DiagnosticCode.FORWARD_REF, "warning", msg, location=stage.name)
+                yield diag(DiagnosticCode.FORWARD_REF, msg, location=f"stages[{i}].always_run")
             else:
                 yield diag(
                     DiagnosticCode.UNDEFINED_VAR,
-                    "warning",
                     f"Stage '{stage.name}': always_run references '{name}' — potentially not in scope; only fixtures, "
                     f"parametrize parameters, scenario substitutions, and variables saved by earlier stages are available",
-                    location=stage.name,
+                    location=f"stages[{i}].always_run",
                 )
 
-        # (references, names available to them, is-a-pre-response-phase). Each
-        # substitution step is checked against its own scope, not the whole
-        # stage's: checking cumulatively is what catches intra-list forward
-        # references. A name referenced by several steps is reported once.
-        phase_checks: list[tuple[list[str], frozenset[str], bool]] = []
+        # (phase, references, names available to them). Each substitution step is
+        # checked against its own scope, not the whole stage's: checking
+        # cumulatively is what catches intra-list forward references. A name
+        # referenced by several steps is reported once. The phase is carried
+        # rather than a bare "is this pre-response?" flag because it is also what
+        # the author needs told: "undefined in this stage" sends them hunting,
+        # "undefined in this stage's request" does not.
+        phase_checks: list[tuple[str, list[str], frozenset[str]]] = []
         seen_sub_refs: set[str] = set()
         for entry_refs, prior_sub_names in substitution_step_refs(raw.get("substitutions")):
             entry_refs -= seen_sub_refs
             seen_sub_refs |= entry_refs
-            phase_checks.append((sorted(entry_refs), scope.always_run | prior_sub_names, True))
+            phase_checks.append(("substitutions", sorted(entry_refs), scope.always_run | prior_sub_names))
         phase_checks += [
-            (sorted(extract_template_variables(raw.get("parallel"))), scope.pre_iteration, True),
-            (sorted(extract_template_variables(raw.get("request"))), scope.request, True),
-            (sorted(extract_template_variables(raw.get("response"))), scope.response, False),
+            ("parallel", sorted(extract_template_variables(raw.get("parallel"))), scope.pre_iteration),
+            ("request", sorted(extract_template_variables(raw.get("request"))), scope.request),
+            ("response", sorted(extract_template_variables(raw.get("response"))), scope.response),
         ]
 
-        undefined_here: set[str] = set()
-        for refs, available, in_request in phase_checks:
+        # Insertion order, so output stays deterministic across runs.
+        undefined_by_phase: dict[str, set[str]] = {}
+        for phase, refs, available in phase_checks:
             for name in refs:
                 if name in available:
                     continue
                 if name in scope.stage_substitutions:
                     yield diag(
                         DiagnosticCode.FORWARD_REF,
-                        "warning",
                         f"Stage '{stage.name}': substitution references '{name}' before the substitution step that defines it — steps resolve in order",
-                        location=stage.name,
+                        location=f"stages[{i}].substitutions",
                     )
                 elif name in all_saved:
                     j = first_save_stage[name]
-                    if j == i and in_request:
-                        msg = f"Stage '{stage.name}': variable '{name}' is referenced in the request but only saved in this stage's response"
+                    if j == i and phase != "response":
+                        msg = f"Stage '{stage.name}': {phase} references '{name}', which is only saved in this stage's response"
                     else:
                         msg = f"Stage '{stage.name}': variable '{name}' is referenced before it is saved (saved in stage '{scenario.stages[j].name}')"
-                    yield diag(DiagnosticCode.FORWARD_REF, "warning", msg, location=stage.name)
+                    yield diag(DiagnosticCode.FORWARD_REF, msg, location=f"stages[{i}].{phase}")
                 else:
-                    undefined_here.add(name)
+                    undefined_by_phase.setdefault(phase, set()).add(name)
 
-        if undefined_here:
+        for phase, names in undefined_by_phase.items():
             yield diag(
                 DiagnosticCode.UNDEFINED_VAR,
-                "warning",
-                f"Stage '{stage.name}': potentially undefined variable(s) referenced: {sorted(undefined_here)}",
-                location=stage.name,
+                f"Stage '{stage.name}': {phase} references potentially undefined variable(s): {sorted(names)}",
+                location=f"stages[{i}].{phase}",
             )
 
 
@@ -279,7 +285,7 @@ def _verify_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
     header declarations."""
     for i, stage in enumerate(scenario.stages):
         if not any(isinstance(step, VerifyStep) for step in stage.response):
-            yield diag(DiagnosticCode.NO_VERIFY, "warning", f"Stage '{stage.name}' has no response validation (no verify step)", location=stage.name)
+            yield diag(DiagnosticCode.NO_VERIFY, f"Stage '{stage.name}' has no response validation (no verify step)", location=f"stages[{i}]")
 
         for k, step in enumerate(stage.response):
             if not isinstance(step, VerifyStep):
@@ -290,7 +296,6 @@ def _verify_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
             if _is_noop_verify(verify):
                 yield diag(
                     DiagnosticCode.NOOP_VERIFY,
-                    "warning",
                     f"Stage '{stage.name}': verify step asserts nothing (no status, headers, expressions, user functions, or body checks)",
                     location=location,
                 )
@@ -301,7 +306,6 @@ def _verify_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                 if isinstance(expr, str) and not is_complete_template(expr):
                     yield diag(
                         DiagnosticCode.NONTEMPLATE_EXPRESSION,
-                        "warning",
                         f"Stage '{stage.name}': verify expression {expr!r} is not a template ({{{{ }}}}); it is always truthy and asserts nothing",
                         location=location,
                     )
@@ -367,7 +371,7 @@ def _contradiction_diagnostics(
     ):
         overlap = {str(value) for value in required} & {str(value) for value in forbidden}
         if overlap:
-            yield diag(code, "error", f"Stage '{stage_name}': {what} both requires and forbids {noun}: {sorted(overlap)}", location=location)
+            yield diag(code, f"Stage '{stage_name}': {what} both requires and forbids {noun}: {sorted(overlap)}", location=location)
 
 
 def _inline_schema_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
@@ -407,18 +411,17 @@ def _inline_schema_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
             case _:
                 return set()
 
-    for stage in scenario.stages:
-        for step in stage.response:
+    for i, stage in enumerate(scenario.stages):
+        for k, step in enumerate(stage.response):
             if isinstance(step, VerifyStep) and isinstance(step.verify.body.schema, dict):
                 found = directive_keys(step.verify.body.schema)
                 if found:
                     yield diag(
                         DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE,
-                        "warning",
                         f"Inline JSON schema contains scenario reference directive(s) {sorted(found)}. "
                         f"Inline schemas are standard JSON Schema: scenario directives are not resolved there. "
                         f"Inline the shared content, or reference the schema by file path instead.",
-                        location=stage.name,
+                        location=f"stages[{i}].response[{k}].verify.body.schema",
                     )
 
 
@@ -439,7 +442,7 @@ def _marker_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                 # for reserved names ('_foo'), ast.literal_eval TypeError for
                 # exotic argument nodes — any parse failure must become a
                 # diagnostic, not a validator crash.
-                yield diag(DiagnosticCode.INVALID_MARKER, "error", f"Invalid marker {mark!r}: {e}", location=location)
+                yield diag(DiagnosticCode.INVALID_MARKER, f"Invalid marker {mark!r}: {e}", location=location)
 
     yield from check(scenario.marks, "marks")
     for i, stage in enumerate(scenario.stages):
@@ -471,7 +474,6 @@ def _template_key_diagnostics(test_data: dict[str, Any]) -> Iterator[Diagnostic]
     for key, location in templated_keys(test_data, ""):
         yield diag(
             DiagnosticCode.TEMPLATE_IN_KEY,
-            "warning",
             f"Key {key!r} contains a template expression, but only values are substituted — the key is sent literally. "
             f"Move the dynamic part into the value, or build the object in a user function.",
             location=location or None,
@@ -486,7 +488,6 @@ def _parametrize_timing_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
         if parametrize_values_contain_template(stage.parametrize):
             yield diag(
                 DiagnosticCode.PARAMETRIZE_COLLECTION_RESOLUTION,
-                "info",
                 f"Stage '{stage.name}' has template parametrize values: scenario-level substitutions for this scenario "
                 f"resolve at collection time (pytest needs concrete parameter values), including any user functions they call",
                 location=f"stages[{i}].parametrize",

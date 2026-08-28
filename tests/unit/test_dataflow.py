@@ -179,7 +179,7 @@ def test_m12_cross_stage_fixture_and_param_not_conflict():
             {"name": "b", "parametrize": [{"individual": {"token": [1, 2]}}], "request": {"url": "https://x.test/{{ token }}"}, "response": [{"verify": {"status": 200}}]},
         ]
     )
-    diags, _ = check_scenario(sc, data)
+    diags = check_scenario(sc, data)
     assert DiagnosticCode.FIXTURE_CONFLICT not in _codes(diags)
 
 
@@ -196,7 +196,7 @@ def test_m12_same_stage_fixture_and_var_conflict():
             },
         ]
     )
-    diags, _ = check_scenario(sc, data)
+    diags = check_scenario(sc, data)
     assert DiagnosticCode.FIXTURE_CONFLICT in _codes(diags)
 
 
@@ -208,7 +208,7 @@ def test_m13_scenario_substitution_undefined_is_error():
         "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
     }
     sc = Scenario.model_validate(data)
-    diags, _ = check_scenario(sc, data)
+    diags = check_scenario(sc, data)
     assert any(d.code == DiagnosticCode.SCENARIO_UNDEFINED_VAR and d.severity == "error" for d in diags), [d.message for d in diags]
 
 
@@ -219,7 +219,7 @@ def test_m13_scenario_substitution_self_reference_ok():
         "stages": [{"name": "s", "request": {"url": "{{ url }}"}, "response": [{"verify": {"status": 200}}]}],
     }
     sc = Scenario.model_validate(data)
-    diags, _ = check_scenario(sc, data)
+    diags = check_scenario(sc, data)
     assert DiagnosticCode.SCENARIO_UNDEFINED_VAR not in _codes(diags)
 
 
@@ -238,9 +238,44 @@ def test_m11_substitution_referencing_foreach_param_is_flagged():
             },
         ]
     )
-    diags, _ = check_scenario(sc, data)
-    undefined_msgs = [d.message for d in diags if d.code == DiagnosticCode.UNDEFINED_VAR]
-    assert any("wid" in m for m in undefined_msgs), undefined_msgs
+    diags = check_scenario(sc, data)
+    undefined = [d for d in diags if d.code == DiagnosticCode.UNDEFINED_VAR]
+    # The phase is the whole explanation here — `wid` IS defined a few lines
+    # below, just not yet when substitutions resolve. Saying only "stage 's'"
+    # sends the author looking for a typo that isn't there.
+    assert [(d.location, d.message) for d in undefined] == [("stages[0].substitutions", "Stage 's': substitutions references potentially undefined variable(s): ['wid']")], (
+        undefined
+    )
+
+
+def test_undefined_names_are_reported_per_phase():
+    """Two phases referencing different undefined names are two findings, each
+    pointing at its own phase — not one bag naming the stage."""
+    sc, data = _scenario(
+        [
+            {
+                "name": "s",
+                "request": {"url": "https://x.test/{{ nope_req }}"},
+                "response": [{"verify": {"status": 200, "expressions": ["{{ nope_resp }}"]}}],
+            },
+        ]
+    )
+    diags = check_scenario(sc, data)
+    undefined = {d.location: d.message for d in diags if d.code == DiagnosticCode.UNDEFINED_VAR}
+
+    assert set(undefined) == {"stages[0].request", "stages[0].response"}, undefined
+    assert "nope_req" in undefined["stages[0].request"]
+    assert "nope_resp" in undefined["stages[0].response"]
+
+
+def test_dataflow_locations_are_indexed_json_paths():
+    """`Diagnostic.location` is documented as a machine-routable address, so an
+    unnamed stage must still produce a usable one (it used to be "")."""
+    sc, data = _scenario([{"request": {"url": "https://x.test/{{ nope }}"}, "response": [{"verify": {"status": 200}}]}])
+    diags = check_scenario(sc, data)
+
+    assert all(d.location for d in diags), [d for d in diags if not d.location]
+    assert {d.location for d in diags if d.code == DiagnosticCode.UNDEFINED_VAR} == {"stages[0].request"}
 
 
 def test_saved_response_name_not_consumed_in_response_steps():
@@ -361,7 +396,7 @@ def test_scenario_substitution_forward_ref_is_error():
         "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
     }
     sc = Scenario.model_validate(data)
-    diags, _ = check_scenario(sc, data)
+    diags = check_scenario(sc, data)
     assert any(d.code == DiagnosticCode.SCENARIO_UNDEFINED_VAR and d.severity == "error" and "before the substitution step" in d.message for d in diags), [d.message for d in diags]
 
 
@@ -373,7 +408,7 @@ def test_scenario_substitution_same_entry_ref_is_error():
         "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
     }
     sc = Scenario.model_validate(data)
-    diags, _ = check_scenario(sc, data)
+    diags = check_scenario(sc, data)
     assert any(d.code == DiagnosticCode.SCENARIO_UNDEFINED_VAR and d.severity == "error" for d in diags), [d.message for d in diags]
 
 
@@ -386,7 +421,7 @@ def test_scenario_functions_kwargs_are_dead_text_no_error():
         "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
     }
     sc = Scenario.model_validate(data)
-    diags, _ = check_scenario(sc, data)
+    diags = check_scenario(sc, data)
     assert DiagnosticCode.SCENARIO_UNDEFINED_VAR not in _codes(diags), [d.message for d in diags]
 
 
@@ -398,14 +433,14 @@ def test_scenario_functions_templated_name_is_checked():
         "substitutions": [{"vars": {"mod": "x"}}, {"functions": {"f": "{{ mod }}:fn"}}],
         "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
     }
-    diags, _ = check_scenario(Scenario.model_validate(ok), ok)
+    diags = check_scenario(Scenario.model_validate(ok), ok)
     assert DiagnosticCode.SCENARIO_UNDEFINED_VAR not in _codes(diags), [d.message for d in diags]
 
     bad = {
         "substitutions": [{"functions": {"f": "{{ missing_mod }}:fn"}}],
         "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
     }
-    diags, _ = check_scenario(Scenario.model_validate(bad), bad)
+    diags = check_scenario(Scenario.model_validate(bad), bad)
     assert DiagnosticCode.SCENARIO_UNDEFINED_VAR in _codes(diags), [d.message for d in diags]
 
 
@@ -417,7 +452,7 @@ def test_reserved_marker_name_is_diagnostic_not_crash():
         "stages": [{"name": "s", "marks": ["_foo"], "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
     }
     sc = Scenario.model_validate(data)
-    diags, _ = check_scenario(sc, data)
+    diags = check_scenario(sc, data)
     assert any(d.code == DiagnosticCode.INVALID_MARKER and d.severity == "error" for d in diags), [d.message for d in diags]
 
 
