@@ -282,9 +282,6 @@ def test_saved_response_name_not_consumed_in_response_steps():
     """The reserved `response` metadata namespace shadows a same-named earlier
     save inside response steps, so a `response` reference there is not a data
     dependency; in a request template it still is."""
-    from pytest_httpchain.dataflow import analyze_dataflow
-    from pytest_httpchain.models import Scenario
-
     data = {
         "stages": [
             {

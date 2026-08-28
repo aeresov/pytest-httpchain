@@ -383,22 +383,5 @@ def malformed_json():
     return Response("{invalid json", mimetype="application/json", status=200)
 
 
-@app.get("/empty-response")
-def empty_response():
-    """Return empty response body"""
-    from flask import Response
-
-    return Response("", status=200)
-
-
-@app.get("/non-utf8")
-def non_utf8():
-    """Return non-UTF8 binary data with JSON content type"""
-    from flask import Response
-
-    # Invalid UTF-8 bytes
-    return Response(b"\xff\xfe\x00\x01", mimetype="application/json", status=200)
-
-
 # ============ User Functions for Tests ============
 # Note: auth functions are in auth.py, verify functions are in verify.py, save functions are in save.py

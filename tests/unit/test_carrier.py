@@ -9,8 +9,11 @@ Success cases for body types, verify, and save are covered by integration tests:
 
 import json
 import ssl
+import threading
+import time
 from collections import ChainMap
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from http import HTTPMethod
 
 import httpx
@@ -18,12 +21,14 @@ import pytest
 import trustme
 from pyrate_limiter import Duration, Limiter, Rate
 
-from pytest_httpchain.carrier import Carrier, IterationResult, fresh_scenario_state
-from pytest_httpchain.errors import RequestError, SaveError, VerificationError
+from pytest_httpchain.carrier import Carrier, IterationResult, _context_dump, fresh_scenario_state
+from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.models import (
     BinaryBody,
     FilesBody,
+    IndividualParameter,
     JMESPathSave,
+    ParallelForeachConfig,
     ParallelRepeatConfig,
     Request,
     Scenario,
@@ -34,6 +39,7 @@ from pytest_httpchain.models import (
 from pytest_httpchain.models.entities import ResponseBody
 from pytest_httpchain.request_builder import build_request_kwargs
 from pytest_httpchain.response_steps import check_rendered_assertions, process_save, process_verify
+from pytest_httpchain.templates import TemplatesError
 
 
 class TestBuildRequestKwargsErrors:
@@ -385,7 +391,6 @@ class TestRateLimiting:
             Carrier._execute_single_iteration(stage, ChainMap(), {}, limiter=limiter, max_rate_limit_delay=0.2)
 
     def test_limiter_blocks_until_timeout_elapses(self):
-        import time
 
         limiter = Limiter(Rate(1, Duration.SECOND))
         assert limiter.try_acquire("api", blocking=True, timeout=2)
@@ -512,12 +517,10 @@ class TestContextDump:
     """Context dumps feed DEBUG logging only; they must never break a stage."""
 
     def test_serializes_plain_context(self):
-        from pytest_httpchain.carrier import _context_dump
 
         assert '"a": 1' in _context_dump({"a": 1})
 
     def test_circular_context_degrades_to_placeholder(self):
-        from pytest_httpchain.carrier import _context_dump
 
         circular: dict = {}
         circular["self"] = circular
@@ -532,16 +535,12 @@ class TestIterationCapBeforeMaterialization:
     completing quickly (no 10^9 allocations) is the point."""
 
     def test_huge_repeat_rejected_before_allocation(self):
-        from pytest_httpchain.errors import StageExecutionError
-        from pytest_httpchain.models import ParallelRepeatConfig
 
         config = ParallelRepeatConfig(repeat=10**9)
         with pytest.raises(StageExecutionError, match="exceeds maximum"):
             Carrier._build_iteration_substitutions(config, max_parallel_iterations=10)
 
     def test_huge_foreach_product_rejected_before_expansion(self):
-        from pytest_httpchain.errors import StageExecutionError
-        from pytest_httpchain.models import IndividualParameter, ParallelForeachConfig
 
         config = ParallelForeachConfig(
             foreach=[
@@ -553,7 +552,6 @@ class TestIterationCapBeforeMaterialization:
             Carrier._build_iteration_substitutions(config, max_parallel_iterations=10)
 
     def test_small_configs_still_expand(self):
-        from pytest_httpchain.models import ParallelRepeatConfig
 
         result = Carrier._build_iteration_substitutions(ParallelRepeatConfig(repeat=3), max_parallel_iterations=10)
         assert result == [{}, {}, {}]
@@ -567,13 +565,11 @@ class TestContextDumpNeverRaises:
     whatever a user-function save put into the context."""
 
     def test_tuple_keyed_dict_degrades(self):
-        from pytest_httpchain.carrier import _context_dump
 
         out = _context_dump({"a": {(1, 2): 3}})
         assert "unserializable" in out
 
     def test_poison_str_degrades(self):
-        from pytest_httpchain.carrier import _context_dump
 
         class Poison:
             def __str__(self):
@@ -597,7 +593,6 @@ class TestRedirectExchangeRecording:
         return hop_req, hop, final_req, final
 
     def test_hops_expanded_when_recording_all(self):
-        from datetime import UTC, datetime
 
         hop_req, hop, final_req, final = self._redirect_chain()
         started = datetime.now(UTC)
@@ -615,7 +610,6 @@ class TestRedirectExchangeRecording:
         assert cls.last_response is final
 
     def test_only_final_exchange_kept_without_har(self):
-        from datetime import UTC, datetime
 
         _, _, final_req, final = self._redirect_chain()
         started = datetime.now(UTC)
@@ -664,8 +658,6 @@ class TestParallelCancellation:
         assert len(calls) < 20, f"{len(calls)} iterations ran after the failure"
 
     def test_rate_slot_wait_interrupted_by_cancellation(self):
-        import threading
-        import time
 
         limiter = Limiter(Rate(1, Duration.SECOND))
         try:
@@ -687,14 +679,12 @@ class TestFailedExchangeShownFlag:
 
     @staticmethod
     def _completed_result():
-        from datetime import UTC, datetime
 
         req = httpx.Request("GET", "http://t/x")
         resp = httpx.Response(200, request=req)
         return IterationResult(saved_context={}, request=req, response=resp, started=datetime.now(UTC)), req
 
     def test_failure_without_request_info_not_marked_failing(self):
-        from pytest_httpchain.templates import TemplatesError
 
         result, req = self._completed_result()
         cls = _make_carrier_subclass()

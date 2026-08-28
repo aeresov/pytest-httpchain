@@ -127,24 +127,22 @@ class TestPerExchangeStartTimes:
     from startedDateTime, so per-entry truth matters."""
 
     def test_entries_carry_their_own_start_times(self, tmp_path):
-        from datetime import UTC, datetime
 
         req1, resp1 = _make_pair()
         req2, resp2 = _make_pair()
-        t0 = datetime(2026, 7, 22, 10, 0, 0, tzinfo=UTC)
-        t1 = datetime(2026, 7, 22, 10, 0, 5, tzinfo=UTC)
+        t0 = datetime.datetime(2026, 7, 22, 10, 0, 0, tzinfo=datetime.UTC)
+        t1 = datetime.datetime(2026, 7, 22, 10, 0, 5, tzinfo=datetime.UTC)
         path = write_har_file(tmp_path, "t", [(req1, resp1, t0), (req2, resp2, t1)])
         entries = json.loads(path.read_text())["log"]["entries"]
         assert entries[0]["startedDateTime"] == t0.isoformat()
         assert entries[1]["startedDateTime"] == t1.isoformat()
 
     def test_missing_start_time_falls_back_to_write_time(self, tmp_path):
-        from datetime import datetime
 
         req, resp = _make_pair()
         path = write_har_file(tmp_path, "t", [(req, resp, None)])
         entries = json.loads(path.read_text())["log"]["entries"]
-        datetime.fromisoformat(entries[0]["startedDateTime"])
+        datetime.datetime.fromisoformat(entries[0]["startedDateTime"])
 
 
 class TestSerializationFamilies:
