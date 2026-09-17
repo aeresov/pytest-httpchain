@@ -383,7 +383,7 @@ class Verify(Descripted):
         description=(
             "Template expressions evaluated as boolean conditions against the context "
             "(saved variables, fixtures, substitutions). Each must be a full template "
-            "expression that evaluates to a truthy/falsy value. Response metadata is "
+            "expression that evaluates to a boolean. Response metadata is "
             "available as `response.*`: status, reason, headers, elapsed_ms."
         ),
         examples=[["{{ user_age >= 18 }}", "{{ response.status == 200 }}", "{{ 'json' in response.headers['content-type'] }}"]],
