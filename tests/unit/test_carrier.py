@@ -21,7 +21,14 @@ import pytest
 import trustme
 from pyrate_limiter import Duration, Limiter, Rate
 
-from pytest_httpchain.carrier import Carrier, IterationResult, _context_dump, fresh_scenario_state
+from pytest_httpchain.carrier import (
+    Carrier,
+    IterationResult,
+    _context_dump,
+    _parallel_int,
+    _parallel_number,
+    fresh_scenario_state,
+)
 from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.models import (
     BinaryBody,
@@ -435,6 +442,55 @@ class TestRateLimiting:
             Carrier._execute_single_iteration(stage, ChainMap(), {}, limiter=limiter, max_rate_limit_delay=0.3)
         # It actually blocked for ~the timeout rather than failing instantly.
         assert time.monotonic() - start >= 0.25
+
+
+class TestResolvedParallelSettings:
+    """The numeric `parallel` settings are `PositiveInt | NumberOrTemplate`.
+    walk() re-validates the resolved config, but NumberOrTemplate accepts any
+    complete template, so a template resolving to another template arrives as
+    text. Whatever gets through, a value that cannot make a working limiter or
+    pool must fail loudly — never quietly turn rate limiting off."""
+
+    @pytest.mark.parametrize("value", [0, 0.5, -1, pytest.param("0.5", id="fractional-string"), "abc", "{{ 2 }}"])
+    def test_bad_count_rejected_naming_field_and_value(self, value):
+        with pytest.raises(StageExecutionError) as excinfo:
+            _parallel_int("calls_per_sec", value)
+        assert "calls_per_sec" in str(excinfo.value)
+        assert repr(value) in str(excinfo.value)
+
+    def test_fractional_rate_is_rejected_not_truncated(self):
+        # int(0.5) == 0, which is falsy: the plain cast turned "one call every
+        # two seconds" into no rate limiting at all.
+        config = ParallelRepeatConfig.model_construct(repeat=2, max_concurrency=2, calls_per_sec=0.5, max_rate_limit_delay=60)
+        with pytest.raises(StageExecutionError, match="calls_per_sec"):
+            _make_carrier_subclass()._run_iterations(_make_stage(), ChainMap(), [{}, {}], config)
+
+    def test_residual_template_fails_the_stage_cleanly(self):
+        # A substitution holding '{{ 2 }}' resolves to that text, which satisfies
+        # NumberOrTemplate on walk()'s re-validation; int() of it raised a bare
+        # ValueError, which no stage-failure path catches.
+        carrier = _make_carrier_subclass(global_context=ChainMap({"rate": "{{ 2 }}"}))
+        stage = _make_stage(parallel=ParallelRepeatConfig.model_validate({"repeat": 2, "max_concurrency": 2, "calls_per_sec": "{{ rate }}"}))
+        with pytest.raises(pytest.fail.Exception, match="calls_per_sec"):
+            carrier.execute_stage(stage, {})
+
+    @pytest.mark.parametrize("value", [0, 0.5, "{{ 2 }}"])
+    def test_bad_max_concurrency_rejected(self, value):
+        # int(0.5) == 0 workers, and ThreadPoolExecutor(max_workers=0) raises a
+        # bare ValueError rather than failing the stage.
+        config = ParallelRepeatConfig.model_construct(repeat=2, max_concurrency=value, calls_per_sec=None, max_rate_limit_delay=60)
+        with pytest.raises(StageExecutionError, match="max_concurrency"):
+            _make_carrier_subclass()._run_iterations(_make_stage(), ChainMap(), [{}, {}], config)
+
+    def test_bad_max_rate_limit_delay_rejected(self):
+        config = ParallelRepeatConfig.model_construct(repeat=2, max_concurrency=2, calls_per_sec=None, max_rate_limit_delay="{{ 5 }}")
+        with pytest.raises(StageExecutionError, match="max_rate_limit_delay"):
+            _make_carrier_subclass()._run_iterations(_make_stage(), ChainMap(), [{}, {}], config)
+
+    def test_fractional_delay_is_kept(self):
+        # Unlike the two counts, the delay is a duration: half a second is a
+        # meaningful budget, so only the counts demand whole numbers.
+        assert _parallel_number("max_rate_limit_delay", 0.5) == 0.5
 
 
 class TestParallelIterationCap:

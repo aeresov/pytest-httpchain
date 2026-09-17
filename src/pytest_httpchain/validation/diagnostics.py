@@ -45,6 +45,7 @@ class DiagnosticCode(StrEnum):
     RESERVED_NAME = "HTTPCHAIN027"
     SCHEMA_SCENARIO_DIRECTIVE = "HTTPCHAIN028"
     TEMPLATE_IN_KEY = "HTTPCHAIN029"
+    TEMPLATE_IN_KWARGS = "HTTPCHAIN030"
 
 
 # A code's severity is a property of the code, not of the site that raises it:
@@ -84,6 +85,7 @@ SEVERITY: dict[DiagnosticCode, Severity] = {
     DiagnosticCode.RESERVED_NAME: "warning",
     DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE: "warning",
     DiagnosticCode.TEMPLATE_IN_KEY: "warning",
+    DiagnosticCode.TEMPLATE_IN_KWARGS: "warning",
 }
 
 

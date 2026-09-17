@@ -6,11 +6,22 @@ Each check family is a generator of `Diagnostic`; `check_scenario` composes them
 import re
 import warnings
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
-from pytest_httpchain.models import HeaderMatcher, Scenario, Verify, VerifyStep, parametrize_values_contain_template
+from pytest_httpchain.models import (
+    FunctionsSubstitution,
+    HeaderMatcher,
+    SaveStep,
+    Scenario,
+    Substitution,
+    SubstitutionsSave,
+    UserFunctionKwargs,
+    Verify,
+    VerifyStep,
+    parametrize_values_contain_template,
+)
 from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     SCENARIO_TEMPLATE_FIELDS,
@@ -23,7 +34,7 @@ from pytest_httpchain.scoping import (
     substitution_names,
     substitution_step_refs,
 )
-from pytest_httpchain.templates import TEMPLATE_PATTERN, is_complete_template
+from pytest_httpchain.templates import TEMPLATE_PATTERN, contains_template, is_complete_template
 from pytest_httpchain.utils import make_marker, optional_as_list
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ScenarioInfo, diag
 
@@ -56,6 +67,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagno
         *_marker_diagnostics(scenario),
         *_parametrize_timing_diagnostics(scenario),
         *_template_key_diagnostics(test_data),
+        *_template_kwargs_diagnostics(scenario),
     ]
 
 
@@ -484,6 +496,44 @@ def _template_key_diagnostics(test_data: dict[str, Any]) -> Iterator[Diagnostic]
             f"Move the dynamic part into the value, or build the object in a user function.",
             location=location or None,
         )
+
+
+def _template_kwargs_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
+    """HTTPCHAIN030: ``{{ }}`` inside a ``functions`` substitution's ``kwargs``,
+    which `utils.process_substitutions` hands to ``wrap_function`` raw.
+
+    Deliberate — the kwargs are the function's own defaults, not chain data — but
+    it leaves the one template nothing ever renders, reaching the function as
+    literal text. Like a templated key (029), no other check would mention it.
+
+    Driven off the validated model, not the raw JSON: a request body may
+    legitimately carry a key named "functions", and only the model tells a
+    substitution step from one.
+    """
+
+    def offending(substitutions: Sequence[Substitution], location: str) -> Iterator[Diagnostic]:
+        for step in substitutions:
+            if not isinstance(step, FunctionsSubstitution):
+                continue
+            for alias, func_def in step.functions.items():
+                if not isinstance(func_def, UserFunctionKwargs):
+                    continue
+                for name, value in func_def.kwargs.items():
+                    if contains_template(value):
+                        yield diag(
+                            DiagnosticCode.TEMPLATE_IN_KWARGS,
+                            f"Function '{alias}' kwarg '{name}' contains a template expression, but a functions substitution's kwargs are passed to the "
+                            f"function unrendered — it arrives as literal text. Render the value in a 'vars' substitution and pass that variable where the "
+                            f"alias is called, or resolve the value inside the function.",
+                            location=location,
+                        )
+
+    yield from offending(scenario.substitutions, "substitutions")
+    for i, stage in enumerate(scenario.stages):
+        yield from offending(stage.substitutions, f"stages[{i}].substitutions")
+        for k, step in enumerate(stage.response):
+            if isinstance(step, SaveStep) and isinstance(step.save, SubstitutionsSave):
+                yield from offending(step.save.substitutions, f"stages[{i}].response[{k}].save.substitutions")
 
 
 def _parametrize_timing_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:

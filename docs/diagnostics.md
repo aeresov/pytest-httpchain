@@ -48,6 +48,7 @@ not free their numbers for reuse.
 | `HTTPCHAIN027` | warning | User-defined name shadowed by the reserved `response` namespace |
 | `HTTPCHAIN028` | warning | Scenario directive (`$include`/`$merge`, or file-path `$ref`) inside an inline JSON Schema — not resolved there |
 | `HTTPCHAIN029` | warning | Template expression in a dict **key** — only values are substituted, so the key is sent literally |
+| `HTTPCHAIN030` | warning | Template expression in a `functions` substitution's **kwargs** — kwargs are passed to the function unrendered, so it arrives as literal text |
 
 ## Deep (opt-in) checks
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `HTTPCHAIN030` warns when a `functions` substitution's `kwargs` contain a `{{ }}` template. Those
+  kwargs are deliberately passed to the function unrendered, so the template arrived as literal text
+  with nothing reporting it — the same gap `HTTPCHAIN029` closes for templated dict keys.
+
 ### Fixed
 
 - `verify.expressions` entries must now evaluate to a bool. Any truthy non-boolean previously passed
@@ -21,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HAR filenames are built from an allow-list of characters and bounded to 255 bytes. Parametrize ids
   containing `?`, `*` or quotes previously made the write fail, and the file was dropped with only a
   log warning.
+- A `parallel` setting that resolves to something unusable now fails the stage with a message naming
+  the field and the value. `repeat`, `max_concurrency`, `calls_per_sec` and `max_rate_limit_delay`
+  accept a template, and a template resolving to another template string satisfies the model but
+  reached the engine as text — `int("{{ 2 }}")` then escaped as a plugin traceback. A resolved `0`
+  for `calls_per_sec` also used to disable rate limiting silently rather than being rejected.
 
 ### Changed
 

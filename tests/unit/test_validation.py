@@ -982,14 +982,44 @@ def test_documented_severities_match_the_registry():
     assert all(SEVERITY[code] == "warning" for code in deep_codes), "docs say deep findings are always warnings"
 
 
-def test_function_kwargs_templates_are_dead_text_no_warn(datadir):
+def test_function_kwargs_templates_are_dead_text_reported_as_030(datadir):
     """functions-substitution kwargs are passed to wrap_function raw
-    (utils.process_substitutions) — a template inside them is never rendered
-    at seed time, so it must not produce data-flow diagnostics."""
+    (utils.process_substitutions) — a template inside them is never rendered at
+    seed time. The two halves of that rule are pinned together here: it is not a
+    reference, so no data-flow diagnostic may fire, and it is never rendered, so
+    HTTPCHAIN030 is what reports it."""
     r = validate_scenario(datadir / "substitution_function_kwargs_template_ok.json")
     assert r.valid is True, r.errors
     assert DiagnosticCode.FORWARD_REF not in _codes(r)
     assert DiagnosticCode.UNDEFINED_VAR not in _codes(r)
+    kwargs_diagnostics = [d for d in r.diagnostics if d.code == DiagnosticCode.TEMPLATE_IN_KWARGS]
+    assert [d.location for d in kwargs_diagnostics] == ["stages[0].substitutions"]
+    assert "'helper'" in kwargs_diagnostics[0].message
+    assert "'arg'" in kwargs_diagnostics[0].message
+
+
+def test_scenario_function_kwargs_template_warns(datadir):
+    r = validate_scenario(datadir / "scenario_function_kwargs_template.json")
+    assert r.valid is True, r.errors
+    kwargs_diagnostics = [d for d in r.diagnostics if d.code == DiagnosticCode.TEMPLATE_IN_KWARGS]
+    assert [d.location for d in kwargs_diagnostics] == ["substitutions"]
+
+
+def test_response_save_function_kwargs_template_warns(datadir):
+    """Substitutions nested in a save step are the third place functions can be
+    seeded, and the easiest one for the check to miss."""
+    r = validate_scenario(datadir / "response_save_function_kwargs_template.json")
+    assert r.valid is True, r.errors
+    kwargs_diagnostics = [d for d in r.diagnostics if d.code == DiagnosticCode.TEMPLATE_IN_KWARGS]
+    assert [d.location for d in kwargs_diagnostics] == ["stages[0].response[1].save.substitutions"]
+
+
+def test_literal_function_kwargs_do_not_warn(datadir):
+    """Only a template is dead text; literal kwargs (and the bare-name function
+    form, which has no kwargs at all) are the normal case."""
+    r = validate_scenario(datadir / "substitution_function_kwargs_literal_ok.json")
+    assert r.valid is True, r.errors
+    assert DiagnosticCode.TEMPLATE_IN_KWARGS not in _codes(r)
 
 
 def test_duplicate_substitution_forward_refs_reported_once(datadir):
