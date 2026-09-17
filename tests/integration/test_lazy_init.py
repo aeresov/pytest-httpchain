@@ -114,6 +114,19 @@ def test_template_parametrize_still_resolves_at_collection(pytester):
     assert Path(pytester.path, "mk_envs_called.txt").exists()
 
 
+def test_collection_context_always_run_does_not_force_init(pytester):
+    """A template `always_run` must not initialize when the context is already
+    there. Template parametrize values resolve scenario substitutions at
+    collection, so a false `always_run` can be evaluated with no initialization
+    at all — and auth must stay uncalled for stages that only ever skip."""
+    _setup(pytester, "lazy_init/test_lazy_always_run_collection_context.http.json")
+    result = pytester.runpytest("-s", "-rs")
+    result.assert_outcomes(errors=1, skipped=4)
+    result.stdout.fnmatch_lines(["*Flow aborted*"])
+    assert Path(pytester.path, "mk_envs_called.txt").exists(), "parametrize templates resolve substitutions at collection"
+    assert not Path(pytester.path, "auth_called.txt").exists(), "auth must not run for a stage that only skips"
+
+
 def test_template_parametrize_executes_correctly(pytester):
     _setup(pytester, "lazy_init/test_lazy_parametrize.http.json")
     result = pytester.runpytest("-s")

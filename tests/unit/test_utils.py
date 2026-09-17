@@ -1,6 +1,7 @@
 import pytest
 
 from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
+from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.userfunc import call_user_function
 from pytest_httpchain.utils import process_substitutions
 
@@ -143,6 +144,30 @@ class TestProcessSubstitutions:
         result = process_substitutions(substitutions, {"mod": "tests.unit.test_utils"})
 
         assert result["my_func"](c=3) == {"a": 1, "b": 2, "c": 3}
+
+    def test_step_sees_prior_steps_over_context(self):
+        """Each step reads the incoming context through the names seeded so far,
+        which shadow it; what comes back is a plain dict of only this call's own
+        names, whatever the layering underneath."""
+        context = {"name": "outer", "other": "kept"}
+        substitutions = [
+            VarsSubstitution(vars={"name": "inner"}),
+            VarsSubstitution(vars={"echo": "{{ name }}", "passthrough": "{{ other }}"}),
+        ]
+        result = process_substitutions(substitutions, context)
+
+        assert type(result) is dict
+        assert result == {"name": "inner", "echo": "inner", "passthrough": "kept"}
+
+    def test_step_does_not_see_its_own_names(self):
+        """A step sees PRIOR steps only — the boundary `scoping` validates
+        against, which a single mutating context layer would erase."""
+        substitutions = [
+            VarsSubstitution(vars={"first": 1, "second": "{{ first + 1 }}"}),
+        ]
+
+        with pytest.raises(TemplatesError, match="Undefined variable"):
+            process_substitutions(substitutions)
 
 
 class TestCallUserFunction:

@@ -28,6 +28,22 @@ class _AnyOfTaggedUnions(GenerateJsonSchema):
         return json_schema
 
 
+def _widen_with_jsonref(subschema: dict[str, Any], default_title: str | None = None) -> dict[str, Any]:
+    """Wrap a subschema so a reference object is accepted in its place.
+
+    Title and description are moved onto the wrapper rather than copied: left on
+    the inner branch as well, editors show the same text twice at some sites and
+    once at others.
+    """
+    wrapper: dict[str, Any] = {"anyOf": [{"$ref": "#/$defs/JsonRef"}, subschema]}
+    title = subschema.pop("title", default_title)
+    if title is not None:
+        wrapper["title"] = title
+    if "description" in subschema:
+        wrapper["description"] = subschema.pop("description")
+    return wrapper
+
+
 def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
     """Accept reference objects at named-type and root-property sites.
 
@@ -68,19 +84,10 @@ def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
     for type_name, original_def in list(schema["$defs"].items()):
         if type_name == "JsonRef":
             continue
-        schema["$defs"][type_name] = {"anyOf": [{"$ref": "#/$defs/JsonRef"}, original_def]}
-        if "title" in original_def:
-            schema["$defs"][type_name]["title"] = original_def.pop("title")
-        if "description" in original_def:
-            schema["$defs"][type_name]["description"] = original_def.pop("description")
+        schema["$defs"][type_name] = _widen_with_jsonref(original_def)
 
     for prop_name, prop_def in list(schema.get("properties", {}).items()):
-        schema["properties"][prop_name] = {
-            "anyOf": [{"$ref": "#/$defs/JsonRef"}, prop_def],
-            "title": prop_def.get("title", prop_name),
-        }
-        if "description" in prop_def:
-            schema["properties"][prop_name]["description"] = prop_def.get("description")
+        schema["properties"][prop_name] = _widen_with_jsonref(prop_def, default_title=prop_name)
 
     # The root forbids extra keys, so keys handled before model validation must
     # be declared: "$schema" and the directives the loader resolves.

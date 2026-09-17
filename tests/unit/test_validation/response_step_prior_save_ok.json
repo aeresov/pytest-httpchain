@@ -1,0 +1,12 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/ok" },
+            "response": [
+                { "save": { "jmespath": { "token": "token" } } },
+                { "verify": { "expressions": [ "{{ token == 'abc' }}" ] } }
+            ]
+        }
+    ]
+}

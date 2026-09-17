@@ -50,15 +50,18 @@ class TestStageScopes:
         assert scope.always_run == {"svar", "sfix", "f1", "p1"}
         assert scope.pre_iteration == scope.always_run | {"sub1"}
         assert scope.request == scope.pre_iteration | {"item"}
-        # Response steps additionally see the reserved `response` metadata namespace.
-        assert scope.response == scope.request | {"saved1", "response"}
+        # Response steps additionally see the reserved `response` metadata
+        # namespace; this stage's own saves are NOT in scope wholesale — each
+        # step sees only what strictly earlier steps saved.
+        assert scope.response == scope.request | {"response"}
+        assert "saved1" not in scope.response
 
     def test_saves_accumulate_into_later_stages(self):
         scopes = stage_scopes(make_scenario())
 
         assert scopes[1].earlier_saves == {"saved1"}
         assert "saved1" in scopes[1].always_run
-        # A stage's own saves are never in earlier stages' scopes.
+        # A later stage's saves are never in an earlier stage's scopes.
         assert "saved2" not in scopes[0].response
 
     def test_empty_scenario(self):
@@ -103,8 +106,12 @@ class TestContextBuilders:
             iteration = iteration_context(local, dict.fromkeys(scope.foreach_params, "value"))
             assert set(iteration) == scope.request
 
-            responded = response_step_context(with_saves(iteration, dict.fromkeys(scope.saves, "value")), response_meta=object())
+            # The carrier rebuilds the step context per step, so `response`
+            # sits above whatever earlier steps saved into the iteration context.
+            responded = response_step_context(iteration, response_meta=object())
             assert set(responded) == scope.response
+            after_saves = response_step_context(with_saves(iteration, dict.fromkeys(scope.saves, "value")), response_meta=object())
+            assert set(after_saves) == scope.response | scope.saves
 
             global_context = with_saves(global_context, dict.fromkeys(scope.saves, "value"))
 

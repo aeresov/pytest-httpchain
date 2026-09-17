@@ -269,6 +269,48 @@ class TestFilenameCollisions:
         path = write_har_file(tmp_path, "plain_name", [(request, response, None)])
         assert path.name == "plain_name.har"
 
+    def test_windows_illegal_characters_are_replaced(self, tmp_path):
+        """Parametrize ids put '?', '*', quotes and friends into nodeids. They
+        are legal on Linux but reject the write on Windows, and the plugin only
+        logs a warning when the write fails — the HAR would vanish silently."""
+        request, response = _make_pair()
+        path = write_har_file(tmp_path, 'tests/t.py::test_q[why? a*b "x"<y>|z]', [(request, response, None)])
+
+        assert not set(path.name) & set('<>:"/\\|?*')
+        assert path.exists()
+        assert "test_q" in path.name, "a human must still recognize which test the .har belongs to"
+
+    def test_long_nodeid_stays_within_the_filename_limit(self, tmp_path):
+        """255 bytes is the per-component cap on ext4/APFS/NTFS: a deep scenario
+        path plus long parametrize ids overruns it and the write raises OSError."""
+        request, response = _make_pair()
+        nodeid = "tests/deeply/nested/test_mod.http.json::mod::test_stage[" + "x" * 500 + "]"
+        path = write_har_file(tmp_path, nodeid, [(request, response, None)])
+
+        assert len(path.name.encode()) <= 255
+        assert path.exists()
+
+    def test_truncated_nodeids_do_not_collide(self, tmp_path):
+        """Two nodeids sharing a long prefix truncate to the same stem, so
+        truncation needs the digest just as much as sanitization does."""
+        request, response = _make_pair()
+        prefix = "tests/test_mod.http.json::mod::test_stage[" + "x" * 500
+        p1 = write_har_file(tmp_path, prefix + "-alpha]", [(request, response, None)])
+        p2 = write_har_file(tmp_path, prefix + "-beta]", [(request, response, None)])
+
+        assert p1 != p2
+        assert p1.exists()
+        assert p2.exists()
+
+    def test_non_ascii_nodeid_is_bounded_in_bytes(self, tmp_path):
+        """The filesystem cap counts bytes, not characters, so a multi-byte
+        parametrize id must not slip past it."""
+        request, response = _make_pair()
+        path = write_har_file(tmp_path, "tests/test_mod.http.json::mod::test_stage[" + "д" * 300 + "]", [(request, response, None)])
+
+        assert len(path.name.encode()) <= 255
+        assert path.exists()
+
 
 def test_repeated_response_headers_are_not_comma_folded():
     """httpx.Headers.items() folds repeated names with ", ". RFC 6265 forbids

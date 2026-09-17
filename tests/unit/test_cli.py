@@ -146,6 +146,37 @@ def test_build_schema_matches_committed():
     assert build_schema() == committed
 
 
+def test_schema_metadata_is_hoisted_out_of_jsonref_branches():
+    """Widening a subschema MOVES its title/description onto the `anyOf`
+    wrapper. Copying them instead leaves an editor showing the same text twice
+    at the sites that copy and once at the sites that move."""
+    from pytest_httpchain.schema import build_schema
+
+    offenders: list[str] = []
+
+    def collect(node, path):
+        match node:
+            case dict():
+                match node.get("anyOf"):
+                    case [{"$ref": "#/$defs/JsonRef"}, dict() as branch, *_]:
+                        offenders.extend(f"{path}.anyOf[1].{key}" for key in ("title", "description") if key in branch)
+                for key, value in node.items():
+                    collect(value, f"{path}.{key}")
+            case list():
+                for index, item in enumerate(node):
+                    collect(item, f"{path}[{index}]")
+
+    collect(build_schema(), "$")
+    assert not offenders, f"metadata left inside JsonRef anyOf branches: {offenders}"
+
+    # MOVED, not dropped: asserting only the absence above would also pass if the
+    # hoist were deleted, silently stripping every root property and $defs entry
+    # of the hover text the published editor schema exists to provide.
+    schema = build_schema()
+    assert schema["properties"]["stages"]["description"], "root property lost its description"
+    assert schema["$defs"]["Stage"]["title"], "$defs entry lost its title"
+
+
 def test_schema_patterns_are_ecma262_compatible():
     """JSON Schema defines `pattern` as an ECMA-262 regex. Python's named-group
     spelling `(?P<name>...)` is a SyntaxError in JS engines, and VS Code's JSON

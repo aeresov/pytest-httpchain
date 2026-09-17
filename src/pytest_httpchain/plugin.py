@@ -318,6 +318,23 @@ def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> pytest.Col
     return None
 
 
+def _sections_will_be_shown(config: pytest.Config, report: pytest.TestReport) -> bool:
+    """Whether pytest will actually print this report's sections.
+
+    Formatting an exchange re-parses and re-serializes its whole body, which on a
+    suite of passing stages nobody ever reads: the terminal renders sections from
+    the FAILURES block, and from the PASSES block only under -rP/-rA (XFAILURES
+    needs --xfail-tb). An xdist worker unregisters the terminal reporter and ships
+    its sections to the controller, which does the rendering — so there, yes.
+    """
+    if report.failed:
+        return True
+    terminal_reporter = config.pluginmanager.get_plugin("terminalreporter")
+    if terminal_reporter is None:
+        return True
+    return terminal_reporter.hasopt("P") or bool(config.option.xfail_tb)
+
+
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> Any:
     # tryfirst makes this the outermost wrapper: its post-yield half sees the
@@ -357,17 +374,18 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
             hops = len(carrier_class.last_response.history)
             suffix += f" (after {hops} redirect{'s' if hops != 1 else ''})"
 
-        for title, what, exchange, formatter in (
-            ("HTTP Request", "request", carrier_class.last_request, format_request),
-            ("HTTP Response", "response", carrier_class.last_response, format_response),
-        ):
-            if exchange is None:
-                continue
-            try:
-                body = formatter(exchange)
-            except Exception as e:
-                body = f"<Error formatting {what}: {e}>"
-            report.sections.append((f"{title}{suffix}", body))
+        if _sections_will_be_shown(item.config, report):
+            for title, what, exchange, formatter in (
+                ("HTTP Request", "request", carrier_class.last_request, format_request),
+                ("HTTP Response", "response", carrier_class.last_response, format_response),
+            ):
+                if exchange is None:
+                    continue
+                try:
+                    body = formatter(exchange)
+                except Exception as e:
+                    body = f"<Error formatting {what}: {e}>"
+                report.sections.append((f"{title}{suffix}", body))
 
         output_dir = item.config.getoption("httpchain_output_dir")
         if output_dir and carrier_class.last_exchanges:

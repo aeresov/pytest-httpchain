@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `verify.expressions` entries must now evaluate to a bool. Any truthy non-boolean previously passed
+  silently, so `"{{ response.status }}"` against a 500 response asserted nothing. A scenario relying
+  on truthiness now fails with an explicit error naming the offending type.
+- A template `always_run` can now see the scenario substitutions it is documented to see. When the
+  chain aborted before any stage body ran — a fixture error in the first stage — the context was
+  still empty, so the cleanup stage died on an undefined variable instead of running.
+- The validator checks each response step against the saves that have actually landed by that step,
+  so a verify step referencing a name a *later* save produces in the same stage is now reported as
+  `HTTPCHAIN004` instead of passing validation and failing at runtime.
+- HAR filenames are built from an allow-list of characters and bounded to 255 bytes. Parametrize ids
+  containing `?`, `*` or quotes previously made the write fail, and the file was dropped with only a
+  log warning.
+
+### Changed
+
+- Request/response report sections are formatted only when pytest will actually render them (a
+  failure, or `-rP`/`-rA`/`--xfail-tb`), instead of for every passing test.
+- The generated JSON Schema no longer repeats a root property's description inside its `anyOf`
+  branch.
+
 ## [0.14.4] - 2026-08-28
 
 ### Changed

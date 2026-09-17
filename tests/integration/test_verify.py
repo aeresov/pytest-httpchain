@@ -17,6 +17,17 @@ def test_verify_expressions(run_scenario):
     result.assert_outcomes(errors=0, failed=0, passed=1)
 
 
+def test_verify_expression_non_bool_fails(run_scenario):
+    """An expression that renders to a value rather than a condition must fail.
+
+    `{{ response.status }}` against a 400 renders to the truthy int 400, so a
+    truthiness gate passed the stage green while asserting nothing at all.
+    """
+    result = run_scenario("verify/test_verify_expression_non_bool.http.json")
+    result.assert_outcomes(errors=0, failed=1, passed=0)
+    result.stdout.fnmatch_lines(["*must evaluate to bool*"])
+
+
 def test_verify_user_function(run_scenario):
     """Test user function returning bool"""
     result = run_scenario("verify/test_verify_user_function.http.json", "verify.py")

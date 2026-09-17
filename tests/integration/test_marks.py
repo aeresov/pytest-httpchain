@@ -57,6 +57,15 @@ def test_always_run_template_fixture_and_param_scope(run_scenario):
     result.assert_outcomes(errors=0, failed=1, passed=2, skipped=1)
 
 
+def test_always_run_template_before_init(run_scenario):
+    """always_run templates see scenario substitutions even when the abort came
+    before any stage body ran — nothing had initialized the context yet"""
+    result = run_scenario("marks/test_always_run_before_init.http.json")
+    # The fixture error errors out the first stage; the cleanup's template
+    # resolves against the scenario substitutions and the stage runs
+    result.assert_outcomes(errors=1, failed=0, passed=1, skipped=0)
+
+
 def test_always_run_template_lazy(pytester, run_scenario):
     """always_run templates are only evaluated once a stage has failed"""
     result = run_scenario("marks/test_always_run_lazy.http.json")

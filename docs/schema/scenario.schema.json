@@ -1697,9 +1697,7 @@
               "type": "null"
             }
           ],
-          "default": null,
-          "description": "Optional description for this component",
-          "title": "Description"
+          "default": null
         }
       ],
       "title": "Description",
@@ -1722,9 +1720,7 @@
               "type": "null"
             }
           ],
-          "default": null,
-          "description": "User function to create custom authentication.",
-          "title": "Auth"
+          "default": null
         }
       ],
       "title": "Auth",
@@ -1736,11 +1732,9 @@
           "$ref": "#/$defs/JsonRef"
         },
         {
-          "description": "pytest fixtures available to all stages",
           "items": {
             "type": "string"
           },
-          "title": "Fixtures",
           "type": "array"
         }
       ],
@@ -1753,7 +1747,6 @@
           "$ref": "#/$defs/JsonRef"
         },
         {
-          "description": "pytest markers",
           "examples": [
             [
               "xfail"
@@ -1766,7 +1759,6 @@
           "items": {
             "type": "string"
           },
-          "title": "Marks",
           "type": "array"
         }
       ],
@@ -1779,8 +1771,7 @@
           "$ref": "#/$defs/JsonRef"
         },
         {
-          "$ref": "#/$defs/SSLConfig",
-          "description": "SSL/TLS configuration."
+          "$ref": "#/$defs/SSLConfig"
         }
       ],
       "title": "ssl",
@@ -1805,9 +1796,7 @@
               },
               "type": "object"
             }
-          ],
-          "description": "Ordered list (or name-keyed mapping) of stages to execute.",
-          "title": "Stages"
+          ]
         }
       ],
       "title": "Stages",
@@ -1859,9 +1848,7 @@
               },
               "type": "object"
             }
-          ],
-          "description": "Variable substitution configuration.",
-          "title": "Substitutions"
+          ]
         }
       ],
       "title": "Substitutions",

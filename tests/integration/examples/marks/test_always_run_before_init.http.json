@@ -1,0 +1,30 @@
+{
+    "substitutions": [
+        { "vars": { "mode": "prod" } }
+    ],
+    "stages": [
+        {
+            "name": "setup_error",
+            "description": "Fixture setup fails before any stage body runs, so the chain aborts with the scenario context still uninitialized",
+            "fixtures": ["fixture_setup_error"],
+            "request": {
+                "url": "https://x.test/"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "conditional_cleanup",
+            "description": "always_run reads a scenario substitution; it must be in scope even though no stage body has run yet",
+            "fixtures": ["server"],
+            "always_run": "{{ mode == 'prod' }}",
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

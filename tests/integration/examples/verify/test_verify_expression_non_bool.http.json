@@ -1,0 +1,21 @@
+{
+    "stages": [
+        {
+            "name": "expression_renders_to_status",
+            "description": "An expression that renders to a value, not a condition, must fail against a 400",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/bad"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ response.status }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

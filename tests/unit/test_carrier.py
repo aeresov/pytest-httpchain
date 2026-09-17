@@ -226,13 +226,48 @@ class TestProcessVerifyStepErrors:
         with pytest.raises(VerificationError, match="Expression.*failed"):
             process_verify(verify, response)
 
-    def test_verify_expressions_empty_string_fails(self):
-        """Test that empty string expression fails."""
+    def test_verify_expressions_truthy_non_bool_is_rejected(self):
+        """A value written where a predicate belongs must fail, not pass green.
+
+        `{{ response.status }}` against a 500 renders to the int 500, and a
+        truthiness check would let that stage pass without asserting anything.
+        """
+        response = httpx.Response(200)
+        verify = Verify(expressions=[500])
+
+        with pytest.raises(VerificationError, match="Verify expression 0 must evaluate to bool, got int"):
+            process_verify(verify, response)
+
+    def test_verify_expressions_string_is_rejected(self):
+        """Forgetting the `{{ }}` leaves an always-truthy string behind."""
+        response = httpx.Response(200)
+        verify = Verify(expressions=["response.status == 200"])
+
+        with pytest.raises(VerificationError, match="must evaluate to bool, got str"):
+            process_verify(verify, response)
+
+    def test_verify_expressions_empty_string_is_rejected(self):
+        """Falsy, but still not a predicate: the failure must name the type."""
         response = httpx.Response(200)
         verify = Verify(expressions=[""])
 
-        with pytest.raises(VerificationError, match="Expression.*failed"):
+        with pytest.raises(VerificationError, match="must evaluate to bool, got str"):
             process_verify(verify, response)
+
+    def test_verify_expressions_rendered_away_is_rejected(self):
+        """Why `expressions` needs no `check_rendered_assertions` entry.
+
+        Substitution rewrites the list element-wise, so it cannot lose an entry:
+        one that rendered away arrives here as None and the bool contract fails it.
+        """
+        response = httpx.Response(200)
+        verify = Verify(expressions=[None])
+
+        with pytest.raises(VerificationError, match="must evaluate to bool, got NoneType"):
+            process_verify(verify, response)
+
+    def test_verify_expressions_bools_pass(self):
+        process_verify(Verify(expressions=[True, True]), httpx.Response(200))
 
     def test_verify_body_contains_failure(self):
         response = httpx.Response(200, content=b"hello world")

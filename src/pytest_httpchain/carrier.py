@@ -187,9 +187,20 @@ class Carrier:
     @classmethod
     def _resolve_always_run(cls, stage: Stage, stage_fixtures: dict[str, Any]) -> bool:
         """Resolve ``always_run``, evaluating a template form against the
-        stage-start context (stage substitutions do not exist yet)."""
+        stage-start context (stage substitutions do not exist yet).
+
+        Only a template form still missing its context initializes, and it must:
+        the scenario substitutions it is promised (see `scoping`'s scope table)
+        exist only once the context is built, and an abort raised before any stage
+        body ran — a fixture error in stage one — leaves it empty otherwise. A
+        static bool reads no context, and a collection-resolved context is already
+        populated; initializing for either would run auth and allocate the client
+        for a stage about to skip.
+        """
         if isinstance(stage.always_run, bool):
             return stage.always_run
+        if not cls._context_resolved_at_collection:
+            cls._ensure_initialized()
         try:
             return bool(walk(stage.always_run, stage_start_context(cls.global_context, stage_fixtures)))
         except TemplatesError as e:

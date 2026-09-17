@@ -4,6 +4,7 @@ import base64
 import functools
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -233,6 +234,27 @@ def create_har_log(entries: list[dict[str, Any]], comment: str | None = None) ->
     return har
 
 
+# A node ID carries path separators, "::", and whatever a parametrize id holds —
+# "?", "*", quotes, control characters, all illegal in a Windows filename — so the
+# safe set is enumerated instead of chased with a deny-list. Restricting it to
+# ASCII also makes the cap below a byte count, which is what filesystems limit.
+_UNSAFE_FILENAME_RUN = re.compile(r"[^A-Za-z0-9._-]+")
+
+# Longest single path component ext4/APFS/NTFS accept. A deeply nested scenario
+# path plus long parametrize ids reaches it, and an over-long name fails the write.
+_MAX_FILENAME_BYTES = 255
+
+
+def _har_filename(test_name: str) -> str:
+    """HAR file name for a pytest node ID: safe on every filesystem, still readable."""
+    stem = _UNSAFE_FILENAME_RUN.sub("_", test_name) or "har"
+    # Both the substitution and the truncation below are lossy, so a digest of the
+    # original node ID is what keeps distinct tests' files from overwriting each other.
+    digest = f"-{hashlib.sha1(test_name.encode(), usedforsecurity=False).hexdigest()[:8]}"
+    stem = stem[: _MAX_FILENAME_BYTES - len(digest) - len(".har")]
+    return f"{stem}.har" if stem == test_name else f"{stem}{digest}.har"
+
+
 def write_har_file(
     output_dir: Path,
     test_name: str,
@@ -246,13 +268,7 @@ def write_har_file(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    safe_name = test_name.replace("/", "_").replace("\\", "_").replace(":", "_")
-    if safe_name != test_name:
-        # Sanitization is not injective, so a digest keeps distinct tests' files
-        # from overwriting each other.
-        safe_name = f"{safe_name}-{hashlib.sha1(test_name.encode(), usedforsecurity=False).hexdigest()[:8]}"
-    filename = f"{safe_name}.har"
-    filepath = output_dir / filename
+    filepath = output_dir / _har_filename(test_name)
 
     entries = [request_response_to_har_entry(request, response, started) for request, response, started in exchanges]
     har = create_har_log(entries, comment=f"Test: {test_name}")

@@ -115,6 +115,13 @@ def process_verify(verify_model: Verify, response: httpx.Response, scenario_dir:
                     raise VerificationError(f"Header '{header_name}' doesn't match: expected {expected_value}, got {response.headers.get(header_name)}")
 
     for i, expression in enumerate(verify_model.expressions):
+        # An expression is a predicate, not a value. Truthiness alone would pass a
+        # stage on "{{ response.status }}" against a 500, and a template that
+        # rendered away to None needs no `check_rendered_assertions` entry here:
+        # the list keeps its declared length through substitution, so a vanished
+        # entry is a non-bool and fails right below.
+        if not isinstance(expression, bool):
+            raise VerificationError(f"Verify expression {i} must evaluate to bool, got {type(expression).__name__} ({expression!r}), a value written where a condition belongs")
         if not expression:
             raise VerificationError(f"Expression {i} failed: evaluated to {expression}")
 

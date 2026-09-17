@@ -18,6 +18,7 @@ from pytest_httpchain.scoping import (
     extract_saved_variables,
     extract_template_variables,
     raw_stages,
+    response_step_refs,
     stage_scopes,
     substitution_names,
     substitution_step_refs,
@@ -184,9 +185,8 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iter
 
     Checks every template reference against the phase scopes of
     ``scoping.stage_scopes``. An unavailable reference is a FORWARD_REF when the
-    name is saved later (or defined by a later substitution step), else an
-    UNDEFINED_VAR. Intra-response step ordering is approximated: a stage's own
-    saves count as available to its whole response.
+    name is saved later (by a later stage, or by a later step of this stage's
+    own response) or defined by a later substitution step, else an UNDEFINED_VAR.
     """
     scopes = stage_scopes(scenario)
     all_saved = extract_saved_variables(scenario)
@@ -230,9 +230,9 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iter
                     location=f"stages[{i}].always_run",
                 )
 
-        # (phase, references, names available to them). Each substitution step is
-        # checked against its own scope, not the whole stage's: checking
-        # cumulatively is what catches intra-list forward references. A name
+        # (phase, references, names available to them). Each substitution and
+        # response step is checked against its own scope, not the whole stage's:
+        # checking cumulatively is what catches intra-list forward references. A name
         # referenced by several steps is reported once. The phase is carried
         # rather than a bare "is this pre-response?" flag because it is also what
         # the author needs told: "undefined in this stage" sends them hunting,
@@ -246,8 +246,12 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iter
         phase_checks += [
             ("parallel", sorted(extract_template_variables(raw.get("parallel"))), scope.pre_iteration),
             ("request", sorted(extract_template_variables(raw.get("request"))), scope.request),
-            ("response", sorted(extract_template_variables(raw.get("response"))), scope.response),
         ]
+        seen_response_refs: set[str] = set()
+        for step_refs, prior_saves in response_step_refs(stage, raw.get("response")):
+            step_refs -= seen_response_refs
+            seen_response_refs |= step_refs
+            phase_checks.append(("response", sorted(step_refs), scope.response | prior_saves))
 
         # Insertion order, so output stays deterministic across runs.
         undefined_by_phase: dict[str, set[str]] = {}
@@ -263,10 +267,12 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iter
                     )
                 elif name in all_saved:
                     j = first_save_stage[name]
-                    if j == i and phase != "response":
-                        msg = f"Stage '{stage.name}': {phase} references '{name}', which is only saved in this stage's response"
-                    else:
+                    if j != i:
                         msg = f"Stage '{stage.name}': variable '{name}' is referenced before it is saved (saved in stage '{scenario.stages[j].name}')"
+                    elif phase == "response":
+                        msg = f"Stage '{stage.name}': response step references '{name}' before the save that produces it — steps resolve in order"
+                    else:
+                        msg = f"Stage '{stage.name}': {phase} references '{name}', which is only saved in this stage's response"
                     yield diag(DiagnosticCode.FORWARD_REF, msg, location=f"stages[{i}].{phase}")
                 else:
                     undefined_by_phase.setdefault(phase, set()).add(name)
@@ -300,13 +306,13 @@ def _verify_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                     location=location,
                 )
 
-            # A non-template expression is a non-empty string, hence always
-            # truthy at runtime: the assertion silently passes.
+            # A non-template expression is a plain string, never the bool an
+            # expression must evaluate to, so it fails the stage at runtime.
             for expr in verify.expressions:
                 if isinstance(expr, str) and not is_complete_template(expr):
                     yield diag(
                         DiagnosticCode.NONTEMPLATE_EXPRESSION,
-                        f"Stage '{stage.name}': verify expression {expr!r} is not a template ({{{{ }}}}); it is always truthy and asserts nothing",
+                        f"Stage '{stage.name}': verify expression {expr!r} is not a template ({{{{ }}}}); an expression must evaluate to a bool, so this fails at runtime",
                         location=location,
                     )
 

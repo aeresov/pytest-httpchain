@@ -110,6 +110,11 @@ def process_substitutions(
     """
     result: dict[str, Any] = {}
     for step in substitutions:
+        # Flattened per step, deliberately: `walk()` rebuilds its evaluator from
+        # a full pass over whatever mapping it is handed, so layering a ChainMap
+        # here would be re-walked once per rendered VALUE — measurably worse than
+        # the single copy it would replace. Rebuilding per step is also what keeps
+        # a step's own names out of its own scope.
         current_context = {**(context or {}), **result}
         match step:
             case FunctionsSubstitution():
