@@ -6,11 +6,22 @@ Each check family is a generator of `Diagnostic`; `check_scenario` composes them
 import re
 import warnings
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
-from pytest_httpchain.models import HeaderMatcher, Scenario, Verify, VerifyStep, parametrize_values_contain_template
+from pytest_httpchain.models import (
+    FunctionsSubstitution,
+    HeaderMatcher,
+    SaveStep,
+    Scenario,
+    Substitution,
+    SubstitutionsSave,
+    UserFunctionKwargs,
+    Verify,
+    VerifyStep,
+    parametrize_values_contain_template,
+)
 from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     SCENARIO_TEMPLATE_FIELDS,
@@ -18,11 +29,12 @@ from pytest_httpchain.scoping import (
     extract_saved_variables,
     extract_template_variables,
     raw_stages,
+    response_step_refs,
     stage_scopes,
     substitution_names,
     substitution_step_refs,
 )
-from pytest_httpchain.templates import TEMPLATE_PATTERN, is_complete_template
+from pytest_httpchain.templates import TEMPLATE_PATTERN, contains_template, is_complete_template
 from pytest_httpchain.utils import make_marker, optional_as_list
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ScenarioInfo, diag
 
@@ -55,6 +67,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagno
         *_marker_diagnostics(scenario),
         *_parametrize_timing_diagnostics(scenario),
         *_template_key_diagnostics(test_data),
+        *_template_kwargs_diagnostics(scenario),
     ]
 
 
@@ -184,9 +197,8 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iter
 
     Checks every template reference against the phase scopes of
     ``scoping.stage_scopes``. An unavailable reference is a FORWARD_REF when the
-    name is saved later (or defined by a later substitution step), else an
-    UNDEFINED_VAR. Intra-response step ordering is approximated: a stage's own
-    saves count as available to its whole response.
+    name is saved later (by a later stage, or by a later step of this stage's
+    own response) or defined by a later substitution step, else an UNDEFINED_VAR.
     """
     scopes = stage_scopes(scenario)
     all_saved = extract_saved_variables(scenario)
@@ -230,9 +242,9 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iter
                     location=f"stages[{i}].always_run",
                 )
 
-        # (phase, references, names available to them). Each substitution step is
-        # checked against its own scope, not the whole stage's: checking
-        # cumulatively is what catches intra-list forward references. A name
+        # (phase, references, names available to them). Each substitution and
+        # response step is checked against its own scope, not the whole stage's:
+        # checking cumulatively is what catches intra-list forward references. A name
         # referenced by several steps is reported once. The phase is carried
         # rather than a bare "is this pre-response?" flag because it is also what
         # the author needs told: "undefined in this stage" sends them hunting,
@@ -246,8 +258,12 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iter
         phase_checks += [
             ("parallel", sorted(extract_template_variables(raw.get("parallel"))), scope.pre_iteration),
             ("request", sorted(extract_template_variables(raw.get("request"))), scope.request),
-            ("response", sorted(extract_template_variables(raw.get("response"))), scope.response),
         ]
+        seen_response_refs: set[str] = set()
+        for step_refs, prior_saves in response_step_refs(stage, raw.get("response")):
+            step_refs -= seen_response_refs
+            seen_response_refs |= step_refs
+            phase_checks.append(("response", sorted(step_refs), scope.response | prior_saves))
 
         # Insertion order, so output stays deterministic across runs.
         undefined_by_phase: dict[str, set[str]] = {}
@@ -263,10 +279,12 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iter
                     )
                 elif name in all_saved:
                     j = first_save_stage[name]
-                    if j == i and phase != "response":
-                        msg = f"Stage '{stage.name}': {phase} references '{name}', which is only saved in this stage's response"
-                    else:
+                    if j != i:
                         msg = f"Stage '{stage.name}': variable '{name}' is referenced before it is saved (saved in stage '{scenario.stages[j].name}')"
+                    elif phase == "response":
+                        msg = f"Stage '{stage.name}': response step references '{name}' before the save that produces it — steps resolve in order"
+                    else:
+                        msg = f"Stage '{stage.name}': {phase} references '{name}', which is only saved in this stage's response"
                     yield diag(DiagnosticCode.FORWARD_REF, msg, location=f"stages[{i}].{phase}")
                 else:
                     undefined_by_phase.setdefault(phase, set()).add(name)
@@ -300,13 +318,13 @@ def _verify_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                     location=location,
                 )
 
-            # A non-template expression is a non-empty string, hence always
-            # truthy at runtime: the assertion silently passes.
+            # A non-template expression is a plain string, never the bool an
+            # expression must evaluate to, so it fails the stage at runtime.
             for expr in verify.expressions:
                 if isinstance(expr, str) and not is_complete_template(expr):
                     yield diag(
                         DiagnosticCode.NONTEMPLATE_EXPRESSION,
-                        f"Stage '{stage.name}': verify expression {expr!r} is not a template ({{{{ }}}}); it is always truthy and asserts nothing",
+                        f"Stage '{stage.name}': verify expression {expr!r} is not a template ({{{{ }}}}); an expression must evaluate to a bool, so this fails at runtime",
                         location=location,
                     )
 
@@ -478,6 +496,44 @@ def _template_key_diagnostics(test_data: dict[str, Any]) -> Iterator[Diagnostic]
             f"Move the dynamic part into the value, or build the object in a user function.",
             location=location or None,
         )
+
+
+def _template_kwargs_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
+    """HTTPCHAIN030: ``{{ }}`` inside a ``functions`` substitution's ``kwargs``,
+    which `utils.process_substitutions` hands to ``wrap_function`` raw.
+
+    Deliberate — the kwargs are the function's own defaults, not chain data — but
+    it leaves the one template nothing ever renders, reaching the function as
+    literal text. Like a templated key (029), no other check would mention it.
+
+    Driven off the validated model, not the raw JSON: a request body may
+    legitimately carry a key named "functions", and only the model tells a
+    substitution step from one.
+    """
+
+    def offending(substitutions: Sequence[Substitution], location: str) -> Iterator[Diagnostic]:
+        for step in substitutions:
+            if not isinstance(step, FunctionsSubstitution):
+                continue
+            for alias, func_def in step.functions.items():
+                if not isinstance(func_def, UserFunctionKwargs):
+                    continue
+                for name, value in func_def.kwargs.items():
+                    if contains_template(value):
+                        yield diag(
+                            DiagnosticCode.TEMPLATE_IN_KWARGS,
+                            f"Function '{alias}' kwarg '{name}' contains a template expression, but a functions substitution's kwargs are passed to the "
+                            f"function unrendered — it arrives as literal text. Render the value in a 'vars' substitution and pass that variable where the "
+                            f"alias is called, or resolve the value inside the function.",
+                            location=location,
+                        )
+
+    yield from offending(scenario.substitutions, "substitutions")
+    for i, stage in enumerate(scenario.stages):
+        yield from offending(stage.substitutions, f"stages[{i}].substitutions")
+        for k, step in enumerate(stage.response):
+            if isinstance(step, SaveStep) and isinstance(step.save, SubstitutionsSave):
+                yield from offending(step.save.substitutions, f"stages[{i}].response[{k}].save.substitutions")
 
 
 def _parametrize_timing_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:

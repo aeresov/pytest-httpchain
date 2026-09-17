@@ -22,7 +22,7 @@ not free their numbers for reuse.
 | `HTTPCHAIN001` | error | Duplicate stage names |
 | `HTTPCHAIN002` | error | Fixture and variable share the same name |
 | `HTTPCHAIN003` | warning | Variable referenced but never defined/saved/fixture (typo) |
-| `HTTPCHAIN004` | warning | Variable referenced before it is saved or defined — saved by a later stage, or defined by a later substitution step (ordering / data-flow) |
+| `HTTPCHAIN004` | warning | Variable referenced before it is saved or defined — saved by a later stage or by a later step of the same stage's response, or defined by a later substitution step (ordering / data-flow) |
 | `HTTPCHAIN005` | warning | Stage has no verify step (no response validation) |
 | `HTTPCHAIN006` | warning | Verify step asserts nothing (no-op) |
 | `HTTPCHAIN007` | error | Body or header matcher `contains`/`not_contains` list the same substring |
@@ -36,7 +36,7 @@ not free their numbers for reuse.
 | `HTTPCHAIN015` | error | Failed to parse JSON file |
 | `HTTPCHAIN016` | error | Fixture referenced in a scenario-level template |
 | `HTTPCHAIN017` | error | Scenario-level template references an undefined name |
-| `HTTPCHAIN018` | warning | Verify expression is not a template (`{{ }}`) — asserts nothing |
+| `HTTPCHAIN018` | warning | Verify expression is not a template (`{{ }}`) — cannot evaluate to the required bool |
 | `HTTPCHAIN019` | error | Invalid pytest marker expression (scenario or stage `marks`) |
 | `HTTPCHAIN020` | warning | Referenced file does not exist (deep, opt-in) |
 | `HTTPCHAIN021` | warning | Schema file is not valid JSON / not a valid schema (deep) |
@@ -48,6 +48,7 @@ not free their numbers for reuse.
 | `HTTPCHAIN027` | warning | User-defined name shadowed by the reserved `response` namespace |
 | `HTTPCHAIN028` | warning | Scenario directive (`$include`/`$merge`, or file-path `$ref`) inside an inline JSON Schema — not resolved there |
 | `HTTPCHAIN029` | warning | Template expression in a dict **key** — only values are substituted, so the key is sent literally |
+| `HTTPCHAIN030` | warning | Template expression in a `functions` substitution's **kwargs** — kwargs are passed to the function unrendered, so it arrives as literal text |
 
 ## Deep (opt-in) checks
 

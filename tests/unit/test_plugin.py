@@ -1,10 +1,12 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
+from pytest_httpchain.carrier import Carrier
 from pytest_httpchain.constants import ConfigOptions
-from pytest_httpchain.plugin import pytest_collect_file
+from pytest_httpchain.plugin import _sections_will_be_shown, pytest_collect_file, pytest_runtest_makereport
 
 
 class TestPytestConfigure:
@@ -200,3 +202,65 @@ class TestPytestCollectFile:
         # With escaping it must NOT, proving the metacharacter is treated literally.
         injected = Path("/some/path/test_example.v1X2.json")
         assert pytest_collect_file(injected, parent) is None
+
+
+class TestReportSectionsBuiltOnlyWhenShown:
+    """Formatting an exchange parses and re-serializes the whole body, and on a
+    suite of thousands of passing stages nothing ever prints the result — but
+    -rA/-rP do print it, so the guard must not cost those runs their output."""
+
+    @staticmethod
+    def _report(*, failed: bool) -> MagicMock:
+        return MagicMock(failed=failed)
+
+    def test_failed_report_is_formatted(self, pytester):
+        assert _sections_will_be_shown(pytester.parseconfigure(), self._report(failed=True))
+
+    def test_passing_report_is_skipped_by_default(self, pytester):
+        """Default reportchars ('fE') renders no PASSES block at all."""
+        assert not _sections_will_be_shown(pytester.parseconfigure(), self._report(failed=False))
+
+    @pytest.mark.parametrize("flag", ["-rA", "-rP", "-rfEP"])
+    def test_passing_report_is_formatted_when_asked_for(self, pytester, flag):
+        assert _sections_will_be_shown(pytester.parseconfigure(flag), self._report(failed=False))
+
+    def test_xfail_tb_formats_non_failing_reports(self, pytester):
+        """--xfail-tb renders the XFAILURES block, whose reports are 'skipped'."""
+        assert _sections_will_be_shown(pytester.parseconfigure("--xfail-tb"), self._report(failed=False))
+
+    def test_worker_without_terminal_reporter_formats_everything(self, pytester):
+        """An xdist worker unregisters the terminal reporter and ships its
+        sections to the controller, which does the rendering: the worker cannot
+        tell what will be shown, so it must not drop anything."""
+        config = pytester.parseconfigure()
+        config.pluginmanager.unregister(name="terminalreporter")
+        assert _sections_will_be_shown(config, self._report(failed=False))
+
+    @staticmethod
+    def _run_hook(config, *, failed: bool) -> list[tuple[str, str]]:
+        """Drive the report hook over one recorded exchange, returning the
+        sections it attached."""
+        request = httpx.Request("GET", "https://example.com/")
+        response = httpx.Response(200, json={"a": 1}, request=request)
+
+        class _Scenario(Carrier):
+            last_request = request
+            last_response = response
+
+        report = MagicMock(failed=failed, skipped=False, sections=[])
+        # `cls` is reserved by Mock's own constructor, so it is set afterwards.
+        item = MagicMock(config=config, nodeid="t::s")
+        item.cls = _Scenario
+        hook = pytest_runtest_makereport(item, MagicMock(when="call"))
+        hook.send(None)
+        with pytest.raises(StopIteration):
+            hook.send(report)
+        return report.sections
+
+    def test_hook_skips_formatting_for_a_passing_stage(self, pytester):
+        assert self._run_hook(pytester.parseconfigure(), failed=False) == []
+
+    @pytest.mark.parametrize("failed", [True, False], ids=["failed", "passed-with-rA"])
+    def test_hook_formats_when_the_sections_will_be_read(self, pytester, failed):
+        config = pytester.parseconfigure() if failed else pytester.parseconfigure("-rA")
+        assert [title for title, _ in self._run_hook(config, failed=failed)] == ["HTTP Request", "HTTP Response"]

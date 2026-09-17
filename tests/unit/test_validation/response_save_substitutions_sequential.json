@@ -1,0 +1,19 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/ok" },
+            "response": [
+                { "verify": { "status": 200 } },
+                {
+                    "save": {
+                        "substitutions": [
+                            { "vars": { "seq_a": "{{ 2 + 3 }}" } },
+                            { "vars": { "seq_b": "{{ seq_a * 10 }}" } }
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

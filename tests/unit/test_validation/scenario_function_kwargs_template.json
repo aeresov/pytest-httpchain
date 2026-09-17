@@ -1,0 +1,19 @@
+{
+    "substitutions": [
+        {
+            "functions": {
+                "seed": {
+                    "name": "mod:func",
+                    "kwargs": { "arg": "{{ env }}" }
+                }
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

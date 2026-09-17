@@ -161,7 +161,7 @@ TemplateExpressionOnly = Annotated[
 # expression re-validates as a boolean after rendering), while the editor schema
 # says what the field actually accepts. Without it the field emits `items: {}`
 # and an editor cannot flag the mistake that matters most here — forgetting the
-# `{{ }}`, which makes the assertion a non-empty (always truthy) string.
+# `{{ }}`, which leaves a plain string where a boolean condition belongs.
 TemplateExpressionSchema = Annotated[
     Any,
     WithJsonSchema({"type": "string", "pattern": _COMPLETE_TEMPLATE_PATTERN}),

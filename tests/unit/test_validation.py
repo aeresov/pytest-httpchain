@@ -83,8 +83,8 @@ def test_no_verify_warns(datadir):
 
 
 def test_nontemplate_verify_expression_warns(datadir):
-    """M2: a verify expression that is a plain string (no {{ }}) is always truthy
-    and asserts nothing — the validator must warn."""
+    """M2: a verify expression that is a plain string (no {{ }}) is never the bool
+    an expression must evaluate to — the validator must warn."""
     r = validate_scenario(datadir / "verify_nontemplate_expression.json")
     assert DiagnosticCode.NONTEMPLATE_EXPRESSION in _codes(r)
 
@@ -1035,6 +1035,58 @@ def test_substitution_prior_step_ref_ok(datadir):
     assert DiagnosticCode.UNDEFINED_VAR not in _codes(r)
 
 
+def test_response_step_forward_ref_warns(datadir):
+    """Response steps resolve strictly in order too: a verify reading a name a
+    LATER save step produces dies with a TemplatesError at runtime, so treating
+    a stage's saves as available to its whole response hid a real bug."""
+    r = validate_scenario(datadir / "response_step_forward.json")
+    assert r.valid is True, r.errors
+    forward = [d for d in r.diagnostics if d.code == DiagnosticCode.FORWARD_REF]
+    assert forward, [d.code for d in r.diagnostics]
+    assert "before the save that produces it" in forward[0].message
+    assert forward[0].location == "stages[0].response"
+    # It is saved in this stage, so it is an ordering bug, not a typo.
+    assert not any(d.code == DiagnosticCode.UNDEFINED_VAR and "token" in d.message for d in r.diagnostics)
+
+
+def test_response_step_prior_save_ref_ok(datadir):
+    """A verify reading what an EARLIER save step produced is the whole point of
+    step ordering — no diagnostics."""
+    r = validate_scenario(datadir / "response_step_prior_save_ok.json")
+    assert r.valid is True, r.errors
+    assert DiagnosticCode.FORWARD_REF not in _codes(r)
+    assert DiagnosticCode.UNDEFINED_VAR not in _codes(r)
+
+
+def test_duplicate_response_forward_refs_reported_once(datadir):
+    """As for substitution steps: one unavailable name is one HTTPCHAIN004,
+    however many response steps reference it."""
+    r = validate_scenario(datadir / "response_duplicate_forward_refs.json")
+    assert r.valid is True, r.errors
+    forward = [d for d in r.diagnostics if d.code == DiagnosticCode.FORWARD_REF]
+    assert len(forward) == 1, [d.message for d in forward]
+
+
+def test_opaque_save_suppresses_later_forward_refs(datadir):
+    """A `user_functions` save returns arbitrary keys, so nothing after it can be
+    called a forward reference: the name it produced may be exactly the one a
+    later step reads, even when the stage also saves that name further down."""
+    r = validate_scenario(datadir / "response_opaque_save_no_false_forward_ref.json")
+    assert r.valid is True, r.errors
+    assert DiagnosticCode.FORWARD_REF not in _codes(r)
+    assert DiagnosticCode.UNDEFINED_VAR not in _codes(r)
+
+
+def test_save_substitutions_entries_chain_within_one_step(datadir):
+    """process_save renders a substitutions save's entries itself, in order, so
+    an entry reading a PRIOR entry of the same step is legal — the per-step
+    ordering check must not mistake it for a forward reference."""
+    r = validate_scenario(datadir / "response_save_substitutions_sequential.json")
+    assert r.valid is True, r.errors
+    assert DiagnosticCode.FORWARD_REF not in _codes(r)
+    assert DiagnosticCode.UNDEFINED_VAR not in _codes(r)
+
+
 def test_all_diagnostic_codes_published_in_docs():
     """README promises stable HTTPCHAINxxx diagnostic codes; the full table must
     be published on the docs site, not only in a source docstring — and the
@@ -1086,14 +1138,44 @@ def test_documented_severities_match_the_registry():
     assert all(SEVERITY[code] == "warning" for code in deep_codes), "docs say deep findings are always warnings"
 
 
-def test_function_kwargs_templates_are_dead_text_no_warn(datadir):
+def test_function_kwargs_templates_are_dead_text_reported_as_030(datadir):
     """functions-substitution kwargs are passed to wrap_function raw
-    (utils.process_substitutions) — a template inside them is never rendered
-    at seed time, so it must not produce data-flow diagnostics."""
+    (utils.process_substitutions) — a template inside them is never rendered at
+    seed time. The two halves of that rule are pinned together here: it is not a
+    reference, so no data-flow diagnostic may fire, and it is never rendered, so
+    HTTPCHAIN030 is what reports it."""
     r = validate_scenario(datadir / "substitution_function_kwargs_template_ok.json")
     assert r.valid is True, r.errors
     assert DiagnosticCode.FORWARD_REF not in _codes(r)
     assert DiagnosticCode.UNDEFINED_VAR not in _codes(r)
+    kwargs_diagnostics = [d for d in r.diagnostics if d.code == DiagnosticCode.TEMPLATE_IN_KWARGS]
+    assert [d.location for d in kwargs_diagnostics] == ["stages[0].substitutions"]
+    assert "'helper'" in kwargs_diagnostics[0].message
+    assert "'arg'" in kwargs_diagnostics[0].message
+
+
+def test_scenario_function_kwargs_template_warns(datadir):
+    r = validate_scenario(datadir / "scenario_function_kwargs_template.json")
+    assert r.valid is True, r.errors
+    kwargs_diagnostics = [d for d in r.diagnostics if d.code == DiagnosticCode.TEMPLATE_IN_KWARGS]
+    assert [d.location for d in kwargs_diagnostics] == ["substitutions"]
+
+
+def test_response_save_function_kwargs_template_warns(datadir):
+    """Substitutions nested in a save step are the third place functions can be
+    seeded, and the easiest one for the check to miss."""
+    r = validate_scenario(datadir / "response_save_function_kwargs_template.json")
+    assert r.valid is True, r.errors
+    kwargs_diagnostics = [d for d in r.diagnostics if d.code == DiagnosticCode.TEMPLATE_IN_KWARGS]
+    assert [d.location for d in kwargs_diagnostics] == ["stages[0].response[1].save.substitutions"]
+
+
+def test_literal_function_kwargs_do_not_warn(datadir):
+    """Only a template is dead text; literal kwargs (and the bare-name function
+    form, which has no kwargs at all) are the normal case."""
+    r = validate_scenario(datadir / "substitution_function_kwargs_literal_ok.json")
+    assert r.valid is True, r.errors
+    assert DiagnosticCode.TEMPLATE_IN_KWARGS not in _codes(r)
 
 
 def test_duplicate_substitution_forward_refs_reported_once(datadir):

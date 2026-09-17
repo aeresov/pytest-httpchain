@@ -1,0 +1,68 @@
+{
+    "auth": "sentinel:auth",
+    "substitutions": [
+        {
+            "functions": {
+                "mk_envs": "sentinel:mk_envs"
+            }
+        },
+        {
+            "vars": {
+                "mode": "prod",
+                "envs": "{{ mk_envs() }}"
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "setup_error",
+            "fixtures": ["fixture_setup_error"],
+            "request": {
+                "url": "http://localhost/never"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "cleanup",
+            "always_run": "{{ mode == 'dev' }}",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "per_env",
+            "fixtures": ["server"],
+            "parametrize": [
+                {
+                    "individual": {
+                        "env_name": "{{ envs }}"
+                    }
+                }
+            ],
+            "request": {
+                "url": "{{ server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

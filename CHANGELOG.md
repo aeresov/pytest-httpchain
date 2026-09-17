@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-17
+
+### Added
+
+- `HTTPCHAIN030` warns when a `functions` substitution's `kwargs` contain a `{{ }}` template. Those
+  kwargs are deliberately passed to the function unrendered, so the template arrived as literal text
+  with nothing reporting it — the same gap `HTTPCHAIN029` closes for templated dict keys.
+
+### Fixed
+
+- `verify.expressions` entries must now evaluate to a bool. Any truthy non-boolean previously passed
+  silently, so `"{{ response.status }}"` against a 500 response asserted nothing. A scenario relying
+  on truthiness now fails with an explicit error naming the offending type.
+- A template `always_run` can now see the scenario substitutions it is documented to see. When the
+  chain aborted before any stage body ran — a fixture error in the first stage — the context was
+  still empty, so the cleanup stage died on an undefined variable instead of running.
+- The validator checks each response step against the saves that have actually landed by that step,
+  so a verify step referencing a name a *later* save produces in the same stage is now reported as
+  `HTTPCHAIN004` instead of passing validation and failing at runtime.
+- HAR filenames are built from an allow-list of characters and bounded to 255 bytes. Parametrize ids
+  containing `?`, `*` or quotes previously made the write fail, and the file was dropped with only a
+  log warning.
+- A `parallel` setting that resolves to something unusable now fails the stage with a message naming
+  the field and the value. `repeat`, `max_concurrency`, `calls_per_sec` and `max_rate_limit_delay`
+  accept a template, and a template resolving to another template string satisfies the model but
+  reached the engine as text — `int("{{ 2 }}")` then escaped as a plugin traceback. A resolved `0`
+  for `calls_per_sec` also used to disable rate limiting silently rather than being rejected.
+
+### Changed
+
+- Request/response report sections are formatted only when pytest will actually render them (a
+  failure, or `-rP`/`-rA`/`--xfail-tb`), instead of for every passing test.
+- The generated JSON Schema no longer repeats a root property's description inside its `anyOf`
+  branch.
+
 ## [0.14.5] - 2026-09-17
 
 Nothing in `src/` changed, so upgrading from 0.14.4 changes nothing at runtime.
@@ -569,7 +604,8 @@ This release carries a test-suite and CI pass.
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.5...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.5...v0.15.0
 [0.14.5]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.2...v0.14.3

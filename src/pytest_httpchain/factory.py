@@ -23,6 +23,20 @@ from pytest_httpchain.templates import walk
 from pytest_httpchain.utils import make_marker, process_substitutions
 
 
+def _make_stage_method(stage_template: Stage) -> Callable:
+    """Build one stage's test method.
+
+    The stage arrives as an argument, not captured from the caller's loop
+    variable: a closure over that variable would make every method run the LAST
+    stage.
+    """
+
+    def call_execute_stage(self, **kwargs):
+        type(self).execute_stage(stage_template, kwargs)
+
+    return call_execute_stage
+
+
 def create_test_class(
     scenario: Scenario,
     class_name: str,
@@ -62,15 +76,7 @@ def create_test_class(
     padding_width = len(str(total_stages - 1)) if total_stages > 0 else 1
 
     for i, stage in enumerate(scenario.stages):
-        # Captures `stage` by value: a closure over the loop variable would make
-        # every method run the LAST stage.
-        def make_stage_method(stage_template: Stage) -> Callable:
-            def call_execute_stage(self, **kwargs):
-                type(self).execute_stage(stage_template, kwargs)
-
-            return call_execute_stage
-
-        stage_method = make_stage_method(stage)
+        stage_method = _make_stage_method(stage)
 
         if stage.description:
             stage_method.__doc__ = stage.description

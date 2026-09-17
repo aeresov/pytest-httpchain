@@ -17,8 +17,8 @@ stage ``substitutions``   same as ``always_run``, plus PRIOR steps' names
                           (steps resolve strictly in order)
 ``parallel`` config       the above plus this stage's substitutions
 request (per iteration)   the above plus ``foreach`` parameters
-response (per iteration)  the above plus this stage's own saves and the
-                          ``response`` metadata namespace
+response (per iteration)  the above plus the ``response`` metadata namespace,
+                          plus PRIOR steps' saves (steps resolve in order)
 ========================  ====================================================
 
 Stage ``parametrize`` *values* are the exception: they resolve at collection
@@ -246,6 +246,48 @@ def substitution_step_refs(raw_substitutions: Any) -> Iterator[tuple[set[str], f
         prior_names |= frozenset(_raw_substitution_entry_names(entry))
 
 
+def _raw_save_substitutions(step_raw: Any) -> Any:
+    """The raw ``substitutions`` list of a substitutions-save step."""
+    save = step_raw.get("save") if isinstance(step_raw, dict) else None
+    return save.get("substitutions") if isinstance(save, dict) else None
+
+
+def response_step_refs(stage: Stage, raw_response: Any) -> Iterator[tuple[set[str], frozenset[str]]]:
+    """Walk response steps in resolution order, yielding ``(names referenced,
+    names saved by STRICTLY EARLIER steps of this stage)``.
+
+    The response-phase sibling of `substitution_step_refs`: a save lands only
+    once its own step has run, so a step reading a name a LATER step saves is a
+    forward reference, not a hit. The raw entries carry the template text and
+    the validated steps say what each saves, so the two are walked in lockstep
+    (`raw_list_entries` keeps the name-keyed mapping form paired correctly).
+
+    A substitutions-save step yields one tuple per ENTRY rather than one for the
+    step, because `response_steps.process_save` renders those entries itself,
+    strictly in order — so an entry does see its own step's prior entries, and
+    nothing else in that step (not even ``description``) is rendered at all.
+    """
+    prior_saves: frozenset[str] = frozenset()
+    # A save whose names cannot be enumerated (``user_functions`` returns
+    # arbitrary keys) ends the order-aware claim: from there on a name this stage
+    # saves anywhere may already exist, so the whole-stage set is restored rather
+    # than report a forward reference the runtime would satisfy.
+    opaque_save_seen = False
+    all_stage_saves = frozenset(saved_in_stage(stage))
+    raw_steps = raw_list_entries(raw_response)
+    for k, step in enumerate(stage.response):
+        step_raw = raw_steps[k] if k < len(raw_steps) else None
+        visible = prior_saves | all_stage_saves if opaque_save_seen else prior_saves
+        if isinstance(step, SaveStep) and isinstance(step.save, SubstitutionsSave):
+            for entry_refs, prior_entry_names in substitution_step_refs(_raw_save_substitutions(step_raw)):
+                yield entry_refs, visible | prior_entry_names
+        else:
+            yield extract_template_variables(step_raw), visible
+        prior_saves |= frozenset(saved_in_step(step))
+        if isinstance(step, SaveStep) and not isinstance(step.save, JMESPathSave | SubstitutionsSave):
+            opaque_save_seen = True
+
+
 # --------------------------------------------------------------------------- #
 # Static scope model: per-stage, per-phase name availability.
 # --------------------------------------------------------------------------- #
@@ -258,6 +300,11 @@ class StageScopes:
     Ingredients are stored separately so consumers can tell *why* a name is
     visible; the phase properties union them in the order the runtime layers its
     contexts, and each names its runtime twin.
+
+    ``saves`` is the exception: no phase unions it, because a stage's own saves
+    become visible step by step, which `response_step_refs` tracks. It remains a
+    reporting input (`cli show`, `dataflow.StageFlow`, the first-save index) —
+    reading it as in-stage visibility is what produced the bug that split it out.
     """
 
     scenario_substitutions: frozenset[str]
@@ -287,10 +334,12 @@ class StageScopes:
 
     @property
     def response(self) -> frozenset[str]:
-        """Response steps: the request scope plus this stage's own saves (treated
-        as available to the whole response) and the ``response`` namespace.
-        Twins: `response_step_context`, `with_saves`."""
-        return self.request | self.saves | frozenset({RESPONSE_META_NAME})
+        """Response steps as they start, before any of this stage's own saves
+        have landed: the request scope plus the ``response`` namespace. Steps
+        resolve strictly in order, so each additionally sees PRIOR steps' saves
+        (see `response_step_refs`, whose runtime twin is `with_saves`).
+        Twin: `response_step_context`."""
+        return self.request | frozenset({RESPONSE_META_NAME})
 
     # Shadow sets: names layered ABOVE the global context in each phase, behind
     # which a same-named earlier save is unreadable.

@@ -74,13 +74,23 @@ def _build_evaluator(context: Mapping[str, Any]) -> EvalWithCompoundTypes:
     derive purely from ``context``, so each ``walk()`` builds its own — which
     also keeps parallel iterations sharing nothing.
     """
-    # simpleeval keeps callables and data in separate maps.
-    callables = {key: value for key, value in context.items() if callable(value)}
-    names = {key: value for key, value in context.items() if not callable(value)}
-
-    # exists()/get() must see the whole context, callables included, so they are
-    # bound to a full copy.
-    context_dict = dict(context)
+    # One traversal, not three. ``context`` is a ChainMap that gains a layer per
+    # stage and per save step, so every pass over it resolves each name through
+    # the whole chain — and a stage repeats this once per iteration. Iterating
+    # ``items()`` keeps first-layer-wins (it resolves each key through the chain,
+    # so a name is classified by the value that actually wins) while filling all
+    # three maps at once.
+    # simpleeval keeps callables and data in separate maps; exists()/get() must
+    # see the whole context, callables included, so they get a full copy.
+    callables: dict[str, Any] = {}
+    names: dict[str, Any] = {}
+    context_dict: dict[str, Any] = {}
+    for key, value in context.items():
+        context_dict[key] = value
+        if callable(value):
+            callables[key] = value
+        else:
+            names[key] = value
 
     # Merge order is load-bearing: last wins, so user callables shadow the safe
     # functions while `exists`/`get` cannot be overridden, and user names shadow

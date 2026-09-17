@@ -1,0 +1,13 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/ok" },
+            "response": [
+                { "save": { "user_functions": ["checks:body_meta"] } },
+                { "verify": { "expressions": [ "{{ 'ok' in body_text }}" ] } },
+                { "save": { "substitutions": [ { "vars": { "body_text": "{{ body_text }}" } } ] } }
+            ]
+        }
+    ]
+}

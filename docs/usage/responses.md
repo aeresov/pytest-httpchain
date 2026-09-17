@@ -87,7 +87,7 @@ string form fails for an absent header, as before.)
 
 ### Expression Verification
 
-Evaluate template expressions that must return truthy values. Expressions are evaluated against the **context** — saved variables, fixtures, and substitutions — plus the reserved **`response` metadata namespace** (see below). For response *body* data, save what you want to assert on first, then reference it:
+Evaluate template expressions, each of which must evaluate to a boolean. Expressions are evaluated against the **context** — saved variables, fixtures, and substitutions — plus the reserved **`response` metadata namespace** (see below). For response *body* data, save what you want to assert on first, then reference it:
 
 ```json
 {

@@ -1,0 +1,22 @@
+{
+    "substitutions": [
+        {
+            "functions": {
+                "seed": {
+                    "name": "mod:func",
+                    "kwargs": { "arg": "literal" }
+                }
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "s",
+            "substitutions": [
+                { "functions": { "bare": "mod:func" } }
+            ],
+            "request": { "url": "https://x.test/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

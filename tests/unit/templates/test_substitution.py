@@ -1,3 +1,4 @@
+from collections import ChainMap
 from types import SimpleNamespace
 
 import pytest
@@ -431,3 +432,48 @@ class TestTemplateBuiltins:
         assert walk("{{ exists('k') }}", {}) is False
         assert walk("{{ env('NOPE_VAR_XYZ', 'fallback') }}", {}) == "fallback"
         assert walk("{{ str(int('41') + 1) }}", {}) == "42"
+
+
+class TestChainMapContextSemantics:
+    """The runtime context is a ChainMap (a layer per stage, per save step and
+    per iteration), and the evaluator is built from ONE traversal of it. These
+    pin what that traversal must preserve: first-layer-wins, and the
+    callable/value split taken from the winning layer alone."""
+
+    def test_first_layer_wins(self):
+        context = ChainMap({"x": "top"}, {"x": "middle"}, {"x": "bottom"})
+        assert walk("{{ x }}", context) == "top"
+        # The helpers close over the same flattened view, so they agree.
+        assert walk("{{ get('x') }}", context) == "top"
+
+    def test_shadowed_callable_does_not_leak_into_names(self):
+        """A per-layer partition would put the shadowed value in names= and the
+        shadowed callable in functions= at once; the winning layer decides both."""
+        callable_on_top = ChainMap({"f": lambda: "top"}, {"f": 7})
+        assert walk("{{ f() }}", callable_on_top) == "top"
+        # simpleeval's name lookup falls back to functions=, so a bare reference
+        # resolves to the callable itself — never to the shadowed 7.
+        assert callable(walk("{{ f }}", callable_on_top))
+
+        value_on_top = ChainMap({"f": 7}, {"f": lambda: "shadowed"})
+        assert walk("{{ f }}", value_on_top) == 7
+        with pytest.raises(TemplatesError, match="Unknown function"):
+            walk("{{ f() }}", value_on_top)
+
+    def test_callable_named_like_a_json_literal_stays_out_of_names(self):
+        """The split is by value, not by name: the literal keeps the plain-name
+        slot while the callable is reachable only as a call."""
+        context = {"true": lambda: "called"}
+        assert walk("{{ true }}", context) is True
+        assert walk("{{ true() }}", context) == "called"
+
+    def test_helpers_report_the_winning_layer(self):
+        """exists()/get() see callables too, and the copy they are bound to is
+        the flattened one — a shadowed layer is invisible to them as well."""
+        context = ChainMap({"fn": lambda: "top"}, {"fn": "shadowed"})
+        assert walk("{{ exists('fn') }}", context) is True
+        assert walk("{{ get('fn') }}", context)() == "top"
+
+    def test_upper_layer_adds_without_hiding_lower_ones(self):
+        context = ChainMap({"b": 2}, {"a": 1})
+        assert walk("{{ a + b }}", context) == 3

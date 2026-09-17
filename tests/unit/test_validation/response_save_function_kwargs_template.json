@@ -1,0 +1,25 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/ok" },
+            "response": [
+                { "verify": { "status": 200 } },
+                {
+                    "save": {
+                        "substitutions": [
+                            {
+                                "functions": {
+                                    "extract": {
+                                        "name": "mod:func",
+                                        "kwargs": { "path": "{{ token }}" }
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}
