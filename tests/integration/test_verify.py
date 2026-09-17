@@ -58,7 +58,9 @@ def test_verify_body_schema_inline_defs(run_scenario):
     def must fail the verify, not error out)."""
     result = run_scenario("verify/test_verify_body_schema_defs.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=1)
-    result.stdout.fnmatch_lines(["*schema*"])
+    # The `$ref`ed def is what rejected the body — not a resolution error and
+    # not some other schema complaint that a bare "*schema*" would also match.
+    result.stdout.fnmatch_lines(["*Body schema validation failed*'email' is a required property*"])
 
 
 def test_verify_body_schema_unresolvable_ref_fails_cleanly(run_scenario):

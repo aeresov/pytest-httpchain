@@ -8,6 +8,7 @@ and, crucially, assert the two views correspond on a concrete scenario.
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.scoping import (
     base_global_context,
+    extract_template_variables,
     iteration_context,
     response_step_context,
     stage_scopes,
@@ -114,3 +115,35 @@ class TestContextBuilders:
         base = {"svar": 1}
         context = with_saves(with_saves(base_global_context(base), {"a": 1}), {"b": 2})
         assert context.maps[-1] == base
+
+
+class TestReferenceExtraction:
+    """Which names a `{{ }}` expression actually references.
+
+    Everything downstream — undefined-variable and forward-reference
+    diagnostics, the data-flow graph — is built on this set, so a name wrongly
+    included is a false warning on working scenarios and a name wrongly dropped
+    is a missed one.
+    """
+
+    def test_comprehension_targets_are_local(self):
+        assert extract_template_variables("{{ [y for y in items] }}") == {"items"}
+
+    def test_lambda_parameters_are_local(self):
+        """A lambda parameter is bound by the lambda, not supplied by the
+        context — `key=lambda row: ...` must not demand a `row` variable."""
+        assert extract_template_variables("{{ sorted(items, key=lambda row: row.score) }}") == {"items"}
+
+    def test_every_lambda_parameter_kind_is_bound(self):
+        """Positional-only, positional, *args, keyword-only and **kwargs alike:
+        walking only `args.args` would leave the other four looking undefined."""
+        assert extract_template_variables("{{ (lambda p, /, a, *rest, b=1, **kw: [p, a, rest, b, kw])(1, 2) }}") == set()
+
+    def test_unparseable_expression_falls_back_to_identifiers(self):
+        """A malformed expression still fails at runtime, but the validator
+        must not go blind: the regex fallback keeps reporting the names it can
+        see rather than silently claiming the expression references nothing."""
+        assert extract_template_variables("{{ items[ }}") == {"items"}
+
+    def test_builtins_are_not_context_references(self):
+        assert extract_template_variables("{{ len(items) }}") == {"items"}

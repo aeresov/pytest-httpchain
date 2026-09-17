@@ -1,0 +1,22 @@
+{
+    "ssl": {
+        "verify": false
+    },
+    "stages": [
+        {
+            "name": "verification_disabled",
+            "description": "verify=false accepts the same certificate the default rejects",
+            "fixtures": ["https_server"],
+            "request": {
+                "url": "{{ https_server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

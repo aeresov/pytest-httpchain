@@ -1,0 +1,36 @@
+{
+    "ssl": {
+        "verify": "ca.pem"
+    },
+    "stages": [
+        {
+            "name": "trusted_handshake",
+            "description": "A real TLS handshake verified against the scenario's CA bundle",
+            "fixtures": ["https_server"],
+            "request": {
+                "url": "{{ https_server }}/user/1"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "user_name": "name"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ user_name == 'Alice' }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

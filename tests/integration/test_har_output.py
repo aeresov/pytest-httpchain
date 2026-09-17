@@ -7,13 +7,13 @@ file per executed stage, and that file must parse as valid HAR JSON.
 
 import json
 
+import pytest
 
-def test_har_file_written(pytester):
+
+def test_har_file_written(pytester, run_scenario):
     har_dir = pytester.path / "har_out"
 
-    pytester.copy_example("conftest.py")
-    pytester.copy_example("verify/test_verify_status.http.json")
-    result = pytester.runpytest("-s", "--httpchain-output-dir", str(har_dir))
+    result = run_scenario("verify/test_verify_status.http.json", args=("-s", "--httpchain-output-dir", str(har_dir)))
 
     # Sanity: the scenario itself passes (2 stages = 2 test methods).
     result.assert_outcomes(errors=0, failed=0, passed=2)
@@ -96,15 +96,13 @@ def test_har_form_repeats_are_separate_scalar_params(pytester):
     ]
 
 
-def test_parallel_stage_har_contains_every_iteration(pytester):
+def test_parallel_stage_har_contains_every_iteration(pytester, run_scenario):
     """A parallel stage's HAR must hold one entry per iteration, not a single
     arbitrary iteration presented as the stage's only exchange. The report
     section title must also say which of how many iterations it shows."""
     har_dir = pytester.path / "har_out"
 
-    pytester.copy_example("conftest.py")
-    pytester.copy_example("parallel/test_repeat.http.json")
-    result = pytester.runpytest("-s", "--httpchain-output-dir", str(har_dir))
+    result = run_scenario("parallel/test_repeat.http.json", args=("-s", "--httpchain-output-dir", str(har_dir)))
 
     result.assert_outcomes(errors=0, failed=0, passed=1)
 
@@ -115,6 +113,7 @@ def test_parallel_stage_har_contains_every_iteration(pytester):
     assert all(e["response"]["status"] == 200 for e in entries)
 
 
+@pytest.mark.slow
 def test_timeout_still_produces_report_and_har(pytester):
     """A timed-out request previously vanished: no request section, no HAR.
     Now the request that was on the wire is reported and the HAR carries a
@@ -155,12 +154,10 @@ def test_timeout_still_produces_report_and_har(pytester):
     assert entries[0]["request"]["url"].endswith("/delay/2")
 
 
-def test_parallel_failure_report_labels_shown_iteration(pytester):
+def test_parallel_failure_report_labels_shown_iteration(run_scenario):
     """The report shows one exchange for a parallel stage; the section title
     must say it is one of many, not present it as the stage's only request."""
-    pytester.copy_example("conftest.py")
-    pytester.copy_example("errors/test_parallel_failure.http.json")
-    result = pytester.runpytest("-s")
+    result = run_scenario("errors/test_parallel_failure.http.json")
 
     result.assert_outcomes(failed=1)
     result.stdout.fnmatch_lines(["*HTTP Request (failing of 3 parallel iterations)*"])
@@ -205,6 +202,7 @@ def test_stage_failing_before_request_inherits_nothing(pytester):
     assert "parallel_ok" in har_files[0]
 
 
+@pytest.mark.slow
 def test_timeout_after_passing_stage_shows_no_stale_response(pytester):
     """A timed-out stage's report must not pair its request with the previous
     stage's response."""
@@ -238,7 +236,7 @@ def test_timeout_after_passing_stage_shows_no_stale_response(pytester):
     result.stdout.no_fnmatch_line("*HTTP Response*")
 
 
-def test_har_entries_carry_real_start_times(pytester):
+def test_har_entries_carry_real_start_times(pytester, run_scenario):
     """startedDateTime must be each request's actual start, not export time:
     a rate-limited stage (3 iterations at 2/sec) spreads real starts over
     roughly a second, while export-time fabrication packs every entry within
@@ -246,9 +244,7 @@ def test_har_entries_carry_real_start_times(pytester):
     from datetime import datetime
 
     har_dir = pytester.path / "har_out"
-    pytester.copy_example("conftest.py")
-    pytester.copy_example("parallel/test_rate_limit_slow.http.json")
-    result = pytester.runpytest("-s", "--httpchain-output-dir", str(har_dir))
+    result = run_scenario("parallel/test_rate_limit_slow.http.json", args=("-s", "--httpchain-output-dir", str(har_dir)))
     result.assert_outcomes(errors=0, failed=0, passed=1)
 
     har_files = list(har_dir.glob("*.har"))
@@ -260,18 +256,19 @@ def test_har_entries_carry_real_start_times(pytester):
     assert spread >= 0.4, f"start times span only {spread}s — fabricated at export time?"
 
 
-def test_multipart_upload_writes_har_and_report(pytester):
+def test_multipart_upload_writes_har_and_report(pytester, run_scenario):
     """A multipart (files) body is a streaming httpx request whose bytes are
     consumed on send; the HAR and report paths must degrade to 'body not
     captured' instead of erroring — previously the whole HAR file was silently
     dropped and the request section showed a formatting error."""
     har_dir = pytester.path / "har_out"
 
-    pytester.copy_example("conftest.py")
-    pytester.copy_example("body_types/upload_a.txt")
-    pytester.copy_example("body_types/upload_b.bin")
-    pytester.copy_example("body_types/test_files_body.http.json")
-    result = pytester.runpytest("-s", "-rA", "--httpchain-output-dir", str(har_dir))
+    result = run_scenario(
+        "body_types/test_files_body.http.json",
+        "body_types/upload_a.txt",
+        "body_types/upload_b.bin",
+        args=("-s", "-rA", "--httpchain-output-dir", str(har_dir)),
+    )
 
     result.assert_outcomes(errors=0, failed=0, passed=1)
 

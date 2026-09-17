@@ -1,0 +1,14 @@
+{
+    "substitutions": [
+        { "functions": { "mint": "userfuncs:auth_with_required" } }
+    ],
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                { "verify": { "status": 200, "expressions": ["{{ mint('t') is not None }}"] } }
+            ]
+        }
+    ]
+}

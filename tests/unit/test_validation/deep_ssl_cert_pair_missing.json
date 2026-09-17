@@ -1,0 +1,14 @@
+{
+    "ssl": {
+        "cert": ["missing_client_31415.crt", "missing_client_31415.key"]
+    },
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

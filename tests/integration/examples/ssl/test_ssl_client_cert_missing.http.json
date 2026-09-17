@@ -1,0 +1,22 @@
+{
+    "ssl": {
+        "verify": "ca.pem"
+    },
+    "stages": [
+        {
+            "name": "no_client_cert",
+            "description": "Trusting the CA is not enough when the server demands a client certificate",
+            "fixtures": ["mtls_server"],
+            "request": {
+                "url": "{{ mtls_server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

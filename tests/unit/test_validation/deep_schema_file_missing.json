@@ -1,0 +1,11 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                { "verify": { "status": 200, "body": { "schema": "definitely_missing_schema_27182.json" } } }
+            ]
+        }
+    ]
+}
