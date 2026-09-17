@@ -1,0 +1,37 @@
+{
+    "ssl": {
+        "verify": "ca.pem",
+        "cert": "client.pem"
+    },
+    "stages": [
+        {
+            "name": "mutual_tls",
+            "description": "ssl.cert is presented to a server that demands a client certificate",
+            "fixtures": ["mtls_server"],
+            "request": {
+                "url": "{{ mtls_server }}/user/2"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "user_name": "name"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ user_name == 'Bob' }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -1,5 +1,6 @@
 import base64
 import socket
+import ssl
 import threading
 import time
 from contextlib import contextmanager
@@ -297,19 +298,23 @@ def closed_port():
 
 
 @contextmanager
-def _run_app():
+def _run_app(ssl_context: ssl.SSLContext | None = None):
     """Serve the Flask app on an OS-assigned port in a background thread.
 
     werkzeug's ``make_server`` binds port 0 directly (no bind-then-release
     race), and its threaded server runs handlers on daemon threads — teardown
     returns immediately even while a ``/delay`` handler is still sleeping,
     instead of blocking until the sleep finishes.
+
+    With an ``ssl_context`` the same app is served over real TLS and the yielded
+    URL carries the ``https`` scheme.
     """
-    http_server = make_server("127.0.0.1", 0, app, threaded=True)
+    http_server = make_server("127.0.0.1", 0, app, threaded=True, ssl_context=ssl_context)
     thread = threading.Thread(target=http_server.serve_forever, name="examples-http-server")
     thread.start()
     try:
-        yield f"http://127.0.0.1:{http_server.server_port}"
+        scheme = "https" if ssl_context is not None else "http"
+        yield f"{scheme}://127.0.0.1:{http_server.server_port}"
     finally:
         http_server.shutdown()
         thread.join()
@@ -320,6 +325,65 @@ def _run_app():
 def server():
     reset_counter()  # Reset counter before each test
     with _run_app() as url:
+        yield url
+
+
+# Scenario-level ``ssl`` is resolved once, before any fixture value can reach a
+# template (a scenario-level template referencing a fixture is HTTPCHAIN017), so
+# a scenario cannot interpolate a fixture-provided certificate path. The TLS
+# fixtures below instead drop their throwaway PEMs under these fixed names in
+# the CWD — which under pytester is the scenario file's own directory — and
+# scenarios name them as scenario-relative ``ssl.verify`` / ``ssl.cert`` paths.
+HTTPS_CA_BUNDLE = "ca.pem"
+HTTPS_CLIENT_BUNDLE = "client.pem"
+
+
+def _tls_server_context(ca, *, require_client_cert: bool) -> ssl.SSLContext:
+    """A server context holding a cert for 127.0.0.1 issued by ``ca``, with
+    ``ca``'s bundle written to HTTPS_CA_BUNDLE for the scenario to trust."""
+    ca.cert_pem.write_to_path(HTTPS_CA_BUNDLE)
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    with ca.issue_cert("127.0.0.1").private_key_and_cert_chain_pem.tempfile() as pem:
+        context.load_cert_chain(pem)
+    if require_client_cert:
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.load_verify_locations(cafile=HTTPS_CA_BUNDLE)
+    return context
+
+
+@pytest.fixture
+def https_server():
+    """The app over real TLS, with the issuing CA's bundle at ``ca.pem``.
+
+    The SSL unit tests assert what the engine hands ``httpx.Client``; this is
+    the other half — that a scenario's ``ssl.verify`` actually decides whether a
+    genuine handshake against this certificate succeeds. `trustme` is imported
+    lazily: every integration test copies this conftest, and pulling in
+    `cryptography` on each of those runs costs more than the TLS tests save.
+    """
+    import trustme
+
+    with _run_app(_tls_server_context(trustme.CA(), require_client_cert=False)) as url:
+        yield url
+
+
+@pytest.fixture
+def mtls_server():
+    """Like ``https_server``, but the server also demands a client certificate.
+
+    The client bundle (key + chain, the single-file ``ssl.cert`` form) lands at
+    ``client.pem``. A scenario that trusts ``ca.pem`` but sends no client
+    certificate fails the handshake, which is what makes the positive case
+    evidence that ``ssl.cert`` was really presented.
+    """
+    import trustme
+
+    ca = trustme.CA()
+    context = _tls_server_context(ca, require_client_cert=True)
+    ca.issue_cert("client@example.com").private_key_and_cert_chain_pem.write_to_path(HTTPS_CLIENT_BUNDLE)
+
+    with _run_app(context) as url:
         yield url
 
 

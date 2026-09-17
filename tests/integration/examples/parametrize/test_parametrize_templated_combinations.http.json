@@ -1,0 +1,48 @@
+{
+    "substitutions": [
+        {
+            "vars": {
+                "combos": [
+                    { "item_id": 1, "expected_name": "Item One" },
+                    { "item_id": 2, "expected_name": "Item Two" }
+                ]
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "templated_combinations",
+            "description": "combinations supplied as one template, resolved at collection",
+            "fixtures": ["server"],
+            "parametrize": [
+                {
+                    "combinations": "{{ combos }}"
+                }
+            ],
+            "request": {
+                "url": "{{ server }}/item/{{ item_id }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "got_name": "name"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ got_name == expected_name }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

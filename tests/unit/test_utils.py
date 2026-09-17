@@ -1,22 +1,14 @@
 import pytest
 
+from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.userfunc import call_user_function
 from pytest_httpchain.utils import process_substitutions
 
-
-# Test helper functions to be imported
-def sample_func():
-    return "sample_result"
-
-
-def func_with_args(a, b, c=None):
-    return {"a": a, "b": b, "c": c}
-
-
-def add_numbers(x, y):
-    return x + y
+# The functions these tests import live in a module of their own; see its
+# docstring for why they are not defined here.
+HELPERS = "tests.unit.utils_test_helpers"
 
 
 class TestProcessSubstitutions:
@@ -76,7 +68,7 @@ class TestProcessSubstitutions:
     def test_functions_substitution_simple_name(self):
         substitutions = [
             FunctionsSubstitution(
-                functions={"my_func": UserFunctionName("tests.unit.test_utils:sample_func")},
+                functions={"my_func": UserFunctionName(f"{HELPERS}:sample_func")},
             ),
         ]
         result = process_substitutions(substitutions)
@@ -87,7 +79,7 @@ class TestProcessSubstitutions:
 
     def test_functions_substitution_with_kwargs(self):
         func_def = UserFunctionKwargs(
-            name=UserFunctionName("tests.unit.test_utils:func_with_args"),
+            name=UserFunctionName(f"{HELPERS}:func_with_args"),
             kwargs={"a": 1, "b": 2},
         )
         substitutions = [
@@ -103,7 +95,7 @@ class TestProcessSubstitutions:
     def test_mixed_substitutions(self):
         substitutions = [
             VarsSubstitution(vars={"x": 5, "y": 10}),
-            FunctionsSubstitution(functions={"adder": UserFunctionName("tests.unit.test_utils:add_numbers")}),
+            FunctionsSubstitution(functions={"adder": UserFunctionName(f"{HELPERS}:add_numbers")}),
         ]
         result = process_substitutions(substitutions)
 
@@ -126,7 +118,7 @@ class TestProcessSubstitutions:
         ('module.{{ submodule_name }}:funcname') — resolves against the current
         context at seed time; nothing downstream ever sees a context."""
         substitutions = [
-            VarsSubstitution(vars={"mod": "tests.unit.test_utils"}),
+            VarsSubstitution(vars={"mod": HELPERS}),
             FunctionsSubstitution(functions={"my_func": UserFunctionName("{{ mod }}:sample_func")}),
         ]
         result = process_substitutions(substitutions)
@@ -141,7 +133,7 @@ class TestProcessSubstitutions:
         substitutions = [
             FunctionsSubstitution(functions={"my_func": func_def}),
         ]
-        result = process_substitutions(substitutions, {"mod": "tests.unit.test_utils"})
+        result = process_substitutions(substitutions, {"mod": HELPERS})
 
         assert result["my_func"](c=3) == {"a": 1, "b": 2, "c": 3}
 
@@ -169,17 +161,30 @@ class TestProcessSubstitutions:
         with pytest.raises(TemplatesError, match="Undefined variable"):
             process_substitutions(substitutions)
 
+    def test_templated_name_resolving_to_non_string_is_rejected(self):
+        """A complete `{{ }}` import name preserves the value's type, so it can
+        come back as something that is not a name at all. That must be a clean
+        StageExecutionError naming the type, not a confusing failure deeper in
+        the importer.
+        """
+        substitutions = [
+            VarsSubstitution(vars={"ref": [1, 2]}),
+            FunctionsSubstitution(functions={"my_func": UserFunctionName("{{ ref }}")}),
+        ]
+        with pytest.raises(StageExecutionError, match="must resolve to a string, got list"):
+            process_substitutions(substitutions)
+
 
 class TestCallUserFunction:
     def test_call_with_simple_name(self):
-        func_call = UserFunctionName("tests.unit.test_utils:sample_func")
+        func_call = UserFunctionName(f"{HELPERS}:sample_func")
         result = call_user_function(func_call)
 
         assert result == "sample_result"
 
     def test_call_with_kwargs(self):
         func_call = UserFunctionKwargs(
-            name=UserFunctionName("tests.unit.test_utils:func_with_args"),
+            name=UserFunctionName(f"{HELPERS}:func_with_args"),
             kwargs={"a": 1, "b": 2, "c": 3},
         )
         result = call_user_function(func_call)
@@ -188,7 +193,7 @@ class TestCallUserFunction:
 
     def test_call_with_extra_kwargs(self):
         func_call = UserFunctionKwargs(
-            name=UserFunctionName("tests.unit.test_utils:func_with_args"),
+            name=UserFunctionName(f"{HELPERS}:func_with_args"),
             kwargs={"a": 1, "b": 2},
         )
         result = call_user_function(func_call, c="extra")
@@ -197,7 +202,7 @@ class TestCallUserFunction:
 
     def test_call_extra_kwargs_override(self):
         func_call = UserFunctionKwargs(
-            name=UserFunctionName("tests.unit.test_utils:func_with_args"),
+            name=UserFunctionName(f"{HELPERS}:func_with_args"),
             kwargs={"a": 1, "b": 2, "c": "original"},
         )
         # extra_kwargs should override kwargs from UserFunctionKwargs
@@ -206,7 +211,7 @@ class TestCallUserFunction:
         assert result == {"a": 1, "b": 2, "c": "overridden"}
 
     def test_call_simple_name_with_extra_kwargs(self):
-        func_call = UserFunctionName("tests.unit.test_utils:func_with_args")
+        func_call = UserFunctionName(f"{HELPERS}:func_with_args")
         result = call_user_function(func_call, a=10, b=20, c=30)
 
         assert result == {"a": 10, "b": 20, "c": 30}

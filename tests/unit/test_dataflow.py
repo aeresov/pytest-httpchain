@@ -170,9 +170,9 @@ def test_latest_producer_selected():
     assert flow.stages[2].consumes == ["x"]
 
 
-def test_m12_cross_stage_fixture_and_param_not_conflict():
-    # M12: a fixture used only in stage A and a same-named parametrize parameter
-    # used only in stage B never coexist, so this must NOT be a conflict error.
+def test_cross_stage_fixture_and_param_not_conflict():
+    # A fixture used only in stage A and a same-named parametrize parameter used
+    # only in stage B never coexist, so this must NOT be a conflict error (M12).
     sc, data = _scenario(
         [
             {"name": "a", "fixtures": ["token"], "request": {"url": "https://x.test/a"}, "response": [{"verify": {"status": 200}}]},
@@ -183,8 +183,8 @@ def test_m12_cross_stage_fixture_and_param_not_conflict():
     assert DiagnosticCode.FIXTURE_CONFLICT not in _codes(diags)
 
 
-def test_m12_same_stage_fixture_and_var_conflict():
-    # M12: a fixture and a same-named substitution variable IN THE SAME stage still conflict.
+def test_same_stage_fixture_and_var_conflict():
+    # A fixture and a same-named substitution variable IN THE SAME stage still conflict (M12).
     sc, data = _scenario(
         [
             {
@@ -200,9 +200,9 @@ def test_m12_same_stage_fixture_and_var_conflict():
     assert DiagnosticCode.FIXTURE_CONFLICT in _codes(diags)
 
 
-def test_m13_scenario_substitution_undefined_is_error():
-    # M13: a scenario-level substitution referencing an undefined name is a
-    # guaranteed collection-time crash, reported as HTTPCHAIN017 (error).
+def test_scenario_substitution_undefined_is_error():
+    # A scenario-level substitution referencing an undefined name is a guaranteed
+    # collection-time crash, reported as HTTPCHAIN017 (error) (M13).
     data = {
         "substitutions": [{"vars": {"a": "{{ missing }}"}}],
         "stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}],
@@ -212,7 +212,7 @@ def test_m13_scenario_substitution_undefined_is_error():
     assert any(d.code == DiagnosticCode.SCENARIO_UNDEFINED_VAR and d.severity == "error" for d in diags), [d.message for d in diags]
 
 
-def test_m13_scenario_substitution_self_reference_ok():
+def test_scenario_substitution_self_reference_ok():
     # An earlier scenario substitution referenced by a later one is in scope.
     data = {
         "substitutions": [{"vars": {"base": "https://x.test"}}, {"vars": {"url": "{{ base }}/a"}}],
@@ -223,10 +223,10 @@ def test_m13_scenario_substitution_self_reference_ok():
     assert DiagnosticCode.SCENARIO_UNDEFINED_VAR not in _codes(diags)
 
 
-def test_m11_substitution_referencing_foreach_param_is_flagged():
-    # M11: stage substitutions resolve before any foreach iteration variable exists,
-    # so referencing a foreach parameter in a substitution is undefined — even though
-    # the request (resolved per iteration) may reference it fine.
+def test_substitution_referencing_foreach_param_is_flagged():
+    # Stage substitutions resolve before any foreach iteration variable exists, so
+    # referencing a foreach parameter in a substitution is undefined — even though
+    # the request (resolved per iteration) may reference it fine (M11).
     sc, data = _scenario(
         [
             {

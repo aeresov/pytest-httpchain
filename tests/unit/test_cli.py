@@ -350,6 +350,46 @@ def test_graph_direction_lr(tmp_path):
     assert "flowchart LR" in result.output
 
 
+def test_show_marks_and_unproduced_consumes(tmp_path):
+    """The two `show` rows the chain fixture never reaches: a stage's marks,
+    and a consumed name with no producing stage — an author-visible signal that
+    the value has to come from a fixture or the environment, so it must not
+    render as if some stage supplied it.
+    """
+    scenario = _write(
+        tmp_path / "test_marks.http.json",
+        {
+            "stages": [
+                {
+                    "name": "only",
+                    "marks": ["skip", 'xfail(reason="flaky")'],
+                    "request": {"url": "https://x.test/{{ from_nowhere }}"},
+                    "response": [{"verify": {"status": 200}}],
+                }
+            ]
+        },
+    )
+    result = runner.invoke(app, ["show", str(scenario)])
+
+    assert result.exit_code == 0, result.output
+    assert "marks:" in result.output
+    assert "skip" in result.output
+    # Named plainly, without the "(from #N ...)" attribution a real producer gets.
+    assert "from_nowhere" in result.output
+    assert "from_nowhere (from #" not in result.output
+
+
+def test_graph_of_a_stageless_scenario_is_still_valid_mermaid(tmp_path):
+    """An empty `stages` list has no nodes; the output must stay a parseable
+    flowchart with a comment rather than a bare header or a crash."""
+    scenario = _write(tmp_path / "test_empty.http.json", {"stages": []})
+    result = runner.invoke(app, ["graph", str(scenario)])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[0] == "flowchart TD"
+    assert "%% (no stages)" in result.output
+
+
 def test_show_reports_scenario_fixtures_and_vars(tmp_path):
     scenario = tmp_path / "test_meta.http.json"
     scenario.write_text(

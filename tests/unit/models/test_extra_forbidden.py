@@ -14,6 +14,7 @@ from pytest_httpchain.models.entities import (
     UserFunctionKwargs,
     Verify,
 )
+from tests.unit.models.helpers import assert_error_types
 
 
 @pytest.mark.parametrize(
@@ -42,8 +43,7 @@ from pytest_httpchain.models.entities import (
 def test_unknown_key_rejected(model, data, typo):
     with pytest.raises(ValidationError) as exc_info:
         model.model_validate(data)
-    errors = exc_info.value.errors()
-    assert any(e["type"] == "extra_forbidden" and typo in e["loc"] for e in errors)
+    assert_error_types(exc_info, "extra_forbidden", at=typo)
 
 
 def test_parallel_config_extra_key_rejected():

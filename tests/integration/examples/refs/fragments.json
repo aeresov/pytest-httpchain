@@ -1,0 +1,30 @@
+{
+    "shared_headers": {
+        "x-shared": "from-fragment"
+    },
+    "request": {
+        "url": "{{ server }}/user/{{ user_id }}",
+        "headers": {
+            "x-shared": "from-fragment"
+        }
+    },
+    "checks": [
+        {
+            "verify": {
+                "status": 200
+            }
+        },
+        {
+            "save": {
+                "jmespath": {
+                    "name": "name"
+                }
+            }
+        },
+        {
+            "verify": {
+                "expressions": ["{{ name == 'Alice' }}"]
+            }
+        }
+    ]
+}

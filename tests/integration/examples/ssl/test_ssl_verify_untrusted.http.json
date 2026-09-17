@@ -1,0 +1,34 @@
+{
+    "stages": [
+        {
+            "name": "untrusted_handshake",
+            "description": "Default verify=true against a throwaway CA: the handshake must fail",
+            "fixtures": ["https_server"],
+            "request": {
+                "url": "{{ https_server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        },
+        {
+            "name": "never_runs",
+            "description": "Skipped, because the handshake failure aborts the chain",
+            "fixtures": ["https_server"],
+            "request": {
+                "url": "{{ https_server }}/ok"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -40,13 +40,13 @@ from pytest_httpchain.models import (
     Request,
     Scenario,
     SSLConfig,
-    Stage,
     Verify,
 )
 from pytest_httpchain.models.entities import ResponseBody
 from pytest_httpchain.request_builder import build_request_kwargs
 from pytest_httpchain.response_steps import check_rendered_assertions, process_save, process_verify
 from pytest_httpchain.templates import TemplatesError
+from tests.unit.models.helpers import make_stage
 
 
 class TestBuildRequestKwargsErrors:
@@ -301,17 +301,6 @@ class TestProcessVerifyStepErrors:
             process_verify(verify, response)
 
 
-def _make_stage(**kwargs) -> Stage:
-    """Minimal valid stage pointing at a URL that is never actually requested in
-    these unit tests (the code paths under test stop before the HTTP call)."""
-    return Stage(
-        name="s",
-        request=Request(url="https://example.com/", method=HTTPMethod.GET),
-        response=[],
-        **kwargs,
-    )
-
-
 def _make_carrier_subclass(**attrs) -> type[Carrier]:
     """Fresh Carrier subclass with its own mutable state, so a test never mutates
     the shared base-class defaults. `client` is None: teardown_class tolerates it.
@@ -426,7 +415,7 @@ class TestRateLimiting:
         limiter = Limiter(Rate(1, Duration.SECOND))
         assert limiter.try_acquire("api", blocking=True, timeout=2)
 
-        stage = _make_stage()
+        stage = make_stage()
         with pytest.raises(RequestError, match="Rate limit exceeded"):
             # The limiter check happens before the HTTP request, so no client is
             # needed; an exhausted limiter forces the timeout path.
@@ -436,7 +425,7 @@ class TestRateLimiting:
         limiter = Limiter(Rate(1, Duration.SECOND))
         assert limiter.try_acquire("api", blocking=True, timeout=2)
 
-        stage = _make_stage()
+        stage = make_stage()
         start = time.monotonic()
         with pytest.raises(RequestError, match="Rate limit exceeded"):
             Carrier._execute_single_iteration(stage, ChainMap(), {}, limiter=limiter, max_rate_limit_delay=0.3)
@@ -463,14 +452,14 @@ class TestResolvedParallelSettings:
         # two seconds" into no rate limiting at all.
         config = ParallelRepeatConfig.model_construct(repeat=2, max_concurrency=2, calls_per_sec=0.5, max_rate_limit_delay=60)
         with pytest.raises(StageExecutionError, match="calls_per_sec"):
-            _make_carrier_subclass()._run_iterations(_make_stage(), ChainMap(), [{}, {}], config)
+            _make_carrier_subclass()._run_iterations(make_stage(), ChainMap(), [{}, {}], config)
 
     def test_residual_template_fails_the_stage_cleanly(self):
         # A substitution holding '{{ 2 }}' resolves to that text, which satisfies
         # NumberOrTemplate on walk()'s re-validation; int() of it raised a bare
         # ValueError, which no stage-failure path catches.
         carrier = _make_carrier_subclass(global_context=ChainMap({"rate": "{{ 2 }}"}))
-        stage = _make_stage(parallel=ParallelRepeatConfig.model_validate({"repeat": 2, "max_concurrency": 2, "calls_per_sec": "{{ rate }}"}))
+        stage = make_stage(parallel=ParallelRepeatConfig.model_validate({"repeat": 2, "max_concurrency": 2, "calls_per_sec": "{{ rate }}"}))
         with pytest.raises(pytest.fail.Exception, match="calls_per_sec"):
             carrier.execute_stage(stage, {})
 
@@ -480,12 +469,12 @@ class TestResolvedParallelSettings:
         # bare ValueError rather than failing the stage.
         config = ParallelRepeatConfig.model_construct(repeat=2, max_concurrency=value, calls_per_sec=None, max_rate_limit_delay=60)
         with pytest.raises(StageExecutionError, match="max_concurrency"):
-            _make_carrier_subclass()._run_iterations(_make_stage(), ChainMap(), [{}, {}], config)
+            _make_carrier_subclass()._run_iterations(make_stage(), ChainMap(), [{}, {}], config)
 
     def test_bad_max_rate_limit_delay_rejected(self):
         config = ParallelRepeatConfig.model_construct(repeat=2, max_concurrency=2, calls_per_sec=None, max_rate_limit_delay="{{ 5 }}")
         with pytest.raises(StageExecutionError, match="max_rate_limit_delay"):
-            _make_carrier_subclass()._run_iterations(_make_stage(), ChainMap(), [{}, {}], config)
+            _make_carrier_subclass()._run_iterations(make_stage(), ChainMap(), [{}, {}], config)
 
     def test_fractional_delay_is_kept(self):
         # Unlike the two counts, the delay is a duration: half a second is a
@@ -498,7 +487,7 @@ class TestParallelIterationCap:
 
     def test_exceeding_cap_fails(self):
         carrier = _make_carrier_subclass(max_parallel_iterations=2)
-        stage = _make_stage(parallel=ParallelRepeatConfig(repeat=5))
+        stage = make_stage(parallel=ParallelRepeatConfig(repeat=5))
 
         # execute_stage turns the StageExecutionError into a clean pytest failure.
         with pytest.raises(pytest.fail.Exception, match=r"exceeds maximum \(2\)"):
@@ -512,7 +501,7 @@ class TestParallelIterationCap:
         # auth flows raise arbitrary types) into RequestError so the
         # chain-abort machinery engages.
         carrier = _make_carrier_subclass(max_parallel_iterations=3)
-        stage = _make_stage(parallel=ParallelRepeatConfig(repeat=3))
+        stage = make_stage(parallel=ParallelRepeatConfig(repeat=3))
 
         with pytest.raises(pytest.fail.Exception) as excinfo:
             carrier.execute_stage(stage, {})

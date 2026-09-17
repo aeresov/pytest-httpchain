@@ -1,0 +1,34 @@
+{
+    "substitutions": [
+        {
+            "vars": {
+                "combos": [
+                    { "item_id": 1 },
+                    { "item_id": 2, "unexpected": 9 }
+                ]
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "ragged_combinations",
+            "description": "template resolving to combinations with mismatched keys",
+            "fixtures": ["server"],
+            "parametrize": [
+                {
+                    "combinations": "{{ combos }}"
+                }
+            ],
+            "request": {
+                "url": "{{ server }}/item/{{ item_id }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                }
+            ]
+        }
+    ]
+}

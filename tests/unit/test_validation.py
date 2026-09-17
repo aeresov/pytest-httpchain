@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import pytest_httpchain.validation.loader as validation_loader
 from pytest_httpchain.validation import SEVERITY, DiagnosticCode, resolve_root_path, validate_scenario
 
@@ -47,24 +49,28 @@ def test_valid_scenario(datadir):
 def test_invalid_json(datadir):
     r = validate_scenario(datadir / "invalid_json.json")
     assert r.valid is False
+    assert DiagnosticCode.INVALID_JSON in _codes(r)
     assert any("JSON" in e for e in r.errors)
 
 
 def test_missing_file(datadir):
     r = validate_scenario(datadir / "does_not_exist.json")
     assert r.valid is False
+    assert DiagnosticCode.FILE_NOT_FOUND in _codes(r)
     assert any("not found" in e.lower() for e in r.errors)
 
 
 def test_duplicate_stage_names(datadir):
     r = validate_scenario(datadir / "duplicate_stage_names.json")
     assert r.valid is False
+    assert DiagnosticCode.DUPLICATE_STAGE in _codes(r)
     assert any("Duplicate stage names" in e for e in r.errors)
 
 
 def test_undefined_variable_warns(datadir):
     r = validate_scenario(datadir / "undefined_variables.json")
     assert r.valid is True  # warning, not error
+    assert DiagnosticCode.UNDEFINED_VAR in _codes(r)
     assert any("undefined" in w.lower() for w in r.warnings)
     assert "undefined_var" in r.scenario_info.vars_referenced
 
@@ -72,6 +78,7 @@ def test_undefined_variable_warns(datadir):
 def test_no_verify_warns(datadir):
     r = validate_scenario(datadir / "no_response_validation.json")
     assert r.valid is True
+    assert DiagnosticCode.NO_VERIFY in _codes(r)
     assert any("no response validation" in w for w in r.warnings)
 
 
@@ -143,6 +150,7 @@ def test_functions_substitution_names_not_undefined(datadir):
 def test_fixture_var_conflict_is_error(datadir):
     r = validate_scenario(datadir / "fixture_var_conflict.json")
     assert r.valid is False
+    assert DiagnosticCode.FIXTURE_CONFLICT in _codes(r)
     assert any("Conflicting fixtures and vars" in e for e in r.errors)
 
 
@@ -429,6 +437,13 @@ def test_deep_signature_unknown_kwarg(datadir):
     assert any(d.code == DiagnosticCode.UNKNOWN_ARG and "y" in d.message for d in r.diagnostics), r.diagnostics
 
 
+def test_deep_var_keyword_function_accepts_any_kwarg(datadir):
+    """`**kwargs` makes every supplied name fillable, so an argument the
+    signature does not spell out is not an unknown-argument finding."""
+    r = validate_scenario(datadir / "deep_sig_var_keyword.json", deep=True, syspaths=[USERFUNCS_DIR])
+    assert DiagnosticCode.UNKNOWN_ARG not in _codes(r), r.diagnostics
+
+
 def test_deep_auth_required_missing(datadir):
     """auth functions are called with no injected args, so a required param is missing."""
     r = validate_scenario(datadir / "deep_auth_required_missing.json", deep=True, syspaths=[USERFUNCS_DIR])
@@ -470,6 +485,67 @@ def test_deep_ssl_verify_ca_bundle_missing_warns(datadir):
 def test_deep_schema_file_invalid_warns(datadir):
     r = validate_scenario(datadir / "deep_schema_invalid.json", deep=True)
     assert DiagnosticCode.SCHEMA_FILE_INVALID in _codes(r), r.diagnostics
+
+
+def test_deep_schema_file_missing_warns(datadir):
+    """A schema path that does not exist is HTTPCHAIN020, not the
+    HTTPCHAIN021 reserved for a file that exists but does not parse."""
+    r = validate_scenario(datadir / "deep_schema_file_missing.json", deep=True)
+    assert DiagnosticCode.REFERENCED_FILE_NOT_FOUND in _codes(r), r.diagnostics
+    assert DiagnosticCode.SCHEMA_FILE_INVALID not in _codes(r), r.diagnostics
+
+
+def test_deep_schema_file_that_is_json_but_not_a_schema_warns(datadir):
+    """The third schema outcome, between "missing" and "unparseable": the file
+    is valid JSON yet fails its dialect's meta-schema. jsonschema only rejects
+    it when the schema is actually compiled, so nothing else catches it."""
+    r = validate_scenario(datadir / "deep_schema_not_a_schema.json", deep=True)
+    assert any(d.code == DiagnosticCode.SCHEMA_FILE_INVALID and "not a valid JSON Schema" in d.message for d in r.diagnostics), r.diagnostics
+
+
+def test_deep_files_body_paths_checked_per_field(datadir):
+    """`body.files` uploads get the same existence check as `body.binary`, and
+    the diagnostic names the offending field rather than the whole body."""
+    r = validate_scenario(datadir / "deep_files_missing.json", deep=True)
+    missing = [d for d in r.diagnostics if d.code == DiagnosticCode.REFERENCED_FILE_NOT_FOUND]
+    assert len(missing) == 1, r.diagnostics
+    assert missing[0].location == "stages[0].request.body.files.absent", missing[0]
+
+
+def test_deep_ssl_cert_pair_checked_element_wise(datadir):
+    """The (cert, key) tuple form of `ssl.cert` is two paths, so a missing one
+    is reported per element — not once for the pair, and not skipped because
+    the value is not a bare path."""
+    r = validate_scenario(datadir / "deep_ssl_cert_pair_missing.json", deep=True)
+    locations = sorted(d.location for d in r.diagnostics if d.code == DiagnosticCode.REFERENCED_FILE_NOT_FOUND)
+    assert locations == ["ssl.cert[0]", "ssl.cert[1]"], r.diagnostics
+
+
+def test_deep_signature_checked_for_save_user_functions(datadir):
+    """A save `user_functions` call gets `response` injected exactly like the
+    verify side, so its signature is checkable — and was the one call site the
+    collector skipped."""
+    r = validate_scenario(datadir / "deep_save_user_function_sig.json", deep=True, syspaths=[USERFUNCS_DIR])
+    missing = [d for d in r.diagnostics if d.code == DiagnosticCode.MISSING_ARG]
+    assert missing, r.diagnostics
+    assert missing[0].location == "stages[0].response[1].save.user_functions[0]", missing[0]
+    assert "x" in missing[0].message
+
+
+def test_deep_substitution_functions_are_import_checked_only(datadir):
+    """Substitution `functions` are invoked from templates with call-time
+    arguments the validator cannot see, so a required parameter is NOT a
+    finding — importing successfully is the whole check."""
+    r = validate_scenario(datadir / "deep_substitution_function_required_arg.json", deep=True, syspaths=[USERFUNCS_DIR])
+    assert _codes(r).isdisjoint({DiagnosticCode.IMPORT_FAILED, DiagnosticCode.MISSING_ARG, DiagnosticCode.UNKNOWN_ARG}), r.diagnostics
+
+
+def test_deep_non_introspectable_callable_is_not_flagged(datadir):
+    """Some C callables have no retrievable signature (`inspect.signature` raises).
+    That is not evidence of a bad call, so it must produce no argument
+    diagnostics rather than a false `missing required argument`."""
+    r = validate_scenario(datadir / "deep_non_introspectable_func.json", deep=True)
+    assert _codes(r).isdisjoint({DiagnosticCode.MISSING_ARG, DiagnosticCode.UNKNOWN_ARG}), r.diagnostics
 
 
 class TestRootPathDefault:
@@ -522,6 +598,100 @@ class TestRootPathDefault:
 
         assert result.valid is True
         assert result.errors == []
+
+    def test_real_pytest_config_beats_nearer_bare_marker(self, tmp_path):
+        """A sub-package's plain pyproject.toml is not a pytest rootdir.
+
+        Preferring it would shrink the CLI's root below pytest's, so `validate`
+        would reject $ref targets that collection resolves fine — a red CI on a
+        working scenario.
+        """
+        (tmp_path / "pyproject.toml").write_text('[tool.pytest.ini_options]\ntestpaths = ["tests"]\n')
+        package = tmp_path / "packages" / "api"
+        package.mkdir(parents=True)
+        (package / "pyproject.toml").write_text('[project]\nname = "api"\n')
+        scenario = package / "test_x.http.json"
+        scenario.write_text("{}")
+
+        assert resolve_root_path(scenario) == tmp_path
+
+    def test_bare_marker_still_used_when_no_pytest_config_anywhere(self, tmp_path):
+        """The marker fallback is unchanged when nothing carries a pytest section."""
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "solo"\n')
+        scenario = tmp_path / "test_x.http.json"
+        scenario.write_text("{}")
+
+        assert resolve_root_path(scenario) == tmp_path
+
+    def test_markerless_tree_falls_back_to_tests_ancestor(self, tmp_path, monkeypatch):
+        """Without any project marker, the pre-marker default (nearest tests/
+        ancestor) still applies, so exported bundles keep their sandbox."""
+        _hide_ancestor_project_markers(monkeypatch)
+        suite = tmp_path / "bundle" / "tests" / "api"
+        suite.mkdir(parents=True)
+        scenario = suite / "test_x.http.json"
+        scenario.write_text("{}")
+
+        assert resolve_root_path(scenario) == tmp_path / "bundle" / "tests"
+
+    @pytest.mark.parametrize(
+        ("filename", "content"),
+        [
+            # pytest.ini counts unconditionally — it exists only for pytest, so
+            # it needs no section to prove intent.
+            ("pytest.ini", "[pytest]\n"),
+            ("pytest.ini", ""),
+            ("tox.ini", "[pytest]\ntestpaths = tests\n"),
+            ("setup.cfg", "[tool:pytest]\ntestpaths = tests\n"),
+        ],
+        ids=["pytest.ini", "pytest.ini-empty", "tox.ini", "setup.cfg"],
+    )
+    def test_every_pytest_inifile_spelling_wins_over_a_nearer_bare_marker(self, tmp_path, filename, content):
+        """The precedence pinned by `test_real_pytest_config_beats_nearer_bare_marker`
+        applies to each file pytest accepts as an inifile, not just pyproject.toml.
+        Only pyproject.toml was covered, so a project configured through tox.ini
+        or setup.cfg could silently get a narrower $ref root than collection uses.
+        """
+        (tmp_path / filename).write_text(content)
+        package = tmp_path / "packages" / "api"
+        package.mkdir(parents=True)
+        (package / "pyproject.toml").write_text('[project]\nname = "api"\n')
+        scenario = package / "test_x.http.json"
+        scenario.write_text("{}")
+
+        assert resolve_root_path(scenario) == tmp_path
+
+    @pytest.mark.parametrize(
+        ("filename", "content"),
+        [
+            ("tox.ini", "[tox]\nenvlist = py313\n"),
+            ("setup.cfg", "[metadata]\nname = api\n"),
+            ("tox.ini", "this is not ini syntax at all\x00"),
+            ("pyproject.toml", "this is not [ valid toml"),
+        ],
+        ids=[
+            "tox-without-pytest-section",
+            "setup.cfg-without-pytest-section",
+            "unparseable-ini",
+            "unparseable-toml",
+        ],
+    )
+    def test_shared_inifile_without_a_pytest_section_is_not_a_rootdir(self, tmp_path, filename, content):
+        """pyproject.toml, tox.ini and setup.cfg belong to other tools too.
+        Treating one as a pytest rootdir on sight — or crashing on a file the
+        parser cannot read — would move the root for projects that never
+        configured pytest there, so all of it degrades to the bare-marker
+        fallback.
+        """
+        (tmp_path / filename).write_text(content)
+        package = tmp_path / "packages" / "api"
+        package.mkdir(parents=True)
+        (package / "pyproject.toml").write_text('[project]\nname = "api"\n')
+        scenario = package / "test_x.http.json"
+        scenario.write_text("{}")
+
+        # The nearest bare marker wins, because nothing above holds pytest config.
+        assert resolve_root_path(scenario) == package
 
 
 def test_ambiguous_ref_reported_as_diagnostic(tmp_path):
@@ -626,115 +796,8 @@ class TestResponseMetadataNamespace:
         assert DiagnosticCode.CONTAINS_CONTRADICTION in _codes(result)
 
 
-class TestReviewRegressionsBatch2:
-    """Regression guards for the 2026-07-16 batch review findings."""
-
-    def test_empty_matches_pattern_is_not_a_contradiction(self, tmp_path):
-        """An empty `matches` regex with not_matches UNSET must not trigger
-        HTTPCHAIN008 (unset used to be conflated with the empty pattern)."""
-        path = tmp_path / "test_x.http.json"
-        path.write_text(
-            json.dumps(
-                {
-                    "stages": [
-                        {
-                            "name": "s",
-                            "request": {"url": "http://server/x"},
-                            "response": [{"verify": {"headers": {"x-h": {"matches": ""}}}}],
-                        }
-                    ]
-                }
-            )
-        )
-        result = validate_scenario(path)
-        assert result.valid is True
-        assert DiagnosticCode.MATCHES_CONTRADICTION not in _codes(result)
-
-    def test_ambiguity_diagnostic_survives_later_load_failure(self, tmp_path):
-        """A recorded HTTPCHAIN026 must not be dropped when a later $ref in the
-        same file fails to resolve."""
-        (tmp_path / "pyproject.toml").write_text("")
-        (tmp_path / "fragment.json").write_text(json.dumps({"url": "http://server/root"}))
-        suite = tmp_path / "suite"
-        suite.mkdir()
-        (suite / "fragment.json").write_text(json.dumps({"url": "http://server/local"}))
-        scenario_path = suite / "test_a.http.json"
-        scenario_path.write_text(
-            json.dumps(
-                {
-                    "stages": [
-                        {
-                            "name": "s",
-                            "request": {"$ref": "fragment.json"},
-                            "response": [{"verify": {"$ref": "missing.json"}}],
-                        }
-                    ]
-                }
-            )
-        )
-        result = validate_scenario(scenario_path)
-        assert result.valid is False  # the missing ref is still an error
-        codes = _codes(result)
-        assert DiagnosticCode.AMBIGUOUS_REF in codes
-        assert DiagnosticCode.REF_ERROR in codes
-
-    def test_markerless_tree_falls_back_to_tests_ancestor(self, tmp_path, monkeypatch):
-        """Without any project marker, the pre-marker default (nearest tests/
-        ancestor) still applies, so exported bundles keep their sandbox."""
-        _hide_ancestor_project_markers(monkeypatch)
-        suite = tmp_path / "bundle" / "tests" / "api"
-        suite.mkdir(parents=True)
-        scenario = suite / "test_x.http.json"
-        scenario.write_text("{}")
-
-        assert resolve_root_path(scenario) == tmp_path / "bundle" / "tests"
-
-    def test_real_pytest_config_beats_nearer_bare_marker(self, tmp_path):
-        """A sub-package's plain pyproject.toml is not a pytest rootdir.
-
-        Preferring it would shrink the CLI's root below pytest's, so `validate`
-        would reject $ref targets that collection resolves fine — a red CI on a
-        working scenario.
-        """
-        (tmp_path / "pyproject.toml").write_text('[tool.pytest.ini_options]\ntestpaths = ["tests"]\n')
-        package = tmp_path / "packages" / "api"
-        package.mkdir(parents=True)
-        (package / "pyproject.toml").write_text('[project]\nname = "api"\n')
-        scenario = package / "test_x.http.json"
-        scenario.write_text("{}")
-
-        assert resolve_root_path(scenario) == tmp_path
-
-    def test_bare_marker_still_used_when_no_pytest_config_anywhere(self, tmp_path):
-        """The marker fallback is unchanged when nothing carries a pytest section."""
-        (tmp_path / "pyproject.toml").write_text('[project]\nname = "solo"\n')
-        scenario = tmp_path / "test_x.http.json"
-        scenario.write_text("{}")
-
-        assert resolve_root_path(scenario) == tmp_path
-
-    def test_templated_dict_key_is_reported(self, tmp_path):
-        """HTTPCHAIN029: only values are substituted, so a templated key would
-        otherwise reach the wire verbatim with nothing anywhere mentioning it."""
-        (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
-        scenario = tmp_path / "test_k.http.json"
-        scenario.write_text(
-            json.dumps(
-                {
-                    "substitutions": [{"vars": {"hname": "X-Trace"}}],
-                    "stages": [
-                        {
-                            "name": "s",
-                            "request": {"url": "http://server/x", "headers": {"{{ hname }}": "v"}},
-                            "response": [{"verify": {"status": 200}}],
-                        }
-                    ],
-                }
-            )
-        )
-        result = validate_scenario(scenario)
-        assert result.valid is True  # a warning, not an error
-        assert DiagnosticCode.TEMPLATE_IN_KEY in _codes(result)
+class TestDuplicateStageNames:
+    """HTTPCHAIN003 fires on repeated stage names — and only on real ones."""
 
     def test_unnamed_stages_are_not_duplicates(self, tmp_path):
         """`name` is optional and defaults to "": two stages that omit it are
@@ -771,39 +834,115 @@ class TestReviewRegressionsBatch2:
         )
         assert DiagnosticCode.DUPLICATE_STAGE in _codes(validate_scenario(scenario))
 
-    def test_absolute_uri_ref_in_inline_schema_not_flagged(self, tmp_path):
-        """HTTPCHAIN028 targets scenario file references. An absolute-URI $ref is
-        JSON Schema vocabulary the validator's registry resolves, so flagging it
-        warns on a schema that works."""
-        (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
-        scenario = tmp_path / "test_s.http.json"
-        scenario.write_text(
-            json.dumps(
-                {
-                    "stages": [
-                        {
-                            "name": "s",
-                            "request": {"url": "http://server/x"},
-                            "response": [
-                                {
-                                    "verify": {
-                                        "body": {
-                                            "schema": {
-                                                "$id": "https://example.com/s",
-                                                "type": "object",
-                                                "properties": {"a": {"$ref": "https://example.com/s#/$defs/a"}},
-                                                "$defs": {"a": {"type": "string"}},
-                                            }
+
+def test_empty_matches_pattern_is_not_a_contradiction(tmp_path):
+    """An empty `matches` regex with not_matches UNSET must not trigger
+    HTTPCHAIN008 (unset used to be conflated with the empty pattern)."""
+    path = tmp_path / "test_x.http.json"
+    path.write_text(
+        json.dumps(
+            {
+                "stages": [
+                    {
+                        "name": "s",
+                        "request": {"url": "http://server/x"},
+                        "response": [{"verify": {"headers": {"x-h": {"matches": ""}}}}],
+                    }
+                ]
+            }
+        )
+    )
+    result = validate_scenario(path)
+    assert result.valid is True
+    assert DiagnosticCode.MATCHES_CONTRADICTION not in _codes(result)
+
+
+def test_ambiguity_diagnostic_survives_later_load_failure(tmp_path):
+    """A recorded HTTPCHAIN026 must not be dropped when a later $ref in the
+    same file fails to resolve."""
+    (tmp_path / "pyproject.toml").write_text("")
+    (tmp_path / "fragment.json").write_text(json.dumps({"url": "http://server/root"}))
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "fragment.json").write_text(json.dumps({"url": "http://server/local"}))
+    scenario_path = suite / "test_a.http.json"
+    scenario_path.write_text(
+        json.dumps(
+            {
+                "stages": [
+                    {
+                        "name": "s",
+                        "request": {"$ref": "fragment.json"},
+                        "response": [{"verify": {"$ref": "missing.json"}}],
+                    }
+                ]
+            }
+        )
+    )
+    result = validate_scenario(scenario_path)
+    assert result.valid is False  # the missing ref is still an error
+    codes = _codes(result)
+    assert DiagnosticCode.AMBIGUOUS_REF in codes
+    assert DiagnosticCode.REF_ERROR in codes
+
+
+def test_templated_dict_key_is_reported(tmp_path):
+    """HTTPCHAIN029: only values are substituted, so a templated key would
+    otherwise reach the wire verbatim with nothing anywhere mentioning it."""
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+    scenario = tmp_path / "test_k.http.json"
+    scenario.write_text(
+        json.dumps(
+            {
+                "substitutions": [{"vars": {"hname": "X-Trace"}}],
+                "stages": [
+                    {
+                        "name": "s",
+                        "request": {"url": "http://server/x", "headers": {"{{ hname }}": "v"}},
+                        "response": [{"verify": {"status": 200}}],
+                    }
+                ],
+            }
+        )
+    )
+    result = validate_scenario(scenario)
+    assert result.valid is True  # a warning, not an error
+    assert DiagnosticCode.TEMPLATE_IN_KEY in _codes(result)
+
+
+def test_absolute_uri_ref_in_inline_schema_not_flagged(tmp_path):
+    """HTTPCHAIN028 targets scenario file references. An absolute-URI $ref is
+    JSON Schema vocabulary the validator's registry resolves, so flagging it
+    warns on a schema that works."""
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+    scenario = tmp_path / "test_s.http.json"
+    scenario.write_text(
+        json.dumps(
+            {
+                "stages": [
+                    {
+                        "name": "s",
+                        "request": {"url": "http://server/x"},
+                        "response": [
+                            {
+                                "verify": {
+                                    "body": {
+                                        "schema": {
+                                            "$id": "https://example.com/s",
+                                            "type": "object",
+                                            "properties": {"a": {"$ref": "https://example.com/s#/$defs/a"}},
+                                            "$defs": {"a": {"type": "string"}},
                                         }
                                     }
                                 }
-                            ],
-                        }
-                    ]
-                }
-            )
+                            }
+                        ],
+                    }
+                ]
+            }
         )
-        assert DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE not in _codes(validate_scenario(scenario))
+    )
+    assert DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE not in _codes(validate_scenario(scenario))
 
 
 def test_inline_schema_standard_json_schema_kept(datadir):
@@ -815,6 +954,23 @@ def test_inline_schema_standard_json_schema_kept(datadir):
     assert r.valid is True, r.errors
     _, raw = load_scenario(datadir / "inline_schema_standard_ref.json")
     schema = raw["stages"][0]["response"][0]["verify"]["body"]["schema"]
+    assert schema["$defs"] == {"item": {"type": "string"}}
+    assert schema["properties"]["item"] == {"$ref": "#/$defs/item"}
+
+
+def test_inline_schema_kept_under_mapping_form_response_steps(datadir):
+    """The name-keyed `response` form flattens to a list, so an inline schema
+    sits one level deeper in the raw JSON than in the list form. The opacity
+    check addresses raw paths, so it has to recognise both shapes — otherwise
+    the resolver treats a schema's own `$ref` as a scenario directive and tries
+    to load `#/$defs/item` as a file.
+    """
+    from pytest_httpchain.validation import load_scenario
+
+    r = validate_scenario(datadir / "inline_schema_mapping_form_response.json")
+    assert r.valid is True, r.errors
+    _, raw = load_scenario(datadir / "inline_schema_mapping_form_response.json")
+    schema = raw["stages"][0]["response"]["checks"][0]["verify"]["body"]["schema"]
     assert schema["$defs"] == {"item": {"type": "string"}}
     assert schema["properties"]["item"] == {"$ref": "#/$defs/item"}
 
