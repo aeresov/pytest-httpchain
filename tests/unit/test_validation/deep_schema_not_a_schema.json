@@ -1,0 +1,11 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                { "verify": { "status": 200, "body": { "schema": "not_json_schema.json" } } }
+            ]
+        }
+    ]
+}

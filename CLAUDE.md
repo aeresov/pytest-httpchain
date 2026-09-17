@@ -16,6 +16,18 @@ uv run pytest
 uv run pytest tests/integration/test_primer.py -v
 uv run pytest tests/unit/test_foo.py::test_specific -v
 
+# Faster full run. Almost all the wall time is integration tests that each spawn
+# a pytester session and its own HTTP server, and they are independent, so the
+# suite parallelizes cleanly (~4 min -> ~2 min on 4 cores). CI passes `-n auto`.
+uv run pytest -n auto
+
+# Faster feedback loop while iterating. The unit suite alone is ~1000 tests in
+# under 10 seconds; `-m "not slow"` then drops the subprocess-spawning and
+# sleep-bound integration families (~27 tests, ~40% of integration wall time).
+# Both are for iterating only — run the whole suite before pushing.
+uv run pytest tests/unit
+uv run pytest -m "not slow"
+
 # Lint — CI's Lint job runs ALL FIVE of these; run them all before pushing
 uv run ruff check .
 uv run ruff format --check .
@@ -43,8 +55,8 @@ uv run pytest-httpchain validate --deep --syspath tests/integration/examples tes
 # bodies) as missed and report a ~20-point-low floor. CI uses this form.
 # `parallel` + `patch=subprocess` measure pytester subprocesses too and write
 # pid-suffixed data files — always `combine` before `report`.
-# Run the WHOLE suite: `fail_under = 88` applies to every `coverage report`, and
-# unit tests alone reach ~85, so `tests/unit` here would always exit non-zero.
+# Run the WHOLE suite: `fail_under = 94` applies to every `coverage report`, and
+# unit tests alone reach ~87, so `tests/unit` here would always exit non-zero.
 uv run coverage run -m pytest tests
 uv run coverage combine
 uv run coverage report --show-missing
@@ -101,6 +113,42 @@ Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix config
 
 Per-scenario mutable class state (client, abort flag, exchange bookkeeping) is defined once in `carrier.fresh_scenario_state()`; the factory seeds each generated subclass with it and `teardown_class` re-applies it.
 
-## Integration Tests
+## Test suite conventions
 
-Integration tests use pytest's `pytester` fixture. Test scenarios live in `tests/integration/examples/` and are executed via pytester's `runpytest()`.
+**Unit vs integration.** `tests/unit` owns pure logic — models, templates, jsonref,
+validation, and the error/edge paths of the engine. `tests/integration` owns
+everything that needs a real pytest session and a real socket: collection,
+ordering, fixtures, marks, and the HTTP round trip. Unit tests alone reach ~87%
+coverage in seconds; integration carries the rest to ~97%. When a behavior can
+be pinned in a unit test, pin it there — reach for an integration test when the
+thing under test *is* the pytest or HTTP interaction.
+
+**Integration tests** use pytest's `pytester` fixture. Prefer the `run_scenario`
+fixture (`tests/integration/conftest.py`) over calling `copy_example` /
+`runpytest` by hand; it takes extra pytest args via `args=` and switches to a
+real subprocess via `subprocess=True`, so almost every case fits:
+
+```python
+run_scenario("verify/test_verify_status.http.json")  # plain run
+run_scenario("auth/test_request_auth.http.json", "auth.py")  # with aux files
+run_scenario("save/test_save_jmespath.http.json", args="--collect-only")
+run_scenario(*CHAIN_SCENARIOS, args=("-n", "2"), subprocess=True)
+```
+
+**Where a scenario lives.** A scenario that is *fixture scaffolding* for the
+behavior under test goes in `tests/integration/examples/` as a real
+`test_<name>.http.json`, so the CLI validator and the schema check cover it too.
+A scenario that *is* the subject of the test — where reading it next to the
+assertion is the point — may be built inline and written into the pytester dir.
+Don't add an example file that only one test will ever use inline-style, and
+don't inline a scenario other tests could share.
+
+**`slow` marker.** Applies to every test that spawns a pytester subprocess or
+waits on a real timeout/rate limit. Keep it accurate: it is what makes
+`-m "not slow"` a usable inner loop. CI runs everything.
+
+**"M\<n\>" in docstrings** (`M1`, `M14`, `M50`, ...) are internal review-round
+finding IDs, kept as provenance for regression guards. They are not resolvable
+outside the review that produced them, so they belong in a docstring next to a
+real explanation — never in a test's name, and never as the only thing a
+docstring says.

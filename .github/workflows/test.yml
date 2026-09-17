@@ -106,8 +106,16 @@ jobs:
             # One command per step: on windows-latest the default shell is pwsh, which
             # only propagates the LAST command's exit code from a multi-line block —
             # a failing pytest would be masked by a succeeding `coverage xml`.
+            #
+            # `-n auto` distributes the suite over the runner's cores. Almost all of
+            # the wall time is integration tests that each spawn a pytester session
+            # and its own HTTP server, and those are independent, so this roughly
+            # halves the Linux legs and helps the Windows one more. It does not
+            # change what is measured: `parallel = true` already writes pid-suffixed
+            # data files for the pytester subprocesses, and the Combine step below
+            # merges the worker files the same way.
             - name: Run tests with coverage
-              run: uv run coverage run -m pytest tests -v
+              run: uv run coverage run -m pytest tests -v -n auto
 
             # parallel + patch=subprocess produce pid-suffixed data files (one
             # per pytester subprocess); merge them before reporting.
@@ -160,7 +168,7 @@ jobs:
               run: uv sync --frozen
 
             - name: Run tests
-              run: uv run --frozen pytest tests -v
+              run: uv run --frozen pytest tests -v -n auto
 
     # Non-blocking early warning: run the suite against pytest's main branch so
     # upcoming deprecations/breakage surface before a pytest release day.
@@ -198,4 +206,4 @@ jobs:
             # it silently warns about nothing. Drop the flag once anyio releases
             # a build that imports CallSpec instead.
             - name: Run tests
-              run: uv run --no-sync pytest tests -v -p no:anyio
+              run: uv run --no-sync pytest tests -v -p no:anyio -n auto

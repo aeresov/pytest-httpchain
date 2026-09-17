@@ -20,24 +20,20 @@ pytestmark = pytest.mark.slow
 SCENARIO = "save/test_save_jmespath.http.json"
 
 
-def run_xdist(pytester, *args):
-    pytester.copy_example("conftest.py")
-    pytester.copy_example(SCENARIO)
-    return pytester.runpytest_subprocess(*args)
+def run_xdist(run_scenario, *args):
+    return run_scenario(SCENARIO, args=args, subprocess=True)
 
 
-def test_single_stage_allowed_under_any_mode(pytester):
+def test_single_stage_allowed_under_any_mode(run_scenario):
     """A single-stage scenario has no chain to split — bare -n keeps working."""
-    pytester.copy_example("conftest.py")
-    pytester.copy_example("xdist/test_single.http.json")
-    result = pytester.runpytest_subprocess("-n", "2")
+    result = run_scenario("xdist/test_single.http.json", args=("-n", "2"), subprocess=True)
     result.assert_outcomes(passed=1)
 
 
 @pytest.mark.parametrize("mode", ["load", "each", "worksteal"])
-def test_chain_splitting_modes_rejected(pytester, mode):
+def test_chain_splitting_modes_rejected(run_scenario, mode):
     """Modes that can scatter one scenario's stages across workers fail collection."""
-    result = run_xdist(pytester, "-n", "2", "--dist", mode)
+    result = run_xdist(run_scenario, "-n", "2", "--dist", mode)
     outcomes = result.parseoutcomes()
     assert outcomes.get("passed", 0) == 0, "no stage may run under an incompatible dist mode"
     assert result.ret != 0
@@ -45,24 +41,24 @@ def test_chain_splitting_modes_rejected(pytester, mode):
     result.stdout.fnmatch_lines(["*loadscope*"])
 
 
-def test_bare_numprocesses_rejected(pytester):
+def test_bare_numprocesses_rejected(run_scenario):
     """-n without --dist implies the incompatible default mode (load)."""
-    result = run_xdist(pytester, "-n", "2")
+    result = run_xdist(run_scenario, "-n", "2")
     assert result.parseoutcomes().get("passed", 0) == 0
     assert result.ret != 0
     result.stdout.fnmatch_lines(["*cannot run under pytest-xdist --dist=load*"])
 
 
 @pytest.mark.parametrize("mode", ["loadscope", "loadfile", "loadgroup"])
-def test_class_preserving_modes_supported(pytester, mode):
+def test_class_preserving_modes_supported(run_scenario, mode):
     """Modes that keep a class/file/group on one worker run the chain correctly."""
-    result = run_xdist(pytester, "-n", "2", "--dist", mode)
+    result = run_xdist(run_scenario, "-n", "2", "--dist", mode)
     result.assert_outcomes(passed=2)
 
 
-def test_xdist_installed_but_inactive(pytester):
+def test_xdist_installed_but_inactive(run_scenario):
     """With xdist installed but no -n, behavior is unchanged."""
-    result = run_xdist(pytester)
+    result = run_xdist(run_scenario)
     result.assert_outcomes(passed=2)
 
 
@@ -74,7 +70,7 @@ CHAIN_SCENARIOS = [
 
 
 @pytest.mark.parametrize("mode", ["loadscope", "loadfile", "loadgroup"])
-def test_stage_order_strict_across_scenarios(pytester, mode):
+def test_stage_order_strict_across_scenarios(run_scenario, mode):
     """Ordering stress: the plugin's collection hooks must sequence stages inside each worker.
 
     Three scenarios of six strictly-chained stages each — stage k verifies
@@ -84,8 +80,5 @@ def test_stage_order_strict_across_scenarios(pytester, mode):
     least one worker receives two scenario groups, exercising group-after-group
     sequencing as well.
     """
-    pytester.copy_example("conftest.py")
-    for scenario in CHAIN_SCENARIOS:
-        pytester.copy_example(scenario)
-    result = pytester.runpytest_subprocess("-n", "2", "--dist", mode)
+    result = run_scenario(*CHAIN_SCENARIOS, args=("-n", "2", "--dist", mode), subprocess=True)
     result.assert_outcomes(passed=18)

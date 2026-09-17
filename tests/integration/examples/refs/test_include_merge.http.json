@@ -1,0 +1,57 @@
+{
+    "substitutions": [
+        {
+            "vars": {
+                "user_id": 1
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "included_request",
+            "description": "$include pulls whole request and response subtrees in verbatim",
+            "fixtures": ["server"],
+            "request": {
+                "$include": "fragments.json#/request"
+            },
+            "response": {
+                "$include": "fragments.json#/checks"
+            }
+        },
+        {
+            "name": "merged_headers",
+            "description": "$merge deep-merges a shared header set with a stage-local one",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/headers",
+                "headers": {
+                    "$merge": "fragments.json#/shared_headers",
+                    "x-local": "from-stage"
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "sent_shared": "received_headers.\"X-Shared\"",
+                            "sent_local": "received_headers.\"X-Local\""
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ sent_shared == 'from-fragment' }}",
+                            "{{ sent_local == 'from-stage' }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

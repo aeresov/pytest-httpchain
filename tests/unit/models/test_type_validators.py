@@ -1,11 +1,11 @@
 """Unit tests for custom type validators in types.py."""
 
 import json
-import warnings
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from pytest_httpchain.models.entities import _suppress_field_shadow_warning
 from pytest_httpchain.models.types import (
     Base64String,
     FunctionImportName,
@@ -19,9 +19,6 @@ from pytest_httpchain.models.types import (
     XMLString,
     check_json_schema,
 )
-
-# Suppress Pydantic warning about field name "schema" shadowing BaseModel attribute
-warnings.filterwarnings("ignore", message=r'Field name "schema" in "TestJSONSchemaInline.Model" shadows an attribute', category=UserWarning)
 
 
 class TestVariableName:
@@ -330,8 +327,19 @@ class TestBase64String:
 class TestJSONSchemaInline:
     """Tests for JSONSchemaInline validator."""
 
-    class Model(BaseModel):
-        schema: JSONSchemaInline
+    # `schema` shadows BaseModel.schema, which pydantic warns about and
+    # `filterwarnings = error` would turn into a collection error. The field is
+    # named that way on purpose (ResponseBody.schema is the model under test),
+    # so borrow the same scoped suppression src uses rather than filtering at
+    # module level — a module-level `warnings.filterwarnings` runs at import and
+    # mutates the process-global filter list, which pytest's per-item snapshot
+    # then carries into every test collected afterwards. A `filterwarnings`
+    # marker cannot do it: the warning fires while the class body executes, at
+    # collection, before any marker applies.
+    with _suppress_field_shadow_warning("schema"):
+
+        class Model(BaseModel):
+            schema: JSONSchemaInline
 
     def test_valid_simple_schema(self):
         """Test simple valid JSON schema."""

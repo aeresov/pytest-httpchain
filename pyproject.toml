@@ -171,10 +171,10 @@ precision = 2
 show_missing = true
 skip_covered = false
 # Regression floor for the CI `coverage report` step (full suite under
-# `coverage run -m pytest`, ~95%). Kept a few points below the real number to
+# `coverage run -m pytest`, ~97%). Kept a few points below the real number to
 # tolerate platform/Python-version branch differences; ratchet upward as
 # coverage improves rather than letting it silently erode.
-fail_under = 88
+fail_under = 94
 
 [tool.importlinter]
 root_package = "pytest_httpchain"

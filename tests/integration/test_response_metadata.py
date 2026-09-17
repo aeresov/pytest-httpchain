@@ -148,6 +148,12 @@ def test_response_namespace_not_visible_in_request(pytester):
     )
     result = pytester.runpytest("-s")
     result.assert_outcomes(failed=1)
+    # Pin the cause: `failed=1` alone would also pass if the stage broke on the
+    # URL template, or on anything else this scenario happens to touch.
+    result.stdout.fnmatch_lines(["*'response' is not defined*"])
+    # The validator sees it statically too, so the author is told at collection
+    # rather than only when the stage runs.
+    result.stdout.fnmatch_lines(["*HTTPCHAIN003*undefined variable*'response'*"])
 
 
 def test_user_function_saving_reserved_name_warns_at_runtime(pytester):
