@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-09-17
+
+Nothing in `src/` changed, so upgrading from 0.14.4 changes nothing at runtime.
+This release carries a test-suite and CI pass.
+
+### Changed
+
+- Test suite review follow-up. Coverage rose from 95.13% to 97.11% and the full
+  suite runs in about half the time: it is almost entirely independent pytester
+  sessions, so CI now passes `-n auto`. The regression floor is ratcheted from
+  88 to 94.
+- Scenario `ssl` is exercised against a server presenting a real certificate.
+  `SSLConfig` was pinned only at the `httpx.Client` kwargs level, which cannot
+  tell a correctly built context from one trusting the wrong thing — no
+  handshake ever happened. Now `verify` against a trusted CA bundle, against an
+  untrusted certificate, and with verification disabled, plus `cert` against a
+  server demanding a client certificate, each with its negative control.
+- `validate --deep` covers the diagnostics it emits that no test reached:
+  `body.files` paths, the `(cert, key)` tuple form of `ssl.cert`, a missing
+  schema file, a schema file that parses but fails its meta-schema, and
+  `save.user_functions` signature checking. Rootdir detection is tested through
+  `pytest.ini`, `tox.ini` and `setup.cfg` as well as `pyproject.toml` — it
+  decides the CLI's `$ref` root, and only one of the four spellings was covered.
+- Integration tests go through one `run_scenario` fixture, which now takes extra
+  pytest arguments and can run in a subprocess, instead of three competing
+  spellings of the same setup. `CLAUDE.md` documents the suite's conventions.
+
 ## [0.14.4] - 2026-08-28
 
 ### Changed
@@ -542,7 +569,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.4...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.5...HEAD
+[0.14.5]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.1...v0.14.2
