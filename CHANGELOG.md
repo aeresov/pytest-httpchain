@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-17
+
 ### Added
 
 - `HTTPCHAIN030` warns when a `functions` substitution's `kwargs` contain a `{{ }}` template. Those
@@ -602,7 +604,8 @@ This release carries a test-suite and CI pass.
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.5...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.5...v0.15.0
 [0.14.5]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.2...v0.14.3
