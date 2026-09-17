@@ -63,4 +63,9 @@ def test_missing_client_certificate_fails_handshake(run_scenario):
     the passing case above cannot be explained by ``verify`` alone."""
     result = run_scenario("ssl/test_ssl_client_cert_missing.http.json")
     result.assert_outcomes(errors=0, failed=1, passed=0)
-    result.stdout.fnmatch_lines(["*CERTIFICATE_REQUIRED*"])
+    # How the refusal surfaces is the platform's choice, so only the refusal is
+    # asserted: OpenSSL reports the server's CERTIFICATE_REQUIRED alert, while
+    # Windows reports just the reset that follows it (WinError 10054) and never
+    # shows the alert. Pinning the OpenSSL spelling made this Linux-only.
+    output = result.stdout.str()
+    assert "CERTIFICATE_REQUIRED" in output or "10054" in output, output
