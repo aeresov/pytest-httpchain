@@ -197,13 +197,20 @@ jobs:
 
             # --no-sync so uv run does not restore the locked pytest.
             #
-            # -p no:anyio because anyio ships a pytest11 entry point that is
-            # auto-loaded purely because httpx pulls anyio in transitively — the
-            # suite never uses it. Its plugin imports the CallSpec2 alias, which
-            # pytest main renamed, and `filterwarnings = error` promotes that
-            # deprecation to a hard error during load_setuptools_entrypoints.
-            # Without this flag the job dies before collecting a single test, so
-            # it silently warns about nothing. Drop the flag once anyio releases
-            # a build that imports CallSpec instead.
+            # -p no:anyio is gone: anyio 4.15.1 imports CallSpec and only falls
+            # back to the renamed CallSpec2 alias on older pytest, so its
+            # pytest11 entry point no longer trips `filterwarnings = error`
+            # during load_setuptools_entrypoints. The flag only ever covered
+            # THIS run in any case — pytester deletes PYTEST_ADDOPTS, so the
+            # inner sessions most of this suite is made of never inherited it,
+            # and the anyio floor in uv.lock is what actually fixes those.
+            #
+            # Expected red, upstream, not ours: the two --dist loadgroup cases
+            # in test_xdist.py. xdist appends its group suffix by assigning the
+            # private `item._nodeid`, but pytest main derives `nodeid` from a
+            # structured NodeId, so that assignment is a no-op — loadgroup stops
+            # grouping and a scenario's stages scatter across workers. The
+            # xdist_group marker this plugin sets is applied correctly; there is
+            # nothing to fix here until xdist stops writing _nodeid.
             - name: Run tests
-              run: uv run --no-sync pytest tests -v -p no:anyio -n auto
+              run: uv run --no-sync pytest tests -v -n auto
