@@ -9,7 +9,7 @@ import importlib
 from collections.abc import Callable
 from typing import Any
 
-from pytest_httpchain.constants import USER_FUNCTION_NAME_PATTERN, user_function_name_problem
+from pytest_httpchain.constants import USER_FUNCTION_NAME_PATTERN, parse_user_function_name
 from pytest_httpchain.errors import HttpChainError
 from pytest_httpchain.models import UserFunctionCall, UserFunctionKwargs, UserFunctionName
 
@@ -18,21 +18,17 @@ class UserFunctionError(HttpChainError):
     """Error importing or calling a user-supplied function."""
 
 
-# Shared with the models' validator; lives in constants so neither module has to
-# sit below the other.
+# Re-exported: the grammar lives in constants, shared with the models' validator,
+# so neither module has to sit below the other.
 NAME_PATTERN = USER_FUNCTION_NAME_PATTERN
 
 
 def import_function(name: str) -> Callable[..., Any]:
     """Import a ``"module.path:function_name"`` function."""
-    if (problem := user_function_name_problem(name)) is not None:
-        raise UserFunctionError(problem)
-
-    match = NAME_PATTERN.match(name)
-    assert match is not None, "user_function_name_problem() returns None only for names NAME_PATTERN matches"
-
-    module_path = match.group("module")
-    function_name = match.group("function")
+    try:
+        module_path, function_name = parse_user_function_name(name)
+    except ValueError as e:
+        raise UserFunctionError(str(e)) from None
 
     try:
         module = importlib.import_module(module_path)

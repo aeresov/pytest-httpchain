@@ -9,7 +9,7 @@ from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
 class CircularDependencyTracker:
     """Tracks references to detect circular dependencies."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.external_refs: set[tuple[Path, str]] = set()
         self.internal_refs: set[str] = set()
 
@@ -41,7 +41,6 @@ class CircularDependencyTracker:
         own document, and inheriting them would raise a phantom cycle for two
         documents that merely reuse a pointer string.
         """
-        child = self.__class__()
+        child = type(self)()
         child.external_refs = self.external_refs.copy()
-        child.internal_refs = set()
         return child

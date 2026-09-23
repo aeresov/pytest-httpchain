@@ -16,7 +16,7 @@ class TestBareNamesRejected:
     @pytest.mark.parametrize("name", BARE_NAMES)
     def test_bare_name_rejected_by_pattern(self, name: str):
         """The regex itself rejects module-less names."""
-        assert NAME_PATTERN.match(name) is None
+        assert NAME_PATTERN.fullmatch(name) is None
 
     @pytest.mark.parametrize("name", BARE_NAMES)
     def test_bare_name_requires_module(self, name: str):
@@ -84,6 +84,7 @@ class TestInvalidNamePatterns:
             ("mod.:func", "trailing dot in module"),
             ("a.123.b:func", "leading digit in module segment"),
             ("a.-b:func", "hyphen in module segment"),
+            ("mod:func\n", "trailing newline"),
         ],
     )
     def test_invalid_pattern_rejected(self, name: str, description: str):

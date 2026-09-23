@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A user-function name (`"module:func"`) or `httpchain_suffix` value ending in a newline is now
+  rejected. Both were checked with `re.match` against a `^...$` pattern, and `$` also matches just
+  before a trailing `\n`.
+
 ## [0.15.0] - 2026-09-17
 
 ### Added

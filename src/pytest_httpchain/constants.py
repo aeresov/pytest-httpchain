@@ -6,24 +6,26 @@ from enum import StrEnum
 # "module.path:function_name": a required dotted module path (no leading,
 # trailing or doubled dots) and a single identifier. Shared by the models'
 # validator and the importer, so a bare name fails at validation, not at import.
-USER_FUNCTION_NAME_PATTERN = re.compile(r"^(?P<module>[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*):(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)$")
+# Unanchored: use fullmatch (with "$", match would also accept a trailing "\n").
+USER_FUNCTION_NAME_PATTERN = re.compile(r"(?P<module>[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*):(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)")
 
 _BARE_NAME_PATTERN = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
 
-def user_function_name_problem(name: str) -> str | None:
-    """Why ``name`` is not a usable ``module.path:function_name``, or None.
+def parse_user_function_name(name: str) -> tuple[str, str]:
+    """Split ``module.path:function_name`` into ``(module_path, function_name)``,
+    raising ``ValueError`` that says what is wrong with an unusable name.
 
-    The wording is shared, not just the grammar: the models' validator raises it
-    as a ``ValueError`` and the importer as a ``UserFunctionError``, and one
+    The wording is shared, not just the grammar: the models' validator surfaces
+    it as a validation error and the importer as a ``UserFunctionError``, and one
     mistake must not be described to the author in two different ways.
     """
-    if USER_FUNCTION_NAME_PATTERN.match(name):
-        return None
+    if match := USER_FUNCTION_NAME_PATTERN.fullmatch(name):
+        return match["module"], match["function"]
     # The most common mistake deserves an actionable hint.
     if _BARE_NAME_PATTERN.fullmatch(name):
-        return f"Module path is required: use 'module:{name}' format instead of '{name}'"
-    return f"Invalid function name format: {name}"
+        raise ValueError(f"Module path is required: use 'module:{name}' format instead of '{name}'")
+    raise ValueError(f"Invalid function name format: {name}")
 
 
 class ConfigOptions(StrEnum):

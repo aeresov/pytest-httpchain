@@ -54,7 +54,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagno
     fixtures = _scenario_fixtures(scenario)
     vars_defined = extract_defined_variables(scenario)
     vars_saved = extract_saved_variables(scenario)
-    scenario_sub_names = set(substitution_names(scenario.substitutions))
+    scenario_sub_names = substitution_names(scenario.substitutions)
 
     return [
         *_stage_name_diagnostics(scenario),

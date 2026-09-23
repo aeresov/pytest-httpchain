@@ -1,6 +1,9 @@
-import enum
+"""The ``pytest-httpchain`` command line: ``validate``, ``schema``, ``resolve``,
+``show`` and ``graph`` over scenario files, outside a pytest run."""
+
 import importlib.metadata
 import json
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -16,12 +19,12 @@ from pytest_httpchain.validation import ValidateResult, is_inline_schema_positio
 app = typer.Typer(no_args_is_help=True)
 
 
-class OutputFormat(enum.StrEnum):
+class OutputFormat(StrEnum):
     text = "text"
     json = "json"
 
 
-class GraphDirection(enum.StrEnum):
+class GraphDirection(StrEnum):
     TD = "TD"
     LR = "LR"
 

@@ -51,10 +51,10 @@ def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
     would balloon the output, so anonymous nested schemas are left untouched: a
     reference still resolves there at runtime, it is just not described.
     """
-    if "$defs" not in schema:
-        schema["$defs"] = {}
+    defs = schema.setdefault("$defs", {})
+    properties = schema.setdefault("properties", {})
 
-    schema["$defs"]["JsonRef"] = {
+    defs["JsonRef"] = {
         "type": "object",
         "description": "Reference to external JSON file or JSON pointer. Use $include or $merge (preferred) or $ref. Resolved when the scenario file is loaded.",
         "properties": {
@@ -81,23 +81,20 @@ def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
         "additionalProperties": True,
     }
 
-    for type_name, original_def in list(schema["$defs"].items()):
-        if type_name == "JsonRef":
-            continue
-        schema["$defs"][type_name] = _widen_with_jsonref(original_def)
+    for type_name, original_def in defs.items():
+        if type_name != "JsonRef":
+            defs[type_name] = _widen_with_jsonref(original_def)
 
-    for prop_name, prop_def in list(schema.get("properties", {}).items()):
-        schema["properties"][prop_name] = _widen_with_jsonref(prop_def, default_title=prop_name)
+    for prop_name, prop_def in properties.items():
+        properties[prop_name] = _widen_with_jsonref(prop_def, default_title=prop_name)
 
     # The root forbids extra keys, so keys handled before model validation must
     # be declared: "$schema" and the directives the loader resolves.
-    schema.setdefault("properties", {})
-    schema["properties"]["$schema"] = {
+    properties["$schema"] = {
         "type": "string",
         "description": "URL of this schema, for editor as-you-type validation. Dropped during model validation.",
     }
-    for directive, directive_def in schema["$defs"]["JsonRef"]["properties"].items():
-        schema["properties"][directive] = directive_def
+    properties.update(defs["JsonRef"]["properties"])
 
     return schema
 

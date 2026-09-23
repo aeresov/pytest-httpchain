@@ -11,7 +11,7 @@ import re
 import sys
 import types
 import warnings
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -138,6 +138,17 @@ class JsonModule(pytest.Module):
 _ORIGINAL_POSITIONS: pytest.StashKey[dict[pytest.Item, int]] = pytest.StashKey()
 
 
+def _carrier_class(item: pytest.Item) -> type[Carrier] | None:
+    """The generated scenario class ``item`` belongs to, or None for any other test."""
+    cls = getattr(item, "cls", None)
+    return cls if isinstance(cls, type) and issubclass(cls, Carrier) else None
+
+
+def _stage_index(item: pytest.Item) -> int:
+    """The stage position `factory.create_test_class` stamped on the item's method."""
+    return getattr(getattr(item, "function", None), "_httpchain_stage_index", 0)
+
+
 def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[pytest.Item, int]) -> None:
     """Re-sort collected items so each scenario class's stages run contiguously,
     in stage order.
@@ -149,26 +160,24 @@ def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[pyt
     at its first item (preserving inter-class order), with ``original_position``
     breaking ties so parametrized instances of a stage keep collection order.
     """
-    buckets: dict[type, list[pytest.Item]] = {}
+    buckets: dict[type[Carrier], list[pytest.Item]] = {}
     for item in items:
-        cls = getattr(item, "cls", None)
-        if cls is not None and issubclass(cls, Carrier):
+        if (cls := _carrier_class(item)) is not None:
             buckets.setdefault(cls, []).append(item)
     if not buckets:
         return
 
     def stage_key(item: pytest.Item) -> tuple[int, int]:
-        index = getattr(getattr(item, "function", None), "_httpchain_stage_index", 0)
-        return (index, original_position.get(item, sys.maxsize))
+        return (_stage_index(item), original_position.get(item, sys.maxsize))
 
     for bucket in buckets.values():
         bucket.sort(key=stage_key)
 
     regrouped: list[pytest.Item] = []
-    emitted: set[type] = set()
+    emitted: set[type[Carrier]] = set()
     for item in items:
-        cls = getattr(item, "cls", None)
-        if cls is None or cls not in buckets:
+        cls = _carrier_class(item)
+        if cls is None:
             regrouped.append(item)
         elif cls not in emitted:
             emitted.add(cls)
@@ -202,10 +211,8 @@ def _warn_on_split_chains(items: list[pytest.Item]) -> None:
     """
     selected_indices: dict[type[Carrier], set[int]] = {}
     for item in items:
-        cls = getattr(item, "cls", None)
-        if cls is not None and issubclass(cls, Carrier):
-            index = getattr(getattr(item, "function", None), "_httpchain_stage_index", 0)
-            selected_indices.setdefault(cls, set()).add(index)
+        if (cls := _carrier_class(item)) is not None:
+            selected_indices.setdefault(cls, set()).add(_stage_index(item))
 
     for cls, indices in selected_indices.items():
         scenario = cls.scenario
@@ -292,7 +299,7 @@ def pytest_configure(config: pytest.Config) -> None:
         return value
 
     suffix = str(config.getini(ConfigOptions.SUFFIX))
-    if not re.match(r"^[a-zA-Z0-9_-]{1,32}$", suffix):
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,32}", suffix):
         raise pytest.UsageError(f"{ConfigOptions.SUFFIX} must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
 
     _getint(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, minimum=0, minimum_message="must be non-negative")
@@ -311,10 +318,8 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> pytest.Collector | None:
     suffix: str = parent.config.getini(ConfigOptions.SUFFIX)
-    pattern = re.compile(rf"^test_(?P<name>.+)\.{re.escape(suffix)}\.json$")
-    file_match = pattern.match(file_path.name)
-    if file_match:
-        return JsonModule.from_parent(parent, path=file_path, name=file_match.group("name"))
+    if file_match := re.fullmatch(rf"test_(?P<name>.+)\.{re.escape(suffix)}\.json", file_path.name):
+        return JsonModule.from_parent(parent, path=file_path, name=file_match["name"])
     return None
 
 
@@ -335,14 +340,22 @@ def _sections_will_be_shown(config: pytest.Config, report: pytest.TestReport) ->
     return terminal_reporter.hasopt("P") or bool(config.option.xfail_tb)
 
 
+def _format_section[T](what: str, formatter: Callable[[T], str], exchange: T) -> str:
+    """A report section body. Reporting must never break the report, so a
+    formatter failure becomes the section's text."""
+    try:
+        return formatter(exchange)
+    except Exception as e:
+        return f"<Error formatting {what}: {e}>"
+
+
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> Any:
     # tryfirst makes this the outermost wrapper: its post-yield half sees the
     # final outcome after pytest has applied skip/xfail/strict semantics.
     report: pytest.TestReport = yield
 
-    item_cls = getattr(item, "cls", None)
-    carrier_class = item_cls if isinstance(item_cls, type) and issubclass(item_cls, Carrier) else None
+    carrier_class = _carrier_class(item)
 
     if call.when == "call" and carrier_class is not None:
         # An initialization failure breaks the whole scenario and must stay
@@ -375,17 +388,10 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
             suffix += f" (after {hops} redirect{'s' if hops != 1 else ''})"
 
         if _sections_will_be_shown(item.config, report):
-            for title, what, exchange, formatter in (
-                ("HTTP Request", "request", carrier_class.last_request, format_request),
-                ("HTTP Response", "response", carrier_class.last_response, format_response),
-            ):
-                if exchange is None:
-                    continue
-                try:
-                    body = formatter(exchange)
-                except Exception as e:
-                    body = f"<Error formatting {what}: {e}>"
-                report.sections.append((f"{title}{suffix}", body))
+            if (request := carrier_class.last_request) is not None:
+                report.sections.append((f"HTTP Request{suffix}", _format_section("request", format_request, request)))
+            if (response := carrier_class.last_response) is not None:
+                report.sections.append((f"HTTP Response{suffix}", _format_section("response", format_response, response)))
 
         output_dir = item.config.getoption("httpchain_output_dir")
         if output_dir and carrier_class.last_exchanges:
@@ -397,7 +403,7 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
                 )
                 report.sections.append(("HAR File", str(har_path)))
             except Exception as e:
-                logger.warning(f"Failed to write HAR file for {item.nodeid}: {e}")
+                logger.warning("Failed to write HAR file for %s: %s", item.nodeid, e)
 
     # The report, not the stage body, is the source of truth. Fixture setup and
     # teardown can fail without execute_stage running, and strict XPASS plus
