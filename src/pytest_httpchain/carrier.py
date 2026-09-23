@@ -34,6 +34,7 @@ from pydantic import ValidationError
 from pyrate_limiter import Duration, Limiter, Rate
 
 from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError
+from pytest_httpchain.har_writer import Exchange
 from pytest_httpchain.models import (
     CombinationsParameter,
     IndividualParameter,
@@ -186,7 +187,7 @@ class Carrier:
     aborted: ClassVar[bool] = False
     last_request: ClassVar[httpx.Request | None] = None
     last_response: ClassVar[httpx.Response | None] = None
-    last_exchanges: ClassVar[list[tuple[httpx.Request, httpx.Response | None, datetime | None]]] = []
+    last_exchanges: ClassVar[list[Exchange]] = []
     last_iterations_attempted: ClassVar[int] = 0
     last_shown_exchange_is_failed: ClassVar[bool] = False
     record_all_exchanges: ClassVar[bool] = False
@@ -338,7 +339,7 @@ class Carrier:
         return {name: cls._wrap_factory_fixture(value) if callable(value) and not inspect.isclass(value) else value for name, value in fixture_kwargs.items()}
 
     @staticmethod
-    def _build_iteration_substitutions(parallel_config: "ParallelConfig | None", max_parallel_iterations: int) -> list[dict[str, Any]]:
+    def _build_iteration_substitutions(parallel_config: ParallelConfig | None, max_parallel_iterations: int) -> list[dict[str, Any]]:
         """Expand a resolved parallel config into per-iteration substitutions:
         no config -> one empty dict; ``repeat`` -> N empties; ``foreach`` -> the
         cross-product of its steps.
@@ -391,7 +392,7 @@ class Carrier:
         return iteration_substitutions
 
     @classmethod
-    def _record_exchanges(cls, completed: list["IterationResult"], failed: Exception | None, attempted: int) -> None:
+    def _record_exchanges(cls, completed: list[IterationResult], failed: Exception | None, attempted: int) -> None:
         """Record this stage's HTTP exchanges for the report and the HAR file.
 
         ``last_request``/``last_response`` are the one exchange the report shows:
@@ -402,7 +403,7 @@ class Carrier:
         """
         failed_request, failed_response, failed_started = (failed.request, failed.response, failed.started) if isinstance(failed, StageExecutionError) else (None, None, None)
 
-        exchanges: list[tuple[httpx.Request, httpx.Response | None, datetime | None]] = []
+        exchanges: list[Exchange] = []
         for r in completed:
             # A redirect chain lives on .history, each hop carrying its own
             # request: expand it so the HAR shows every wire exchange. Individual
@@ -424,7 +425,7 @@ class Carrier:
             cls.last_request, cls.last_response = failed_request, failed_response
             cls.last_shown_exchange_is_failed = True
         elif exchanges:
-            cls.last_request, cls.last_response = exchanges[-1][0], exchanges[-1][1]
+            cls.last_request, cls.last_response, _ = exchanges[-1]
 
     @classmethod
     def _run_iterations(
@@ -432,7 +433,7 @@ class Carrier:
         stage: Stage,
         local_context: ChainMap[str, Any],
         iteration_substitutions: list[dict[str, Any]],
-        parallel_config: "ParallelConfig | None",
+        parallel_config: ParallelConfig | None,
     ) -> tuple[list[IterationResult | None], tuple[int, Exception] | None]:
         """Run the iterations and return ``(results_by_index, first_error)``.
 
@@ -684,7 +685,7 @@ class Carrier:
             try:
                 ctx.__exit__(None, None, None)
             except Exception as e:
-                logger.error(f"Error while cleaning up context manager fixture: {e}")
+                logger.error("Error while cleaning up context manager fixture: %s", e)
 
         if cls.client is not None:
             cls.client.close()

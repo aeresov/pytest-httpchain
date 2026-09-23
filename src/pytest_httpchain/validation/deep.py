@@ -52,13 +52,11 @@ def check_scenario_deep(scenario: Scenario, syspaths: list[Path] | None = None, 
 def _literal_path(value: Any) -> Path | None:
     """A concrete filesystem path for a literal path value, else None (missing
     values, inline schemas, and anything holding a ``{{ }}`` template)."""
-    if value is None or isinstance(value, dict):
-        return None
-    if isinstance(value, Path):
-        return None if "{{" in str(value) else value
-    if isinstance(value, str):
-        return None if "{{" in value else Path(value)
-    return None
+    match value:
+        case str() | Path() if "{{" not in str(value):
+            return Path(value)
+        case _:
+            return None
 
 
 def _check_path_value(value: Any, location: str, base_dir: Path | None = None) -> Iterator[Diagnostic]:

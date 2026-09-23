@@ -19,7 +19,7 @@ def validate_ref_path(ref_path: str, base_path: Path, root_path: Path, max_paren
     if PurePosixPath(ref_path).is_absolute() or PureWindowsPath(ref_path).is_absolute() or ref_path.startswith(("/", "\\")):
         raise ReferenceResolverError(f"Absolute reference paths are not allowed: {ref_path}")
 
-    parent_traversals = sum(1 for part in Path(ref_path).parts if part == "..")
+    parent_traversals = Path(ref_path).parts.count("..")
 
     if parent_traversals > max_parent_traversal_depth:
         raise ReferenceResolverError(f"Reference path '{ref_path}' exceeds maximum parent traversal depth of {max_parent_traversal_depth}")

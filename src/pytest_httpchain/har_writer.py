@@ -15,6 +15,10 @@ import httpx
 
 from pytest_httpchain.utils import request_content
 
+# One wire exchange: the request, its response (None when none arrived), and when
+# it went on the wire (None falls back to HAR write time).
+type Exchange = tuple[httpx.Request, httpx.Response | None, datetime | None]
+
 
 @functools.cache
 def _get_version() -> str:
@@ -69,53 +73,42 @@ def _format_query_string(url: httpx.URL) -> list[dict[str, str]]:
     return [{"name": name, "value": value} for name, values in params.items() for value in values]
 
 
+def _mime_type(content_type: str) -> str:
+    return content_type.split(";")[0].strip() if content_type else "application/octet-stream"
+
+
+def _body_text(content: bytes) -> dict[str, str]:
+    """HAR ``text`` for a body: UTF-8 as is, anything else base64 with ``encoding`` set."""
+    try:
+        return {"text": content.decode("utf-8")}
+    except UnicodeDecodeError:
+        return {"text": base64.b64encode(content).decode("ascii"), "encoding": "base64"}
+
+
 def _format_post_data(request: httpx.Request) -> dict[str, Any] | None:
     content = request_content(request)
     if not content:
         return None
 
     content_type = request.headers.get("content-type", "")
-    mime_type = content_type.split(";")[0].strip() if content_type else "application/octet-stream"
+    body_text = _body_text(content)
+    post_data: dict[str, Any] = {"mimeType": _mime_type(content_type), **body_text}
 
-    try:
-        text = content.decode("utf-8")
-    except UnicodeDecodeError:
-        text = base64.b64encode(content).decode("ascii")
-        return {
-            "mimeType": mime_type,
-            "text": text,
-            "encoding": "base64",
-        }
-
-    post_data: dict[str, Any] = {
-        "mimeType": mime_type,
-        "text": text,
-    }
-
-    if "application/x-www-form-urlencoded" in content_type:
+    if "application/x-www-form-urlencoded" in content_type and "encoding" not in body_text:
         # HAR params are repeated scalar name/value records, not one record with
         # an array value. parse_qsl also preserves the body's original ordering.
-        post_data["params"] = [{"name": name, "value": value} for name, value in parse_qsl(text, keep_blank_values=True)]
+        post_data["params"] = [{"name": name, "value": value} for name, value in parse_qsl(body_text["text"], keep_blank_values=True)]
 
     return post_data
 
 
 def _format_response_content(response: httpx.Response) -> dict[str, Any]:
-    content_type = response.headers.get("content-type", "")
-    mime_type = content_type.split(";")[0].strip() if content_type else "application/octet-stream"
-
     content: dict[str, Any] = {
-        "size": len(response.content) if response.content else 0,
-        "mimeType": mime_type,
+        "size": len(response.content),
+        "mimeType": _mime_type(response.headers.get("content-type", "")),
     }
-
     if response.content:
-        try:
-            content["text"] = response.content.decode("utf-8")
-        except UnicodeDecodeError:
-            content["text"] = base64.b64encode(response.content).decode("ascii")
-            content["encoding"] = "base64"
-
+        content |= _body_text(response.content)
     return content
 
 
@@ -163,7 +156,7 @@ def request_response_to_har_entry(
             "content": _format_response_content(response),
             "redirectURL": response.headers.get("location", ""),
             "headersSize": _calculate_headers_size(response.headers),
-            "bodySize": len(response.content) if response.content else 0,
+            "bodySize": len(response.content),
         }
     else:
         response_har = {
@@ -258,7 +251,7 @@ def _har_filename(test_name: str) -> str:
 def write_har_file(
     output_dir: Path,
     test_name: str,
-    exchanges: list[tuple[httpx.Request, httpx.Response | None, datetime | None]],
+    exchanges: list[Exchange],
 ) -> Path:
     """Write one test's exchanges to a HAR file and return its path.
 

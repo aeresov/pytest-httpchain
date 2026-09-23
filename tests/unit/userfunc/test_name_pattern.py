@@ -16,13 +16,35 @@ class TestBareNamesRejected:
     @pytest.mark.parametrize("name", BARE_NAMES)
     def test_bare_name_rejected_by_pattern(self, name: str):
         """The regex itself rejects module-less names."""
-        assert NAME_PATTERN.match(name) is None
+        assert NAME_PATTERN.fullmatch(name) is None
 
     @pytest.mark.parametrize("name", BARE_NAMES)
     def test_bare_name_requires_module(self, name: str):
         """import_function keeps the actionable 'use module:func' hint."""
         with pytest.raises(UserFunctionError, match="Module path is required"):
             import_function(name)
+
+
+class TestExportedPatternAnchoring:
+    """``userfunc.NAME_PATTERN`` is public, so callers may use ``match`` as well
+    as ``fullmatch``. The pattern is anchored with ``\\A``/``\\Z`` rather than
+    ``^``/``$``: ``$`` also matches just before a trailing newline, so an
+    anchored-with-``$`` pattern accepted ``"mod:func\\n"`` via ``match``."""
+
+    @pytest.mark.parametrize("name", ["mod:func\n", "mod:func garbage", "mod:func:extra", "pkg.mod:func\n"])
+    def test_match_rejects_trailing_input(self, name: str):
+        assert NAME_PATTERN.match(name) is None
+        assert NAME_PATTERN.fullmatch(name) is None
+
+    @pytest.mark.parametrize("name", ["mod:func", "pkg.mod:func", "_p.m2:f_1"])
+    def test_match_and_fullmatch_agree_on_valid_names(self, name: str):
+        match = NAME_PATTERN.match(name)
+        assert match is not None
+        assert match.groupdict() == NAME_PATTERN.fullmatch(name).groupdict()
+
+    def test_match_rejects_leading_input(self):
+        assert NAME_PATTERN.match(" mod:func") is None
+        assert NAME_PATTERN.search("x mod:func") is None
 
 
 class TestValidModulePatterns:
@@ -84,6 +106,7 @@ class TestInvalidNamePatterns:
             ("mod.:func", "trailing dot in module"),
             ("a.123.b:func", "leading digit in module segment"),
             ("a.-b:func", "hyphen in module segment"),
+            ("mod:func\n", "trailing newline"),
         ],
     )
     def test_invalid_pattern_rejected(self, name: str, description: str):

@@ -64,7 +64,7 @@ JSON_LITERALS = {
 
 # Names an expression gets for free. The validator reads this to tell an
 # undefined variable from an engine-provided name.
-TEMPLATE_BUILTINS = set(SAFE_FUNCTIONS) | set(JSON_LITERALS) | {"exists", "get"} | set(DEFAULT_FUNCTIONS)
+TEMPLATE_BUILTINS = frozenset({*SAFE_FUNCTIONS, *JSON_LITERALS, "exists", "get", *DEFAULT_FUNCTIONS})
 
 
 def _build_evaluator(context: Mapping[str, Any]) -> EvalWithCompoundTypes:
@@ -178,7 +178,7 @@ def _walk(obj: Any, evaluator: EvalWithCompoundTypes) -> Any:
 
             obj_dict = obj.model_dump(mode="python")
             processed_dict = _walk(obj_dict, evaluator)
-            return obj.__class__.model_validate(processed_dict)
+            return type(obj).model_validate(processed_dict)
         case SimpleNamespace():
             if not contains_template(obj):
                 return obj

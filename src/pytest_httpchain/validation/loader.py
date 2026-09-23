@@ -83,14 +83,13 @@ def is_inline_schema_position(path: tuple[str | int, ...]) -> bool:
     response steps accept both the list form (``K`` is an index) and the
     name-keyed mapping form, and a response mapping value may itself be a list.
     """
-    if path[-3:] != ("verify", "body", "schema"):
-        return False
-    head = path[:-3]
-    if len(head) == 4:
-        return head[0] == "stages" and head[2] == "response"
-    if len(head) == 5:
-        return head[0] == "stages" and head[2] == "response" and isinstance(head[4], int)
-    return False
+    match path:
+        case ("stages", _, "response", _, "verify", "body", "schema"):
+            return True
+        case ("stages", _, "response", _, int(), "verify", "body", "schema"):
+            return True
+        case _:
+            return False
 
 
 def load_scenario(path: Path, *, root_path: Path | None = None, ref_parent_traversal_depth: int = 3) -> tuple[Scenario, dict[str, Any]]:

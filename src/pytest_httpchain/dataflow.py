@@ -127,6 +127,9 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         for name in scope.saves:
             last_save_stage[name] = i
 
-    scenario_var_names = set(substitution_names(scenario.substitutions))
-
-    return DataFlow(stages=stages, edges=edges, scenario_fixtures=sorted(scenario.fixtures), scenario_vars=sorted(scenario_var_names))
+    return DataFlow(
+        stages=stages,
+        edges=edges,
+        scenario_fixtures=sorted(scenario.fixtures),
+        scenario_vars=sorted(substitution_names(scenario.substitutions)),
+    )

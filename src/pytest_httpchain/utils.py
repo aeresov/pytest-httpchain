@@ -17,9 +17,9 @@ import httpx
 import pytest
 
 from pytest_httpchain.errors import SchemaFileError, StageExecutionError
-from pytest_httpchain.models import FunctionsSubstitution, Substitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
+from pytest_httpchain.models import FunctionsSubstitution, Substitution, VarsSubstitution
 from pytest_httpchain.templates import walk
-from pytest_httpchain.userfunc import wrap_function
+from pytest_httpchain.userfunc import call_target, wrap_function
 
 logger = logging.getLogger(__name__)
 
@@ -119,13 +119,8 @@ def process_substitutions(
         match step:
             case FunctionsSubstitution():
                 for alias, func_def in step.functions.items():
-                    match func_def:
-                        case UserFunctionName():
-                            result[alias] = wrap_function(_resolve_function_name(func_def.root, current_context))
-                        case UserFunctionKwargs():
-                            result[alias] = wrap_function(_resolve_function_name(func_def.name.root, current_context), default_kwargs=func_def.kwargs)
-                        case _:
-                            raise RuntimeError(f"Unhandled function definition for '{alias}': {type(func_def).__name__}")
+                    name, default_kwargs = call_target(func_def)
+                    result[alias] = wrap_function(_resolve_function_name(name, current_context), default_kwargs=default_kwargs)
                     logger.debug("Seeded %s", alias)
 
             case VarsSubstitution():

@@ -115,7 +115,7 @@ def create_test_class(
                 all_param_names.extend(param_names)
                 stage_method = pytest.mark.parametrize(",".join(param_names), param_values, ids=step.ids or None)(stage_method)
 
-        all_fixtures = ["self"] + list(dict.fromkeys(all_param_names + stage.fixtures + scenario.fixtures))
+        all_fixtures = ["self", *dict.fromkeys(all_param_names + stage.fixtures + scenario.fixtures)]
         stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # ty: ignore[unresolved-attribute]
 
         # Read by the chain-contiguity hook to restore stage order.

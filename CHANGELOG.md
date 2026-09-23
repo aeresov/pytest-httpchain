@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A user-function name (`"module:func"`), an `httpchain_suffix` value, or a scenario file name
+  ending in a newline is now rejected. All three were checked with `re.match` against a `^...$`
+  pattern, and `$` also matches just before a trailing `\n`. The shared name pattern
+  (`pytest_httpchain.userfunc.NAME_PATTERN`) is now anchored with `\A`/`\Z`, so its `match()`
+  is as strict as its `fullmatch()`.
+
 ## [0.15.0] - 2026-09-17
 
 ### Added

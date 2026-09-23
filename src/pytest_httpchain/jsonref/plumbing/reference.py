@@ -44,7 +44,7 @@ _SIBLING_MERGER = Merger(
 )
 
 
-def _build_opaque_aware_merger(opaque: "OpaquePredicate", base_path: tuple[str | int, ...]) -> Merger:
+def _build_opaque_aware_merger(opaque: OpaquePredicate, base_path: tuple[str | int, ...]) -> Merger:
     """Sibling merger treating opaque positions as atomic: two opaque subtrees
     must be equal or conflict, never blend.
 
@@ -133,8 +133,8 @@ class ReferenceResolver:
         if self.opaque is not None and self.opaque(doc_path):
             return data
         match data:
-            case dict() if self._get_ref_key(data):
-                return self._resolve_single_ref(data, current_path, root_data, root_path, doc_path)
+            case dict() if (ref_key := self._get_ref_key(data)) is not None:
+                return self._resolve_single_ref(data, ref_key, current_path, root_data, root_path, doc_path)
             case dict():
                 return {key: self._resolve_refs(value, current_path, root_data, root_path, doc_path + (key,)) for key, value in data.items()}
             case list():
@@ -152,13 +152,12 @@ class ReferenceResolver:
     def _resolve_single_ref(
         self,
         data: dict[str, Any],
+        ref_key: str,
         current_path: Path,
         root_data: Any,
         root_path: Path,
         doc_path: tuple[str | int, ...],
     ) -> Any:
-        ref_key = self._get_ref_key(data)
-        assert ref_key is not None
         ref_value = data[ref_key]
         if not isinstance(ref_value, str):
             raise ReferenceResolverError(f"{ref_key} value must be a string, got {type(ref_value).__name__}: {ref_value!r}")
