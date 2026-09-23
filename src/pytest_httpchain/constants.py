@@ -6,8 +6,10 @@ from enum import StrEnum
 # "module.path:function_name": a required dotted module path (no leading,
 # trailing or doubled dots) and a single identifier. Shared by the models'
 # validator and the importer, so a bare name fails at validation, not at import.
-# Unanchored: use fullmatch (with "$", match would also accept a trailing "\n").
-USER_FUNCTION_NAME_PATTERN = re.compile(r"(?P<module>[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*):(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)")
+# Anchored with \A and \Z, not ^ and $: "$" also matches just before a trailing
+# "\n", so match() against "^...$" accepted "mod:func\n". The pattern is exported
+# as userfunc.NAME_PATTERN, so match() has to be as strict as fullmatch() here.
+USER_FUNCTION_NAME_PATTERN = re.compile(r"\A(?P<module>[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*):(?P<function>[a-zA-Z_][a-zA-Z0-9_]*)\Z")
 
 _BARE_NAME_PATTERN = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
