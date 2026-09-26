@@ -1,7 +1,8 @@
 """Unit tests for Verify and ResponseBody models."""
 
 import json
-from http import HTTPMethod, HTTPStatus
+from http import HTTPStatus
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -12,45 +13,46 @@ from pytest_httpchain.models.entities import (
     UserFunctionKwargs,
     UserFunctionName,
     Verify,
-    VerifyStep,
 )
-from tests.unit.models.helpers import make_request, make_stage
+from tests.unit.models.helpers import assert_error_types
+
+
+class TestVerifyFields:
+    @pytest.mark.parametrize(
+        ("attr", "default"),
+        [
+            ("status", None),
+            ("headers", {}),
+            ("expressions", []),
+            ("user_functions", []),
+            ("description", None),
+            ("body", ResponseBody()),
+        ],
+    )
+    def test_field_default(self, attr, default):
+        assert getattr(Verify(), attr) == default
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            pytest.param("expressions", ["{{ status_code == 200 }}", "{{ 'error' not in response_text }}", "{{ user_age >= 18 }}"], id="expressions"),
+            pytest.param("description", "Verify successful user creation", id="description"),
+            pytest.param(
+                "user_functions",
+                [UserFunctionName("validators:check_schema"), UserFunctionKwargs(name=UserFunctionName("validators:custom"), kwargs={"strict": True})],
+                id="user_functions",
+            ),
+            pytest.param("body", ResponseBody(schema={"type": "object"}, contains=["success"]), id="body"),
+        ],
+    )
+    def test_field_round_trip(self, field, value):
+        assert getattr(Verify(**{field: value}), field) == value
 
 
 class TestVerifyStatus:
-    """Tests for Verify.status field."""
-
-    def test_status_default_none(self):
-        """Test default status is None."""
-        verify = Verify()
-        assert verify.status is None
-
-    def test_status_integer(self):
-        """Test status with a plain integer value (compares equal to the enum)."""
-        verify = Verify(status=200)
-        assert verify.status == 200
-        assert verify.status == HTTPStatus.OK
-
-    def test_status_nonstandard_codes_accepted(self):
-        """Any int in 100-599 is a valid assertion target (nginx 499, 599, vendor codes)."""
-        for code in [499, 599, 418, 425]:
-            verify = Verify(status=code)
-            assert verify.status == code
-
-    def test_status_out_of_range_rejected(self):
-        """Ints outside the HTTP status range are rejected."""
-        for bad in [99, 600, 0, -200]:
-            with pytest.raises(ValidationError):
-                Verify(status=bad)
-
-    def test_status_http_status(self):
-        """Test status with HTTPStatus enum."""
-        verify = Verify(status=HTTPStatus.CREATED)
-        assert verify.status == HTTPStatus.CREATED
-
-    def test_status_various_codes(self):
-        """Test various HTTP status codes."""
-        codes = [
+    @pytest.mark.parametrize(
+        "status",
+        [
             HTTPStatus.OK,
             HTTPStatus.CREATED,
             HTTPStatus.NO_CONTENT,
@@ -61,320 +63,84 @@ class TestVerifyStatus:
             HTTPStatus.INTERNAL_SERVER_ERROR,
             HTTPStatus.BAD_GATEWAY,
             HTTPStatus.SERVICE_UNAVAILABLE,
-        ]
-        for code in codes:
-            verify = Verify(status=code)
-            assert verify.status == code
+            pytest.param(200, id="int-200"),
+            # Any int in 100-599 is assertable (nginx 499, vendor codes).
+            418,
+            425,
+            499,
+            599,
+            "{{ expected_status }}",
+        ],
+    )
+    def test_accepted(self, status):
+        assert Verify(status=status).status == status
 
-    def test_status_with_template(self):
-        """Test status with template expression."""
-        verify = Verify(status="{{ expected_status }}")
-        assert verify.status == "{{ expected_status }}"
+    @pytest.mark.parametrize(
+        ("status", "error_type"),
+        [(99, "greater_than_equal"), (0, "greater_than_equal"), (-200, "greater_than_equal"), (600, "less_than_equal")],
+    )
+    def test_outside_http_range_rejected(self, status, error_type):
+        with pytest.raises(ValidationError) as exc_info:
+            Verify(status=status)
+        assert_error_types(exc_info, error_type, at="status")
 
 
 class TestVerifyHeaders:
-    """Tests for Verify.headers field."""
+    """A header value is an exact string or a matcher object."""
 
-    def test_headers_default_empty(self):
-        """Test default headers is empty dict."""
-        verify = Verify()
-        assert verify.headers == {}
-
-    def test_headers_content_type(self):
-        """Test headers with content type."""
-        verify = Verify(headers={"Content-Type": "application/json"})
-        assert verify.headers["Content-Type"] == "application/json"
-
-    def test_headers_multiple(self):
-        """Test multiple headers."""
-        verify = Verify(
-            headers={
-                "Content-Type": "application/json",
-                "Cache-Control": "no-cache",
-                "X-Request-Id": "abc123",
-            }
-        )
-        assert len(verify.headers) == 3
-
-
-class TestVerifyHeaderMatchers:
-    """Verify.headers values may be matcher objects besides exact strings."""
-
-    def test_matcher_object_parsed(self):
-        verify = Verify(headers={"content-type": {"contains": "json"}})
-        matcher = verify.headers["content-type"]
-        assert isinstance(matcher, HeaderMatcher)
-        assert matcher.contains == "json"
-
-    def test_exact_string_still_a_string(self):
-        verify = Verify(headers={"content-type": "application/json", "x-id": {"matches": "^[0-9]+$"}})
-        assert verify.headers["content-type"] == "application/json"
-        assert isinstance(verify.headers["x-id"], HeaderMatcher)
+    def test_strings_and_matchers(self):
+        headers = {"Content-Type": "application/json", "Cache-Control": "no-cache", "x-type": {"contains": "json"}, "x-id": {"matches": "^[0-9]+$"}}
+        assert Verify(headers=headers).headers == {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-cache",
+            "x-type": HeaderMatcher(contains="json"),
+            "x-id": HeaderMatcher(matches="^[0-9]+$"),
+        }
 
     def test_empty_matcher_rejected(self):
         with pytest.raises(ValidationError, match="at least one"):
             Verify(headers={"content-type": {}})
 
-    def test_unknown_matcher_key_rejected(self):
-        with pytest.raises(ValidationError):
-            Verify(headers={"content-type": {"equals": "x"}})
-
-
-class TestVerifyExpressions:
-    """Tests for Verify.expressions field."""
-
-    def test_expressions_default_empty(self):
-        """Test default expressions is empty list."""
-        verify = Verify()
-        assert verify.expressions == []
-
-    def test_expressions_simple(self):
-        """Test simple template expressions."""
-        verify = Verify(
-            expressions=[
-                "{{ status_code == 200 }}",
-                "{{ 'error' not in response_text }}",
-            ]
-        )
-        assert len(verify.expressions) == 2
-
-    def test_expressions_comparison(self):
-        """Test comparison expressions."""
-        verify = Verify(
-            expressions=[
-                "{{ user_age >= 18 }}",
-                "{{ item_count > 0 }}",
-                "{{ balance <= limit }}",
-            ]
-        )
-        assert len(verify.expressions) == 3
-
-
-class TestVerifyUserFunctions:
-    """Tests for Verify.user_functions field."""
-
-    def test_user_functions_default_empty(self):
-        """Test default user_functions is empty list."""
-        verify = Verify()
-        assert verify.user_functions == []
-
-    def test_user_functions_simple(self):
-        """Test simple function names."""
-        verify = Verify(user_functions=[UserFunctionName("validators:check_response")])
-        assert len(verify.user_functions) == 1
-
-    def test_user_functions_multiple(self):
-        """Test multiple user functions."""
-        verify = Verify(
-            user_functions=[
-                UserFunctionName("validators:check_schema"),
-                UserFunctionName("validators:check_permissions"),
-            ]
-        )
-        assert len(verify.user_functions) == 2
-
-    def test_user_functions_with_kwargs(self):
-        """Test user functions with kwargs."""
-        verify = Verify(
-            user_functions=[
-                UserFunctionKwargs(
-                    name=UserFunctionName("validators:custom"),
-                    kwargs={"strict": True},
-                )
-            ]
-        )
-        assert len(verify.user_functions) == 1
-
-
-class TestVerifyDescription:
-    """Tests for Verify.description field."""
-
-    def test_description_default_none(self):
-        """Test default description is None."""
-        verify = Verify()
-        assert verify.description is None
-
-    def test_description_custom(self):
-        """Test custom description."""
-        verify = Verify(
-            status=HTTPStatus.OK,
-            description="Verify successful user creation",
-        )
-        assert verify.description == "Verify successful user creation"
-
 
 class TestResponseBody:
-    """Tests for ResponseBody model."""
+    def test_defaults(self):
+        assert ResponseBody().model_dump() == {"schema": None, "contains": [], "not_contains": [], "matches": [], "not_matches": []}
 
-    def test_response_body_defaults(self):
-        """Test ResponseBody default values."""
-        body = ResponseBody()
-        assert body.schema is None
-        assert body.contains == []
-        assert body.not_contains == []
-        assert body.matches == []
-        assert body.not_matches == []
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("contains", ["success", "user_id", "created"]),
+            ("not_contains", ["error", "failed", "unauthorized"]),
+            ("matches", [r"\d{4}-\d{2}-\d{2}", r"user_\d+"]),
+            ("not_matches", [r"error:\s*", r"exception"]),
+        ],
+    )
+    def test_list_field_round_trip(self, field, value):
+        assert getattr(ResponseBody(**{field: value}), field) == value
 
-    def test_response_body_schema_inline(self):
-        """Test ResponseBody with inline JSON schema."""
-        body = ResponseBody(
-            schema={
-                "type": "object",
-                "properties": {"id": {"type": "integer"}},
-                "required": ["id"],
-            }
-        )
-        assert isinstance(body.schema, dict)
-        assert body.schema["type"] == "object"
+    @pytest.mark.parametrize(
+        ("schema", "expected"),
+        [
+            pytest.param({"type": "object", "required": ["id"]}, {"type": "object", "required": ["id"]}, id="inline"),
+            pytest.param("schemas/user.json", Path("schemas/user.json"), id="path"),
+            pytest.param("{{ schema_path }}", "{{ schema_path }}", id="template"),
+        ],
+    )
+    def test_schema_forms(self, schema, expected):
+        assert ResponseBody(schema=schema).schema == expected
 
-    def test_response_body_schema_path(self):
-        """Test ResponseBody with schema file path."""
-        from pathlib import Path
-
-        body = ResponseBody(schema="schemas/user.json")
-        assert isinstance(body.schema, Path)
-
-    def test_response_body_schema_template(self):
-        """Test ResponseBody with schema template."""
-        body = ResponseBody(schema="{{ schema_path }}")
-        assert body.schema == "{{ schema_path }}"
-
-    def test_response_body_contains(self):
-        """Test ResponseBody with contains assertions."""
-        body = ResponseBody(contains=["success", "user_id", "created"])
-        assert len(body.contains) == 3
-
-    def test_response_body_not_contains(self):
-        """Test ResponseBody with not_contains assertions."""
-        body = ResponseBody(not_contains=["error", "failed", "unauthorized"])
-        assert len(body.not_contains) == 3
-
-    def test_response_body_matches(self):
-        """Test ResponseBody with regex matches."""
-        body = ResponseBody(matches=[r"\d{4}-\d{2}-\d{2}", r"user_\d+"])
-        assert len(body.matches) == 2
-
-    def test_response_body_not_matches(self):
-        """Test ResponseBody with regex not_matches."""
-        body = ResponseBody(not_matches=[r"error:\s*", r"exception"])
-        assert len(body.not_matches) == 2
-
-    def test_response_body_invalid_regex_rejected(self):
-        """Test that invalid regex patterns are rejected."""
-        with pytest.raises(ValidationError, match="Invalid regular expression"):
-            ResponseBody(matches=["[invalid"])
-
-    def test_response_body_invalid_schema_rejected(self):
-        """Test that invalid JSON schema is rejected."""
-        with pytest.raises(ValidationError, match="Invalid JSON Schema"):
-            ResponseBody(schema={"type": "not_a_type"})
-
-    def test_response_body_schema_from_file(self, datadir):
-        """Test ResponseBody with complex schema loaded from file."""
+    def test_schema_from_file(self, datadir):
         schema = json.loads((datadir / "user_response_schema.json").read_text())
-        body = ResponseBody(schema=schema)
-        assert isinstance(body.schema, dict)
-        assert body.schema["type"] == "object"
-        assert "id" in body.schema["properties"]
-        assert "status" in body.schema["properties"]
-        assert body.schema["properties"]["status"]["enum"] == ["active", "inactive", "pending"]
+        assert ResponseBody(schema=schema).schema == schema
 
-
-class TestVerifyBody:
-    """Tests for Verify.body field (ResponseBody)."""
-
-    def test_verify_body_default(self):
-        """Test default body is empty ResponseBody."""
-        verify = Verify()
-        assert isinstance(verify.body, ResponseBody)
-
-    def test_verify_body_with_schema(self):
-        """Test verify with body schema."""
-        verify = Verify(body=ResponseBody(schema={"type": "object"}))
-        assert verify.body.schema == {"type": "object"}
-
-    def test_verify_body_with_contains(self):
-        """Test verify with body contains."""
-        verify = Verify(body=ResponseBody(contains=["success"]))
-        assert "success" in verify.body.contains
-
-
-class TestVerifyStep:
-    """Tests for VerifyStep wrapper model."""
-
-    def test_verify_step_simple(self):
-        """Test simple VerifyStep."""
-        step = VerifyStep(verify=Verify(status=HTTPStatus.OK))
-        assert isinstance(step.verify, Verify)
-        assert step.verify.status == HTTPStatus.OK
-
-    def test_verify_step_full(self):
-        """Test VerifyStep with full configuration."""
-        step = VerifyStep(
-            verify=Verify(
-                status=HTTPStatus.CREATED,
-                headers={"Content-Type": "application/json"},
-                expressions=["{{ response_json.success == true }}"],
-                body=ResponseBody(
-                    contains=["created"],
-                    schema={"type": "object"},
-                ),
-            )
-        )
-        assert step.verify.status == HTTPStatus.CREATED
-        assert len(step.verify.headers) == 1
-
-
-class TestVerifyInStage:
-    """Tests for Verify in Stage response."""
-
-    def test_stage_with_verify_status(self):
-        """Test Stage with status verification."""
-        stage = make_stage(response=[VerifyStep(verify=Verify(status=HTTPStatus.OK))])
-        assert len(stage.response) == 1
-        assert isinstance(stage.response[0], VerifyStep)
-
-    def test_stage_with_multiple_verifications(self):
-        """Test Stage with multiple verify steps."""
-        stage = make_stage(
-            response=[
-                VerifyStep(verify=Verify(status=HTTPStatus.OK)),
-                VerifyStep(verify=Verify(headers={"Content-Type": "application/json"})),
-                VerifyStep(verify=Verify(body=ResponseBody(contains=["success"]))),
-            ],
-        )
-        assert len(stage.response) == 3
-        assert all(isinstance(s, VerifyStep) for s in stage.response)
-
-    def test_stage_with_complex_verification(self):
-        """Test Stage with complex verification."""
-        stage = make_stage(
-            name="create-user",
-            request=make_request(url="https://example.com/users", method=HTTPMethod.POST),
-            response=[
-                VerifyStep(
-                    verify=Verify(
-                        status=HTTPStatus.CREATED,
-                        headers={"Content-Type": "application/json"},
-                        expressions=[
-                            "{{ response_json.id is defined }}",
-                            "{{ response_json.name == request_json.name }}",
-                        ],
-                        body=ResponseBody(
-                            schema={
-                                "type": "object",
-                                "properties": {
-                                    "id": {"type": "integer"},
-                                    "name": {"type": "string"},
-                                },
-                                "required": ["id", "name"],
-                            }
-                        ),
-                        description="Verify user was created successfully",
-                    )
-                )
-            ],
-        )
-        verify = stage.response[0].verify
-        assert verify.status == HTTPStatus.CREATED
-        assert verify.description == "Verify user was created successfully"
+    @pytest.mark.parametrize(
+        ("construct", "message"),
+        [
+            pytest.param(lambda: ResponseBody(matches=["[invalid"]), "Invalid regular expression", id="regex"),
+            pytest.param(lambda: ResponseBody(schema={"type": "not_a_type"}), "Invalid JSON Schema", id="schema"),
+        ],
+    )
+    def test_invalid_content_rejected(self, construct, message):
+        """Wiring only: the exhaustive cases live in test_type_validators.py."""
+        with pytest.raises(ValidationError, match=message):
+            construct()

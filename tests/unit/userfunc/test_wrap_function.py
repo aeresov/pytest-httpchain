@@ -1,107 +1,37 @@
-"""Tests for wrap_function functionality."""
+"""Tests for wrap_function. Error wrapping itself is call_function's (see
+test_call_function.py); a wrapped function only delegates to it."""
 
 import pytest
 
 from pytest_httpchain.userfunc import UserFunctionError, wrap_function
 
-
-class TestWrapFunctionBasic:
-    """Basic wrap_function tests."""
-
-    def test_wrapped_basic_call(self):
-        wrapped = wrap_function("json:loads")
-        result = wrapped('{"key": "value"}')
-        assert result == {"key": "value"}
-
-    def test_wrapped_is_callable(self):
-        wrapped = wrap_function("json:dumps")
-        assert callable(wrapped)
-
-    def test_wrapped_multiple_calls(self):
-        wrapped = wrap_function("userfunc_test_helpers:helper_add")
-        assert wrapped(1, 2) == 3
-        assert wrapped(10, 20) == 30
-        assert wrapped(0, 0) == 0
+ECHO = "userfunc_test_helpers:echo"
 
 
-class TestWrapFunctionDefaultKwargs:
-    """Tests for default_kwargs behavior."""
-
-    def test_default_kwargs_applied(self):
-        wrapped = wrap_function("json:dumps", default_kwargs={"indent": 2})
-        result = wrapped({"a": 1})
-        assert "\n" in result
-
-    def test_call_kwargs_override_default(self):
-        wrapped = wrap_function("userfunc_test_helpers:helper_with_kwargs", default_kwargs={"name": "default"})
-        result = wrapped(name="override")
-        assert result == "hello, override"
-
-    def test_default_kwargs_empty_dict(self):
-        wrapped = wrap_function("json:dumps", default_kwargs={})
-        result = wrapped({"x": 1})
-        assert result == '{"x": 1}'
-
-    def test_default_kwargs_none(self):
-        wrapped = wrap_function("json:dumps", default_kwargs=None)
-        result = wrapped({"y": 2})
-        assert result == '{"y": 2}'
-
-    def test_default_kwargs_merged_with_call(self):
-        wrapped = wrap_function("json:dumps", default_kwargs={"indent": 2})
-        result = wrapped({"a": 1}, sort_keys=True)
-        assert "\n" in result
+def test_wrapped_forwards_the_call():
+    assert wrap_function(ECHO)(1, k=2) == ((1,), {"k": 2})
 
 
-class TestWrapFunctionName:
-    """Tests for wrapped function __name__ attribute."""
-
-    def test_wrapped_name_with_module(self):
-        wrapped = wrap_function("json:loads")
-        assert "json" in wrapped.__name__
-        assert "loads" in wrapped.__name__
-        assert wrapped.__name__.startswith("wrapped_")
-
-    def test_wrapped_name_nested_module(self):
-        wrapped = wrap_function("os.path:join")
-        assert "os" in wrapped.__name__
-        assert "path" in wrapped.__name__
-        assert "join" in wrapped.__name__
+def test_call_kwargs_win_over_default_kwargs():
+    """Merged per call: a call-time kwarg wins on conflict, and does not leak
+    into the defaults of later calls."""
+    wrapped = wrap_function(ECHO, default_kwargs={"a": 1, "b": "default"})
+    assert wrapped(b="call", c=3) == ((), {"a": 1, "b": "call", "c": 3})
+    assert wrapped() == ((), {"a": 1, "b": "default"})
 
 
-class TestWrapFunctionErrors:
-    """Error handling tests for wrap_function."""
+@pytest.mark.parametrize("default_kwargs", [{}, None])
+def test_no_default_kwargs(default_kwargs):
+    assert wrap_function(ECHO, default_kwargs=default_kwargs)(a=1) == ((), {"a": 1})
 
-    def test_import_error_on_call(self):
-        wrapped = wrap_function("nonexistent_module:func")
-        assert callable(wrapped)
 
-        with pytest.raises(UserFunctionError, match="Failed to import module"):
-            wrapped()
+@pytest.mark.parametrize(("name", "expected"), [("json:loads", "wrapped_json_loads"), ("os.path:join", "wrapped_os_path_join")])
+def test_wrapped_name(name, expected):
+    assert wrap_function(name).__name__ == expected
 
-    def test_bare_name_error_on_call(self):
-        wrapped = wrap_function("nonexistent_function_xyz")
 
-        with pytest.raises(UserFunctionError, match="Module path is required"):
-            wrapped()
-
-    def test_runtime_error_wrapped(self):
-        wrapped = wrap_function("userfunc_test_helpers:always_fails")
-
-        with pytest.raises(UserFunctionError, match="Error calling function") as exc_info:
-            wrapped()
-
-        assert exc_info.value.__cause__ is not None
-        assert isinstance(exc_info.value.__cause__, RuntimeError)
-
-    def test_user_function_error_preserved(self):
-        wrapped = wrap_function("userfunc_test_helpers:raises_user_error")
-
-        with pytest.raises(UserFunctionError, match="custom error"):
-            wrapped()
-
-    def test_type_error_from_bad_args(self):
-        wrapped = wrap_function("userfunc_test_helpers:needs_three_args")
-
-        with pytest.raises(UserFunctionError, match="Error calling function"):
-            wrapped("only_one")
+def test_import_deferred_until_call():
+    """Wrapping never imports, so a bad name surfaces only when called."""
+    wrapped = wrap_function("nonexistent_module:func")
+    with pytest.raises(UserFunctionError, match="Failed to import module"):
+        wrapped()

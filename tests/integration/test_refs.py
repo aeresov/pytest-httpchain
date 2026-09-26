@@ -18,4 +18,4 @@ def test_include_and_merge_resolve_into_a_running_scenario(run_scenario):
     """
     result = run_scenario("refs/test_include_merge.http.json", "refs/fragments.json")
 
-    result.assert_outcomes(errors=0, failed=0, passed=2)
+    result.assert_outcomes(passed=2)

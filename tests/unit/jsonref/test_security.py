@@ -4,95 +4,36 @@ from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
 from pytest_httpchain.jsonref.loader import load_json
 
 
-class TestSecurity:
-    def test_max_parent_traversal_exceeded(self, tmp_path):
-        """Test that excessive parent directory traversals are blocked"""
-        # Create a deeply nested structure
-        nested_dir = tmp_path / "a" / "b" / "c" / "d"
-        nested_dir.mkdir(parents=True)
+@pytest.mark.parametrize(("kwargs", "limit"), [({}, 3), ({"max_parent_traversal_depth": 1}, 1)], ids=["default", "custom"])
+def test_parent_traversal_limit_is_inclusive(create_json_file, kwargs, limit):
+    """``limit`` levels of ``..`` resolve; one more is refused."""
+    create_json_file("target.json", {"value": 42})
+    at_limit = create_json_file("d/" * limit + "ok.json", {"data": {"$ref": "../" * limit + "target.json#/value"}})
+    beyond = create_json_file("d/" * (limit + 1) + "bad.json", {"data": {"$ref": "../" * (limit + 1) + "target.json#/value"}})
 
-        # Create a target file at the top
-        target_file = tmp_path / "target.json"
-        target_file.write_text('{"value": 42}')
+    assert load_json(at_limit, **kwargs) == {"data": 42}
+    with pytest.raises(ReferenceResolverError, match=f"exceeds maximum parent traversal depth of {limit}"):
+        load_json(beyond, **kwargs)
 
-        # Create a file that tries to traverse too many parent directories
-        test_file = nested_dir / "test.json"
-        # This tries to go up 4 levels, but max_parent_traversal_depth defaults to 3
-        test_file.write_text('{"data": {"$ref": "../../../../target.json#/value"}}')
 
-        with pytest.raises(ReferenceResolverError, match="exceeds maximum parent traversal depth"):
-            load_json(test_file)
+def test_root_path_blocks_escape(create_json_files, tmp_path):
+    """The target exists, so the error must name the sandbox boundary —
+    "not found" would send the user hunting for a typo."""
+    files = create_json_files({"outside.json": {"secret": "x"}, "root/inside.json": {"data": {"$ref": "../outside.json#/secret"}}})
+    with pytest.raises(ReferenceResolverError, match="resolves outside the reference root"):
+        load_json(files["root/inside.json"], root_path=tmp_path / "root")
 
-    def test_max_parent_traversal_custom_depth(self, tmp_path):
-        """Test custom max_parent_traversal_depth parameter"""
-        # Create a nested structure
-        nested_dir = tmp_path / "a" / "b"
-        nested_dir.mkdir(parents=True)
 
-        # Create a target file at the top
-        target_file = tmp_path / "target.json"
-        target_file.write_text('{"value": 42}')
+def test_root_path_allows_parent_traversal_within_root(create_json_files, tmp_path):
+    files = create_json_files({"root/data.json": {"value": 42}, "root/subdir/test.json": {"data": {"$ref": "../data.json#/value"}}})
+    assert load_json(files["root/subdir/test.json"], root_path=tmp_path / "root") == {"data": 42}
 
-        # Create a file that tries to traverse 2 parent directories
-        test_file = nested_dir / "test.json"
-        test_file.write_text('{"data": {"$ref": "../../target.json#/value"}}')
 
-        # With max_depth=1, this should fail
-        with pytest.raises(ReferenceResolverError, match="exceeds maximum parent traversal depth"):
-            load_json(test_file, max_parent_traversal_depth=1)
-
-        # With max_depth=2, this should succeed
-        result = load_json(test_file, max_parent_traversal_depth=2)
-        assert result["data"] == 42
-
-    def test_root_path_enforcement(self, tmp_path):
-        """Test that references cannot escape the root_path boundary"""
-        # Create a root directory
-        root_dir = tmp_path / "root"
-        root_dir.mkdir()
-
-        # Create a file outside the root
-        outside_file = tmp_path / "outside.json"
-        outside_file.write_text('{"secret": "should not access"}')
-
-        # Create a file inside the root that tries to reference outside
-        inside_file = root_dir / "inside.json"
-        inside_file.write_text('{"data": {"$ref": "../outside.json#/secret"}}')
-
-        # With root_path set to root_dir, this should fail — and say why: the
-        # target exists, so reporting it as "not found" would send the user
-        # hunting for a typo instead of the sandbox boundary.
-        with pytest.raises(ReferenceResolverError, match="resolves outside the reference root"):
-            load_json(inside_file, root_path=root_dir)
-
-    def test_root_path_allows_internal_references(self, tmp_path):
-        """Test that root_path allows references within the allowed directory"""
-        # Create a root directory with subdirectories
-        root_dir = tmp_path / "root"
-        subdir = root_dir / "subdir"
-        subdir.mkdir(parents=True)
-
-        # Create a file in the root
-        root_file = root_dir / "data.json"
-        root_file.write_text('{"value": 42}')
-
-        # Create a file in subdir that references the root file
-        subdir_file = subdir / "test.json"
-        subdir_file.write_text('{"data": {"$ref": "../data.json#/value"}}')
-
-        # This should succeed since both files are within root_path
-        result = load_json(subdir_file, root_path=root_dir)
-        assert result["data"] == 42
-
-    def test_absolute_path_injection(self, tmp_path):
-        """Absolute $ref file paths must be rejected outright.
-
-        An absolute path has no ".." parts, so the parent-traversal limit never
-        fires, and `base / "/abs"` collapses to "/abs" — escaping the sandbox.
-        The resolver must reject it before any filesystem access.
-        """
-        test_file = tmp_path / "test.json"
-        test_file.write_text('{"data": {"$ref": "/etc/passwd"}}')
-
-        with pytest.raises(ReferenceResolverError, match="Absolute .* not allowed"):
-            load_json(test_file)
+@pytest.mark.parametrize("ref", ["/etc/passwd", "C:\\x.json", "\\x.json"], ids=["posix", "windows-drive", "windows-rooted"])
+def test_absolute_path_rejected(create_json_file, ref):
+    """An absolute path has no ".." parts, so the traversal limit never fires,
+    and ``base / "/abs"`` collapses to "/abs" — escaping the sandbox. Judged
+    under both path flavors, since scenario files are portable."""
+    file = create_json_file("test.json", {"data": {"$ref": ref}})
+    with pytest.raises(ReferenceResolverError, match="Absolute reference paths are not allowed"):
+        load_json(file)

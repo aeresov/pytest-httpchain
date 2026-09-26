@@ -3,7 +3,6 @@ import pytest
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain.templates import TemplatesError
-from pytest_httpchain.userfunc import call_user_function
 from pytest_httpchain.utils import process_substitutions
 
 # The functions these tests import live in a module of their own; see its
@@ -173,55 +172,3 @@ class TestProcessSubstitutions:
         ]
         with pytest.raises(StageExecutionError, match="must resolve to a string, got list"):
             process_substitutions(substitutions)
-
-
-class TestCallUserFunction:
-    def test_call_with_simple_name(self):
-        func_call = UserFunctionName(f"{HELPERS}:sample_func")
-        result = call_user_function(func_call)
-
-        assert result == "sample_result"
-
-    def test_call_with_kwargs(self):
-        func_call = UserFunctionKwargs(
-            name=UserFunctionName(f"{HELPERS}:func_with_args"),
-            kwargs={"a": 1, "b": 2, "c": 3},
-        )
-        result = call_user_function(func_call)
-
-        assert result == {"a": 1, "b": 2, "c": 3}
-
-    def test_call_with_extra_kwargs(self):
-        func_call = UserFunctionKwargs(
-            name=UserFunctionName(f"{HELPERS}:func_with_args"),
-            kwargs={"a": 1, "b": 2},
-        )
-        result = call_user_function(func_call, c="extra")
-
-        assert result == {"a": 1, "b": 2, "c": "extra"}
-
-    def test_call_extra_kwargs_override(self):
-        func_call = UserFunctionKwargs(
-            name=UserFunctionName(f"{HELPERS}:func_with_args"),
-            kwargs={"a": 1, "b": 2, "c": "original"},
-        )
-        # extra_kwargs should override kwargs from UserFunctionKwargs
-        result = call_user_function(func_call, c="overridden")
-
-        assert result == {"a": 1, "b": 2, "c": "overridden"}
-
-    def test_call_simple_name_with_extra_kwargs(self):
-        func_call = UserFunctionName(f"{HELPERS}:func_with_args")
-        result = call_user_function(func_call, a=10, b=20, c=30)
-
-        assert result == {"a": 10, "b": 20, "c": 30}
-
-    def test_invalid_function_call_format(self):
-        # Neither UserFunctionName nor UserFunctionKwargs: unreachable from a
-        # validated scenario, so it surfaces as a plugin bug, not a stage failure.
-        with pytest.raises(RuntimeError, match="Unhandled function call: str"):
-            call_user_function("invalid_string")
-
-    def test_invalid_function_call_none(self):
-        with pytest.raises(RuntimeError, match="Unhandled function call: NoneType"):
-            call_user_function(None)

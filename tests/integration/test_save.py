@@ -1,67 +1,41 @@
-def test_save_jmespath(run_scenario):
-    """Test JMESPath extraction from response"""
-    result = run_scenario("save/test_save_jmespath.http.json")
-    # 2 stages = 2 test methods
-    result.assert_outcomes(errors=0, failed=0, passed=2)
+import pytest
+
+from tests.integration.helpers import named
 
 
-def test_save_substitutions(run_scenario):
-    """Test computed substitutions"""
-    result = run_scenario("save/test_save_substitutions.http.json")
-    # 2 stages = 2 test methods
-    result.assert_outcomes(errors=0, failed=0, passed=2)
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "jmespath",
+        "substitutions",
+        "user_function",
+        # Entries within ONE save step resolve strictly in order, each seeing
+        # the previous entry's names (regression: an eager pre-walk evaluated
+        # later entries before earlier ones' names existed).
+        "substitutions_sequential",
+        # Server text that LOOKS like a template ('{{ probe }}') is saved
+        # literally (regression: a double template pass re-evaluated rendered
+        # values, executing response-derived text as expressions).
+        "preserves_template_literals",
+    ],
+)
+def test_save_then_use_in_next_stage(run_scenario, scenario):
+    run_scenario(f"save/test_save_{scenario}.http.json", "save.py").assert_outcomes(passed=2)
 
 
-def test_save_user_function(run_scenario):
-    """Test user function returning dict"""
-    result = run_scenario("save/test_save_user_function.http.json", "save.py")
-    # 2 stages = 2 test methods
-    result.assert_outcomes(errors=0, failed=0, passed=2)
-
-
-def test_save_user_function_raises(run_scenario):
-    """A raising save function surfaces as a clean stage failure that aborts
-    the chain, mirroring the verify-side twin."""
-    result = run_scenario("save/test_save_user_function_raises.http.json", "save.py")
-    result.assert_outcomes(errors=0, failed=1, passed=0, skipped=1)
-    result.stdout.fnmatch_lines(["*Error calling user function*"])
-
-
-def test_save_user_function_returns_non_dict(run_scenario):
-    """A save function returning a non-dict is rejected, not coerced."""
-    result = run_scenario("save/test_save_user_function_non_dict.http.json", "save.py")
-    result.assert_outcomes(errors=0, failed=1, passed=0)
-    result.stdout.fnmatch_lines(["*must return dict*"])
-
-
-def test_save_jmespath_runtime_error(run_scenario):
-    """A jmespath expression that compiles but errors at search time fails the
-    save cleanly instead of escaping as a raw traceback."""
-    result = run_scenario("save/test_save_jmespath_runtime_error.http.json")
-    result.assert_outcomes(errors=0, failed=1, passed=0)
-    result.stdout.fnmatch_lines(["*Error saving variable*"])
-
-
-def test_save_substitutions_template_error(run_scenario):
-    """A save substitution whose template fails becomes a SaveError with the
-    'Error processing substitutions' wrapping."""
-    result = run_scenario("save/test_save_substitutions_error.http.json")
-    result.assert_outcomes(errors=0, failed=1, passed=0)
-    result.stdout.fnmatch_lines(["*Error processing substitutions*"])
-
-
-def test_save_substitutions_sequential_entries(run_scenario):
-    """Entries within ONE save step resolve strictly in order, each seeing the
-    previous entry's names — the documented semantics shared with scenario- and
-    stage-level substitutions (regression: an eager pre-walk evaluated later
-    entries before earlier ones' names existed)."""
-    result = run_scenario("save/test_save_substitutions_sequential.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=2)
-
-
-def test_save_preserves_template_literal_values(run_scenario):
-    """Server response text that LOOKS like a template ('{{ probe }}') is saved
-    literally (regression: a double template pass re-evaluated already-rendered
-    values, executing response-derived text as expressions)."""
-    result = run_scenario("save/test_save_preserves_template_literals.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=2)
+@pytest.mark.parametrize(
+    ("scenario", "outcomes", "line"),
+    named(
+        # A clean stage failure that aborts the chain, like the verify-side twin.
+        ("user_function_raises", {"failed": 1, "skipped": 1}, "*Error calling user function*"),
+        # Rejected, not coerced.
+        ("user_function_non_dict", {"failed": 1}, "*must return dict*"),
+        # Compiles, but errors at search time: still no raw traceback.
+        ("jmespath_runtime_error", {"failed": 1}, "*Error saving variable*"),
+        ("substitutions_error", {"failed": 1}, "*Error processing substitutions*"),
+    ),
+)
+def test_save_fails_cleanly(run_scenario, scenario, outcomes, line):
+    result = run_scenario(f"save/test_save_{scenario}.http.json", "save.py")
+    result.assert_outcomes(**outcomes)
+    result.stdout.fnmatch_lines([line])

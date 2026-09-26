@@ -32,7 +32,7 @@ def test_ca_bundle_is_trusted(run_scenario):
     """``ssl.verify: <path>`` makes the throwaway CA's certificate acceptable,
     and the response body genuinely round-trips over the TLS connection."""
     result = run_scenario("ssl/test_ssl_verify_ca_bundle.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=1)
+    result.assert_outcomes(passed=1)
 
 
 def test_default_verify_rejects_untrusted_certificate(run_scenario):
@@ -40,7 +40,7 @@ def test_default_verify_rejects_untrusted_certificate(run_scenario):
     the same server's certificate fails verification, the stage fails cleanly
     (no raw httpx traceback), and the chain aborts."""
     result = run_scenario("ssl/test_ssl_verify_untrusted.http.json")
-    result.assert_outcomes(errors=0, failed=1, passed=0, skipped=1)
+    result.assert_outcomes(failed=1, skipped=1)
     result.stdout.fnmatch_lines(["*CERTIFICATE_VERIFY_FAILED*"])
 
 
@@ -48,21 +48,21 @@ def test_verify_false_accepts_untrusted_certificate(run_scenario):
     """``verify: false`` is what turns the failure above into a pass — proof
     the flag reaches the transport rather than only the client kwargs."""
     result = run_scenario("ssl/test_ssl_verify_disabled.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=1)
+    result.assert_outcomes(passed=1)
 
 
 def test_client_certificate_is_presented(run_scenario):
     """``ssl.cert`` (single key+chain bundle) satisfies a server demanding a
     client certificate."""
     result = run_scenario("ssl/test_ssl_client_cert.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=1)
+    result.assert_outcomes(passed=1)
 
 
 def test_missing_client_certificate_fails_handshake(run_scenario):
     """The negative control for ``ssl.cert``: trusting the CA is not enough, so
     the passing case above cannot be explained by ``verify`` alone."""
     result = run_scenario("ssl/test_ssl_client_cert_missing.http.json")
-    result.assert_outcomes(errors=0, failed=1, passed=0)
+    result.assert_outcomes(failed=1)
     # How the refusal surfaces is the platform's choice, so only the refusal is
     # asserted: OpenSSL reports the server's CERTIFICATE_REQUIRED alert, while
     # Windows reports just the reset that follows it (WinError 10054) and never

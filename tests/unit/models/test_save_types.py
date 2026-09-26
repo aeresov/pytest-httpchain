@@ -13,219 +13,66 @@ from pytest_httpchain.models.entities import (
     UserFunctionsSave,
     VarsSubstitution,
 )
-from tests.unit.models.helpers import assert_error_types, make_stage
+
+
+@pytest.mark.parametrize(
+    ("save", "expected"),
+    [
+        pytest.param({"jmespath": {"result": "data"}}, JMESPathSave, id="jmespath"),
+        pytest.param({"substitutions": [{"vars": {"x": 1}}]}, SubstitutionsSave, id="substitutions"),
+        pytest.param({"user_functions": ["module:func"]}, UserFunctionsSave, id="user_functions"),
+    ],
+)
+def test_raw_save_dict_selects_model(save, expected):
+    assert type(SaveStep.model_validate({"save": save}).save) is expected
+
+
+@pytest.mark.parametrize(
+    ("model", "kwargs"),
+    [
+        pytest.param(JMESPathSave, {"jmespath": {"token": "data.token"}}, id="jmespath"),
+        pytest.param(SubstitutionsSave, {"substitutions": []}, id="substitutions"),
+        pytest.param(UserFunctionsSave, {"user_functions": []}, id="user_functions"),
+    ],
+)
+def test_description_round_trips(model, kwargs):
+    assert model(**kwargs, description="Extract authentication token").description == "Extract authentication token"
 
 
 class TestJMESPathSave:
-    """Tests for JMESPathSave model."""
+    @pytest.mark.parametrize(
+        "jmespath",
+        [
+            pytest.param({"user_id": "data.user.id", "user_name": "data.user.name", "items": "data.items[*].id"}, id="concrete"),
+            pytest.param({"result": "{{ jmespath_expr }}"}, id="template"),
+        ],
+    )
+    def test_expressions_round_trip(self, jmespath):
+        assert JMESPathSave(jmespath=jmespath).jmespath == jmespath
 
-    def test_jmespath_simple_expression(self):
-        """Test JMESPathSave with simple expression."""
-        save = JMESPathSave(jmespath={"result": "data.value"})
-        assert save.jmespath == {"result": "data.value"}
-
-    def test_jmespath_multiple_expressions(self):
-        """Test JMESPathSave with multiple expressions."""
-        save = JMESPathSave(
-            jmespath={
-                "user_id": "data.user.id",
-                "user_name": "data.user.name",
-                "items": "data.items[*].id",
-            }
-        )
-        assert len(save.jmespath) == 3
-
-    def test_jmespath_complex_expressions(self):
-        """Test JMESPathSave with complex JMESPath expressions."""
-        save = JMESPathSave(
-            jmespath={
-                "active_users": "users[?active == `true`].name",
-                "first_item": "items | [0]",
-            }
-        )
-        assert "active_users" in save.jmespath
-
-    def test_jmespath_with_template(self):
-        """Test JMESPathSave with template expression."""
-        save = JMESPathSave(jmespath={"result": "{{ jmespath_expr }}"})
-        assert save.jmespath["result"] == "{{ jmespath_expr }}"
-
-    def test_jmespath_invalid_expression_rejected(self):
-        """Test that invalid JMESPath expressions are rejected."""
+    def test_invalid_expression_rejected(self):
         with pytest.raises(ValidationError, match="Invalid JMESPath expression"):
             JMESPathSave(jmespath={"result": "[invalid"})
 
-    def test_jmespath_with_description(self):
-        """Test JMESPathSave with description."""
-        save = JMESPathSave(
-            jmespath={"token": "data.token"},
-            description="Extract authentication token",
-        )
-        assert save.description == "Extract authentication token"
-
-    def test_jmespath_extra_fields_forbidden(self):
-        """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError) as exc_info:
-            JMESPathSave(jmespath={"x": "y"}, extra="field")
-        assert_error_types(exc_info, "extra_forbidden")
-
-    @pytest.mark.parametrize("bad_key", ["my-var", "with space", "1leading", "class"])
-    def test_jmespath_non_identifier_key_rejected(self, bad_key: str):
+    def test_key_must_be_identifier(self):
         """M24: save keys become context variable names, so a key that is not a
-        valid Python identifier (or is a keyword) can never be referenced in a
-        {{ }} expression and is rejected at validation."""
-        with pytest.raises(ValidationError):
-            JMESPathSave(jmespath={bad_key: "data.value"})
+        valid Python identifier can never be referenced in a {{ }} expression.
+        (Wiring only: the identifier rules live in test_type_validators.py.)"""
+        with pytest.raises(ValidationError, match="Invalid Python variable name"):
+            JMESPathSave(jmespath={"my-var": "data.value"})
 
 
-class TestSubstitutionsSave:
-    """Tests for SubstitutionsSave model."""
-
-    def test_substitutions_with_vars(self):
-        """Test SubstitutionsSave with vars substitution."""
-        save = SubstitutionsSave(substitutions=[VarsSubstitution(vars={"saved_value": "extracted"})])
-        assert len(save.substitutions) == 1
-
-    def test_substitutions_with_functions(self):
-        """Test SubstitutionsSave with functions substitution."""
-        save = SubstitutionsSave(substitutions=[FunctionsSubstitution(functions={"processor": UserFunctionName("utils:process_data")})])
-        assert len(save.substitutions) == 1
-
-    def test_substitutions_mixed(self):
-        """Test SubstitutionsSave with mixed substitutions."""
-        save = SubstitutionsSave(
-            substitutions=[
-                VarsSubstitution(vars={"constant": "value"}),
-                FunctionsSubstitution(functions={"computed": UserFunctionName("module:compute")}),
-            ]
-        )
-        assert len(save.substitutions) == 2
-
-    def test_substitutions_dict_format(self):
-        """Test SubstitutionsSave with dict format."""
-        save = SubstitutionsSave(
-            substitutions={
-                "constants": {"vars": {"x": 1}},
-                "computed": {"functions": {"y": "mod:func"}},
-            }
-        )
-        assert len(save.substitutions) == 2
-
-    def test_substitutions_with_description(self):
-        """Test SubstitutionsSave with description."""
-        save = SubstitutionsSave(
-            substitutions=[VarsSubstitution(vars={"x": 1})],
-            description="Save computed values",
-        )
-        assert save.description == "Save computed values"
-
-    def test_substitutions_extra_fields_forbidden(self):
-        """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError) as exc_info:
-            SubstitutionsSave(substitutions=[], extra="field")
-        assert_error_types(exc_info, "extra_forbidden")
+def test_substitutions_save_normalizes_mapping_form():
+    """Same ``Substitutions`` type as Stage/Scenario (list-or-mapping input)."""
+    save = SubstitutionsSave.model_validate(
+        {"substitutions": {"constants": {"vars": {"x": 1}}, "computed": {"functions": {"y": "mod:func"}}}},
+    )
+    assert save.substitutions == [VarsSubstitution(vars={"x": 1}), FunctionsSubstitution(functions={"y": UserFunctionName("mod:func")})]
 
 
-class TestUserFunctionsSave:
-    """Tests for UserFunctionsSave model."""
-
-    def test_user_functions_simple(self):
-        """Test UserFunctionsSave with simple function."""
-        save = UserFunctionsSave(user_functions=[UserFunctionName("module:save_data")])
-        assert len(save.user_functions) == 1
-
-    def test_user_functions_multiple(self):
-        """Test UserFunctionsSave with multiple functions."""
-        save = UserFunctionsSave(
-            user_functions=[
-                UserFunctionName("validators:check_response"),
-                UserFunctionName("storage:save_to_db"),
-            ]
-        )
-        assert len(save.user_functions) == 2
-
-    def test_user_functions_with_kwargs(self):
-        """Test UserFunctionsSave with function kwargs."""
-        save = UserFunctionsSave(
-            user_functions=[
-                UserFunctionKwargs(
-                    name=UserFunctionName("module:process"),
-                    kwargs={"format": "json", "validate": True},
-                )
-            ]
-        )
-        assert len(save.user_functions) == 1
-
-    def test_user_functions_mixed(self):
-        """Test UserFunctionsSave with mixed formats."""
-        save = UserFunctionsSave(
-            user_functions=[
-                UserFunctionName("simple:func"),
-                UserFunctionKwargs(
-                    name=UserFunctionName("complex:func"),
-                    kwargs={"arg": "value"},
-                ),
-            ]
-        )
-        assert len(save.user_functions) == 2
-
-    def test_user_functions_with_description(self):
-        """Test UserFunctionsSave with description."""
-        save = UserFunctionsSave(
-            user_functions=[UserFunctionName("module:func")],
-            description="Custom save handler",
-        )
-        assert save.description == "Custom save handler"
-
-    def test_user_functions_extra_fields_forbidden(self):
-        """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError) as exc_info:
-            UserFunctionsSave(user_functions=[], extra="field")
-        assert_error_types(exc_info, "extra_forbidden")
-
-
-class TestSaveDiscriminator:
-    """Tests for Save discriminated union."""
-
-    def test_discriminator_jmespath(self):
-        """Test discriminator identifies JMESPathSave."""
-        step = SaveStep(save=JMESPathSave(jmespath={"result": "data"}))
-        assert isinstance(step.save, JMESPathSave)
-
-    def test_discriminator_substitutions(self):
-        """Test discriminator identifies SubstitutionsSave."""
-        step = SaveStep(save=SubstitutionsSave(substitutions=[VarsSubstitution(vars={"x": 1})]))
-        assert isinstance(step.save, SubstitutionsSave)
-
-    def test_discriminator_user_functions(self):
-        """Test discriminator identifies UserFunctionsSave."""
-        step = SaveStep(save=UserFunctionsSave(user_functions=[UserFunctionName("module:func")]))
-        assert isinstance(step.save, UserFunctionsSave)
-
-    def test_discriminator_invalid_rejected(self):
-        """Test that invalid save type is rejected."""
-        with pytest.raises(ValidationError) as exc_info:
-            SaveStep(save={"invalid": "value"})
-        assert_error_types(exc_info, "union_tag_invalid")
-
-
-class TestSaveStepInStage:
-    """Tests for SaveStep in Stage response."""
-
-    def test_stage_with_jmespath_save(self):
-        """Test Stage with JMESPath save step."""
-        stage = make_stage(response=[SaveStep(save=JMESPathSave(jmespath={"token": "data.token"}))])
-        assert len(stage.response) == 1
-        assert isinstance(stage.response[0], SaveStep)
-        assert isinstance(stage.response[0].save, JMESPathSave)
-
-    def test_stage_with_multiple_save_steps(self):
-        """Test Stage with multiple save steps."""
-        stage = make_stage(
-            response=[
-                SaveStep(save=JMESPathSave(jmespath={"id": "data.id"})),
-                SaveStep(save=UserFunctionsSave(user_functions=[UserFunctionName("custom:saver")])),
-            ],
-        )
-        assert len(stage.response) == 2
-        assert all(isinstance(s, SaveStep) for s in stage.response)
+def test_user_functions_save_accepts_name_and_kwargs_forms():
+    save = UserFunctionsSave.model_validate({"user_functions": ["simple:func", {"name": "complex:func", "kwargs": {"arg": "value"}}]})
+    assert save.user_functions == [
+        UserFunctionName("simple:func"),
+        UserFunctionKwargs(name=UserFunctionName("complex:func"), kwargs={"arg": "value"}),
+    ]

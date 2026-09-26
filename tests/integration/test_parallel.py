@@ -1,46 +1,30 @@
 import pytest
 
-
-def test_repeat(run_scenario):
-    """Test repeat mode with max_concurrency"""
-    result = run_scenario("parallel/test_repeat.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=1)
+from tests.integration.helpers import named
 
 
-def test_repeat_counter(run_scenario):
-    """M50: a parallel `repeat: N` stage must actually fire N requests, not one.
-
-    The first stage POSTs to the thread-safe /counter endpoint N times in
-    parallel; a final non-parallel stage GETs the resulting count and verifies
-    it equals N. The `server` fixture resets the counter at setup, so a silent
-    single execution would yield count==1 and fail the verification.
-    """
-    result = run_scenario("parallel/test_repeat_counter.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=2)
-
-
-def test_foreach_individual(run_scenario):
-    """Test foreach with individual parameter values"""
-    result = run_scenario("parallel/test_foreach_individual.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=1)
-
-
-def test_foreach_combinations(run_scenario):
-    """Test foreach with parameter combinations"""
-    result = run_scenario("parallel/test_foreach_combinations.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=1)
-
-
-def test_rate_limit(run_scenario):
-    """calls_per_sec must construct the limiter and run to completion (M2)."""
-    result = run_scenario("parallel/test_rate_limit.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=1)
+@pytest.mark.parametrize(
+    ("scenario", "passed"),
+    named(
+        ("repeat", 1),
+        # M50: `repeat: N` must fire N requests, not one. The first stage POSTs
+        # to the /counter endpoint N times in parallel; a final stage verifies
+        # the count equals N (the `server` fixture resets it at setup).
+        ("repeat_counter", 2),
+        ("foreach_individual", 1),
+        ("foreach_combinations", 1),
+        # M2: calls_per_sec must construct the limiter and run to completion.
+        ("rate_limit", 1),
+    ),
+)
+def test_parallel_stage_passes(run_scenario, scenario, passed):
+    run_scenario(f"parallel/test_{scenario}.http.json").assert_outcomes(passed=passed)
 
 
 def test_rate_limit_exceeded(run_scenario):
     """Exceeding max_rate_limit_delay fails cleanly, not with a raw traceback (M2)."""
     result = run_scenario("parallel/test_rate_limit_exceeded.http.json")
-    result.assert_outcomes(errors=0, failed=1, passed=0)
+    result.assert_outcomes(failed=1)
     result.stdout.fnmatch_lines(["*Rate limit exceeded*"])
 
 
@@ -51,7 +35,7 @@ def test_parallel_no_partial_save(run_scenario):
     result = run_scenario("parallel/test_parallel_no_partial_save.http.json")
     # stage 1 fails (an iteration hits /bad -> 400); stage 2 (always_run) passes
     # only because `leaked` was NOT committed. Without M4 it would be failed=2.
-    result.assert_outcomes(errors=0, failed=1, passed=1)
+    result.assert_outcomes(failed=1, passed=1)
 
 
 @pytest.mark.slow
@@ -64,7 +48,7 @@ def test_rate_limiter_threads_not_leaked(run_scenario):
     import time
 
     result = run_scenario("parallel/test_rate_limit.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=1)
+    result.assert_outcomes(passed=1)
 
     def leakers() -> list[str]:
         return [t.name for t in threading.enumerate() if "pyratelimiter" in t.name.lower().replace(" ", "")]

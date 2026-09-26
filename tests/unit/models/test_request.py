@@ -5,227 +5,116 @@ from http import HTTPMethod
 import pytest
 from pydantic import ValidationError
 
-from pytest_httpchain.models.entities import (
-    JsonBody,
-    Request,
-    UserFunctionKwargs,
-    UserFunctionName,
+from pytest_httpchain.models.entities import Request, UserFunctionKwargs, UserFunctionName
+from tests.unit.models.helpers import assert_error_types, make_request
+
+
+@pytest.mark.parametrize(
+    ("attr", "default"),
+    [
+        ("method", HTTPMethod.GET),
+        ("params", {}),
+        ("headers", {}),
+        ("body", None),
+        ("timeout", 30.0),
+        ("allow_redirects", True),
+        ("auth", None),
+    ],
 )
+def test_field_default(attr, default):
+    assert getattr(make_request(), attr) == default
 
 
-class TestRequestUrl:
-    """Tests for Request.url field."""
-
-    def test_url_valid_http(self):
-        """Test valid HTTP URL."""
-        request = Request(url="http://example.com")
-        assert str(request.url) == "http://example.com/"
-
-    def test_url_valid_https(self):
-        """Test valid HTTPS URL."""
-        request = Request(url="https://api.example.com/v1/users")
-        assert "api.example.com" in str(request.url)
-
-    def test_url_with_query_params(self):
-        """Test URL with query parameters."""
-        request = Request(url="https://example.com/search?q=test&page=1")
-        assert "q=test" in str(request.url)
-
-    def test_url_with_template(self):
-        """Test URL with template expression."""
-        request = Request(url="{{ base_url }}/api/users")
-        assert request.url == "{{ base_url }}/api/users"
-
-    def test_url_with_partial_template(self):
-        """Test URL with partial template."""
-        request = Request(url="https://example.com/users/{{ user_id }}")
-        assert request.url == "https://example.com/users/{{ user_id }}"
-
-    def test_url_invalid_rejected(self):
-        """Test that invalid URLs are rejected."""
-        with pytest.raises(ValidationError):
-            Request(url="not-a-url")
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("params", {"page": 1, "limit": 10}, id="params"),
+        pytest.param("params", {"q": "search term", "sort": "asc"}, id="params-str"),
+        pytest.param("headers", {"Content-Type": "application/json"}, id="headers"),
+        pytest.param("headers", {"X-Custom-Header": "custom-value"}, id="headers-custom"),
+        pytest.param("timeout", 60.0, id="timeout"),
+        pytest.param("timeout", "{{ timeout_value }}", id="timeout-template"),
+        pytest.param("allow_redirects", False, id="allow_redirects-false"),
+        pytest.param("allow_redirects", "{{ follow_redirects }}", id="allow_redirects-template"),
+    ],
+)
+def test_field_round_trip(field, value):
+    assert getattr(make_request(**{field: value}), field) == value
 
 
-class TestRequestMethod:
-    """Tests for Request.method field."""
-
-    def test_method_default_get(self):
-        """Test default method is GET."""
-        request = Request(url="https://example.com")
-        assert request.method == HTTPMethod.GET
-
-    def test_method_post(self):
-        """Test POST method."""
-        request = Request(url="https://example.com", method=HTTPMethod.POST)
-        assert request.method == HTTPMethod.POST
-
-    def test_method_all_http_methods(self):
-        """Test all standard HTTP methods."""
-        methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
-        for method in methods:
-            request = Request(url="https://example.com", method=method)
-            assert request.method == HTTPMethod(method)
-
-    def test_method_with_template(self):
-        """Test method with template expression."""
-        request = Request(url="https://example.com", method="{{ http_method }}")
-        assert request.method == "{{ http_method }}"
-
-    def test_method_any_rfc_token_accepted(self):
-        """Non-enum verbs are legal HTTP: any RFC 9110 token is accepted
-        (WebDAV PROPFIND/REPORT, cache PURGE, vendor methods)."""
-        for method in ["PROPFIND", "REPORT", "MKCALENDAR", "PURGE", "INVALID"]:
-            request = Request(url="https://example.com", method=method)
-            assert request.method == method
-
-    def test_method_non_token_rejected(self):
-        """Strings that are not RFC 9110 tokens (spaces, separators) are rejected."""
-        for bad in ["FOO BAR", "GET/POST", "", "MÉTHODE"]:
-            with pytest.raises(ValidationError):
-                Request(url="https://example.com", method=bad)
-
-
-class TestRequestPassThroughDicts:
-    """params and headers are plain pass-through dict fields (no coercion or
-    normalization), so one construction test covers their round-trip; only the
-    default-empty behavior is asserted separately."""
-
-    def test_params_default_empty(self):
-        """Test default params is empty dict."""
-        request = Request(url="https://example.com")
-        assert request.params == {}
-
-    def test_headers_default_empty(self):
-        """Test default headers is empty dict."""
-        request = Request(url="https://example.com")
-        assert request.headers == {}
-
+class TestUrl:
     @pytest.mark.parametrize(
-        ("params", "headers"),
+        ("url", "expected"),
         [
-            ({"page": 1, "limit": 10}, {"Content-Type": "application/json"}),
-            ({"q": "search term", "sort": "asc"}, {"X-Custom-Header": "custom-value"}),
+            ("http://example.com", "http://example.com/"),
+            ("https://api.example.com/v1/users", "https://api.example.com/v1/users"),
+            ("https://example.com/search?q=test&page=1", "https://example.com/search?q=test&page=1"),
         ],
     )
-    def test_params_and_headers_round_trip(self, params, headers):
-        request = Request(url="https://example.com", params=params, headers=headers)
-        assert request.params == params
-        assert request.headers == headers
+    def test_concrete_url_normalized(self, url, expected):
+        assert str(Request(url=url).url) == expected
+
+    @pytest.mark.parametrize("url", ["{{ base_url }}/api/users", "https://example.com/users/{{ user_id }}"])
+    def test_template_url_kept_as_str(self, url):
+        assert Request(url=url).url == url
+
+    def test_invalid_url_rejected(self):
+        with pytest.raises(ValidationError) as exc_info:
+            Request(url="not-a-url")
+        assert_error_types(exc_info, "url_parsing", at="url")
 
 
-class TestRequestTimeout:
-    """Tests for Request.timeout field."""
+class TestMethod:
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS",
+            # Non-enum verbs are legal HTTP too: any RFC 9110 token (WebDAV
+            # PROPFIND/REPORT, cache PURGE, vendor methods).
+            "PROPFIND",
+            "REPORT",
+            "MKCALENDAR",
+            "PURGE",
+            "INVALID",
+            pytest.param(HTTPMethod.POST, id="enum"),
+            "{{ http_method }}",
+        ],
+    )
+    def test_accepted_verbatim(self, method):
+        assert make_request(method=method).method == method
 
-    def test_timeout_default(self):
-        """Test default timeout is 30 seconds."""
-        request = Request(url="https://example.com")
-        assert request.timeout == 30.0
-
-    def test_timeout_custom(self):
-        """Test custom timeout."""
-        request = Request(url="https://example.com", timeout=60.0)
-        assert request.timeout == 60.0
-
-    def test_timeout_with_template(self):
-        """Test timeout with template expression."""
-        request = Request(url="https://example.com", timeout="{{ timeout_value }}")
-        assert request.timeout == "{{ timeout_value }}"
-
-    def test_timeout_must_be_positive(self):
-        """Test that timeout must be positive."""
-        with pytest.raises(ValidationError):
-            Request(url="https://example.com", timeout=0)
-        with pytest.raises(ValidationError):
-            Request(url="https://example.com", timeout=-1)
-
-
-class TestRequestAllowRedirects:
-    """Tests for Request.allow_redirects field."""
-
-    def test_allow_redirects_default_true(self):
-        """Test default allow_redirects is True."""
-        request = Request(url="https://example.com")
-        assert request.allow_redirects is True
-
-    def test_allow_redirects_false(self):
-        """Test allow_redirects set to False."""
-        request = Request(url="https://example.com", allow_redirects=False)
-        assert request.allow_redirects is False
-
-    def test_allow_redirects_with_template(self):
-        """Test allow_redirects with template expression."""
-        request = Request(url="https://example.com", allow_redirects="{{ follow_redirects }}")
-        assert request.allow_redirects == "{{ follow_redirects }}"
+    @pytest.mark.parametrize("method", ["FOO BAR", "GET/POST", "", "MÉTHODE"])
+    def test_non_token_rejected(self, method):
+        """Strings that are not RFC 9110 tokens (spaces, separators) are rejected."""
+        with pytest.raises(ValidationError, match="Invalid HTTP method token"):
+            make_request(method=method)
 
 
-class TestRequestAuth:
-    """Tests for Request.auth field."""
-
-    def test_auth_default_none(self):
-        """Test default auth is None."""
-        request = Request(url="https://example.com")
-        assert request.auth is None
-
-    def test_auth_simple_function(self):
-        """Test auth with simple function name."""
-        request = Request(url="https://example.com", auth=UserFunctionName("auth:get_credentials"))
-        assert isinstance(request.auth, UserFunctionName)
-
-    def test_auth_with_kwargs(self):
-        """Test auth with function kwargs."""
-        request = Request(
-            url="https://example.com",
-            auth=UserFunctionKwargs(
-                name=UserFunctionName("auth:oauth2"),
-                kwargs={"client_id": "abc123"},
-            ),
-        )
-        assert isinstance(request.auth, UserFunctionKwargs)
-        assert request.auth.kwargs == {"client_id": "abc123"}
-
-    def test_auth_with_template(self):
-        """Test auth with template in function name."""
-        request = Request(url="https://example.com", auth=UserFunctionName("auth:{{ auth_func }}"))
-        assert isinstance(request.auth, UserFunctionName)
+@pytest.mark.parametrize("timeout", [0, -1])
+def test_timeout_must_be_positive(timeout):
+    with pytest.raises(ValidationError) as exc_info:
+        make_request(timeout=timeout)
+    assert_error_types(exc_info, "greater_than", at="timeout")
 
 
-class TestRequestBody:
-    """Tests for Request.body field."""
-
-    def test_body_default_none(self):
-        """Test default body is None."""
-        request = Request(url="https://example.com")
-        assert request.body is None
-
-    def test_body_json(self):
-        """Test body with JSON data."""
-        request = Request(
-            url="https://example.com",
-            body=JsonBody(json={"key": "value"}),
-        )
-        assert isinstance(request.body, JsonBody)
-
-
-class TestRequestComplete:
-    """Tests for complete Request configurations."""
-
-    def test_request_full_config(self):
-        """Test Request with all fields."""
-        request = Request(
-            url="https://api.example.com/users",
-            method=HTTPMethod.POST,
-            params={"version": "v1"},
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": "Bearer token",
-            },
-            body=JsonBody(json={"name": "Alice", "email": "alice@example.com"}),
-            timeout=45.0,
-            allow_redirects=False,
-            auth=UserFunctionName("auth:api_key"),
-        )
-        assert str(request.url) == "https://api.example.com/users"
-        assert request.method == HTTPMethod.POST
-        assert request.timeout == 45.0
-        assert request.allow_redirects is False
+@pytest.mark.parametrize(
+    ("auth", "expected"),
+    [
+        pytest.param("auth:get_credentials", UserFunctionName("auth:get_credentials"), id="name"),
+        pytest.param("auth:{{ auth_func }}", UserFunctionName("auth:{{ auth_func }}"), id="name-template"),
+        pytest.param(
+            {"name": "auth:oauth2", "kwargs": {"client_id": "abc123"}},
+            UserFunctionKwargs(name=UserFunctionName("auth:oauth2"), kwargs={"client_id": "abc123"}),
+            id="kwargs",
+        ),
+    ],
+)
+def test_auth_forms(auth, expected):
+    """A bare name or a {name, kwargs} object (``auth`` is shared with Scenario via Authenticated)."""
+    assert make_request(auth=auth).auth == expected

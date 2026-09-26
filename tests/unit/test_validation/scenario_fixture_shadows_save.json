@@ -4,7 +4,7 @@
         {
             "name": "login",
             "request": { "url": "{{ server }}/login", "method": "POST" },
-            "response": [ { "save": { "jmespath": { "token": "token" } } } ]
+            "response": [ { "save": { "jmespath": { "token": "token" } } }, { "verify": { "status": 200 } } ]
         },
         {
             "name": "use_token",

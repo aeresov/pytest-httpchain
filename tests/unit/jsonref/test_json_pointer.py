@@ -1,142 +1,72 @@
+"""JSON pointer navigation through load_json(), per RFC 6901."""
+
 import pytest
 
 from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
 from pytest_httpchain.jsonref.loader import load_json
 
 
-class TestJsonPointerBasics:
-    """Tests for basic JSON pointer functionality per RFC 6901."""
-
-    def test_pointer_without_leading_slash_is_invalid(self, datadir):
-        """JSON pointer after # must start with '/'."""
-        json_file = datadir / "case_pointer_no_slash.json"
-        with pytest.raises(ReferenceResolverError, match="Invalid .ref format"):
-            load_json(json_file)
-
-    def test_tilde_escapes_decode_correctly(self, datadir):
-        """~0 decodes to ~ and ~1 decodes to /."""
-        json_file = datadir / "case_pointer_escape.json"
-        result = load_json(json_file)
-        assert result["ref1"] == 1
-        assert result["ref2"] == 2
-
-    def test_array_index_navigation(self, datadir):
-        """Numeric path segments navigate into arrays."""
-        json_file = datadir / "case_pointer_array.json"
-        result = load_json(json_file)
-        assert result["ref0"] == "first"
-        assert result["ref1"] == "second"
-        assert result["ref2"] == "third"
-
-    def test_bare_hash_without_slash_is_invalid(self, datadir):
-        """A bare '#' with no pointer is invalid - a pointer must be #/... ."""
-        json_file = datadir / "case_pointer_empty.json"
-        with pytest.raises(ReferenceResolverError, match="Invalid .ref format"):
-            load_json(json_file)
-
-    def test_special_characters_in_keys(self, datadir):
-        """Keys with special chars (space, @, dots) work correctly."""
-        json_file = datadir / "case_pointer_special_chars.json"
-        result = load_json(json_file)
-        assert result["ref1"] == 1
-        assert result["ref2"] == 2
-        assert result["ref3"] == 3
-        assert result["ref4"] == 4
-
-    def test_unicode_characters_in_keys(self, datadir):
-        """Keys with unicode characters work correctly."""
-        json_file = datadir / "case_pointer_unicode.json"
-        result = load_json(json_file)
-        assert result["ref1"] == "Japanese"
-        assert result["ref2"] == "French"
-        assert result["ref3"] == "emoji"
-
-    def test_deeply_nested_navigation(self, datadir):
-        """Pointer can navigate multiple levels deep."""
-        json_file = datadir / "case_pointer_nested.json"
-        result = load_json(json_file)
-        assert result["ref"] == "deep"
-
-    def test_empty_string_as_key(self, datadir):
-        """Empty string is a valid key, accessed via #/."""
-        json_file = datadir / "case_pointer_empty_key.json"
-        result = load_json(json_file)
-        assert result["ref"] == "empty key"
-
-    def test_numeric_string_keys_in_objects(self, datadir):
-        """Numeric strings like '0', '42' are valid object keys."""
-        json_file = datadir / "case_pointer_numeric_keys.json"
-        result = load_json(json_file)
-        assert result["ref0"] == "zero"
-        assert result["ref1"] == "one"
-        assert result["ref42"] == "forty-two"
+@pytest.mark.parametrize(
+    ("key", "pointer"),
+    [
+        pytest.param("a~b", "#/a~0b", id="tilde"),
+        pytest.param("c/d", "#/c~1d", id="slash"),
+        pytest.param("a/b~c", "#/a~1b~0c", id="slash-and-tilde"),
+        pytest.param("~1", "#/~01", id="~01-is-literal-~1"),
+        pytest.param("~0", "#/~00", id="~00-is-literal-~0"),
+        pytest.param("key with spaces", "#/key with spaces", id="spaces"),
+        pytest.param("k-e_y.w@h", "#/k-e_y.w@h", id="dash-underscore-dot-at"),
+        pytest.param("日本語", "#/日本語", id="cjk"),
+        pytest.param("émojis", "#/émojis", id="accented"),
+        pytest.param("🎉", "#/🎉", id="emoji"),
+        pytest.param("0", "#/0", id="numeric-string-key"),
+        pytest.param("007", "#/007", id="leading-zeros-fine-for-object-keys"),
+        pytest.param("", "#/", id="empty-key"),
+    ],
+)
+def test_pointer_selects_object_key(create_json_file, key, pointer):
+    file = create_json_file("test.json", {key: "hit", "ref": {"$ref": pointer}})
+    assert load_json(file)["ref"] == "hit"
 
 
-class TestJsonPointerEdgeCases:
-    """Tests for JSON pointer edge cases per RFC 6901."""
+@pytest.mark.parametrize(
+    ("doc", "pointer", "expected"),
+    [
+        pytest.param({"l1": {"l2": {"l3": {"l4": {"l5": "deep"}}}}}, "#/l1/l2/l3/l4/l5", "deep", id="deeply-nested"),
+        pytest.param({"a": {"": {"b": "value"}}}, "#/a//b", "value", id="empty-key-mid-path"),
+        pytest.param({"items": ["first", "second"]}, "#/items/1", "second", id="array-index"),
+        pytest.param({"users": [{"name": "Alice"}]}, "#/users/0/name", "Alice", id="array-then-key"),
+        pytest.param({"matrix": [[1, 2], [3, 4]]}, "#/matrix/1/0", 3, id="nested-arrays"),
+    ],
+)
+def test_pointer_walks_multi_segment_path(create_json_file, doc, pointer, expected):
+    file = create_json_file("test.json", {**doc, "ref": {"$ref": pointer}})
+    assert load_json(file)["ref"] == expected
 
-    def test_array_index_with_leading_zero_is_rejected(self, create_json_file):
-        """Array index '01' is invalid per RFC 6901."""
-        file = create_json_file(
-            "test.json",
-            {"items": ["a", "b", "c"], "ref": {"$ref": "#/items/01"}},
-        )
-        with pytest.raises(ReferenceResolverError, match="leading zeros"):
-            load_json(file)
 
-    def test_array_index_007_style_is_rejected(self, create_json_file):
-        """Array index '007' is invalid per RFC 6901."""
-        file = create_json_file(
-            "test.json",
-            {
-                "items": ["a", "b", "c", "d", "e", "f", "g", "h"],
-                "ref": {"$ref": "#/items/007"},
-            },
-        )
-        with pytest.raises(ReferenceResolverError, match="leading zeros"):
-            load_json(file)
+@pytest.mark.parametrize(
+    ("index", "match"),
+    [
+        ("-1", "not a valid RFC 6901 index"),
+        ("+1", "not a valid RFC 6901 index"),
+        (" 1", "not a valid RFC 6901 index"),
+        ("1_0", "not a valid RFC 6901 index"),
+        ("notanumber", "not a valid RFC 6901 index"),
+        ("01", "has leading zeros"),
+        ("007", "has leading zeros"),
+        ("10", "list index out of range"),
+    ],
+)
+def test_invalid_array_index_rejected(create_json_file, index, match):
+    """RFC 6901 array indices are digit-only without leading zeros: Python's
+    int() would accept '-1' and silently index from the wrong end."""
+    file = create_json_file("test.json", {"items": [1, 2, 3], "ref": {"$ref": f"#/items/{index}"}})
+    with pytest.raises(ReferenceResolverError, match=f"Invalid JSON pointer .*{match}"):
+        load_json(file)
 
-    def test_tilde_01_decodes_to_literal_tilde_1(self, create_json_file):
-        """~01 decodes to ~1 (tilde escape processed first)."""
-        file = create_json_file(
-            "test.json",
-            {"~1": "tilde-one-key", "ref": {"$ref": "#/~01"}},
-        )
-        result = load_json(file)
-        assert result["ref"] == "tilde-one-key"
 
-    def test_tilde_00_decodes_to_literal_tilde_0(self, create_json_file):
-        """~00 decodes to ~0 (key containing literal ~0)."""
-        file = create_json_file(
-            "test.json",
-            {"~0": "tilde-zero-key", "ref": {"$ref": "#/~00"}},
-        )
-        result = load_json(file)
-        assert result["ref"] == "tilde-zero-key"
-
-    def test_leading_zeros_valid_for_object_keys(self, create_json_file):
-        """Leading zeros restriction only applies to arrays, not object keys."""
-        file = create_json_file(
-            "test.json",
-            {"data": {"007": "james bond"}, "ref": {"$ref": "#/data/007"}},
-        )
-        result = load_json(file)
-        assert result["ref"] == "james bond"
-
-    def test_empty_string_key_in_nested_path(self, create_json_file):
-        """Double slash in path accesses empty string key."""
-        file = create_json_file(
-            "test.json",
-            {"a": {"": {"b": "value"}}, "ref": {"$ref": "#/a//b"}},
-        )
-        result = load_json(file)
-        assert result["ref"] == "value"
-
-    def test_key_with_both_slash_and_tilde(self, create_json_file):
-        """Key 'a/b~c' requires both escape sequences."""
-        file = create_json_file(
-            "test.json",
-            {"a/b~c": "complex-key-value", "ref": {"$ref": "#/a~1b~0c"}},
-        )
-        result = load_json(file)
-        assert result["ref"] == "complex-key-value"
+@pytest.mark.parametrize("ref", ["#data/value", "#"], ids=["no-leading-slash", "bare-hash"])
+def test_fragment_must_be_a_slash_pointer(create_json_file, ref):
+    file = create_json_file("test.json", {"data": {"value": 42}, "ref": {"$ref": ref}})
+    with pytest.raises(ReferenceResolverError, match="Invalid .ref format"):
+        load_json(file)

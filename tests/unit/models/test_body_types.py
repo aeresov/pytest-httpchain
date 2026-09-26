@@ -1,7 +1,7 @@
 """Unit tests for all RequestBody types."""
 
-import base64
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -21,381 +21,115 @@ from pytest_httpchain.models.entities import (
 from tests.unit.models.helpers import assert_error_types
 
 
-class TestTextBody:
-    """Tests for TextBody model."""
-
-    def test_text_body_with_string(self):
-        """Test TextBody with plain string."""
-        body = TextBody(text="Hello, World!")
-        assert body.text == "Hello, World!"
-
-    def test_text_body_with_template(self):
-        """Test TextBody with template expression."""
-        body = TextBody(text="{{ message }}")
-        assert body.text == "{{ message }}"
-
-    def test_text_body_with_partial_template(self):
-        """Test TextBody with partial template."""
-        body = TextBody(text="prefix {{ value }} suffix")
-        assert body.text == "prefix {{ value }} suffix"
-
-    def test_text_body_in_request(self):
-        """Test TextBody as part of Request model."""
-        request = Request(url="https://example.com/api", body=TextBody(text="raw content"))
-        assert isinstance(request.body, TextBody)
-        assert request.body.text == "raw content"
-
-
-class TestBase64Body:
-    """Tests for Base64Body model."""
-
-    def test_base64_body_with_valid_base64(self):
-        """Test Base64Body with valid base64 string."""
-        # "Hello, World!" in base64
-        encoded = base64.b64encode(b"Hello, World!").decode()
-        body = Base64Body(base64=encoded)
-        assert body.base64 == encoded
-
-    def test_base64_body_with_invalid_base64(self):
-        """Test Base64Body rejects invalid base64."""
-        with pytest.raises(ValidationError, match="Invalid base64 encoding"):
-            Base64Body(base64="not-valid-base64!!!")
-
-    def test_base64_body_with_incorrect_padding(self):
-        """Test Base64Body rejects base64 with incorrect padding."""
-        with pytest.raises(ValidationError, match="Invalid base64 encoding"):
-            Base64Body(base64="SGVsbG8")  # Missing padding
-
-    def test_base64_body_with_template(self):
-        """Test Base64Body with template expression (bypasses validation)."""
-        body = Base64Body(base64="{{ encoded_data }}")
-        assert body.base64 == "{{ encoded_data }}"
-
-    def test_base64_body_with_partial_template(self):
-        """Test Base64Body with partial template (bypasses validation)."""
-        body = Base64Body(base64="prefix{{ value }}")
-        assert body.base64 == "prefix{{ value }}"
-
-    def test_base64_body_in_request(self):
-        """Test Base64Body as part of Request model."""
-        encoded = base64.b64encode(b"test data").decode()
-        request = Request(url="https://example.com/api", body=Base64Body(base64=encoded))
-        assert isinstance(request.body, Base64Body)
-        assert request.body.base64 == encoded
-
-    def test_base64_body_empty_string(self):
-        """Test Base64Body with empty string (valid base64)."""
-        body = Base64Body(base64="")
-        assert body.base64 == ""
-
-
-class TestBinaryBody:
-    """Tests for BinaryBody model."""
-
-    def test_binary_body_with_path_string(self):
-        """Test BinaryBody with path as string."""
-        body = BinaryBody(binary="csvs/mydata.csv")
-        assert isinstance(body.binary, Path)
-        assert body.binary == Path("csvs/mydata.csv")
-
-    def test_binary_body_with_path_object(self):
-        """Test BinaryBody with Path object."""
-        path = Path("data/file.bin")
-        body = BinaryBody(binary=path)
-        assert body.binary == path
-
-    def test_binary_body_with_template(self):
-        """Test BinaryBody with template expression."""
-        body = BinaryBody(binary="{{ file_path }}")
-        assert body.binary == "{{ file_path }}"
-
-    def test_binary_body_with_partial_template(self):
-        """Test BinaryBody with partial template."""
-        body = BinaryBody(binary="data/{{ filename }}.csv")
-        assert body.binary == "data/{{ filename }}.csv"
-
-    def test_binary_body_in_request(self):
-        """Test BinaryBody as part of Request model."""
-        request = Request(url="https://example.com/upload", body=BinaryBody(binary="files/data.bin"))
-        assert isinstance(request.body, BinaryBody)
-        assert isinstance(request.body.binary, Path)
-        assert request.body.binary == Path("files/data.bin")
-
-
-class TestBodyTypeDiscriminator:
-    """Tests for body type discrimination using raw dicts."""
-
-    def test_discriminator_chooses_text_body(self):
-        """Test discriminator correctly identifies TextBody."""
-        request = Request(url="https://example.com", body={"text": "content"})
-        assert isinstance(request.body, TextBody)
-
-    def test_discriminator_chooses_base64_body(self):
-        """Test discriminator correctly identifies Base64Body."""
-        encoded = base64.b64encode(b"test").decode()
-        request = Request(url="https://example.com", body={"base64": encoded})
-        assert isinstance(request.body, Base64Body)
-
-    def test_discriminator_chooses_binary_body(self):
-        """Test discriminator correctly identifies BinaryBody."""
-        request = Request(url="https://example.com", body={"binary": "file.bin"})
-        assert isinstance(request.body, BinaryBody)
-
-    def test_multiple_body_types_not_allowed(self):
-        """Test that only one body type can be specified."""
-        with pytest.raises(ValidationError):
-            Request(url="https://example.com", body={"text": "content", "base64": "encoded"})
-
-
-class TestJsonBody:
-    """Tests for JsonBody model."""
-
-    def test_json_body_with_dict(self):
-        """Test JsonBody with dictionary."""
-        body = JsonBody(json={"key": "value", "number": 42})
-        assert body.json == {"key": "value", "number": 42}
-
-    def test_json_body_with_list(self):
-        """Test JsonBody with list."""
-        body = JsonBody(json=[1, 2, 3])
-        assert body.json == [1, 2, 3]
-
-    def test_json_body_with_nested_structure(self):
-        """Test JsonBody with nested JSON."""
-        data = {"users": [{"name": "Alice"}, {"name": "Bob"}], "count": 2}
-        body = JsonBody(json=data)
-        assert body.json == data
-
-    def test_json_body_with_primitives(self):
-        """Test JsonBody with primitive values."""
-        assert JsonBody(json="string").json == "string"
-        assert JsonBody(json=42).json == 42
-        assert JsonBody(json=3.14).json == 3.14
-        assert JsonBody(json=True).json is True
-        assert JsonBody(json=None).json is None
-
-    def test_json_body_in_request(self):
-        """Test JsonBody as part of Request model."""
-        request = Request(url="https://example.com/api", body=JsonBody(json={"data": "test"}))
-        assert isinstance(request.body, JsonBody)
-        assert request.body.json == {"data": "test"}
-
-
-class TestXmlBody:
-    """Tests for XmlBody model."""
-
-    def test_xml_body_with_simple_xml(self):
-        """Test XmlBody with simple XML."""
-        xml = "<root>content</root>"
-        body = XmlBody(xml=xml)
-        assert body.xml == xml
-
-    def test_xml_body_with_nested_xml(self):
-        """Test XmlBody with nested XML."""
-        xml = "<root><child><value>test</value></child></root>"
-        body = XmlBody(xml=xml)
-        assert body.xml == xml
-
-    def test_xml_body_with_attributes(self):
-        """Test XmlBody with attributes."""
-        xml = '<user id="1" active="true">John</user>'
-        body = XmlBody(xml=xml)
-        assert body.xml == xml
-
-    def test_xml_body_with_template(self):
-        """Test XmlBody with template expression."""
-        body = XmlBody(xml="<root>{{ content }}</root>")
-        assert body.xml == "<root>{{ content }}</root>"
-
-    def test_xml_body_invalid_xml_rejected(self):
-        """Test that invalid XML is rejected."""
-        with pytest.raises(ValidationError, match="Invalid XML"):
-            XmlBody(xml="<root>unclosed")
-
-    def test_xml_body_in_request(self):
-        """Test XmlBody as part of Request model."""
-        xml = "<data><value>test</value></data>"
-        request = Request(url="https://example.com/api", body=XmlBody(xml=xml))
-        assert isinstance(request.body, XmlBody)
-        assert request.body.xml == xml
-
-
-class TestFormBody:
-    """Tests for FormBody model."""
-
-    def test_form_body_simple(self):
-        """Test FormBody with simple form data."""
-        body = FormBody(form={"username": "john", "password": "secret"})
-        assert body.form == {"username": "john", "password": "secret"}
-
-    def test_form_body_with_various_types(self):
-        """Test FormBody with various value types."""
-        body = FormBody(form={"string": "value", "number": 42, "boolean": True})
-        assert body.form["string"] == "value"
-        assert body.form["number"] == 42
-        assert body.form["boolean"] is True
-
-    def test_form_body_empty(self):
-        """Test FormBody with empty form."""
-        body = FormBody(form={})
-        assert body.form == {}
-
-    def test_form_body_in_request(self):
-        """Test FormBody as part of Request model."""
-        request = Request(url="https://example.com/api", body=FormBody(form={"field": "value"}))
-        assert isinstance(request.body, FormBody)
-        assert request.body.form == {"field": "value"}
-
-
-class TestFilesBody:
-    """Tests for FilesBody model."""
-
-    def test_files_body_single_file(self):
-        """Test FilesBody with single file."""
-        body = FilesBody(files={"document": "path/to/file.pdf"})
-        assert isinstance(body.files["document"], Path)
-        assert body.files["document"] == Path("path/to/file.pdf")
-
-    def test_files_body_multiple_files(self):
-        """Test FilesBody with multiple files."""
-        body = FilesBody(files={"doc1": "file1.pdf", "doc2": "file2.pdf"})
-        assert len(body.files) == 2
-        assert str(body.files["doc1"]) == "file1.pdf"
-        assert str(body.files["doc2"]) == "file2.pdf"
-
-    def test_files_body_with_path_object(self):
-        """Test FilesBody with Path object."""
-        body = FilesBody(files={"file": Path("data/upload.bin")})
-        assert body.files["file"] == Path("data/upload.bin")
-
-    def test_files_body_with_template(self):
-        """Test FilesBody with template expression."""
-        body = FilesBody(files={"file": "uploads/{{ filename }}"})
-        assert body.files["file"] == "uploads/{{ filename }}"
-
-    def test_files_body_in_request(self):
-        """Test FilesBody as part of Request model."""
-        request = Request(url="https://example.com/upload", body=FilesBody(files={"upload": "file.pdf"}))
-        assert isinstance(request.body, FilesBody)
-
-
-class TestGraphQLBody:
-    """Tests for GraphQLBody model."""
-
-    def test_graphql_body_simple_query(self):
-        """Test GraphQLBody with simple query."""
-        body = GraphQLBody(graphql=GraphQL(query="{ user { id name } }"))
-        assert isinstance(body.graphql, GraphQL)
-        assert body.graphql.query == "{ user { id name } }"
-
-    def test_graphql_body_with_variables(self):
-        """Test GraphQLBody with query and variables."""
-        body = GraphQLBody(
-            graphql=GraphQL(
-                query="query GetUser($id: ID!) { user(id: $id) { name } }",
-                variables={"id": "123"},
-            )
-        )
-        assert body.graphql.query == "query GetUser($id: ID!) { user(id: $id) { name } }"
-        assert body.graphql.variables == {"id": "123"}
-
-    def test_graphql_body_mutation(self):
-        """Test GraphQLBody with mutation."""
-        body = GraphQLBody(
-            graphql=GraphQL(
-                query="mutation CreateUser($name: String!) { createUser(name: $name) { id } }",
-                variables={"name": "Alice"},
-            )
-        )
-        assert "mutation" in body.graphql.query
-
-    def test_graphql_body_mutation_from_file(self, datadir):
-        """Test GraphQLBody with mutation loaded from file."""
-        query = (datadir / "mutation_create_user.graphql").read_text()
-        body = GraphQLBody(
-            graphql=GraphQL(
-                query=query,
-                variables={"input": {"name": "Alice", "email": "alice@example.com"}},
-            )
-        )
-        assert "mutation CreateUser" in body.graphql.query
-        assert "createUser(input: $input)" in body.graphql.query
-
-    def test_graphql_body_query_with_directives(self, datadir):
-        """Test GraphQLBody with query containing directives loaded from file."""
-        query = (datadir / "query_with_variables.graphql").read_text()
-        body = GraphQLBody(
-            graphql=GraphQL(
-                query=query,
-                variables={"id": "123", "includeProfile": True},
-            )
-        )
-        assert "@include(if: $includeProfile)" in body.graphql.query
-
-    def test_graphql_body_with_template_query(self):
-        """Test GraphQLBody with template in query."""
-        body = GraphQLBody(graphql=GraphQL(query="{{ graphql_query }}"))
-        assert body.graphql.query == "{{ graphql_query }}"
-
-    def test_graphql_body_invalid_query_rejected(self):
-        """Test that invalid GraphQL query is rejected."""
-        with pytest.raises(ValidationError, match="Invalid GraphQL query"):
-            GraphQLBody(graphql=GraphQL(query="{ user { id name }"))  # Missing closing brace
-
-    def test_graphql_body_in_request(self):
-        """Test GraphQLBody as part of Request model."""
-        request = Request(
-            url="https://example.com/graphql",
-            body=GraphQLBody(graphql=GraphQL(query="{ users { id } }")),
-        )
-        assert isinstance(request.body, GraphQLBody)
-
-
-class TestBodyTypeDiscriminatorExtended:
-    """Extended tests for body type discrimination using raw dicts."""
-
-    def test_discriminator_chooses_json_body(self):
-        """Test discriminator correctly identifies JsonBody."""
-        request = Request(url="https://example.com", body={"json": {"data": "test"}})
-        assert isinstance(request.body, JsonBody)
-
-    def test_discriminator_chooses_xml_body(self):
-        """Test discriminator correctly identifies XmlBody."""
-        request = Request(url="https://example.com", body={"xml": "<root/>"})
-        assert isinstance(request.body, XmlBody)
-
-    def test_discriminator_chooses_form_body(self):
-        """Test discriminator correctly identifies FormBody."""
-        request = Request(url="https://example.com", body={"form": {"key": "value"}})
-        assert isinstance(request.body, FormBody)
-
-    def test_discriminator_chooses_files_body(self):
-        """Test discriminator correctly identifies FilesBody."""
-        request = Request(url="https://example.com", body={"files": {"f": "file.txt"}})
-        assert isinstance(request.body, FilesBody)
-
-    def test_discriminator_chooses_graphql_body(self):
-        """Test discriminator correctly identifies GraphQLBody."""
-        request = Request(url="https://example.com", body={"graphql": {"query": "{ test }"}})
-        assert isinstance(request.body, GraphQLBody)
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        pytest.param({"json": {"data": "test"}}, JsonBody, id="json"),
+        pytest.param({"xml": "<root/>"}, XmlBody, id="xml"),
+        pytest.param({"form": {"key": "value"}}, FormBody, id="form"),
+        pytest.param({"text": "content"}, TextBody, id="text"),
+        pytest.param({"base64": "dGVzdA=="}, Base64Body, id="base64"),
+        pytest.param({"binary": "file.bin"}, BinaryBody, id="binary"),
+        pytest.param({"files": {"f": "file.txt"}}, FilesBody, id="files"),
+        pytest.param({"graphql": {"query": "{ test }"}}, GraphQLBody, id="graphql"),
+    ],
+)
+def test_raw_body_dict_selects_model(body, expected):
+    """The body key picks the model — the path every scenario file takes."""
+    request = Request.model_validate({"url": "https://example.com", "body": body})
+    assert type(request.body) is expected
+
+
+def test_multiple_body_types_not_allowed():
+    """With several body keys the discriminator picks one deterministically
+    (the alphabetically first, here base64) and that model rejects the rest."""
+    with pytest.raises(ValidationError) as exc_info:
+        Request(url="https://example.com", body={"text": "content", "base64": "ZW5j"})
+    assert_error_types(exc_info, "extra_forbidden", at="text")
 
 
 @pytest.mark.parametrize(
-    "construct",
+    ("model", "field", "value"),
     [
-        pytest.param(lambda: TextBody(text="content", extra="field"), id="text"),
-        pytest.param(lambda: Base64Body(base64=base64.b64encode(b"test").decode(), extra="field"), id="base64"),
-        pytest.param(lambda: BinaryBody(binary="file.bin", extra="field"), id="binary"),
-        pytest.param(lambda: JsonBody(json={"key": "value"}, extra="field"), id="json"),
-        pytest.param(lambda: XmlBody(xml="<root/>", extra="field"), id="xml"),
-        pytest.param(lambda: FormBody(form={"key": "value"}, extra="field"), id="form"),
-        pytest.param(lambda: FilesBody(files={"f": "file.txt"}, extra="field"), id="files"),
-        pytest.param(lambda: GraphQLBody(graphql={"query": "{ test }", "extra": "field"}), id="graphql_inner"),
-        pytest.param(lambda: GraphQLBody(graphql=GraphQL(query="{ test }"), extra="field"), id="graphql_outer"),
+        pytest.param(TextBody, "text", "Hello, World!", id="text"),
+        pytest.param(JsonBody, "json", {"users": [{"name": "Alice"}, {"name": "Bob"}], "count": 2}, id="json-object"),
+        pytest.param(JsonBody, "json", [1, 2, 3], id="json-array"),
+        pytest.param(JsonBody, "json", "string", id="json-string"),
+        pytest.param(JsonBody, "json", 42, id="json-int"),
+        pytest.param(JsonBody, "json", 3.14, id="json-float"),
+        pytest.param(JsonBody, "json", True, id="json-bool"),
+        pytest.param(JsonBody, "json", None, id="json-null"),
+        pytest.param(FormBody, "form", {"string": "value", "number": 42, "boolean": True}, id="form"),
+        pytest.param(FormBody, "form", {}, id="form-empty"),
     ],
 )
-def test_body_extra_fields_forbidden(construct):
-    """Every body model rejects unknown keys (extra='forbid')."""
-    with pytest.raises(ValidationError) as exc_info:
+def test_concrete_value_round_trips(model, field, value):
+    assert getattr(model(**{field: value}), field) == value
+
+
+def test_graphql_variables_round_trip():
+    assert GraphQL(query="query GetUser($id: ID!) { user(id: $id) { name } }", variables={"id": "123"}).variables == {"id": "123"}
+
+
+@pytest.mark.parametrize("filename", ["mutation_create_user.graphql", "query_with_variables.graphql"])
+def test_graphql_query_from_file_accepted_verbatim(datadir, filename):
+    """Multi-line documents with input objects and directives parse and are kept as-is."""
+    query = (datadir / filename).read_text()
+    assert GraphQLBody(graphql={"query": query}).graphql.query == query
+
+
+@pytest.mark.parametrize(
+    ("model", "field", "value", "expected"),
+    [
+        pytest.param(BinaryBody, "binary", "csvs/mydata.csv", Path("csvs/mydata.csv"), id="binary-str"),
+        pytest.param(BinaryBody, "binary", Path("data/file.bin"), Path("data/file.bin"), id="binary-path"),
+        pytest.param(FilesBody, "files", {"doc1": "file1.pdf", "doc2": "file2.pdf"}, {"doc1": Path("file1.pdf"), "doc2": Path("file2.pdf")}, id="files-str"),
+        pytest.param(FilesBody, "files", {"file": Path("data/upload.bin")}, {"file": Path("data/upload.bin")}, id="files-path"),
+    ],
+)
+def test_path_fields_become_paths(model, field, value, expected):
+    assert getattr(model(**{field: value}), field) == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "field", "value"),
+    [
+        pytest.param(TextBody, "text", "prefix {{ value }} suffix", id="text"),
+        pytest.param(Base64Body, "base64", "{{ encoded_data }}", id="base64"),
+        pytest.param(Base64Body, "base64", "prefix{{ value }}", id="base64-partial"),
+        pytest.param(BinaryBody, "binary", "{{ file_path }}", id="binary"),
+        pytest.param(BinaryBody, "binary", "data/{{ filename }}.csv", id="binary-partial"),
+        pytest.param(FilesBody, "files", {"file": "uploads/{{ filename }}"}, id="files"),
+        pytest.param(XmlBody, "xml", "{{ payload }}", id="xml"),
+        pytest.param(GraphQL, "query", "{{ graphql_query }}", id="graphql-query"),
+    ],
+)
+def test_template_kept_as_unvalidated_str(model, field, value):
+    """A template skips content validation (base64/XML/GraphQL) and path
+    coercion; it is validated after rendering instead."""
+    assert getattr(model(**{field: value}), field) == value
+
+
+@pytest.mark.parametrize(
+    ("construct", "message"),
+    [
+        pytest.param(lambda: Base64Body(base64="not-valid-base64!!!"), "Invalid base64 encoding", id="base64"),
+        pytest.param(lambda: XmlBody(xml="<root>unclosed"), "Invalid XML", id="xml"),
+        pytest.param(lambda: GraphQL(query="{ user { id name }"), "Invalid GraphQL query", id="graphql"),
+    ],
+)
+def test_invalid_content_rejected(construct, message):
+    """Wiring only: the exhaustive cases live in test_type_validators.py."""
+    with pytest.raises(ValidationError, match=message):
         construct()
-    assert_error_types(exc_info, "extra_forbidden")
+
+
+def test_json_namespace_becomes_dict():
+    """A rendered ``{{ var }}`` may be a SimpleNamespace (vars are namespaces);
+    JSON-serialized fields turn it back into a plain dict, recursively."""
+    body = JsonBody(json=SimpleNamespace(a=1, b=[SimpleNamespace(c=2)], d={"e": SimpleNamespace(f=3)}))
+    assert body.json == {"a": 1, "b": [{"c": 2}], "d": {"e": {"f": 3}}}
+
+
+def test_graphql_variables_namespace_becomes_dict():
+    assert GraphQL(query="{ a }", variables=SimpleNamespace(id="1")).variables == {"id": "1"}

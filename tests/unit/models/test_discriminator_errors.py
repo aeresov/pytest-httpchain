@@ -11,45 +11,29 @@ import pytest
 from pydantic import ValidationError
 
 from pytest_httpchain.models.entities import Request, SaveStep, Stage
+from tests.unit.models.helpers import assert_error_types, stage_dict
 
-
-def _req() -> Request:
-    return Request(url="https://example.com")
-
-
-# (label, callable that should raise a ValidationError on a malformed shape)
+# (label, callable that should raise a ValidationError on a malformed shape, field it names)
 CASES = [
-    ("body: unknown key", lambda: Request(url="https://example.com", method="POST", body={"jsonn": {"a": 1}})),
-    ("body: empty object", lambda: Request(url="https://example.com", method="POST", body={})),
-    ("body: not an object", lambda: Request(url="https://example.com", method="POST", body="raw")),
-    ("save: unknown key", lambda: SaveStep(save={"invalid": "value"})),
-    (
-        "parallel: unknown key",
-        lambda: Stage.model_validate({"name": "t", "request": {"url": "https://example.com"}, "parallel": {"nope": 1}}),
-    ),
-    (
-        "substitution: unknown key",
-        lambda: Stage.model_validate({"name": "t", "request": {"url": "https://example.com"}, "substitutions": [{"invalid_key": "value"}]}),
-    ),
-    (
-        "response step: unknown key",
-        lambda: Stage.model_validate({"name": "t", "request": {"url": "https://example.com"}, "response": [{"invalid_key": "value"}]}),
-    ),
-    (
-        "parameter step: unknown key",
-        lambda: Stage.model_validate({"name": "t", "request": {"url": "https://example.com"}, "parametrize": [{"invalid": 1}]}),
-    ),
+    ("body: unknown key", lambda: Request(url="https://example.com", method="POST", body={"jsonn": {"a": 1}}), "body"),
+    ("body: empty object", lambda: Request(url="https://example.com", method="POST", body={}), "body"),
+    ("body: not an object", lambda: Request(url="https://example.com", method="POST", body="raw"), "body"),
+    ("save: unknown key", lambda: SaveStep(save={"invalid": "value"}), "save"),
+    ("parallel: unknown key", lambda: Stage.model_validate(stage_dict(parallel={"nope": 1})), "parallel"),
+    ("substitution: unknown key", lambda: Stage.model_validate(stage_dict(substitutions=[{"invalid_key": "value"}])), "substitutions"),
+    ("response step: unknown key", lambda: Stage.model_validate(stage_dict(response=[{"invalid_key": "value"}])), "response"),
+    ("parameter step: unknown key", lambda: Stage.model_validate(stage_dict(parametrize=[{"invalid": 1}])), "parametrize"),
 ]
 
 
-@pytest.mark.parametrize(("label", "construct"), CASES, ids=[c[0] for c in CASES])
-def test_malformed_discriminated_shape_raises_validation_error(label, construct):
+@pytest.mark.parametrize(("label", "construct", "field"), CASES, ids=[c[0] for c in CASES])
+def test_malformed_discriminated_shape_raises_validation_error(label, construct, field):
     """A malformed shape on any discriminated union raises a proper ValidationError
-    (so the CLI/collection/inspection handlers catch it), not a bare ValueError."""
+    (so the CLI/collection/inspection handlers catch it), not a bare ValueError —
+    and it is the discriminator that rejected it, not some unrelated error."""
     with pytest.raises(ValidationError) as exc_info:
         construct()
-    # It is the discriminator that rejected it, not some unrelated error.
-    assert any(e["type"] == "union_tag_invalid" for e in exc_info.value.errors()), exc_info.value.errors()
+    assert_error_types(exc_info, "union_tag_invalid", at=field)
 
 
 def test_unknown_body_key_is_named_in_the_message():

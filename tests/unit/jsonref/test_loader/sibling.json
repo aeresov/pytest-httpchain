@@ -8,11 +8,6 @@
     "extra": {
         "extra_value": 42
     },
-    "nested_source": {
-        "merged": {
-            "other": 42
-        }
-    },
     "list_source": {
         "items": [
             "from_sibling"

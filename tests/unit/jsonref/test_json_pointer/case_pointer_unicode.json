@@ -1,8 +1,0 @@
-{
-    "日本語": {"value": "Japanese"},
-    "émojis": {"value": "French"},
-    "🎉": {"value": "emoji"},
-    "ref1": {"$ref": "#/日本語/value"},
-    "ref2": {"$ref": "#/émojis/value"},
-    "ref3": {"$ref": "#/🎉/value"}
-}

@@ -30,23 +30,21 @@ def test_single_stage_allowed_under_any_mode(run_scenario):
     result.assert_outcomes(passed=1)
 
 
-@pytest.mark.parametrize("mode", ["load", "each", "worksteal"])
-def test_chain_splitting_modes_rejected(run_scenario, mode):
+@pytest.mark.parametrize(
+    ("dist_args", "mode"),
+    [
+        pytest.param(("--dist", "load"), "load", id="load"),
+        pytest.param(("--dist", "each"), "each", id="each"),
+        pytest.param(("--dist", "worksteal"), "worksteal", id="worksteal"),
+        pytest.param((), "load", id="bare-n"),  # -n alone implies load
+    ],
+)
+def test_chain_splitting_modes_rejected(run_scenario, dist_args, mode):
     """Modes that can scatter one scenario's stages across workers fail collection."""
-    result = run_xdist(run_scenario, "-n", "2", "--dist", mode)
-    outcomes = result.parseoutcomes()
-    assert outcomes.get("passed", 0) == 0, "no stage may run under an incompatible dist mode"
+    result = run_xdist(run_scenario, "-n", "2", *dist_args)
+    assert result.parseoutcomes().get("passed", 0) == 0, "no stage may run under an incompatible dist mode"
     assert result.ret != 0
-    result.stdout.fnmatch_lines([f"*cannot run under pytest-xdist --dist={mode}*"])
-    result.stdout.fnmatch_lines(["*loadscope*"])
-
-
-def test_bare_numprocesses_rejected(run_scenario):
-    """-n without --dist implies the incompatible default mode (load)."""
-    result = run_xdist(run_scenario, "-n", "2")
-    assert result.parseoutcomes().get("passed", 0) == 0
-    assert result.ret != 0
-    result.stdout.fnmatch_lines(["*cannot run under pytest-xdist --dist=load*"])
+    result.stdout.fnmatch_lines([f"*cannot run under pytest-xdist --dist={mode}*Use --dist loadscope*"])
 
 
 @pytest.mark.parametrize("mode", ["loadscope", "loadfile", "loadgroup"])

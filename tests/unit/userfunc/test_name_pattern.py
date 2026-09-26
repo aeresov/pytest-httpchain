@@ -7,7 +7,10 @@ from pytest_httpchain.userfunc import NAME_PATTERN, UserFunctionError, import_fu
 # Bare (module-less) function names: the regex now rejects them, so validation
 # and the importer agree on one grammar. Shared by the two tests below so the
 # list stays in sync.
-BARE_NAMES = ["simple", "_", "_private", "__dunder", "name_", "func123", "camelCase", "ALLCAPS", "x"]
+BARE_NAMES = [
+    *["simple", "_", "_private", "__dunder", "name_", "func123", "camelCase", "ALLCAPS", "x"],
+    pytest.param("a" * 100, id="100-chars"),
+]
 
 
 class TestBareNamesRejected:
@@ -36,7 +39,10 @@ class TestExportedPatternAnchoring:
         assert NAME_PATTERN.match(name) is None
         assert NAME_PATTERN.fullmatch(name) is None
 
-    @pytest.mark.parametrize("name", ["mod:func", "pkg.mod:func", "_p.m2:f_1"])
+    @pytest.mark.parametrize(
+        "name",
+        ["mod:func", "pkg.mod:func", "_p.m2:f_1", "z:func", pytest.param("a" * 100 + ":func", id="100-char-module")],
+    )
     def test_match_and_fullmatch_agree_on_valid_names(self, name: str):
         match = NAME_PATTERN.match(name)
         assert match is not None
@@ -45,31 +51,6 @@ class TestExportedPatternAnchoring:
     def test_match_rejects_leading_input(self):
         assert NAME_PATTERN.match(" mod:func") is None
         assert NAME_PATTERN.search("x mod:func") is None
-
-
-class TestValidModulePatterns:
-    """Tests for valid module:function patterns."""
-
-    def test_simple_module(self):
-        func = import_function("json:loads")
-        assert callable(func)
-
-    def test_nested_module(self):
-        func = import_function("os.path:join")
-        assert callable(func)
-
-    def test_deeply_nested_module(self):
-        func = import_function("urllib.parse:urlencode")
-        assert callable(func)
-
-    def test_underscore_in_module(self):
-        # wsgiref.simple_server has an underscore in a module segment.
-        func = import_function("wsgiref.simple_server:demo_app")
-        assert func is not None
-
-    def test_numeric_in_module(self):
-        func = import_function("base64:b64encode")
-        assert callable(func)
 
 
 class TestInvalidNamePatterns:
@@ -107,34 +88,10 @@ class TestInvalidNamePatterns:
             ("a.123.b:func", "leading digit in module segment"),
             ("a.-b:func", "hyphen in module segment"),
             ("mod:func\n", "trailing newline"),
+            ("функция", "non-ascii letters"),
+            ("func🎉", "emoji"),
         ],
     )
     def test_invalid_pattern_rejected(self, name: str, description: str):
         with pytest.raises(UserFunctionError, match="Invalid function name format"):
             import_function(name)
-
-
-class TestEdgeCases:
-    """Edge case tests for name patterns."""
-
-    def test_single_char_module(self):
-        with pytest.raises(UserFunctionError, match="Failed to import module"):
-            import_function("z:func")
-
-    def test_very_long_name(self):
-        long_name = "a" * 100
-        with pytest.raises(UserFunctionError, match="Module path is required"):
-            import_function(long_name)
-
-    def test_very_long_module_name(self):
-        long_name = "a" * 100 + ":func"
-        with pytest.raises(UserFunctionError, match="Failed to import module"):
-            import_function(long_name)
-
-    def test_unicode_rejected(self):
-        with pytest.raises(UserFunctionError, match="Invalid function name format"):
-            import_function("функция")
-
-    def test_emoji_rejected(self):
-        with pytest.raises(UserFunctionError, match="Invalid function name format"):
-            import_function("func🎉")

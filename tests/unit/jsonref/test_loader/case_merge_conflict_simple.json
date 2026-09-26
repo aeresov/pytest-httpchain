@@ -1,6 +1,0 @@
-{
-    "result": {
-        "value": 99,
-        "$ref": "sibling.json#/source"
-    }
-}
