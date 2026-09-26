@@ -65,7 +65,7 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
 
                 if not isinstance(func_result, dict):
                     raise SaveError(f"Save function must return dict, got {type(func_result).__name__}")
-                step_saved.update(func_result)  # ty: ignore[no-matching-overload]
+                step_saved.update(func_result)
 
         case _:
             raise RuntimeError(f"Unhandled save type: {type(save_model).__name__}")

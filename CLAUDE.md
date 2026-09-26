@@ -31,7 +31,7 @@ uv run pytest -m "not slow"
 # Lint — CI's Lint job runs ALL FIVE of these; run them all before pushing
 uv run ruff check .
 uv run ruff format --check .
-uvx ty@0.0.49 check     # type check (pin matches CI)
+uvx ty@0.0.84 check     # type check (pin matches CI)
 uv run lint-imports     # import layering contracts (exhaustive: new modules fail until placed)
 # Regenerate the committed JSON Schema after ANY pydantic model change. The
 # generator always exits 0, so the `git diff` is the actual gate — without it a

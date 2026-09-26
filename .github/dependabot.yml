@@ -13,6 +13,11 @@ updates:
       directory: /
       schedule:
           interval: weekly
+      # Dependabot cannot move the [build-system] uv_build range: it tries, then
+      # skips the WHOLE group ("Previous version was not provided for:
+      # 'uv-build'"), so no lock update is ever proposed. Bump that range by hand.
+      ignore:
+          - dependency-name: "uv-build"
       groups:
           dependencies:
               patterns: ["*"]

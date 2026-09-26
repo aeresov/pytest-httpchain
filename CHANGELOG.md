@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workers ordered a parametrized stage's instances differently. Positions are now keyed by the
   item's identity.
 
+### Changed
+
+- Build backend range raised to uv_build 0.12.x. CI's uv already built with 0.12 and only warned
+  about the `<0.12` range. Dependabot now ignores `uv-build`: it cannot update a build-system
+  range, and trying made it skip the whole grouped lock update every week. Locked dependencies
+  refreshed, CI's type checker pin moved to ty 0.0.84, and `astral-sh/setup-uv` to v10.2.0.
+
 ## [0.15.1] - 2026-09-26
 
 ### Fixed

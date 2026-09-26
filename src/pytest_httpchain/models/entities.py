@@ -59,7 +59,7 @@ def _create_discriminator(class_to_tag: dict[type, str]) -> Callable[[Any], str]
                 return min(found)
 
             # Name the offending key, so the validation error points at it.
-            return next(iter(v), "(empty object)")  # ty: ignore[invalid-return-type]
+            return next(iter(v), "(empty object)")
 
         tag = class_to_tag.get(type(v))
         if tag:

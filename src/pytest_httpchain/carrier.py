@@ -375,7 +375,8 @@ class Carrier:
                     match step:
                         case IndividualParameter(individual=individual):
                             param_name = next(iter(individual))
-                            steps.append((param_name, individual[param_name]))
+                            # The model also admits a template string; walk() has resolved it.
+                            steps.append((param_name, cast(list[Any], individual[param_name])))
                         case CombinationsParameter(combinations=combinations):
                             steps.append((None, cast(list[Any], combinations)))
                         case _:
