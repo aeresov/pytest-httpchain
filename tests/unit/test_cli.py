@@ -2,6 +2,7 @@
 
 import importlib.metadata
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,9 @@ from pytest_httpchain.cli import app
 from pytest_httpchain.schema import build_schema
 
 runner = CliRunner()
+# typer renders usage errors through rich, which colours them whenever
+# GITHUB_ACTIONS (or FORCE_COLOR) is set and splits `--output` across styles.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 USERFUNCS_DIR = Path(__file__).parent / "test_validation_userfuncs"
 
@@ -87,7 +91,7 @@ def test_no_output_option(command, flag):
     redirects. The --output/-o option (and its 'Wrote ... to' chatter) is gone."""
     result = runner.invoke(app, [command, flag, "x.json"])
     assert result.exit_code == 2, result.output
-    assert f"No such option: {flag}" in result.stderr
+    assert f"No such option: {flag}" in _ANSI.sub("", result.stderr)
 
 
 # --- validate ---
