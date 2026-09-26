@@ -9,7 +9,7 @@ import pytest
 
 from pytest_httpchain.carrier import Carrier
 from pytest_httpchain.constants import ConfigOptions
-from pytest_httpchain.plugin import _format_section, _regroup_carrier_items, _sections_will_be_shown, pytest_collect_file, pytest_runtest_makereport
+from pytest_httpchain.plugin import _apply_xdist_group_nodeids, _format_section, _regroup_carrier_items, _sections_will_be_shown, pytest_collect_file, pytest_runtest_makereport
 
 
 class TestPytestConfigure:
@@ -149,6 +149,52 @@ def test_regroup_pulls_each_scenario_together_and_keeps_other_items():
     items: list[Any] = [a1, plain, b0, a0]
     _regroup_carrier_items(items, {it: i for i, it in enumerate(items)})
     assert items == [a0, a1, plain, b0]
+
+
+def test_xdist_group_nodeid_carried_to_structured_id():
+    """From pytest 9.2 ``nodeid`` is derived from a structured ``_id``, so the
+    ``@<group>`` suffix an xdist loadgroup worker writes to ``_nodeid`` is carried
+    over — for scenario items only, and only where xdist wrote one. Up to 9.1
+    ``_nodeid`` is the slot ``nodeid`` reads, and nothing changes."""
+
+    class _Scenario(Carrier):
+        pass
+
+    class _NodeId(str):
+        @classmethod
+        def parse(cls, nodeid: str) -> "_NodeId":
+            return cls(nodeid)
+
+    class _Item:  # pytest >= 9.2: nodeid reads _id, _nodeid is a plain attribute
+        def __init__(self, cls: type | None, grouped: bool):
+            self.cls = cls
+            self._id = _NodeId(f"f.json::{cls.__name__ if cls else 'plain'}::t")
+            if grouped:  # what an xdist loadgroup worker does
+                self._nodeid = f"{self.nodeid}@f.json"
+
+        @property
+        def nodeid(self) -> str:
+            return str(self._id)
+
+    class _LegacyItem:  # pytest <= 9.1: _nodeid is a slot, there is no _id
+        __slots__ = ("__dict__", "_nodeid", "cls")
+
+        def __init__(self):
+            self.cls = _Scenario
+            self._nodeid = "f.json::_Scenario::t@f.json"
+
+        @property
+        def nodeid(self) -> str:
+            return self._nodeid
+
+    grouped, ungrouped, plain, legacy = _Item(_Scenario, True), _Item(_Scenario, False), _Item(None, True), _LegacyItem()
+    items: list[Any] = [grouped, ungrouped, plain, legacy]
+    _apply_xdist_group_nodeids(items)
+    assert grouped.nodeid == "f.json::_Scenario::t@f.json"
+    assert ungrouped.nodeid == "f.json::_Scenario::t"
+    assert plain.nodeid == "f.json::plain::t"  # not a scenario: not the plugin's to touch
+    assert legacy.nodeid == "f.json::_Scenario::t@f.json"
+    assert not hasattr(legacy, "_id")
 
 
 def test_format_section_reports_formatter_failure():

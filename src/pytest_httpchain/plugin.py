@@ -185,6 +185,34 @@ def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[pyt
     items[:] = regrouped
 
 
+def _apply_xdist_group_nodeids(items: list[pytest.Item]) -> None:
+    """Make the ``@<group>`` suffix xdist writes into a scenario item's nodeid
+    actually reach the nodeid, so ``--dist loadgroup`` keeps a chain on one worker.
+
+    An xdist worker encodes each item's ``xdist_group`` by assigning the private
+    ``item._nodeid``, and the controller's loadgroup scheduler groups by the
+    text after ``@``. Up to pytest 9.1 ``_nodeid`` backs ``nodeid``. From pytest
+    9.2 (pytest-dev/pytest#14758) ``nodeid`` is derived from a structured
+    ``item._id`` instead, so the assignment only adds an unused attribute: the
+    suffix is lost, every stage becomes its own work unit, and a scenario's stages
+    scatter across workers. This carries the id xdist wrote over to ``_id``.
+    Where ``_nodeid`` still backs ``nodeid``, or xdist wrote nothing (another dist
+    mode, no group), there is no mismatch and nothing changes.
+    """
+    for item in items:
+        if _carrier_class(item) is None:
+            continue
+        # From 9.2 `_nodeid` is not a slot, so xdist's write lands in __dict__.
+        written = item.__dict__.get("_nodeid")
+        node_id = getattr(item, "_id", None)
+        if written is None or node_id is None or written == item.nodeid:
+            continue
+        # parse() caches the exact string, so nodeid reads back verbatim. setattr
+        # because `_id` exists only from 9.2: a plain assignment fails the type
+        # check on older pytest, and a `ty: ignore` goes unused on newer.
+        setattr(item, "_id", type(node_id).parse(written))  # noqa: B010
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> Any:
     """Enforce chain contiguity after the non-wrapper sorters have run.
@@ -192,10 +220,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     Pre-yield the items are still in collection order, which is recorded as the
     tiebreaker; post-yield runs after pytest-order, pytest-randomly and friends.
     Sorters written as tryfirst wrappers finish even later — `pytest_collection_finish`
-    catches those.
+    catches those. Post-yield is also after an xdist worker has written its
+    loadgroup nodeid suffix, which `_apply_xdist_group_nodeids` needs.
     """
     config.stash[_ORIGINAL_POSITIONS] = {item: i for i, item in enumerate(items)}
     result = yield
+    _apply_xdist_group_nodeids(items)
     _regroup_carrier_items(items, config.stash[_ORIGINAL_POSITIONS])
     return result
 

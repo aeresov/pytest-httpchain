@@ -204,13 +204,5 @@ jobs:
             # THIS run in any case — pytester deletes PYTEST_ADDOPTS, so the
             # inner sessions most of this suite is made of never inherited it,
             # and the anyio floor in uv.lock is what actually fixes those.
-            #
-            # Expected red, upstream, not ours: the two --dist loadgroup cases
-            # in test_xdist.py. xdist appends its group suffix by assigning the
-            # private `item._nodeid`, but pytest main derives `nodeid` from a
-            # structured NodeId, so that assignment is a no-op — loadgroup stops
-            # grouping and a scenario's stages scatter across workers. The
-            # xdist_group marker this plugin sets is applied correctly; there is
-            # nothing to fix here until xdist stops writing _nodeid.
             - name: Run tests
               run: uv run --no-sync pytest tests -v -n auto

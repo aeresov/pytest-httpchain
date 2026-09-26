@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `--dist loadgroup` keeps each scenario's stages on one worker again under pytest 9.2 (currently
+  pytest's main branch). A pytest-xdist worker records an item's `xdist_group` by rewriting the
+  private `item._nodeid` to end in `@<group>`, and the loadgroup scheduler groups by that suffix.
+  pytest 9.2 derives `nodeid` from a structured id instead (pytest-dev/pytest#14758), so the
+  rewrite no longer took effect. Every stage became its own work unit, and later stages failed
+  on another worker without the earlier stages' saved values. The plugin now carries xdist's
+  rewritten id over for scenario items. Nothing changes on pytest 9.1 and earlier.
+
 ## [0.15.1] - 2026-09-26
 
 ### Fixed
