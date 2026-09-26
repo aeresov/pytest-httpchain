@@ -15,7 +15,8 @@ dependencies = [
     "referencing>=0.28.4",
     "pyrate-limiter>=4.2.0",
     "pytest>=9.0",
-    "simpleeval>=1.0.3",
+    # 1.0.8 blocks sandbox escapes through the operator module and os.exec*/spawn*.
+    "simpleeval>=1.0.8",
     # 0.26.0 is the first release that stopped importing the deprecated
     # `click.utils.get_binary_stream`; with `filterwarnings = error` any older
     # typer fails collection against current click.
@@ -46,6 +47,7 @@ dev = [
     "flask-httpauth>=4.8.0",
     "import-linter>=2.0",
     "ruff>=0.12.1",
+    "ty>=0.0.84",
     "coverage[toml]>=7.10", # `patch = ["subprocess"]` needs 7.10
 
     "pytest-datadir>=1.7.2",

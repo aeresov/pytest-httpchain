@@ -31,11 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `simpleeval` floor is raised to 1.0.8, a security release that blocks sandbox escapes
+  through `operator` module functions (`attrgetter`, `itemgetter`, `methodcaller`, `call`) and
+  `os.exec*`/`os.spawn*`/`os.posix_spawn*`. As with `os.system` before, a template context
+  holding one of those callables now makes template rendering fail.
 - Build backend range raised to uv_build 0.12.x. CI's uv already built with 0.12 and only warned
   about the `<0.12` range. Dependabot now proposes `uv-build` range bumps in a PR of their own:
   grouped with the lock-only bumps, the range bump made Dependabot skip the whole grouped lock
-  update every week since uv_build 0.12 was released. Locked dependencies refreshed, CI's type
-  checker pin moved to ty 0.0.84, and `astral-sh/setup-uv` to v10.2.0.
+  update every week since uv_build 0.12 was released.
+- Development tooling: ty is a dev dependency locked in `uv.lock` (0.0.84), run as `uv run ty
+  check`, so Dependabot now moves it like ruff. Locked dependencies refreshed,
+  `astral-sh/setup-uv` moved to v10.2.0, and the devcontainer's node feature to 2.x, with
+  Dependabot now tracking devcontainer features too.
 
 ## [0.15.1] - 2026-09-26
 

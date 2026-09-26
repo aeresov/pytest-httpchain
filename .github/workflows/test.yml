@@ -46,7 +46,7 @@ jobs:
               run: uv run ruff check .
 
             - name: Check types
-              run: uvx ty@0.0.84 check
+              run: uv run ty check
 
             - name: Check import layering
               run: uv run lint-imports
