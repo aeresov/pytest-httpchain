@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the lookup. Whether a lookup still succeeded depended on each worker's random hash seed, so
   workers ordered a parametrized stage's instances differently. Positions are now keyed by the
   item's identity.
+- A `parallel.foreach` step whose template resolves to another template string now fails the
+  stage with a message naming the step. Both step kinds also accept a template, so the text
+  passed re-validation: an `individual` step then ran one iteration per character, and a
+  `combinations` step escaped as a bare `TypeError`. 0.15.0 closed the same gap for the numeric
+  `parallel` settings.
 
 ### Changed
 
