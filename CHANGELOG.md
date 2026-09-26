@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rewrite no longer took effect. Every stage became its own work unit, and later stages failed
   on another worker without the earlier stages' saved values. The plugin now carries xdist's
   rewritten id over for scenario items. Nothing changes on pytest 9.1 and earlier.
+- `--dist loadgroup` no longer fails at random with "Different tests were collected between gw0
+  and gw1" when a scenario has a parametrized stage (pytest 9.1 and earlier). The plugin recorded
+  collection order in a dict keyed by the test item. On those pytest versions an item's hash comes
+  from its nodeid, which the xdist worker rewrites to add the group suffix between the recording
+  and the lookup. Whether a lookup still succeeded depended on each worker's random hash seed, so
+  workers ordered a parametrized stage's instances differently. Positions are now keyed by the
+  item's identity.
 
 ## [0.15.1] - 2026-09-26
 

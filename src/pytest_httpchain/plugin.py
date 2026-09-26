@@ -135,7 +135,9 @@ class JsonModule(pytest.Module):
 
 
 # Collection order, recorded before any sorter runs: the regroup tiebreaker.
-_ORIGINAL_POSITIONS: pytest.StashKey[dict[pytest.Item, int]] = pytest.StashKey()
+# Keyed by id(item), not the item: up to pytest 9.1 an item hashes its `_nodeid`,
+# which an xdist loadgroup worker rewrites between recording and lookup.
+_ORIGINAL_POSITIONS: pytest.StashKey[dict[int, int]] = pytest.StashKey()
 
 
 def _carrier_class(item: pytest.Item) -> type[Carrier] | None:
@@ -149,7 +151,7 @@ def _stage_index(item: pytest.Item) -> int:
     return getattr(getattr(item, "function", None), "_httpchain_stage_index", 0)
 
 
-def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[pytest.Item, int]) -> None:
+def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[int, int]) -> None:
     """Re-sort collected items so each scenario class's stages run contiguously,
     in stage order.
 
@@ -158,7 +160,8 @@ def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[pyt
     (a user-installed pytest-order acting on user-authored ``order(...)`` marks,
     pytest-randomly's shuffle, core's ``--ff``). Each class is pulled together
     at its first item (preserving inter-class order), with ``original_position``
-    breaking ties so parametrized instances of a stage keep collection order.
+    (keyed by ``id(item)``) breaking ties so parametrized instances of a stage
+    keep collection order.
     """
     buckets: dict[type[Carrier], list[pytest.Item]] = {}
     for item in items:
@@ -168,7 +171,7 @@ def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[pyt
         return
 
     def stage_key(item: pytest.Item) -> tuple[int, int]:
-        return (_stage_index(item), original_position.get(item, sys.maxsize))
+        return (_stage_index(item), original_position.get(id(item), sys.maxsize))
 
     for bucket in buckets.values():
         bucket.sort(key=stage_key)
@@ -223,7 +226,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     catches those. Post-yield is also after an xdist worker has written its
     loadgroup nodeid suffix, which `_apply_xdist_group_nodeids` needs.
     """
-    config.stash[_ORIGINAL_POSITIONS] = {item: i for i, item in enumerate(items)}
+    config.stash[_ORIGINAL_POSITIONS] = {id(item): i for i, item in enumerate(items)}
     result = yield
     _apply_xdist_group_nodeids(items)
     _regroup_carrier_items(items, config.stash[_ORIGINAL_POSITIONS])
