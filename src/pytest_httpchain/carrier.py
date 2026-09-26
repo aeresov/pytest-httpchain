@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar
 
 import httpx
 import pytest
@@ -140,6 +140,19 @@ def _parallel_int(field: str, value: Any) -> int:
     if not number.is_integer():
         raise StageExecutionError(f"parallel.{field} must be a positive whole number, got {value!r}")
     return int(number)
+
+
+def _parallel_values(field: str, value: Any) -> list[Any]:
+    """A walk()-resolved ``parallel.foreach`` step's values, or a stage failure.
+
+    Like the numeric fields, both step kinds also accept a template string, so a
+    template resolving to another template arrives here as text: iterated, it
+    ran one iteration per character (``individual``) or escaped as a bare
+    TypeError (``combinations``).
+    """
+    if not isinstance(value, list):
+        raise StageExecutionError(f"parallel.foreach {field} must resolve to a list, got {value!r}")
+    return value
 
 
 def fresh_scenario_state() -> dict[str, Any]:
@@ -375,9 +388,9 @@ class Carrier:
                     match step:
                         case IndividualParameter(individual=individual):
                             param_name = next(iter(individual))
-                            steps.append((param_name, individual[param_name]))
+                            steps.append((param_name, _parallel_values(f"individual '{param_name}'", individual[param_name])))
                         case CombinationsParameter(combinations=combinations):
-                            steps.append((None, cast(list[Any], combinations)))
+                            steps.append((None, _parallel_values("combinations", combinations)))
                         case _:
                             raise RuntimeError(f"Unhandled foreach step: {type(step).__name__}")
                 check_cap(math.prod(len(values) for _, values in steps))

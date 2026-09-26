@@ -2,7 +2,7 @@
     "name": "Python w/uv",
     "image": "mcr.microsoft.com/devcontainers/python:3",
     "features": {
-        "ghcr.io/devcontainers/features/node:1": {}
+        "ghcr.io/devcontainers/features/node:2": {}
     },
     "remoteEnv": {
         "UV_LINK_MODE": "copy"

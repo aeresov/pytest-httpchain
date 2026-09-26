@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-09-26
+
+### Fixed
+
+- `--dist loadgroup` keeps each scenario's stages on one worker again under pytest 9.2 (currently
+  pytest's main branch). A pytest-xdist worker records an item's `xdist_group` by rewriting the
+  private `item._nodeid` to end in `@<group>`, and the loadgroup scheduler groups by that suffix.
+  pytest 9.2 derives `nodeid` from a structured id instead (pytest-dev/pytest#14758), so the
+  rewrite no longer took effect. Every stage became its own work unit, and later stages failed
+  on another worker without the earlier stages' saved values. The plugin now carries xdist's
+  rewritten id over for scenario items. Nothing changes on pytest 9.1 and earlier.
+- `--dist loadgroup` no longer fails at random with "Different tests were collected between gw0
+  and gw1" when a scenario has a parametrized stage (pytest 9.1 and earlier). The plugin recorded
+  collection order in a dict keyed by the test item. On those pytest versions an item's hash comes
+  from its nodeid, which the xdist worker rewrites to add the group suffix between the recording
+  and the lookup. Whether a lookup still succeeded depended on each worker's random hash seed, so
+  workers ordered a parametrized stage's instances differently. Positions are now keyed by the
+  item's identity.
+- A `parallel.foreach` step whose template resolves to another template string now fails the
+  stage with a message naming the step. Both step kinds also accept a template, so the text
+  passed re-validation: an `individual` step then ran one iteration per character, and a
+  `combinations` step escaped as a bare `TypeError`. 0.15.0 closed the same gap for the numeric
+  `parallel` settings.
+
+### Changed
+
+- The `simpleeval` floor is raised to 1.0.8, a security release that blocks sandbox escapes
+  through `operator` module functions (`attrgetter`, `itemgetter`, `methodcaller`, `call`) and
+  `os.exec*`/`os.spawn*`/`os.posix_spawn*`. As with `os.system` before, a template context
+  holding one of those callables now makes template rendering fail.
+- Build backend range raised to uv_build 0.12.x. CI's uv already built with 0.12 and only warned
+  about the `<0.12` range. Dependabot now proposes `uv-build` range bumps in a PR of their own:
+  grouped with the lock-only bumps, the range bump made Dependabot skip the whole grouped lock
+  update every week since uv_build 0.12 was released.
+- Development tooling: ty is a dev dependency locked in `uv.lock` (0.0.84), run as `uv run ty
+  check`, so Dependabot now moves it like ruff. Locked dependencies refreshed,
+  `astral-sh/setup-uv` moved to v10.2.0, and the devcontainer's node feature to 2.x, with
+  Dependabot now tracking devcontainer features too.
+
 ## [0.15.1] - 2026-09-26
 
 ### Fixed

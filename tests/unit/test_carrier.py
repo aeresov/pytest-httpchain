@@ -29,6 +29,7 @@ from pytest_httpchain.carrier import (
 )
 from pytest_httpchain.errors import RequestError, StageExecutionError
 from pytest_httpchain.models import (
+    CombinationsParameter,
     IndividualParameter,
     ParallelForeachConfig,
     ParallelRepeatConfig,
@@ -187,6 +188,24 @@ class TestResolvedParallelSettings:
         carrier = _make_carrier_subclass(global_context=ChainMap({"rate": "{{ 2 }}"}))
         stage = make_stage(parallel=ParallelRepeatConfig.model_validate({"repeat": 2, "max_concurrency": 2, "calls_per_sec": "{{ rate }}"}))
         with pytest.raises(pytest.fail.Exception, match="calls_per_sec"):
+            carrier.execute_stage(stage, {})
+
+    @pytest.mark.parametrize(
+        ("step", "field"),
+        [
+            # Iterated as text, the residual template ran one iteration per character.
+            (IndividualParameter(individual={"v": "{{ vals }}"}), "individual 'v'"),
+            # Iterated as text, it escaped as a bare TypeError ('str' is not a mapping).
+            (CombinationsParameter(combinations="{{ vals }}"), "combinations"),
+        ],
+        ids=["individual", "combinations"],
+    )
+    def test_residual_template_foreach_fails_the_stage_cleanly(self, step, field):
+        # Both foreach step kinds also accept a template, so a substitution holding
+        # '{{ x }}' resolves to text that passes walk()'s re-validation.
+        carrier = _make_carrier_subclass(global_context=ChainMap({"vals": "{{ x }}"}))
+        stage = make_stage(parallel=ParallelForeachConfig(foreach=[step]))
+        with pytest.raises(pytest.fail.Exception, match=f"parallel.foreach {field} must resolve to a list"):
             carrier.execute_stage(stage, {})
 
     @pytest.mark.parametrize(

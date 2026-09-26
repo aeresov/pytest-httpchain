@@ -1,4 +1,4 @@
-# Keep GitHub Actions refs and uv.lock moving; grouped weekly PRs.
+# Keep GitHub Actions refs, uv.lock and devcontainer features moving; grouped weekly PRs.
 version: 2
 updates:
     - package-ecosystem: github-actions
@@ -15,4 +15,17 @@ updates:
           interval: weekly
       groups:
           dependencies:
+              patterns: ["*"]
+              # The uv_build [build-system] range has no uv.lock entry, so its bump
+              # changes a requirement only. Dependabot rejects a group mixing that
+              # with lock-only bumps and skipped the whole group ("Previous version
+              # was not provided for: 'uv-build'"); on its own it gets a PR.
+              exclude-patterns: ["uv-build"]
+
+    - package-ecosystem: devcontainers
+      directory: /
+      schedule:
+          interval: weekly
+      groups:
+          devcontainers:
               patterns: ["*"]
