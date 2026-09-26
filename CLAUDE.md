@@ -55,8 +55,8 @@ uv run pytest-httpchain validate --deep --syspath tests/integration/examples tes
 # bodies) as missed and report a ~20-point-low floor. CI uses this form.
 # `parallel` + `patch=subprocess` measure pytester subprocesses too and write
 # pid-suffixed data files — always `combine` before `report`.
-# Run the WHOLE suite: `fail_under = 94` applies to every `coverage report`, and
-# unit tests alone reach ~87, so `tests/unit` here would always exit non-zero.
+# Run the WHOLE suite: `fail_under = 96` applies to every `coverage report`, and
+# unit tests alone reach ~90, so `tests/unit` here would always exit non-zero.
 uv run coverage run -m pytest tests
 uv run coverage combine
 uv run coverage report --show-missing
@@ -118,8 +118,8 @@ Per-scenario mutable class state (client, abort flag, exchange bookkeeping) is d
 **Unit vs integration.** `tests/unit` owns pure logic — models, templates, jsonref,
 validation, and the error/edge paths of the engine. `tests/integration` owns
 everything that needs a real pytest session and a real socket: collection,
-ordering, fixtures, marks, and the HTTP round trip. Unit tests alone reach ~87%
-coverage in seconds; integration carries the rest to ~97%. When a behavior can
+ordering, fixtures, marks, and the HTTP round trip. Unit tests alone reach ~90%
+coverage in seconds; integration carries the rest to ~98%. When a behavior can
 be pinned in a unit test, pin it there — reach for an integration test when the
 thing under test *is* the pytest or HTTP interaction.
 

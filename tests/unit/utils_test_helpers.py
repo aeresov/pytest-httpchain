@@ -8,10 +8,6 @@ whose only job is to be imported.
 """
 
 
-def sample_func():
-    return "sample_result"
-
-
 def func_with_args(a, b, c=None):
     return {"a": a, "b": b, "c": c}
 

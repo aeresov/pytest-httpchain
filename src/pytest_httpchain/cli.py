@@ -173,12 +173,11 @@ def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[st
         if s.consumes:
             parts: list[str] = []
             for var_name in s.consumes:
-                producer = producer_of.get((s.index, var_name))
-                if producer is None:
-                    parts.append(var_name)
-                else:
-                    producer_name = flow.stages[producer].name or f"stage {producer + 1}"
-                    parts.append(f"{var_name} (from #{producer + 1} {producer_name})")
+                # analyze_dataflow lists a consume only when an earlier stage
+                # saved the name, so every one has a producing edge.
+                producer = producer_of[(s.index, var_name)]
+                producer_name = flow.stages[producer].name or f"stage {producer + 1}"
+                parts.append(f"{var_name} (from #{producer + 1} {producer_name})")
             lines.append(f"    consumes: {', '.join(parts)}")
         if s.marks:
             lines.append(f"    marks:    {', '.join(s.marks)}")
