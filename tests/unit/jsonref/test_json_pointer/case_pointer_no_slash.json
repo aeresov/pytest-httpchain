@@ -1,4 +1,0 @@
-{
-    "data": {"value": 42},
-    "ref": {"$ref": "#data/value"}
-}

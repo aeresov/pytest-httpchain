@@ -44,12 +44,19 @@ def _widen_with_jsonref(subschema: dict[str, Any], default_title: str | None = N
     return wrapper
 
 
+def _accepts_jsonref(subschema: dict[str, Any]) -> bool:
+    """Whether a subschema already admits a reference object: every named type
+    is widened, so a `$ref` to one — alone or as an `anyOf` branch — does."""
+    return any("$ref" in branch for branch in (subschema, *subschema.get("anyOf", [])))
+
+
 def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
-    """Accept reference objects at named-type and root-property sites.
+    """Accept reference objects at named-type, model-field and root-property sites.
 
     The resolver can substitute any element, but wrapping every inline subschema
-    would balloon the output, so anonymous nested schemas are left untouched: a
-    reference still resolves there at runtime, it is just not described.
+    would balloon the output, so schemas nested below a field (array items,
+    mapping values) are left untouched: a reference still resolves there at
+    runtime, it is just not described.
     """
     defs = schema.setdefault("$defs", {})
     properties = schema.setdefault("properties", {})
@@ -83,6 +90,10 @@ def _add_jsonref_support(schema: dict[str, Any]) -> dict[str, Any]:
 
     for type_name, original_def in defs.items():
         if type_name != "JsonRef":
+            fields = original_def.get("properties", {})
+            for field_name, field_def in fields.items():
+                if not _accepts_jsonref(field_def):
+                    fields[field_name] = _widen_with_jsonref(field_def)
             defs[type_name] = _widen_with_jsonref(original_def)
 
     for prop_name, prop_def in properties.items():

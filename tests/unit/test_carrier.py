@@ -1,26 +1,24 @@
-"""Unit tests for carrier.py - error cases and edge cases only.
+"""carrier.py: chain state, the iteration matrix, threading and reporting.
 
-Success cases for body types, verify, and save are covered by integration tests:
-- tests/integration/test_body_types.py
-- tests/integration/test_verify.py
-- tests/integration/test_save.py
-- tests/integration/test_errors.py
+What a single request or response step means lives in request_builder and
+response_steps (test_request_builder.py, test_response_steps.py); the HTTP
+round trip itself is the integration suite's.
 """
 
-import json
 import ssl
 import threading
 import time
 from collections import ChainMap
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from http import HTTPMethod
+from types import SimpleNamespace
 
 import httpx
 import pytest
 import trustme
 from pyrate_limiter import Duration, Limiter, Rate
 
+import pytest_httpchain.carrier as carrier_module
 from pytest_httpchain.carrier import (
     Carrier,
     IterationResult,
@@ -29,276 +27,16 @@ from pytest_httpchain.carrier import (
     _parallel_number,
     fresh_scenario_state,
 )
-from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
+from pytest_httpchain.errors import RequestError, StageExecutionError
 from pytest_httpchain.models import (
-    BinaryBody,
-    FilesBody,
     IndividualParameter,
-    JMESPathSave,
     ParallelForeachConfig,
     ParallelRepeatConfig,
-    Request,
     Scenario,
     SSLConfig,
-    Verify,
 )
-from pytest_httpchain.models.entities import ResponseBody
-from pytest_httpchain.request_builder import build_request_kwargs
-from pytest_httpchain.response_steps import check_rendered_assertions, process_save, process_verify
 from pytest_httpchain.templates import TemplatesError
 from tests.unit.models.helpers import make_stage
-
-
-class TestBuildRequestKwargsErrors:
-    """Error cases not covered by integration tests."""
-
-    def test_binary_body_file_not_found(self):
-        request = Request(
-            url="https://example.com/api",
-            method=HTTPMethod.POST,
-            body=BinaryBody(binary="/nonexistent/file.bin"),
-        )
-
-        with pytest.raises(RequestError, match="Binary file not found"):
-            build_request_kwargs(request)
-
-    def test_files_body_file_not_found(self):
-        request = Request(
-            url="https://example.com/api",
-            method=HTTPMethod.POST,
-            body=FilesBody(files={"upload": "/nonexistent/file.txt"}),
-        )
-
-        with pytest.raises(RequestError, match="File not found for upload"):
-            build_request_kwargs(request)
-
-    def test_binary_body_unreadable_path(self, tmp_path):
-        # A directory raises IsADirectoryError, an OSError that is NOT a
-        # FileNotFoundError, so it must be caught by the broadened handler (M2).
-        request = Request(
-            url="https://example.com/api",
-            method=HTTPMethod.POST,
-            body=BinaryBody(binary=str(tmp_path)),
-        )
-
-        with pytest.raises(RequestError, match="Cannot read binary file"):
-            build_request_kwargs(request)
-
-    def test_files_body_unreadable_path(self, tmp_path):
-        request = Request(
-            url="https://example.com/api",
-            method=HTTPMethod.POST,
-            body=FilesBody(files={"upload": str(tmp_path)}),
-        )
-
-        with pytest.raises(RequestError, match="Cannot read file for upload"):
-            build_request_kwargs(request)
-
-
-class TestBuildRequestKwargsParams:
-    """Params handling edge cases."""
-
-    def test_empty_params_does_not_override_url_query(self):
-        """Empty params default should not strip query parameters from the URL."""
-        request = Request(
-            url="https://example.com/api?streamId=123",
-            method=HTTPMethod.GET,
-        )
-
-        kwargs = build_request_kwargs(request)
-        assert kwargs["params"] is None
-
-    def test_non_empty_params_passed_through(self):
-        request = Request(
-            url="https://example.com/api",
-            method=HTTPMethod.GET,
-            params={"key": "value"},
-        )
-
-        kwargs = build_request_kwargs(request)
-        assert kwargs["params"] == {"key": "value"}
-
-
-class TestProcessSaveStepErrors:
-    """Error cases not covered by integration tests."""
-
-    def test_jmespath_save_invalid_json_response(self):
-        response = httpx.Response(
-            200,
-            content=b"not valid json",
-            headers={"content-type": "text/plain"},
-        )
-        save_model = JMESPathSave(jmespath={"value": "key"})
-        context = ChainMap()
-
-        with pytest.raises(SaveError, match="response is not valid JSON"):
-            process_save(save_model, response, context)
-
-
-class TestProcessVerifyStepErrors:
-    """Error cases and edge cases not covered by integration tests."""
-
-    def test_verify_body_schema_file_not_found(self):
-        response = httpx.Response(200, json={"id": 123})
-        verify = Verify(body=ResponseBody(schema="/nonexistent/schema.json"))
-
-        with pytest.raises(VerificationError, match="Error reading body schema file"):
-            process_verify(verify, response)
-
-    def test_verify_body_schema_invalid_json_response(self):
-        response = httpx.Response(
-            200,
-            content=b"not json",
-            headers={"content-type": "text/plain"},
-        )
-        schema = {"type": "object"}
-        verify = Verify(body=ResponseBody(schema=schema))
-
-        with pytest.raises(VerificationError, match="response is not valid JSON"):
-            process_verify(verify, response)
-
-    def test_verify_body_schema_from_file(self, tmp_path):
-        """Test schema loaded from file path - unique to unit tests."""
-        schema_path = tmp_path / "schema.json"
-        schema_path.write_text(
-            json.dumps(
-                {
-                    "type": "object",
-                    "properties": {"id": {"type": "integer"}},
-                    "required": ["id"],
-                }
-            )
-        )
-
-        response = httpx.Response(200, json={"id": 123})
-        verify = Verify(body=ResponseBody(schema=str(schema_path)))
-
-        # Should not raise
-        process_verify(verify, response)
-
-    def test_verify_status_zero_is_not_treated_as_absent(self):
-        """The status gate is `is not None`, not truthiness."""
-        response = httpx.Response(200, json={})
-        verify = Verify.model_construct(status=0, headers={}, expressions=[], user_functions=[], body=ResponseBody())
-
-        with pytest.raises(VerificationError, match="Status code doesn't match"):
-            process_verify(verify, response)
-
-    def test_rendered_away_status_is_rejected(self):
-        """A declared status that a template rendered to None must fail loudly.
-
-        Both models re-validate cleanly, so without this the assertion would be
-        silently dropped and a 500 would pass green.
-        """
-        declared = Verify(status="{{ expected }}")
-        rendered = Verify(status=None)
-
-        with pytest.raises(VerificationError, match="rendered to None"):
-            check_rendered_assertions(declared, rendered)
-
-    def test_rendered_away_body_schema_is_rejected(self):
-        declared = Verify(body=ResponseBody(schema="{{ schema_path }}"))
-        rendered = Verify(body=ResponseBody(schema=None))
-
-        with pytest.raises(VerificationError, match="body.schema.*rendered to None"):
-            check_rendered_assertions(declared, rendered)
-
-    def test_undeclared_assertions_are_not_flagged(self):
-        """An assertion that was never declared is not a rendered-away one."""
-        check_rendered_assertions(Verify(), Verify())
-
-    def test_rendered_status_that_survives_is_not_flagged(self):
-        check_rendered_assertions(Verify(status="{{ expected }}"), Verify(status=200))
-
-    def test_verify_body_schema_non_utf8_file(self, tmp_path):
-        """A non-UTF-8 schema file must fail the stage cleanly.
-
-        UnicodeDecodeError is a ValueError, not a JSONDecodeError, so a narrower
-        except let it escape past the chain-abort machinery as a raw traceback.
-        """
-        schema_path = tmp_path / "schema.json"
-        schema_path.write_bytes(b'{"type": "\xff\xfe object"}')
-
-        response = httpx.Response(200, json={"id": 1})
-        verify = Verify(body=ResponseBody(schema=str(schema_path)))
-
-        with pytest.raises(VerificationError, match="Error reading body schema file"):
-            process_verify(verify, response)
-
-    def test_verify_expressions_falsy_values(self):
-        """Test that falsy expression values fail verification."""
-        response = httpx.Response(200)
-        verify = Verify(expressions=[True, False, True])
-
-        with pytest.raises(VerificationError, match="Expression.*failed"):
-            process_verify(verify, response)
-
-    def test_verify_expressions_truthy_non_bool_is_rejected(self):
-        """A value written where a predicate belongs must fail, not pass green.
-
-        `{{ response.status }}` against a 500 renders to the int 500, and a
-        truthiness check would let that stage pass without asserting anything.
-        """
-        response = httpx.Response(200)
-        verify = Verify(expressions=[500])
-
-        with pytest.raises(VerificationError, match="Verify expression 0 must evaluate to bool, got int"):
-            process_verify(verify, response)
-
-    def test_verify_expressions_string_is_rejected(self):
-        """Forgetting the `{{ }}` leaves an always-truthy string behind."""
-        response = httpx.Response(200)
-        verify = Verify(expressions=["response.status == 200"])
-
-        with pytest.raises(VerificationError, match="must evaluate to bool, got str"):
-            process_verify(verify, response)
-
-    def test_verify_expressions_empty_string_is_rejected(self):
-        """Falsy, but still not a predicate: the failure must name the type."""
-        response = httpx.Response(200)
-        verify = Verify(expressions=[""])
-
-        with pytest.raises(VerificationError, match="must evaluate to bool, got str"):
-            process_verify(verify, response)
-
-    def test_verify_expressions_rendered_away_is_rejected(self):
-        """Why `expressions` needs no `check_rendered_assertions` entry.
-
-        Substitution rewrites the list element-wise, so it cannot lose an entry:
-        one that rendered away arrives here as None and the bool contract fails it.
-        """
-        response = httpx.Response(200)
-        verify = Verify(expressions=[None])
-
-        with pytest.raises(VerificationError, match="must evaluate to bool, got NoneType"):
-            process_verify(verify, response)
-
-    def test_verify_expressions_bools_pass(self):
-        process_verify(Verify(expressions=[True, True]), httpx.Response(200))
-
-    def test_verify_body_contains_failure(self):
-        response = httpx.Response(200, content=b"hello world")
-        verify = Verify(body=ResponseBody(contains=["goodbye"]))
-        with pytest.raises(VerificationError, match="Body doesn't contain 'goodbye'"):
-            process_verify(verify, response)
-
-    def test_verify_body_not_contains_failure(self):
-        response = httpx.Response(200, content=b"hello world")
-        verify = Verify(body=ResponseBody(not_contains=["hello"]))
-        with pytest.raises(VerificationError, match="Body contains 'hello' while it shouldn't"):
-            process_verify(verify, response)
-
-    def test_verify_body_matches_failure(self):
-        response = httpx.Response(200, content=b"hello world")
-        verify = Verify(body=ResponseBody(matches=["z{3}"]))
-        with pytest.raises(VerificationError, match="Body doesn't match 'z"):
-            process_verify(verify, response)
-
-    def test_verify_body_not_matches_failure(self):
-        response = httpx.Response(200, content=b"hello world")
-        verify = Verify(body=ResponseBody(not_matches=["wor"]))
-        with pytest.raises(VerificationError, match="Body matches 'wor' while it shouldn't"):
-            process_verify(verify, response)
 
 
 def _make_carrier_subclass(**attrs) -> type[Carrier]:
@@ -343,61 +81,48 @@ class TestSSLClientWiring:
         cls._ensure_initialized()
         return captured
 
-    def test_verify_true_passed_through(self, monkeypatch):
-        assert self._client_kwargs_for(monkeypatch, SSLConfig(verify=True))["verify"] is True
+    @pytest.fixture
+    def pems(self, tmp_path):
+        """Throwaway PEMs from one CA: its bundle, a client cert/key pair and
+        the single-file key+chain form of the same client cert."""
+        ca = trustme.CA()
+        client = ca.issue_cert("client@example.com")
+        pems = SimpleNamespace(dir=tmp_path, ca=tmp_path / "ca.pem", pair=(tmp_path / "client.pem", tmp_path / "client.key"), bundle=tmp_path / "bundle.pem")
+        ca.cert_pem.write_to_path(pems.ca)
+        client.cert_chain_pems[0].write_to_path(pems.pair[0])
+        client.private_key_pem.write_to_path(pems.pair[1])
+        client.private_key_and_cert_chain_pem.write_to_path(pems.bundle)
+        return pems
 
-    def test_verify_false_passed_through(self, monkeypatch):
-        assert self._client_kwargs_for(monkeypatch, SSLConfig(verify=False))["verify"] is False
+    @pytest.mark.parametrize("verify", [True, False])
+    def test_bool_verify_passed_through(self, monkeypatch, verify):
+        assert self._client_kwargs_for(monkeypatch, SSLConfig(verify=verify))["verify"] is verify
 
-    def test_verify_ca_bundle_file_builds_context(self, monkeypatch, tmp_path):
-        ca_path = tmp_path / "ca.pem"
-        trustme.CA().cert_pem.write_to_path(ca_path)
-        kwargs = self._client_kwargs_for(monkeypatch, SSLConfig(verify=ca_path))
-        assert isinstance(kwargs["verify"], ssl.SSLContext)
-
-    def test_verify_ca_directory_builds_context(self, monkeypatch, tmp_path):
-        kwargs = self._client_kwargs_for(monkeypatch, SSLConfig(verify=tmp_path))
-        assert isinstance(kwargs["verify"], ssl.SSLContext)
-
-    def test_cert_pair_loaded_into_context(self, monkeypatch, tmp_path):
-        crt, key = tmp_path / "client.pem", tmp_path / "client.key"
-        client_cert = trustme.CA().issue_cert("client@example.com")
-        client_cert.cert_chain_pems[0].write_to_path(crt)
-        client_cert.private_key_pem.write_to_path(key)
-        kwargs = self._client_kwargs_for(monkeypatch, SSLConfig(cert=(crt, key)))
-        assert isinstance(kwargs["verify"], ssl.SSLContext)
-        assert "cert" not in kwargs
-
-    def test_single_cert_file_loaded_into_context(self, monkeypatch, tmp_path):
-        bundle = tmp_path / "client-bundle.pem"
-        client_cert = trustme.CA().issue_cert("client@example.com")
-        client_cert.private_key_and_cert_chain_pem.write_to_path(bundle)
-        kwargs = self._client_kwargs_for(monkeypatch, SSLConfig(cert=bundle))
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(lambda p: SSLConfig(verify=p.ca), id="ca-bundle-file"),
+            pytest.param(lambda p: SSLConfig(verify=p.dir), id="ca-directory"),
+            pytest.param(lambda p: SSLConfig(cert=p.pair), id="cert-pair"),
+            pytest.param(lambda p: SSLConfig(cert=p.bundle), id="single-cert-file"),
+        ],
+    )
+    def test_paths_arrive_as_ssl_context(self, monkeypatch, pems, config):
+        kwargs = self._client_kwargs_for(monkeypatch, config(pems))
         assert isinstance(kwargs["verify"], ssl.SSLContext)
         assert "cert" not in kwargs
 
-    def test_verify_false_with_cert_keeps_verification_off(self, monkeypatch, tmp_path):
-        bundle = tmp_path / "client-bundle.pem"
-        trustme.CA().issue_cert("client@example.com").private_key_and_cert_chain_pem.write_to_path(bundle)
-        ctx = self._client_kwargs_for(monkeypatch, SSLConfig(verify=False, cert=bundle))["verify"]
-        assert isinstance(ctx, ssl.SSLContext)
-        assert ctx.verify_mode == ssl.CERT_NONE
-        assert ctx.check_hostname is False
+    def test_verify_false_with_cert_keeps_verification_off(self, monkeypatch, pems):
+        ctx = self._client_kwargs_for(monkeypatch, SSLConfig(verify=False, cert=pems.bundle))["verify"]
+        assert (ctx.verify_mode, ctx.check_hostname) == (ssl.CERT_NONE, False)
 
-    def test_real_client_construction_emits_no_deprecation(self, tmp_path):
+    def test_real_client_construction_emits_no_deprecation(self, pems):
         """Regression for httpx 0.28: a genuine httpx.Client built from a CA
         path plus client cert pair must construct without warnings."""
-        ca = trustme.CA()
-        ca_path = tmp_path / "ca.pem"
-        ca.cert_pem.write_to_path(ca_path)
-        crt, key = tmp_path / "client.pem", tmp_path / "client.key"
-        client_cert = ca.issue_cert("client@example.com")
-        client_cert.cert_chain_pems[0].write_to_path(crt)
-        client_cert.private_key_pem.write_to_path(key)
         cls = _make_carrier_subclass(
             _initialized=False,
             _context_resolved_at_collection=True,
-            scenario=Scenario(ssl=SSLConfig(verify=ca_path, cert=(crt, key))),
+            scenario=Scenario(ssl=SSLConfig(verify=pems.ca, cert=pems.pair)),
         )
         cls._ensure_initialized()
         try:
@@ -406,31 +131,18 @@ class TestSSLClientWiring:
             cls.client.close()
 
 
-class TestRateLimiting:
-    """The rate limiter actually blocks and times out (M2)."""
-
-    def test_limiter_timeout_raises_request_error(self):
-        # A 1/sec limiter: consume the only slot, then a second acquire with a
-        # tiny timeout must block for the timeout and fail (not silently pass).
-        limiter = Limiter(Rate(1, Duration.SECOND))
-        assert limiter.try_acquire("api", blocking=True, timeout=2)
-
-        stage = make_stage()
-        with pytest.raises(RequestError, match="Rate limit exceeded"):
-            # The limiter check happens before the HTTP request, so no client is
-            # needed; an exhausted limiter forces the timeout path.
-            Carrier._execute_single_iteration(stage, ChainMap(), {}, limiter=limiter, max_rate_limit_delay=0.2)
-
-    def test_limiter_blocks_until_timeout_elapses(self):
-        limiter = Limiter(Rate(1, Duration.SECOND))
-        assert limiter.try_acquire("api", blocking=True, timeout=2)
-
-        stage = make_stage()
+def test_exhausted_rate_limit_blocks_for_the_delay_then_fails():
+    """The limiter really blocks, and times out into a stage failure (M2)."""
+    limiter = Limiter(Rate(1, Duration.SECOND))
+    try:
+        assert limiter.try_acquire("api", blocking=True, timeout=2)  # consume the only slot
         start = time.monotonic()
         with pytest.raises(RequestError, match="Rate limit exceeded"):
-            Carrier._execute_single_iteration(stage, ChainMap(), {}, limiter=limiter, max_rate_limit_delay=0.3)
-        # It actually blocked for ~the timeout rather than failing instantly.
+            # The limiter check precedes the HTTP request, so no client is needed.
+            Carrier._execute_single_iteration(make_stage(), ChainMap(), {}, limiter=limiter, max_rate_limit_delay=0.3)
         assert time.monotonic() - start >= 0.25
+    finally:
+        limiter.close()
 
 
 class TestResolvedParallelSettings:
@@ -440,19 +152,33 @@ class TestResolvedParallelSettings:
     text. Whatever gets through, a value that cannot make a working limiter or
     pool must fail loudly — never quietly turn rate limiting off."""
 
-    @pytest.mark.parametrize("value", [0, 0.5, -1, pytest.param("0.5", id="fractional-string"), "abc", "{{ 2 }}"])
+    @pytest.mark.parametrize(
+        "value",
+        [0, 0.5, -1, pytest.param("0.5", id="fractional-string"), "abc", "{{ 2 }}", pytest.param(True, id="bool")],
+    )
     def test_bad_count_rejected_naming_field_and_value(self, value):
+        # A bool is rejected outright: float(True) == 1.0 would silently
+        # configure one worker / one call per second.
         with pytest.raises(StageExecutionError) as excinfo:
             _parallel_int("calls_per_sec", value)
         assert "calls_per_sec" in str(excinfo.value)
         assert repr(value) in str(excinfo.value)
 
-    def test_fractional_rate_is_rejected_not_truncated(self):
-        # int(0.5) == 0, which is falsy: the plain cast turned "one call every
-        # two seconds" into no rate limiting at all.
-        config = ParallelRepeatConfig.model_construct(repeat=2, max_concurrency=2, calls_per_sec=0.5, max_rate_limit_delay=60)
-        with pytest.raises(StageExecutionError, match="calls_per_sec"):
-            _make_carrier_subclass()._run_iterations(make_stage(), ChainMap(), [{}, {}], config)
+    @pytest.mark.parametrize("value", [2, 2.0, pytest.param("2", id="str")])
+    def test_whole_number_count_accepted_as_int(self, value):
+        """A template may resolve to 2.0 or "2"; both are the whole number 2."""
+        assert _parallel_int("max_concurrency", value) == 2
+
+    @pytest.mark.parametrize("value", [0, -0.5, float("inf"), float("nan"), "abc", True])
+    def test_bad_delay_rejected(self, value):
+        with pytest.raises(StageExecutionError, match="max_rate_limit_delay must be a positive number"):
+            _parallel_number("max_rate_limit_delay", value)
+
+    @pytest.mark.parametrize("value", [0.5, pytest.param("0.5", id="str")])
+    def test_fractional_delay_is_kept(self, value):
+        # Unlike the two counts, the delay is a duration: half a second is a
+        # meaningful budget, so only the counts demand whole numbers.
+        assert _parallel_number("max_rate_limit_delay", value) == 0.5
 
     def test_residual_template_fails_the_stage_cleanly(self):
         # A substitution holding '{{ 2 }}' resolves to that text, which satisfies
@@ -463,23 +189,77 @@ class TestResolvedParallelSettings:
         with pytest.raises(pytest.fail.Exception, match="calls_per_sec"):
             carrier.execute_stage(stage, {})
 
-    @pytest.mark.parametrize("value", [0, 0.5, "{{ 2 }}"])
-    def test_bad_max_concurrency_rejected(self, value):
-        # int(0.5) == 0 workers, and ThreadPoolExecutor(max_workers=0) raises a
-        # bare ValueError rather than failing the stage.
-        config = ParallelRepeatConfig.model_construct(repeat=2, max_concurrency=value, calls_per_sec=None, max_rate_limit_delay=60)
-        with pytest.raises(StageExecutionError, match="max_concurrency"):
-            _make_carrier_subclass()._run_iterations(make_stage(), ChainMap(), [{}, {}], config)
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            # int(0.5) == 0, which is falsy: a plain cast turned "one call
+            # every two seconds" into no rate limiting at all.
+            ("calls_per_sec", 0.5),
+            # int(0.5) == 0 workers, and ThreadPoolExecutor(max_workers=0)
+            # raises a bare ValueError rather than failing the stage.
+            ("max_concurrency", 0),
+            ("max_concurrency", 0.5),
+            ("max_concurrency", "{{ 2 }}"),
+            ("max_rate_limit_delay", "{{ 5 }}"),
+        ],
+    )
+    def test_run_iterations_rejects_unusable_setting(self, field, value):
+        settings = {"repeat": 2, "max_concurrency": 2, "calls_per_sec": None, "max_rate_limit_delay": 60, field: value}
+        with pytest.raises(StageExecutionError, match=field):
+            _make_carrier_subclass()._run_iterations(make_stage(), ChainMap(), [{}, {}], ParallelRepeatConfig.model_construct(**settings))
 
-    def test_bad_max_rate_limit_delay_rejected(self):
-        config = ParallelRepeatConfig.model_construct(repeat=2, max_concurrency=2, calls_per_sec=None, max_rate_limit_delay="{{ 5 }}")
-        with pytest.raises(StageExecutionError, match="max_rate_limit_delay"):
-            _make_carrier_subclass()._run_iterations(make_stage(), ChainMap(), [{}, {}], config)
 
-    def test_fractional_delay_is_kept(self):
-        # Unlike the two counts, the delay is a duration: half a second is a
-        # meaningful budget, so only the counts demand whole numbers.
-        assert _parallel_number("max_rate_limit_delay", 0.5) == 0.5
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (httpx.ReadTimeout("slow"), "HTTP request timed out: slow"),
+        (httpx.ConnectError("refused"), "HTTP connection error: refused"),
+        (httpx.RemoteProtocolError("garbled"), "HTTP request failed: garbled"),
+        # User auth flows run inside request() and may raise anything.
+        (RuntimeError("auth bug"), "Unexpected error during HTTP request: auth bug"),
+    ],
+    ids=["timeout", "connect", "other-httpx", "non-httpx"],
+)
+def test_transport_errors_become_request_errors(error, message):
+    """Pinned here, not by the connection-refused/DNS integration tests: under
+    in-process pytester a stale httpcore module can leave httpx's exception
+    mapping undone, so those runs land in the catch-all whatever the cause."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    cls = _make_carrier_subclass(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    try:
+        with pytest.raises(RequestError, match=f"^{message}$"):
+            cls._execute_http_request({"method": "GET", "url": "http://t/"})
+    finally:
+        cls.client.close()
+
+
+def test_cancelled_iteration_sends_nothing():
+    """Once another iteration has failed, a queued one must not add traffic."""
+    cancel = threading.Event()
+    cancel.set()
+    with pytest.raises(RequestError, match="Iteration cancelled"):
+        # client is None: reaching the send would fail differently.
+        _make_carrier_subclass()._execute_single_iteration(make_stage(), ChainMap(), {}, cancel=cancel)
+
+
+def test_initialization_failure_is_sticky(monkeypatch):
+    """Initialization runs at most once: after a failure, later stages get the
+    same error without substitutions (or auth) being re-invoked."""
+    calls = []
+
+    def failing_substitutions(substitutions):
+        calls.append(substitutions)
+        raise RuntimeError("token service unreachable")
+
+    monkeypatch.setattr(carrier_module, "process_substitutions", failing_substitutions)
+    cls = _make_carrier_subclass(scenario=Scenario(), _initialized=False)
+    for _ in range(2):
+        with pytest.raises(StageExecutionError, match="Failed to initialize scenario: token service unreachable"):
+            cls._ensure_initialized()
+    assert len(calls) == 1
 
 
 class TestParallelIterationCap:
@@ -592,17 +372,33 @@ class TestContextManagerFixtureCleanup:
         assert carrier.active_context_managers == []
 
 
-class TestContextDump:
-    """Context dumps feed DEBUG logging only; they must never break a stage."""
+class _Poison:
+    def __str__(self):
+        raise RuntimeError("boom")
 
-    def test_serializes_plain_context(self):
-        assert '"a": 1' in _context_dump({"a": 1})
 
-    def test_circular_context_degrades_to_placeholder(self):
-        circular: dict = {}
-        circular["self"] = circular
-        out = _context_dump(circular)
-        assert "unserializable" in out
+def _circular() -> dict:
+    circular: dict = {}
+    circular["self"] = circular
+    return circular
+
+
+def test_context_dump_serializes_plain_context():
+    assert '"a": 1' in _context_dump({"a": 1})
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        pytest.param(_circular(), id="circular"),
+        pytest.param({"a": {(1, 2): 3}}, id="tuple-key"),
+        pytest.param({"a": _Poison()}, id="poison-str"),
+    ],
+)
+def test_context_dump_never_raises(context):
+    """Dumps feed DEBUG logging only; whatever a user-function save put into
+    the context, they must degrade rather than break the stage."""
+    assert "unserializable" in _context_dump(context)
 
 
 class TestIterationCapBeforeMaterialization:
@@ -632,23 +428,6 @@ class TestIterationCapBeforeMaterialization:
 
     def test_non_parallel_single_iteration(self):
         assert Carrier._build_iteration_substitutions(None, max_parallel_iterations=10) == [{}]
-
-
-class TestContextDumpNeverRaises:
-    """The helper's contract is absolute: logging must never break a stage,
-    whatever a user-function save put into the context."""
-
-    def test_tuple_keyed_dict_degrades(self):
-        out = _context_dump({"a": {(1, 2): 3}})
-        assert "unserializable" in out
-
-    def test_poison_str_degrades(self):
-        class Poison:
-            def __str__(self):
-                raise RuntimeError("boom")
-
-        out = _context_dump({"a": Poison()})
-        assert "unserializable" in out
 
 
 class TestRedirectExchangeRecording:
@@ -689,20 +468,6 @@ class TestRedirectExchangeRecording:
         cls._record_exchanges([result], None, 1)
 
         assert cls.last_exchanges == [(final_req, final, started)]
-
-
-class TestRedirectKwargsMapping:
-    """The model's allow_redirects must reach httpx as follow_redirects: httpx
-    defaults the kwarg to False, so silently dropping the mapping would flip
-    the plugin's documented follow-by-default behavior with the suite green."""
-
-    def test_default_follows(self):
-        model = Request.model_validate({"url": "http://t/"})
-        assert build_request_kwargs(model, None)["follow_redirects"] is True
-
-    def test_disabled_passes_false(self):
-        model = Request.model_validate({"url": "http://t/", "allow_redirects": False})
-        assert build_request_kwargs(model, None)["follow_redirects"] is False
 
 
 class TestParallelCancellation:
@@ -776,44 +541,36 @@ class TestScenarioRerunReset:
     pristine base context, so a rerun plugin's second pass actually
     re-executes the chain instead of replaying stale saves or skipping."""
 
-    def test_execute_teardown_execute_replays_cleanly(self, monkeypatch):
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json={"v": 1})
-
-        monkeypatch.setattr(
-            "pytest_httpchain.carrier.build_client_kwargs",
-            lambda *args, **kwargs: {"transport": httpx.MockTransport(handler)},
-        )
-
+    @pytest.fixture
+    def executed(self, monkeypatch):
+        """A one-stage scenario class after its first pass: it saved `v`."""
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"v": 1}))
+        monkeypatch.setattr("pytest_httpchain.carrier.build_client_kwargs", lambda *args, **kwargs: {"transport": transport})
         scenario = Scenario.model_validate(
             {
                 "substitutions": [{"vars": {"base": 1}}],
-                "stages": [
-                    {
-                        "name": "s",
-                        "request": {"url": "http://mock/ok"},
-                        "response": [{"save": {"jmespath": {"v": "v"}}}, {"verify": {"status": 200}}],
-                    }
-                ],
+                "stages": [{"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"save": {"jmespath": {"v": "v"}}}]}],
             }
         )
         cls = _make_carrier_subclass(scenario=scenario, _initialized=False)
-        stage = scenario.stages[0]
-
-        cls.execute_stage(stage, {})
-        first_client = cls.client
-        assert cls._initialized is True
+        cls.execute_stage(scenario.stages[0], {})
         assert cls.global_context["v"] == 1
+        yield cls, scenario.stages[0]
+        cls.teardown_class()  # closes whichever client the test left open
 
+    def test_teardown_restores_fresh_state(self, executed):
+        cls, _ = executed
+        client = cls.client
         cls.teardown_class()
-        assert first_client is not None
-        assert first_client.is_closed
-        for name, value in fresh_scenario_state().items():
-            assert getattr(cls, name) == value, f"{name} not reset"
+        assert client.is_closed
+        assert {name: getattr(cls, name) for name in fresh_scenario_state()} == fresh_scenario_state()
         # Saves are gone; the pristine scenario context survives.
         assert dict(cls.global_context) == {"base": 1}
 
-        # The second pass re-initializes (fresh client) and replays the chain.
+    def test_second_pass_reinitializes_and_replays(self, executed):
+        cls, stage = executed
+        first_client = cls.client
+        cls.teardown_class()
         cls.execute_stage(stage, {})
         assert cls.client is not first_client
         assert cls.global_context["v"] == 1

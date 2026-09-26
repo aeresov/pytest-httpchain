@@ -7,99 +7,65 @@ from pytest_httpchain.jsonref.loader import load_json
 from pytest_httpchain.warnings import AmbiguousReferenceWarning
 
 
-class TestRefResolution:
-    """Tests for basic $ref resolution."""
+@pytest.mark.parametrize(
+    "case_file",
+    [
+        pytest.param("case_ref_self.json", id="internal"),
+        pytest.param("case_ref_sibling.json", id="external"),
+        pytest.param("case_ref_child.json", id="external-in-subdir"),
+        pytest.param("case_ref_chain.json", id="external-chain-a-b-c"),
+    ],
+)
+def test_ref_replaced_by_target(datadir, case_file):
+    assert load_json(datadir / case_file)["target"] == {"value": 42}
 
-    @pytest.mark.parametrize(
-        "case_file",
-        [
-            "case_ref_self.json",
-            "case_ref_sibling.json",
-            "case_ref_child.json",
-            "case_ref_chain.json",
-        ],
-    )
-    def test_ref_resolves_to_referenced_value(self, datadir, case_file):
-        """$ref should be replaced with the referenced value."""
-        result = load_json(datadir / case_file)
-        assert result["source"]["value"] == 42
-        assert result["target"]["value"] == 42
 
-    @pytest.mark.parametrize(
-        "case_file",
-        [
-            "case_ref_self.json",
-            "case_ref_sibling.json",
-            "case_ref_child.json",
-            "case_ref_chain.json",
-        ],
-    )
-    def test_ref_key_removed_after_resolution(self, datadir, case_file):
-        """$ref key should not appear in resolved output."""
-        result = load_json(datadir / case_file)
-        assert "$ref" not in result["target"]
+@pytest.mark.parametrize("value", ["hello world", 42, 3.14159, True, False, None, [1, 2, 3]])
+def test_ref_resolves_to_any_json_value(create_json_file, value):
+    file = create_json_file("test.json", {"source": value, "ref": {"$ref": "#/source"}})
+    resolved = load_json(file)["ref"]
+    assert resolved == value
+    assert type(resolved) is type(value)
 
 
 class TestMerging:
-    """Tests for $ref merging with sibling properties."""
+    """Sibling properties merge additively into the referenced dict."""
 
-    def test_merge_ref_with_sibling_properties(self, datadir):
-        """When $ref has sibling properties, they should be merged into the result."""
-        result = load_json(datadir / "case_merge_sibling.json")
-        assert result["result"]["value"] == 42
-        assert result["result"]["extra_value"] == 42
-        assert "$ref" not in result["result"]
+    def test_siblings_added_to_referenced_dict(self, datadir):
+        assert load_json(datadir / "case_merge_sibling.json")["result"] == {"value": 42, "extra_value": 42}
 
-    def test_merge_preserves_nested_structure(self, datadir):
-        """Nested objects with refs should all be resolved."""
-        result = load_json(datadir / "case_merge_nested.json")
-        assert result["result"]["original"]["value"] == 42
-        assert result["result"]["from_ref"]["value"] == 42
+    def test_refs_resolved_inside_siblings(self, datadir):
+        assert load_json(datadir / "case_merge_multi.json")["result"] == {
+            "first": {"value": 42},
+            "second": {"value": 42, "nested": {"extra_value": 42}},
+        }
 
-    def test_merge_multiple_refs_in_nested_structure(self, datadir):
-        """Multiple $refs at different nesting levels should all resolve."""
-        result = load_json(datadir / "case_merge_multi.json")
-        assert result["result"]["first"]["value"] == 42
-        assert result["result"]["second"]["value"] == 42
-        assert result["result"]["second"]["nested"]["extra_value"] == 42
+    def test_lists_concatenate_referenced_first(self, datadir):
+        assert load_json(datadir / "case_merge_list.json")["result"]["items"] == ["from_sibling", "from_local"]
 
-    def test_deep_merge_combines_nested_dicts(self, datadir):
-        """Deep merge should combine nested dictionaries from ref and siblings."""
-        result = load_json(datadir / "case_merge_dict.json")
-        assert result["result"]["merged"]["local"] == 42
-        assert result["result"]["merged"]["other"] == 42
+    def test_empty_referenced_dict_keeps_only_siblings(self, create_json_files):
+        files = create_json_files({"empty.json": {}, "main.json": {"data": {"$ref": "empty.json", "extra": "value"}}})
+        assert load_json(files["main.json"])["data"] == {"extra": "value"}
 
-    def test_merge_concatenates_lists(self, datadir):
-        """Lists from ref and siblings should be concatenated."""
-        result = load_json(datadir / "case_merge_list.json")
-        assert "from_local" in result["result"]["items"]
-        assert "from_sibling" in result["result"]["items"]
 
-    def test_merge_conflict_raises_error(self, datadir):
-        """Conflicting scalar values should raise ReferenceResolverError."""
-        with pytest.raises(ReferenceResolverError, match="Merge conflict"):
-            load_json(datadir / "case_merge_conflict_simple.json")
+class TestSiblingMergePolicy:
+    """No last-wins: a sibling may only repeat a value, never replace it. Null
+    is a value like any other, and equality is judged in JSON terms, where
+    Python's ``True == 1`` must not pass (different types AND values)."""
 
-    def test_merge_with_empty_object_ref(self, create_json_file):
-        """Merging with empty object ref should preserve only sibling properties."""
-        create_json_file("empty.json", {})
-        file = create_json_file(
-            "main.json",
-            {"data": {"$ref": "empty.json", "extra": "value"}},
-        )
-        result = load_json(file)
-        assert result["data"] == {"extra": "value"}
-        assert "$ref" not in result["data"]
+    @pytest.mark.parametrize(
+        ("base", "sibling"),
+        [(42, 99), (42, None), (None, 42), (True, 1), (False, 0), (1, True), (0, False)],
+    )
+    def test_differing_values_conflict(self, create_json_files, base, sibling):
+        files = create_json_files({"base.json": {"value": base}, "main.json": {"data": {"$ref": "base.json", "value": sibling}}})
+        with pytest.raises(ReferenceResolverError, match="Merge conflict at value"):
+            load_json(files["main.json"])
 
-    def test_ref_to_null_value(self, create_json_file):
-        """Reference to null value should resolve to null."""
-        create_json_file("ref.json", {"value": None})
-        file = create_json_file(
-            "main.json",
-            {"data": {"$ref": "ref.json#/value"}},
-        )
-        result = load_json(file)
-        assert result["data"] is None
+    @pytest.mark.parametrize("value", [42, None, True])
+    def test_equal_values_merge(self, create_json_files, value):
+        files = create_json_files({"base.json": {"value": value}, "main.json": {"data": {"$ref": "base.json", "value": value}}})
+        assert load_json(files["main.json"])["data"] == {"value": value}
 
 
 class TestSchemaKeyPassthrough:
@@ -111,189 +77,27 @@ class TestSchemaKeyPassthrough:
     """
 
     def test_schema_key_preserved_in_main_document(self, create_json_file):
-        file = create_json_file(
-            "main.json",
-            {"$schema": "https://example.test/schema.json", "value": 42},
-        )
-        result = load_json(file)
-        assert result["$schema"] == "https://example.test/schema.json"
-        assert result["value"] == 42
+        doc = {"$schema": "https://example.test/schema.json", "value": 42}
+        assert load_json(create_json_file("main.json", doc)) == doc
 
     def test_schema_key_preserved_in_included_fragment(self, create_json_files):
-        """An $include'd JSON Schema document must keep its dialect declaration."""
-        files = create_json_files(
-            {
-                "draft07.schema.json": {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object"},
-                "main.json": {"verify": {"schema": {"$include": "draft07.schema.json"}}},
-            }
-        )
-        result = load_json(files["main.json"])
-        assert result["verify"]["schema"]["$schema"] == "http://json-schema.org/draft-07/schema#"
-        assert result["verify"]["schema"]["type"] == "object"
+        schema = {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object"}
+        files = create_json_files({"draft07.schema.json": schema, "main.json": {"verify": {"schema": {"$include": "draft07.schema.json"}}}})
+        assert load_json(files["main.json"])["verify"]["schema"] == schema
 
 
-class TestExternalReferences:
-    """Tests for external file references."""
-
-    def test_ref_to_whole_external_file(self, create_json_file):
-        """$ref without pointer should include entire external file."""
-        create_json_file("external.json", {"value": 42, "name": "external"})
-        file = create_json_file("main.json", {"data": {"$ref": "external.json"}})
-        result = load_json(file)
-        assert result["data"]["value"] == 42
-        assert result["data"]["name"] == "external"
-        assert "$ref" not in result["data"]
-
-    def test_same_file_can_be_referenced_multiple_times(self, create_json_file):
-        """Multiple refs to same file should not trigger circular reference error."""
-        create_json_file("shared.json", {"common": "value"})
-        file = create_json_file(
-            "main.json",
-            {
+def test_same_file_referenced_repeatedly_is_not_a_cycle(create_json_files):
+    files = create_json_files(
+        {
+            "shared.json": {"common": "value"},
+            "main.json": {
                 "first": {"$ref": "shared.json#/common"},
                 "second": {"$ref": "shared.json#/common"},
                 "third": {"$ref": "shared.json"},
             },
-        )
-        result = load_json(file)
-        assert result["first"] == "value"
-        assert result["second"] == "value"
-        assert result["third"]["common"] == "value"
-
-    def test_multiple_different_external_refs(self, create_json_file):
-        """Document can reference multiple different external files."""
-        create_json_file("a.json", {"a": 1})
-        create_json_file("b.json", {"b": 2})
-        file = create_json_file(
-            "main.json",
-            {
-                "ref_a": {"$ref": "a.json"},
-                "ref_b": {"$ref": "b.json"},
-            },
-        )
-        result = load_json(file)
-        assert result["ref_a"]["a"] == 1
-        assert result["ref_b"]["b"] == 2
-
-
-class TestPrimitiveReferences:
-    """Tests for references that resolve to primitive JSON values."""
-
-    def test_ref_resolves_to_string(self, create_json_file):
-        """$ref can resolve to a string value."""
-        file = create_json_file(
-            "test.json",
-            {"source": "hello world", "ref": {"$ref": "#/source"}},
-        )
-        result = load_json(file)
-        assert result["ref"] == "hello world"
-
-    def test_ref_resolves_to_integer(self, create_json_file):
-        """$ref can resolve to an integer value."""
-        file = create_json_file(
-            "test.json",
-            {"source": 42, "ref": {"$ref": "#/source"}},
-        )
-        result = load_json(file)
-        assert result["ref"] == 42
-
-    def test_ref_resolves_to_float(self, create_json_file):
-        """$ref can resolve to a float value."""
-        file = create_json_file(
-            "test.json",
-            {"source": 3.14159, "ref": {"$ref": "#/source"}},
-        )
-        result = load_json(file)
-        assert result["ref"] == 3.14159
-
-    def test_ref_resolves_to_true(self, create_json_file):
-        """$ref can resolve to boolean true."""
-        file = create_json_file(
-            "test.json",
-            {"source": True, "ref": {"$ref": "#/source"}},
-        )
-        result = load_json(file)
-        assert result["ref"] is True
-
-    def test_ref_resolves_to_false(self, create_json_file):
-        """$ref can resolve to boolean false."""
-        file = create_json_file(
-            "test.json",
-            {"source": False, "ref": {"$ref": "#/source"}},
-        )
-        result = load_json(file)
-        assert result["ref"] is False
-
-    def test_ref_resolves_to_null(self, create_json_file):
-        """$ref can resolve to null."""
-        file = create_json_file(
-            "test.json",
-            {"source": None, "ref": {"$ref": "#/source"}},
-        )
-        result = load_json(file)
-        assert result["ref"] is None
-
-
-class TestArrayReferences:
-    """Tests for references involving arrays."""
-
-    def test_ref_resolves_to_array(self, create_json_file):
-        """$ref can resolve to an entire array."""
-        file = create_json_file(
-            "test.json",
-            {"source": [1, 2, 3], "ref": {"$ref": "#/source"}},
-        )
-        result = load_json(file)
-        assert result["ref"] == [1, 2, 3]
-
-    def test_ref_to_array_element_by_index(self, create_json_file):
-        """$ref can target specific array element by index."""
-        file = create_json_file(
-            "test.json",
-            {"source": ["first", "second", "third"], "ref": {"$ref": "#/source/1"}},
-        )
-        result = load_json(file)
-        assert result["ref"] == "second"
-
-    def test_refs_inside_array_elements(self, create_json_file):
-        """$ref objects inside arrays should be resolved."""
-        file = create_json_file(
-            "test.json",
-            {
-                "template": {"type": "item"},
-                "items": [
-                    {"$ref": "#/template"},
-                    {"$ref": "#/template"},
-                    {"name": "custom"},
-                ],
-            },
-        )
-        result = load_json(file)
-        assert result["items"][0] == {"type": "item"}
-        assert result["items"][1] == {"type": "item"}
-        assert result["items"][2] == {"name": "custom"}
-        assert "$ref" not in result["items"][0]
-
-    def test_ref_to_nested_array_element(self, create_json_file):
-        """$ref can navigate into nested arrays."""
-        file = create_json_file(
-            "test.json",
-            {"matrix": [[1, 2], [3, 4], [5, 6]], "ref": {"$ref": "#/matrix/1/0"}},
-        )
-        result = load_json(file)
-        assert result["ref"] == 3
-
-    def test_ref_to_property_inside_array_element(self, create_json_file):
-        """$ref can target object property inside array element."""
-        file = create_json_file(
-            "test.json",
-            {
-                "users": [{"name": "Alice"}, {"name": "Bob"}],
-                "first_user_name": {"$ref": "#/users/0/name"},
-            },
-        )
-        result = load_json(file)
-        assert result["first_user_name"] == "Alice"
+        }
+    )
+    assert load_json(files["main.json"]) == {"first": "value", "second": "value", "third": {"common": "value"}}
 
 
 @pytest.mark.parametrize("directive", ["$ref", "$include", "$merge"])
@@ -304,118 +108,45 @@ class TestDirectiveAliases:
     $ref is the legacy spelling. Parametrizing here keeps their coverage even.
     """
 
-    def test_resolves_internal_reference(self, create_json_file, directive):
-        """Directive works for internal references."""
-        file = create_json_file(
-            "test.json",
-            {"source": {"value": 42}, "target": {directive: "#/source"}},
-        )
-        result = load_json(file)
-        assert result["target"]["value"] == 42
-        assert directive not in result["target"]
+    def test_internal_reference(self, create_json_file, directive):
+        file = create_json_file("test.json", {"source": {"value": 42}, "target": {directive: "#/source"}})
+        assert load_json(file)["target"] == {"value": 42}
 
-    def test_resolves_external_reference(self, create_json_file, directive):
-        """Directive works for external file references."""
-        create_json_file("external.json", {"data": "from external"})
-        file = create_json_file(
-            "test.json",
-            {"imported": {directive: "external.json"}},
-        )
-        result = load_json(file)
-        assert result["imported"]["data"] == "from external"
+    def test_whole_external_file(self, create_json_files, directive):
+        files = create_json_files({"external.json": {"data": "from external"}, "test.json": {"imported": {directive: "external.json"}}})
+        assert load_json(files["test.json"])["imported"] == {"data": "from external"}
 
-    def test_with_pointer(self, create_json_file, directive):
-        """Directive works with JSON pointers into an external file."""
-        create_json_file("external.json", {"nested": {"value": 99}})
-        file = create_json_file(
-            "test.json",
-            {"target": {directive: "external.json#/nested/value"}},
-        )
-        result = load_json(file)
-        assert result["target"] == 99
+    def test_pointer_into_external_file(self, create_json_files, directive):
+        files = create_json_files({"external.json": {"nested": {"value": 99}}, "test.json": {"target": {directive: "external.json#/nested/value"}}})
+        assert load_json(files["test.json"])["target"] == 99
 
-    def test_with_sibling_merge(self, create_json_file, directive):
-        """Directive supports deep merging with sibling properties."""
-        file = create_json_file(
-            "test.json",
-            {
-                "base": {"a": 1, "b": 2},
-                "extended": {directive: "#/base", "c": 3},
-            },
-        )
-        result = load_json(file)
-        assert result["extended"] == {"a": 1, "b": 2, "c": 3}
+    def test_sibling_merge(self, create_json_file, directive):
+        file = create_json_file("test.json", {"base": {"a": 1, "b": 2}, "extended": {directive: "#/base", "c": 3}})
+        assert load_json(file)["extended"] == {"a": 1, "b": 2, "c": 3}
 
-    def test_in_array(self, create_json_file, directive):
-        """Directive works inside arrays."""
+    def test_inside_array(self, create_json_file, directive):
         file = create_json_file(
             "test.json",
-            {
-                "template": {"type": "item"},
-                "items": [{directive: "#/template"}, {directive: "#/template"}],
-            },
+            {"template": {"type": "item"}, "items": [{directive: "#/template"}, {directive: "#/template"}, {"name": "custom"}]},
         )
-        result = load_json(file)
-        assert result["items"] == [{"type": "item"}, {"type": "item"}]
+        assert load_json(file)["items"] == [{"type": "item"}, {"type": "item"}, {"name": "custom"}]
 
     def test_non_string_value_raises(self, create_json_file, directive):
-        """A non-string directive value must raise (M38)."""
-        file = create_json_file(
-            "test.json",
-            {"target": {directive: ["#/source"]}},
-        )
+        """M38: a clean ReferenceResolverError, not a raw TypeError."""
+        file = create_json_file("test.json", {"target": {directive: ["#/source"]}})
         with pytest.raises(ReferenceResolverError, match="must be a string"):
             load_json(file)
 
 
-class TestMultipleDirectives:
-    """An object may carry at most one reference directive (M37)."""
-
-    @pytest.mark.parametrize(
-        "directives",
-        [
-            ("$ref", "$include"),
-            ("$ref", "$merge"),
-            ("$include", "$merge"),
-            ("$ref", "$include", "$merge"),
-        ],
-    )
-    def test_multiple_directives_raise(self, create_json_file, directives):
-        """More than one directive key in one object must raise, not silently drop."""
-        create_json_file("external.json", {"value": 42})
-        file = create_json_file(
-            "test.json",
-            {"target": dict.fromkeys(directives, "external.json")},
-        )
-        with pytest.raises(ReferenceResolverError, match="Multiple reference directives"):
-            load_json(file)
-
-
-class TestNullMergeSemantics:
-    """Null is not an override: the no-last-wins promise holds for null like
-    any other value. A null/value pair in the same position is a conflict."""
-
-    def test_null_sibling_conflicts_with_value(self, create_json_file):
-        create_json_file("base.json", {"value": 42})
-        file = create_json_file("main.json", {"data": {"$ref": "base.json", "value": None}})
-        with pytest.raises(ReferenceResolverError, match="Merge conflict at value"):
-            load_json(file)
-
-    def test_value_sibling_conflicts_with_null_base(self, create_json_file):
-        create_json_file("base.json", {"value": None})
-        file = create_json_file("main.json", {"data": {"$ref": "base.json", "value": 42}})
-        with pytest.raises(ReferenceResolverError, match="Merge conflict at value"):
-            load_json(file)
-
-    def test_equal_values_are_not_a_conflict(self, create_json_file):
-        create_json_file("base.json", {"value": 42})
-        file = create_json_file("main.json", {"data": {"$ref": "base.json", "value": 42}})
-        assert load_json(file)["data"] == {"value": 42}
-
-    def test_equal_nulls_are_not_a_conflict(self, create_json_file):
-        create_json_file("base.json", {"value": None})
-        file = create_json_file("main.json", {"data": {"$ref": "base.json", "value": None}})
-        assert load_json(file)["data"] == {"value": None}
+@pytest.mark.parametrize(
+    "directives",
+    [("$ref", "$include"), ("$ref", "$merge"), ("$include", "$merge"), ("$ref", "$include", "$merge")],
+)
+def test_multiple_directives_in_one_object_raise(create_json_files, directives):
+    """M37: at most one directive per object — never silently drop the rest."""
+    files = create_json_files({"external.json": {"value": 42}, "test.json": {"target": dict.fromkeys(directives, "external.json")}})
+    with pytest.raises(ReferenceResolverError, match="Multiple reference directives"):
+        load_json(files["test.json"])
 
 
 class TestTwoCandidateLookup:
@@ -433,76 +164,19 @@ class TestTwoCandidateLookup:
 
         assert result["data"] == {"value": "local"}
 
-    def test_root_relative_fallback_is_silent(self, tmp_path, create_json_file):
-        create_json_file("fragment.json", {"value": "root"})
+    @pytest.mark.parametrize(("where", "expected"), [("fragment.json", "root"), ("sub/fragment.json", "local")])
+    def test_single_candidate_is_silent(self, tmp_path, create_json_file, where, expected):
+        create_json_file(where, {"value": expected})
         main = create_json_file("sub/main.json", {"data": {"$ref": "fragment.json"}})
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             result = load_json(main, root_path=tmp_path)
 
-        assert result["data"] == {"value": "root"}
-
-    def test_file_relative_only_is_silent(self, tmp_path, create_json_file):
-        create_json_file("sub/fragment.json", {"value": "local"})
-        main = create_json_file("sub/main.json", {"data": {"$ref": "fragment.json"}})
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            result = load_json(main, root_path=tmp_path)
-
-        assert result["data"] == {"value": "local"}
+        assert result["data"] == {"value": expected}
 
 
-class TestCrossTypeBoolConflicts:
-    """Python's True == 1 must not defeat the no-silent-contradiction rule:
-    JSON true and 1 are different types AND different values, so a bool paired
-    with a number at the same path is a merge conflict, not an equality."""
-
-    @pytest.mark.parametrize(
-        ("ref_value", "sibling_value"),
-        [(True, 1), (False, 0), (1, True), (0, False)],
-    )
-    def test_bool_number_pair_is_conflict(self, create_json_files, ref_value, sibling_value):
-        files = create_json_files(
-            {
-                "main.json": {"$merge": "frag.json", "flag": sibling_value},
-                "frag.json": {"flag": ref_value},
-            }
-        )
-        with pytest.raises(ReferenceResolverError, match="conflict"):
-            load_json(files["main.json"])
-
-    def test_equal_bools_still_merge(self, create_json_files):
-        files = create_json_files(
-            {
-                "main.json": {"$merge": "frag.json", "flag": True},
-                "frag.json": {"flag": True},
-            }
-        )
-        assert load_json(files["main.json"])["flag"] is True
-
-
-class TestRfc6901ArrayIndices:
-    """RFC 6901 array indices are digit-only: '-1'/'+1'/' 1' are invalid
-    pointers, and Python's negative indexing must not silently return
-    wrong-end elements."""
-
-    @pytest.mark.parametrize("bad", ["-1", "+1", " 1", "1_0"])
-    def test_non_digit_array_index_rejected(self, create_json_files, bad):
-        files = create_json_files({"main.json": {"x": {"$ref": f"#/items/{bad}"}, "items": [1, 2, 3]}})
-        with pytest.raises(ReferenceResolverError, match="Invalid JSON pointer"):
-            load_json(files["main.json"])
-
-    def test_plain_index_still_works(self, create_json_files):
-        files = create_json_files({"main.json": {"x": {"$ref": "#/items/2"}, "items": [1, 2, 3]}})
-        assert load_json(files["main.json"])["x"] == 3
-
-
-class TestExternalPointerErrorContext:
-    def test_pointer_error_names_the_fragment_file(self, create_json_files):
-        """A bad pointer into an external fragment must say WHICH file was
-        being navigated."""
-        files = create_json_files({"main.json": {"x": {"$ref": "frag.json#/missing"}}, "frag.json": {"other": 1}})
-        with pytest.raises(ReferenceResolverError, match="frag.json"):
-            load_json(files["main.json"])
+def test_bad_pointer_into_external_file_names_that_file(create_json_files):
+    files = create_json_files({"main.json": {"x": {"$ref": "frag.json#/missing"}}, "frag.json": {"other": 1}})
+    with pytest.raises(ReferenceResolverError, match=r"Invalid JSON pointer /missing in .*frag\.json"):
+        load_json(files["main.json"])

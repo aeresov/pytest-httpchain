@@ -1,9 +1,13 @@
 import base64
 import datetime
+import importlib.metadata
 import json
+from pathlib import Path
 
 import httpx
+import pytest
 
+from pytest_httpchain import har_writer
 from pytest_httpchain.har_writer import request_response_to_har_entry, write_har_file
 
 
@@ -30,35 +34,39 @@ def _make_pair(elapsed_ms: float | None = 123.5) -> tuple[httpx.Request, httpx.R
     return request, response
 
 
+def _write_one(tmp_path: Path, test_name: str = "test_users", elapsed_ms: float | None = 123.5) -> Path:
+    request, response = _make_pair(elapsed_ms)
+    return write_har_file(tmp_path, test_name, [(request, response, None)])
+
+
+def _entry(path: Path, index: int = 0) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))["log"]["entries"][index]
+
+
 class TestWriteHarFile:
-    def test_creates_file(self, tmp_path):
-        request, response = _make_pair()
-        path = write_har_file(tmp_path, "test_users", [(request, response, None)])
+    def test_log_envelope(self, tmp_path):
+        log = json.loads(_write_one(tmp_path).read_text(encoding="utf-8"))["log"]
 
-        assert path.exists()
-        assert path.suffix == ".har"
-        assert path.parent == tmp_path
-
-    def test_top_level_shape(self, tmp_path):
-        request, response = _make_pair()
-        path = write_har_file(tmp_path, "test_users", [(request, response, None)])
-
-        har = json.loads(path.read_text(encoding="utf-8"))
-
-        assert "log" in har
-        log = har["log"]
-        assert log["version"] == "1.2"
-        assert "creator" in log
-        assert log["creator"]["name"] == "pytest-httpchain"
-        assert "version" in log["creator"]
-        assert isinstance(log["entries"], list)
+        assert {key: value for key, value in log.items() if key != "entries"} == {
+            "version": "1.2",
+            "creator": {"name": "pytest-httpchain", "version": importlib.metadata.version("pytest-httpchain")},
+            "comment": "Test: test_users",
+        }
         assert len(log["entries"]) == 1
 
-    def test_entry_request_and_response_fields(self, tmp_path):
-        request, response = _make_pair()
-        path = write_har_file(tmp_path, "test_users", [(request, response, None)])
+    def test_unknown_version_when_metadata_is_missing(self, monkeypatch):
+        def missing(_name):
+            raise importlib.metadata.PackageNotFoundError
 
-        entry = json.loads(path.read_text(encoding="utf-8"))["log"]["entries"][0]
+        monkeypatch.setattr(har_writer, "version", missing)
+        har_writer._get_version.cache_clear()
+        try:
+            assert har_writer._get_version() == "unknown"
+        finally:
+            har_writer._get_version.cache_clear()
+
+    def test_entry_request_and_response_fields(self, tmp_path):
+        entry = _entry(_write_one(tmp_path))
 
         assert entry["request"]["method"] == "POST"
         assert entry["request"]["url"] == "https://example.com/api/users"
@@ -67,33 +75,18 @@ class TestWriteHarFile:
     def test_timing_is_nonzero(self, tmp_path):
         # M19 regression guard: a real duration derived from response.elapsed
         # must appear instead of 0.
-        request, response = _make_pair(elapsed_ms=123.5)
-        path = write_har_file(tmp_path, "test_users", [(request, response, None)])
+        entry = _entry(_write_one(tmp_path, elapsed_ms=123.5))
 
-        entry = json.loads(path.read_text(encoding="utf-8"))["log"]["entries"][0]
-
-        assert isinstance(entry["time"], (int, float))
         assert entry["time"] == 123.5
         assert entry["timings"]["wait"] == 123.5
 
     def test_missing_elapsed_is_handled(self, tmp_path):
         # When response.elapsed is unavailable (unread response), timing falls
-        # back to 0 without raising.
-        request, response = _make_pair(elapsed_ms=None)
-        path = write_har_file(tmp_path, "test_users", [(request, response, None)])
+        # back to 0 and the wait to HAR's "unknown" without raising.
+        entry = _entry(_write_one(tmp_path, elapsed_ms=None))
 
-        entry = json.loads(path.read_text(encoding="utf-8"))["log"]["entries"][0]
-
-        assert isinstance(entry["time"], (int, float))
         assert entry["time"] == 0
-
-    def test_unsafe_test_name_is_sanitized(self, tmp_path):
-        request, response = _make_pair()
-        path = write_har_file(tmp_path, "tests/foo.py::test_bar", [(request, response, None)])
-
-        assert path.exists()
-        assert "/" not in path.name
-        assert ":" not in path.name
+        assert entry["timings"]["wait"] == -1
 
 
 class TestMultipleExchanges:
@@ -105,7 +98,6 @@ class TestMultipleExchanges:
         path = write_har_file(tmp_path, "test_parallel", [(request, response, None) for request, response in pairs])
 
         entries = json.loads(path.read_text(encoding="utf-8"))["log"]["entries"]
-        assert len(entries) == 3
         order = [{h["name"]: h["value"] for h in e["request"]["headers"]}["x-iteration"] for e in entries]
         assert order == ["0", "1", "2"]
 
@@ -114,12 +106,21 @@ class TestMultipleExchanges:
         real, the response side is the browser-convention status-0 stub."""
         request, _ = _make_pair()
 
-        path = write_har_file(tmp_path, "test_timeout", [(request, None, None)])
+        entry = _entry(write_har_file(tmp_path, "test_timeout", [(request, None, None)]))
 
-        entry = json.loads(path.read_text(encoding="utf-8"))["log"]["entries"][0]
         assert entry["request"]["url"] == "https://example.com/api/users"
-        assert entry["response"]["status"] == 0
-        assert "No response received" in entry["comment"]
+        assert entry["response"] == {
+            "status": 0,
+            "statusText": "",
+            "httpVersion": "HTTP/1.1",
+            "cookies": [],
+            "headers": [],
+            "content": {"size": 0, "mimeType": "x-unknown"},
+            "redirectURL": "",
+            "headersSize": -1,
+            "bodySize": -1,
+        }
+        assert entry["comment"] == "No response received (request failed or timed out)"
 
 
 class TestPerExchangeStartTimes:
@@ -132,15 +133,13 @@ class TestPerExchangeStartTimes:
         t0 = datetime.datetime(2026, 7, 22, 10, 0, 0, tzinfo=datetime.UTC)
         t1 = datetime.datetime(2026, 7, 22, 10, 0, 5, tzinfo=datetime.UTC)
         path = write_har_file(tmp_path, "t", [(req1, resp1, t0), (req2, resp2, t1)])
-        entries = json.loads(path.read_text())["log"]["entries"]
-        assert entries[0]["startedDateTime"] == t0.isoformat()
-        assert entries[1]["startedDateTime"] == t1.isoformat()
+        assert [_entry(path, i)["startedDateTime"] for i in (0, 1)] == [t0.isoformat(), t1.isoformat()]
 
     def test_missing_start_time_falls_back_to_write_time(self, tmp_path):
-        req, resp = _make_pair()
-        path = write_har_file(tmp_path, "t", [(req, resp, None)])
-        entries = json.loads(path.read_text())["log"]["entries"]
-        datetime.datetime.fromisoformat(entries[0]["startedDateTime"])
+        before = datetime.datetime.now(datetime.UTC)
+        path = _write_one(tmp_path)
+        after = datetime.datetime.now(datetime.UTC)
+        assert before <= datetime.datetime.fromisoformat(_entry(path)["startedDateTime"]) <= after
 
 
 class TestSerializationFamilies:
@@ -173,6 +172,11 @@ class TestSerializationFamilies:
             }
         ]
 
+    def test_cookie_without_path_or_domain_omits_them(self):
+        cookies = httpx.Cookies()
+        cookies.set("bare", "1", domain="", path="")  # Cookies.set always marks HttpOnly
+        assert har_writer._format_cookies(cookies) == [{"name": "bare", "value": "1", "secure": False, "httpOnly": True}]
+
     def test_same_name_response_cookies_keep_distinct_scopes(self):
         req = httpx.Request("GET", "https://x.com/")
         resp = httpx.Response(
@@ -193,6 +197,18 @@ class TestSerializationFamilies:
         assert cookies[0]["secure"] is True
         assert cookies[0]["httpOnly"] is True
 
+    def test_repeated_response_headers_are_not_comma_folded(self):
+        """httpx.Headers.items() folds repeated names with ", ". RFC 6265 forbids
+        that for Set-Cookie precisely because cookie attributes contain commas, so
+        folding two cookies corrupts both in the HAR export."""
+        set_cookies = ["a=1; Path=/; Expires=Wed, 21 Oct 2026 07:28:00 GMT", "b=2; Path=/"]
+        req = httpx.Request("GET", "https://example.com/")
+        resp = httpx.Response(200, headers=[("set-cookie", value) for value in set_cookies], request=req)
+
+        headers = request_response_to_har_entry(req, resp)["response"]["headers"]
+
+        assert [h["value"] for h in headers if h["name"] == "set-cookie"] == set_cookies
+
     def test_query_string_extracted(self):
         req = httpx.Request("GET", "https://x.com/p?a=1&b=2&a=3")
         entry = request_response_to_har_entry(req, httpx.Response(200, request=req))
@@ -203,25 +219,19 @@ class TestSerializationFamilies:
             {"name": "b", "value": "2"},
         ]
 
-    def test_form_urlencoded_body_params(self):
-        req = httpx.Request("POST", "https://x.com", data={"k1": "v1", "k2": "v2"})
-        entry = request_response_to_har_entry(req, httpx.Response(200, request=req))
-        post = entry["request"]["postData"]
-        assert post["mimeType"] == "application/x-www-form-urlencoded"
-        assert {"name": "k1", "value": "v1"} in post["params"]
-        assert {"name": "k2", "value": "v2"} in post["params"]
-
     def test_repeated_form_values_are_separate_scalar_params(self):
+        """HAR params are one name/value record per pair, in body order — a
+        repeated name is several records, not one record with an array value."""
         req = httpx.Request("POST", "https://x.com", content=b"tag=one&tag=two&empty=", headers={"content-type": "application/x-www-form-urlencoded"})
 
-        params = request_response_to_har_entry(req, httpx.Response(200, request=req))["request"]["postData"]["params"]
+        post = request_response_to_har_entry(req, httpx.Response(200, request=req))["request"]["postData"]
 
-        assert params == [
+        assert post["mimeType"] == "application/x-www-form-urlencoded"
+        assert post["params"] == [
             {"name": "tag", "value": "one"},
             {"name": "tag", "value": "two"},
             {"name": "empty", "value": ""},
         ]
-        assert all(isinstance(param["value"], str) for param in params)
 
     def test_binary_request_body_base64_encoded(self):
         raw = b"\xff\xfe\x00"
@@ -253,83 +263,56 @@ class TestSerializationFamilies:
         assert "postData" not in entry["request"]
 
 
-class TestFilenameCollisions:
-    def test_distinct_nodeids_get_distinct_files(self, tmp_path):
-        """Sanitization maps '/'/'\\'/':' all to '_' — distinct pytest nodeids
-        must still get distinct .har paths, not silently overwrite each other."""
-        request, response = _make_pair()
-        p1 = write_har_file(tmp_path, "t/x", [(request, response, None)])
-        p2 = write_har_file(tmp_path, "t:x", [(request, response, None)])
-        assert p1 != p2
-        assert p1.exists()
-        assert p2.exists()
+_LONG_PREFIX = "tests/test_mod.http.json::mod::test_stage[" + "x" * 500
 
-    def test_clean_names_keep_plain_filenames(self, tmp_path):
-        request, response = _make_pair()
-        path = write_har_file(tmp_path, "plain_name", [(request, response, None)])
-        assert path.name == "plain_name.har"
+
+class TestFilenames:
+    def test_clean_name_is_used_verbatim(self, tmp_path):
+        path = _write_one(tmp_path, "plain_name")
+        assert path == tmp_path / "plain_name.har"
+        assert path.exists()
 
     def test_windows_illegal_characters_are_replaced(self, tmp_path):
         """Parametrize ids put '?', '*', quotes and friends into nodeids. They
         are legal on Linux but reject the write on Windows, and the plugin only
         logs a warning when the write fails — the HAR would vanish silently."""
-        request, response = _make_pair()
-        path = write_har_file(tmp_path, 'tests/t.py::test_q[why? a*b "x"<y>|z]', [(request, response, None)])
+        path = _write_one(tmp_path, 'tests/t.py::test_q[why? a*b "x"<y>|z]')
 
         assert not set(path.name) & set('<>:"/\\|?*')
         assert path.exists()
         assert "test_q" in path.name, "a human must still recognize which test the .har belongs to"
 
-    def test_long_nodeid_stays_within_the_filename_limit(self, tmp_path):
+    @pytest.mark.parametrize(
+        "nodeid",
+        [
+            pytest.param("tests/deeply/nested/test_mod.http.json::mod::test_stage[" + "x" * 500 + "]", id="long"),
+            # The cap counts bytes, not characters.
+            pytest.param("tests/test_mod.http.json::mod::test_stage[" + "д" * 300 + "]", id="multi-byte"),
+        ],
+    )
+    def test_filename_stays_within_the_byte_limit(self, tmp_path, nodeid):
         """255 bytes is the per-component cap on ext4/APFS/NTFS: a deep scenario
         path plus long parametrize ids overruns it and the write raises OSError."""
-        request, response = _make_pair()
-        nodeid = "tests/deeply/nested/test_mod.http.json::mod::test_stage[" + "x" * 500 + "]"
-        path = write_har_file(tmp_path, nodeid, [(request, response, None)])
+        path = _write_one(tmp_path, nodeid)
 
         assert len(path.name.encode()) <= 255
         assert path.exists()
 
-    def test_truncated_nodeids_do_not_collide(self, tmp_path):
-        """Two nodeids sharing a long prefix truncate to the same stem, so
-        truncation needs the digest just as much as sanitization does."""
-        request, response = _make_pair()
-        prefix = "tests/test_mod.http.json::mod::test_stage[" + "x" * 500
-        p1 = write_har_file(tmp_path, prefix + "-alpha]", [(request, response, None)])
-        p2 = write_har_file(tmp_path, prefix + "-beta]", [(request, response, None)])
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [
+            # Sanitization maps '/', '\\' and ':' all to '_'.
+            pytest.param("t/x", "t:x", id="sanitized"),
+            # Two nodeids sharing a long prefix truncate to the same stem.
+            pytest.param(_LONG_PREFIX + "-alpha]", _LONG_PREFIX + "-beta]", id="truncated"),
+        ],
+    )
+    def test_lossy_names_do_not_collide(self, tmp_path, first, second):
+        """Both sanitization and truncation are lossy, so distinct nodeids must
+        still get distinct .har paths rather than overwrite each other."""
+        p1 = _write_one(tmp_path, first)
+        p2 = _write_one(tmp_path, second)
 
         assert p1 != p2
         assert p1.exists()
         assert p2.exists()
-
-    def test_non_ascii_nodeid_is_bounded_in_bytes(self, tmp_path):
-        """The filesystem cap counts bytes, not characters, so a multi-byte
-        parametrize id must not slip past it."""
-        request, response = _make_pair()
-        path = write_har_file(tmp_path, "tests/test_mod.http.json::mod::test_stage[" + "д" * 300 + "]", [(request, response, None)])
-
-        assert len(path.name.encode()) <= 255
-        assert path.exists()
-
-
-def test_repeated_response_headers_are_not_comma_folded():
-    """httpx.Headers.items() folds repeated names with ", ". RFC 6265 forbids
-    that for Set-Cookie precisely because cookie attributes contain commas, so
-    folding two cookies corrupts both in the HAR export."""
-    request = httpx.Request("GET", "https://example.com/")
-    response = httpx.Response(
-        200,
-        headers=[
-            ("set-cookie", "a=1; Path=/; Expires=Wed, 21 Oct 2026 07:28:00 GMT"),
-            ("set-cookie", "b=2; Path=/"),
-        ],
-        request=request,
-    )
-
-    entry = request_response_to_har_entry(request, response)
-    cookies = [h["value"] for h in entry["response"]["headers"] if h["name"] == "set-cookie"]
-
-    assert len(cookies) == 2
-    assert cookies[0].startswith("a=1")
-    assert cookies[1].startswith("b=2")
-    assert not any(v.startswith("a=1") and "b=2" in v for v in cookies)

@@ -107,7 +107,7 @@ def test_failed_first_keeps_chains_contiguous(pytester, run_scenario):
     again.assert_outcomes(passed=1, failed=1, skipped=1)
 
 
-def test_selection_dropping_earlier_stages_warns(pytester, run_scenario):
+def test_selection_dropping_earlier_stages_warns(run_scenario):
     """Reordering is defeated and chain-splitting dist modes are rejected, but
     pytest's selection mechanisms (-k, --lf, --deselect) can still silently
     orphan a chain's tail. Selecting only a later stage must warn that the
@@ -115,10 +115,11 @@ def test_selection_dropping_earlier_stages_warns(pytester, run_scenario):
     result = run_scenario("save/test_save_jmespath.http.json", args=("-s", "-k", "use_saved_values"))
     result.stdout.fnmatch_lines(["*were deselected*"])
 
-    # A full run of the same chain must not warn.
-    full = pytester.runpytest("-s")
-    full.assert_outcomes(passed=2)
-    full.stdout.no_fnmatch_line("*were deselected*")
+
+def test_full_chain_selection_does_not_warn(run_scenario):
+    result = run_scenario("save/test_save_jmespath.http.json")
+    result.assert_outcomes(passed=2)
+    result.stdout.no_fnmatch_line("*were deselected*")
 
 
 def test_split_chain_warning_survives_filterwarnings_error(pytester, run_scenario):

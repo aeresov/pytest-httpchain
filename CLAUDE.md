@@ -55,8 +55,8 @@ uv run pytest-httpchain validate --deep --syspath tests/integration/examples tes
 # bodies) as missed and report a ~20-point-low floor. CI uses this form.
 # `parallel` + `patch=subprocess` measure pytester subprocesses too and write
 # pid-suffixed data files — always `combine` before `report`.
-# Run the WHOLE suite: `fail_under = 94` applies to every `coverage report`, and
-# unit tests alone reach ~87, so `tests/unit` here would always exit non-zero.
+# Run the WHOLE suite: `fail_under = 96` applies to every `coverage report`, and
+# unit tests alone reach ~90, so `tests/unit` here would always exit non-zero.
 uv run coverage run -m pytest tests
 uv run coverage combine
 uv run coverage report --show-missing
@@ -118,30 +118,46 @@ Per-scenario mutable class state (client, abort flag, exchange bookkeeping) is d
 **Unit vs integration.** `tests/unit` owns pure logic — models, templates, jsonref,
 validation, and the error/edge paths of the engine. `tests/integration` owns
 everything that needs a real pytest session and a real socket: collection,
-ordering, fixtures, marks, and the HTTP round trip. Unit tests alone reach ~87%
-coverage in seconds; integration carries the rest to ~97%. When a behavior can
+ordering, fixtures, marks, and the HTTP round trip. Unit tests alone reach ~90%
+coverage in seconds; integration carries the rest to ~98%. When a behavior can
 be pinned in a unit test, pin it there — reach for an integration test when the
 thing under test *is* the pytest or HTTP interaction.
 
 **Integration tests** use pytest's `pytester` fixture. Prefer the `run_scenario`
 fixture (`tests/integration/conftest.py`) over calling `copy_example` /
-`runpytest` by hand; it takes extra pytest args via `args=` and switches to a
-real subprocess via `subprocess=True`, so almost every case fits:
+`runpytest` by hand; it takes extra pytest args via `args=`, switches to a
+real subprocess via `subprocess=True`, and accepts a scenario dict built inline,
+so almost every case fits:
 
 ```python
 run_scenario("verify/test_verify_status.http.json")  # plain run
 run_scenario("auth/test_request_auth.http.json", "auth.py")  # with aux files
 run_scenario("save/test_save_jmespath.http.json", args="--collect-only")
 run_scenario(*CHAIN_SCENARIOS, args=("-n", "2"), subprocess=True)
+run_scenario({"stages": [stage("s", "/headers", request={"timeout": 0.2})]})  # inline
 ```
+
+`tests/integration/helpers.py` holds the rest: `stage()` builds a stage against
+the example `server` fixture (GET, expect 200) so an inline scenario spells out
+only what its test is about; `har_entries()` reads the one HAR file a run
+wrote; `named()` builds parametrize rows whose first value is the test id.
+Scenarios that differ only in expected outcome share one parametrized test
+(`test_verify_passes`, `test_save_fails_cleanly`, ...) with the rationale as a
+comment on the row.
 
 **Where a scenario lives.** A scenario that is *fixture scaffolding* for the
 behavior under test goes in `tests/integration/examples/` as a real
-`test_<name>.http.json`, so the CLI validator and the schema check cover it too.
-A scenario that *is* the subject of the test — where reading it next to the
-assertion is the point — may be built inline and written into the pytester dir.
-Don't add an example file that only one test will ever use inline-style, and
-don't inline a scenario other tests could share.
+`test_<name>.http.json`, so collection runs the validator over it like any
+user scenario. A scenario that *is* the subject of the test — where reading it
+next to the assertion is the point — may be built inline. Don't add an example
+file that only one test will ever use inline-style, and don't inline a scenario
+other tests could share.
+
+**Unit test layout.** A unit test file mirrors the source module it pins
+(`test_request_builder.py` for `request_builder.py`, and so on). Validation
+fixtures under `tests/unit/test_validation/` each trigger exactly one finding
+(or none); `test_fixture_diagnostics` pins each one's complete diagnostic list —
+code, location, message — so a new fixture is a table row, not a test.
 
 **`slow` marker.** Applies to every test that spawns a pytester subprocess or
 waits on a real timeout/rate limit. Keep it accurate: it is what makes
@@ -149,6 +165,6 @@ waits on a real timeout/rate limit. Keep it accurate: it is what makes
 
 **"M\<n\>" in docstrings** (`M1`, `M14`, `M50`, ...) are internal review-round
 finding IDs, kept as provenance for regression guards. They are not resolvable
-outside the review that produced them, so they belong in a docstring next to a
-real explanation — never in a test's name, and never as the only thing a
-docstring says.
+outside the review that produced them, so they belong in a docstring (or a
+table row's comment) next to a real explanation — never in a test's name or id,
+and never as the only thing a docstring says.

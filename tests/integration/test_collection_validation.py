@@ -5,6 +5,8 @@ so a plain `pytest` run (even `--collect-only`) is the canonical validation gate
 
 import json
 
+import pytest
+
 
 def _write(pytester, name: str, data: dict) -> None:
     (pytester.path / name).write_text(json.dumps(data))
@@ -48,19 +50,6 @@ def test_undefined_variable_warns_at_collection(pytester):
     result = pytester.runpytest("--collect-only")
     assert result.ret == 0
     result.stdout.fnmatch_lines(["*ghost*"])
-
-
-def test_unknown_key_fails_collection(pytester):
-    # Models forbid extra keys: a misspelled field is a collection error
-    # naming the key and its location, not a silently wrong request.
-    _write(
-        pytester,
-        "test_typo.http.json",
-        {"stages": [{"name": "s", "request": {"url": "https://x.test/a", "headerz": {"X": "1"}}, "response": [{"verify": {"status": 200}}]}]},
-    )
-    result = pytester.runpytest("--collect-only")
-    assert result.ret != 0
-    result.stdout.fnmatch_lines(["*headerz*Extra inputs are not permitted*"])
 
 
 def test_toplevel_schema_key_collects_clean(pytester):
@@ -112,39 +101,33 @@ def test_valid_scenario_collects_without_warning(pytester):
     result.stdout.fnmatch_lines(["*test_ok*"])
 
 
-def test_ambiguous_ref_surfaces_as_diagnostic_warning_at_collection(pytester):
-    """An ambiguous $ref (file exists under both lookup bases) collects with a
-    [HTTPCHAIN026] ScenarioValidationWarning — and under `filterwarnings =
-    error` it must surface as that accurate message, not be swallowed into the
-    misleading 'Failed to parse JSON file' collection error."""
-    (pytester.path / "fragment.json").write_text(json.dumps({"url": "http://server/root"}))
-    sub = pytester.path / "sub"
-    sub.mkdir()
-    (sub / "fragment.json").write_text(json.dumps({"url": "http://server/local"}))
-    (sub / "test_amb.http.json").write_text(
-        json.dumps(
-            {
-                "stages": [
-                    {
-                        "name": "s",
-                        "request": {"$ref": "fragment.json"},
-                        "response": [{"verify": {"status": 200}}],
-                    }
-                ]
-            }
-        )
-    )
+@pytest.fixture
+def ambiguous_ref(pytester):
+    """A scenario whose $ref target exists under both lookup bases (scenario
+    dir and root path)."""
+    _write(pytester, "fragment.json", {"url": "http://server/root"})
+    pytester.mkdir("sub")
+    _write(pytester, "sub/fragment.json", {"url": "http://server/local"})
+    _write(pytester, "sub/test_amb.http.json", {"stages": [{"name": "s", "request": {"$ref": "fragment.json"}, "response": [{"verify": {"status": 200}}]}]})
 
+
+@pytest.mark.usefixtures("ambiguous_ref")
+def test_ambiguous_ref_warns_at_collection(pytester):
     result = pytester.runpytest("--collect-only")
-    result.stdout.fnmatch_lines(["*HTTPCHAIN026*"])
     assert result.ret == 0
+    result.stdout.fnmatch_lines(["*HTTPCHAIN026*"])
 
+
+@pytest.mark.usefixtures("ambiguous_ref")
+def test_ambiguous_ref_keeps_its_diagnostic_under_filterwarnings_error(pytester):
+    """Escalated to an error, the [HTTPCHAIN026] warning must surface as that
+    accurate message — not be swallowed into the misleading 'Failed to parse
+    JSON file' collection error."""
     pytester.makeini("[pytest]\nfilterwarnings = error\n")
-    result_strict = pytester.runpytest("--collect-only")
-    assert result_strict.ret != 0
-    output = result_strict.stdout.str()
-    assert "HTTPCHAIN026" in output
-    assert "Failed to parse JSON file" not in output
+    result = pytester.runpytest("--collect-only")
+    assert result.ret != 0
+    result.stdout.fnmatch_lines(["*HTTPCHAIN026*"])
+    result.stdout.no_fnmatch_line("*Failed to parse JSON file*")
 
 
 def test_load_failures_are_coded_the_same_way_as_the_cli(pytester):
@@ -171,10 +154,11 @@ def test_load_failures_are_coded_the_same_way_as_the_cli(pytester):
     result.stdout.fnmatch_lines(["*[[]HTTPCHAIN014[]]*Illegal trailing comma*"])
 
 
-def test_schema_failures_are_coded_at_collection(pytester):
-    """A model-validation failure is HTTPCHAIN000 in both surfaces, and still
-    names the offending key (the `headerz` typo case)."""
-    _write(pytester, "test_typo.http.json", {"stages": [{"name": "s", "request": {"url": "https://x.test"}, "response": [{"verify": {"headerz": {}}}]}]})
+def test_unknown_key_fails_collection_with_code(pytester):
+    """Models forbid extra keys: a misspelled field is a collection error
+    naming the key and its location, not a silently wrong request — coded
+    HTTPCHAIN000, as in the CLI."""
+    _write(pytester, "test_typo.http.json", {"stages": [{"name": "s", "request": {"url": "https://x.test/a", "headerz": {"X": "1"}}, "response": [{"verify": {"status": 200}}]}]})
 
     result = pytester.runpytest("--collect-only")
 

@@ -6,152 +6,82 @@ file per executed stage, and that file must parse as valid HAR JSON.
 """
 
 import json
+from datetime import datetime
 
 import pytest
 
+from tests.integration.helpers import har_entries, stage
 
-def test_har_file_written(pytester, run_scenario):
-    har_dir = pytester.path / "har_out"
-
-    result = run_scenario("verify/test_verify_status.http.json", args=("-s", "--httpchain-output-dir", str(har_dir)))
-
-    # Sanity: the scenario itself passes (2 stages = 2 test methods).
-    result.assert_outcomes(errors=0, failed=0, passed=2)
-
-    # A HAR file must have been written under the output dir.
-    har_files = list(har_dir.glob("*.har"))
-    assert har_files, f"expected a .har file under {har_dir}, found none"
-
-    # It must parse as JSON with the canonical HAR top-level shape.
-    har = json.loads(har_files[0].read_text(encoding="utf-8"))
-    assert "log" in har
-    assert isinstance(har["log"]["entries"], list)
-    assert har["log"]["entries"], "HAR log must contain at least one entry"
+# Relative to the pytester dir, which is the CWD of both in-process and
+# subprocess runs.
+HAR_ARGS = ("-s", "--httpchain-output-dir", "har_out")
 
 
-def test_har_preserves_same_name_cookies_with_different_paths(pytester):
+@pytest.fixture
+def har_dir(pytester):
+    return pytester.path / "har_out"
+
+
+def test_har_file_written_per_stage(run_scenario, har_dir):
+    result = run_scenario("verify/test_verify_status.http.json", args=HAR_ARGS)
+
+    result.assert_outcomes(passed=2)
+    per_file = sorted([e["response"]["status"] for e in json.loads(p.read_text(encoding="utf-8"))["log"]["entries"]] for p in har_dir.glob("*.har"))
+    assert per_file == [[200], [400]]
+
+
+def test_har_preserves_same_name_cookies_with_different_paths(run_scenario, har_dir):
     """A valid response may scope the same cookie name to several paths;
     exporting it must not raise httpx.CookieConflict and drop the HAR file."""
-    har_dir = pytester.path / "har_out"
-    pytester.copy_example("conftest.py")
-    (pytester.path / "test_scoped_cookies.http.json").write_text(
-        json.dumps(
-            {
-                "stages": [
-                    {
-                        "name": "scoped_cookies",
-                        "fixtures": ["server"],
-                        "request": {"url": "{{ server }}/scoped-cookies"},
-                        "response": [{"verify": {"status": 200}}],
-                    }
-                ]
-            }
-        )
-    )
+    result = run_scenario({"stages": [stage("scoped_cookies", "/scoped-cookies")]}, args=HAR_ARGS)
 
-    result = pytester.runpytest("-s", "--httpchain-output-dir", str(har_dir))
-
-    result.assert_outcomes(errors=0, failed=0, passed=1)
-    har_files = list(har_dir.glob("*.har"))
-    assert len(har_files) == 1
-    cookies = json.loads(har_files[0].read_text(encoding="utf-8"))["log"]["entries"][0]["response"]["cookies"]
+    result.assert_outcomes(passed=1)
+    cookies = har_entries(har_dir)[0]["response"]["cookies"]
     assert {(cookie["name"], cookie["value"], cookie["path"]) for cookie in cookies} == {
         ("session", "root", "/"),
         ("session", "admin", "/admin"),
     }
 
 
-def test_har_form_repeats_are_separate_scalar_params(pytester):
-    har_dir = pytester.path / "har_out"
-    pytester.copy_example("conftest.py")
-    (pytester.path / "test_repeated_form.http.json").write_text(
-        json.dumps(
-            {
-                "stages": [
-                    {
-                        "name": "repeated_form",
-                        "fixtures": ["server"],
-                        "request": {
-                            "url": "{{ server }}/echo/form",
-                            "method": "POST",
-                            "body": {"form": {"tag": ["one", "two"], "empty": ""}},
-                        },
-                        "response": [{"verify": {"status": 200}}],
-                    }
-                ]
-            }
-        )
-    )
+def test_har_form_repeats_are_separate_scalar_params(run_scenario, har_dir):
+    form = {"method": "POST", "body": {"form": {"tag": ["one", "two"], "empty": ""}}}
+    result = run_scenario({"stages": [stage("repeated_form", "/echo/form", request=form)]}, args=HAR_ARGS)
 
-    result = pytester.runpytest("-s", "--httpchain-output-dir", str(har_dir))
-
-    result.assert_outcomes(errors=0, failed=0, passed=1)
-    har_files = list(har_dir.glob("*.har"))
-    assert len(har_files) == 1
-    params = json.loads(har_files[0].read_text(encoding="utf-8"))["log"]["entries"][0]["request"]["postData"]["params"]
-    assert params == [
+    result.assert_outcomes(passed=1)
+    assert har_entries(har_dir)[0]["request"]["postData"]["params"] == [
         {"name": "tag", "value": "one"},
         {"name": "tag", "value": "two"},
         {"name": "empty", "value": ""},
     ]
 
 
-def test_parallel_stage_har_contains_every_iteration(pytester, run_scenario):
+def test_parallel_stage_har_contains_every_iteration(run_scenario, har_dir):
     """A parallel stage's HAR must hold one entry per iteration, not a single
-    arbitrary iteration presented as the stage's only exchange. The report
-    section title must also say which of how many iterations it shows."""
-    har_dir = pytester.path / "har_out"
+    arbitrary iteration presented as the stage's only exchange."""
+    result = run_scenario("parallel/test_repeat.http.json", args=HAR_ARGS)
 
-    result = run_scenario("parallel/test_repeat.http.json", args=("-s", "--httpchain-output-dir", str(har_dir)))
-
-    result.assert_outcomes(errors=0, failed=0, passed=1)
-
-    har_files = list(har_dir.glob("*.har"))
-    assert len(har_files) == 1
-    entries = json.loads(har_files[0].read_text(encoding="utf-8"))["log"]["entries"]
-    assert len(entries) == 5  # repeat: 5
-    assert all(e["response"]["status"] == 200 for e in entries)
+    result.assert_outcomes(passed=1)
+    assert [e["response"]["status"] for e in har_entries(har_dir)] == [200] * 5  # repeat: 5
 
 
 @pytest.mark.slow
-def test_timeout_still_produces_report_and_har(pytester):
+def test_timeout_still_produces_report_and_har(run_scenario, har_dir):
     """A timed-out request previously vanished: no request section, no HAR.
     Now the request that was on the wire is reported and the HAR carries a
     status-0 entry for it."""
-    har_dir = pytester.path / "har_out"
-
-    pytester.copy_example("conftest.py")
-    (pytester.path / "test_timeout.http.json").write_text(
-        json.dumps(
-            {
-                "stages": [
-                    {
-                        "name": "times_out",
-                        "fixtures": ["server"],
-                        "request": {"url": "{{ server }}/delay/2", "timeout": 0.2},
-                        "response": [{"verify": {"status": 200}}],
-                    }
-                ]
-            }
-        )
-    )
     # Subprocess, not in-process: pytester's in-process mode restores
     # sys.modules between runs, which breaks httpx's lazily-cached
     # httpcore-exception mapping (isinstance against classes from a stale
     # httpcore module) — the timeout then surfaces as an unmapped
     # httpcore.ReadTimeout without request info. A real pytest run (fresh
     # interpreter) always gets the mapped httpx.ReadTimeout.
-    result = pytester.runpytest_subprocess("-s", "--httpchain-output-dir", str(har_dir))
+    result = run_scenario({"stages": [stage("times_out", "/delay/2", request={"timeout": 0.2})]}, args=HAR_ARGS, subprocess=True)
 
     result.assert_outcomes(failed=1)
     result.stdout.fnmatch_lines(["*HTTP Request*", "*GET*/delay/2*"])
-
-    har_files = list(har_dir.glob("*.har"))
-    assert len(har_files) == 1
-    entries = json.loads(har_files[0].read_text(encoding="utf-8"))["log"]["entries"]
-    assert len(entries) == 1
-    assert entries[0]["response"]["status"] == 0
-    assert entries[0]["request"]["url"].endswith("/delay/2")
+    [entry] = har_entries(har_dir)
+    assert entry["response"]["status"] == 0
+    assert entry["request"]["url"].endswith("/delay/2")
 
 
 def test_parallel_failure_report_labels_shown_iteration(run_scenario):
@@ -163,120 +93,71 @@ def test_parallel_failure_report_labels_shown_iteration(run_scenario):
     result.stdout.fnmatch_lines(["*HTTP Request (failing of 3 parallel iterations)*"])
 
 
-def test_stage_failing_before_request_inherits_nothing(pytester):
+def test_stage_failing_before_request_inherits_nothing(run_scenario, har_dir):
     """A stage that fails before any request runs (bad substitution template)
     must not inherit the previous parallel stage's exchanges: no stale
     'parallel iterations' label, no HAR file under its nodeid."""
-    har_dir = pytester.path / "har_out"
-
-    pytester.copy_example("conftest.py")
-    (pytester.path / "test_stale.http.json").write_text(
-        json.dumps(
-            {
-                "stages": [
-                    {
-                        "name": "parallel_ok",
-                        "fixtures": ["server"],
-                        "parallel": {"repeat": 3},
-                        "request": {"url": "{{ server }}/ok"},
-                        "response": [{"verify": {"status": 200}}],
-                    },
-                    {
-                        "name": "fails_pre_request",
-                        "fixtures": ["server"],
-                        "substitutions": [{"vars": {"boom": "{{ no_such_name }}"}}],
-                        "request": {"url": "{{ server }}/ok"},
-                        "response": [{"verify": {"status": 200}}],
-                    },
-                ]
-            }
-        )
-    )
-    result = pytester.runpytest("-s", "--httpchain-output-dir", str(har_dir))
+    scenario = {
+        "stages": [
+            stage("parallel_ok", parallel={"repeat": 3}),
+            stage("fails_pre_request", substitutions=[{"vars": {"boom": "{{ no_such_name }}"}}]),
+        ]
+    }
+    result = run_scenario(scenario, args=HAR_ARGS)
 
     result.assert_outcomes(passed=1, failed=1)
     result.stdout.no_fnmatch_line("*failing of 3 parallel iterations*")
-
-    har_files = sorted(p.name for p in har_dir.glob("*.har"))
+    har_files = [p.name for p in har_dir.glob("*.har")]
     assert len(har_files) == 1, har_files  # only the parallel stage wrote one
     assert "parallel_ok" in har_files[0]
 
 
 @pytest.mark.slow
-def test_timeout_after_passing_stage_shows_no_stale_response(pytester):
+def test_timeout_after_passing_stage_shows_no_stale_response(run_scenario):
     """A timed-out stage's report must not pair its request with the previous
     stage's response."""
-    pytester.copy_example("conftest.py")
-    (pytester.path / "test_pair.http.json").write_text(
-        json.dumps(
-            {
-                "stages": [
-                    {
-                        "name": "passes",
-                        "fixtures": ["server"],
-                        "request": {"url": "{{ server }}/ok"},
-                        "response": [{"verify": {"status": 200}}],
-                    },
-                    {
-                        "name": "times_out",
-                        "fixtures": ["server"],
-                        "request": {"url": "{{ server }}/delay/2", "timeout": 0.2},
-                        "response": [{"verify": {"status": 200}}],
-                    },
-                ]
-            }
-        )
-    )
+    scenario = {"stages": [stage("passes"), stage("times_out", "/delay/2", request={"timeout": 0.2})]}
     # Subprocess for the same httpx/pytester interaction documented in
     # test_timeout_still_produces_report_and_har.
-    result = pytester.runpytest_subprocess("-s")
+    result = run_scenario(scenario, subprocess=True)
 
     result.assert_outcomes(passed=1, failed=1)
     result.stdout.fnmatch_lines(["*HTTP Request*", "*GET*/delay/2*"])
     result.stdout.no_fnmatch_line("*HTTP Response*")
 
 
-def test_har_entries_carry_real_start_times(pytester, run_scenario):
+def test_har_entries_carry_real_start_times(run_scenario, har_dir):
     """startedDateTime must be each request's actual start, not export time:
     a rate-limited stage (3 iterations at 2/sec) spreads real starts over
     roughly a second, while export-time fabrication packs every entry within
     milliseconds of the stage's end."""
-    from datetime import datetime
+    result = run_scenario("parallel/test_rate_limit_slow.http.json", args=HAR_ARGS)
+    result.assert_outcomes(passed=1)
 
-    har_dir = pytester.path / "har_out"
-    result = run_scenario("parallel/test_rate_limit_slow.http.json", args=("-s", "--httpchain-output-dir", str(har_dir)))
-    result.assert_outcomes(errors=0, failed=0, passed=1)
-
-    har_files = list(har_dir.glob("*.har"))
-    assert len(har_files) == 1
-    entries = json.loads(har_files[0].read_text(encoding="utf-8"))["log"]["entries"]
+    entries = har_entries(har_dir)
     assert len(entries) == 3
     times = sorted(datetime.fromisoformat(e["startedDateTime"]) for e in entries)
     spread = (times[-1] - times[0]).total_seconds()
     assert spread >= 0.4, f"start times span only {spread}s — fabricated at export time?"
 
 
-def test_multipart_upload_writes_har_and_report(pytester, run_scenario):
+def test_multipart_upload_degrades_in_har_and_report(run_scenario, har_dir):
     """A multipart (files) body is a streaming httpx request whose bytes are
     consumed on send; the HAR and report paths must degrade to 'body not
     captured' instead of erroring — previously the whole HAR file was silently
     dropped and the request section showed a formatting error."""
-    har_dir = pytester.path / "har_out"
-
     result = run_scenario(
         "body_types/test_files_body.http.json",
         "body_types/upload_a.txt",
         "body_types/upload_b.bin",
-        args=("-s", "-rA", "--httpchain-output-dir", str(har_dir)),
+        args=(*HAR_ARGS, "-rA"),
     )
 
-    result.assert_outcomes(errors=0, failed=0, passed=1)
-
-    har_files = list(har_dir.glob("*.har"))
-    assert len(har_files) == 1, f"expected exactly one .har under {har_dir}"
-    entries = json.loads(har_files[0].read_text(encoding="utf-8"))["log"]["entries"]
-    assert len(entries) == 1
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(["*HTTP Request*", "*Streaming body*not captured*"])
+    result.stdout.no_fnmatch_line("*Error formatting*")
+    [entry] = har_entries(har_dir)
     # -1 is HAR's "unknown size": the streaming body is gone after the send.
-    assert entries[0]["request"]["bodySize"] == -1
-    assert "postData" not in entries[0]["request"]
-    assert entries[0]["response"]["status"] == 200
+    assert entry["request"]["bodySize"] == -1
+    assert "postData" not in entry["request"]
+    assert entry["response"]["status"] == 200

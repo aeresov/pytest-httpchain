@@ -1,22 +1,18 @@
-def test_fixture_injection(run_scenario):
-    """Test fixture values in stage context"""
-    result = run_scenario("fixtures/test_fixture_injection.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=1)
+import pytest
+
+from tests.integration.helpers import named
 
 
-def test_fixture_dict(run_scenario):
-    """Test fixture providing dict values"""
-    result = run_scenario("fixtures/test_fixture_dict.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=1)
-
-
-def test_fixture_factory(run_scenario):
-    """Test callable fixture (factory pattern)"""
-    result = run_scenario("fixtures/test_fixture_factory.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=1)
-
-
-def test_scenario_fixtures(run_scenario):
-    """Test scenario-level fixtures injected into all stages, deduplicated against stage fixtures"""
-    result = run_scenario("fixtures/test_scenario_fixtures.http.json")
-    result.assert_outcomes(errors=0, failed=0, passed=2)
+@pytest.mark.parametrize(
+    ("scenario", "passed"),
+    named(
+        ("fixture_injection", 1),
+        ("fixture_dict", 1),
+        ("fixture_factory", 1),  # a callable fixture (factory pattern)
+        # Scenario-level fixtures reach every stage, deduplicated against the
+        # stage's own fixtures.
+        ("scenario_fixtures", 2),
+    ),
+)
+def test_fixture_values_reach_templates(run_scenario, scenario, passed):
+    run_scenario(f"fixtures/test_{scenario}.http.json").assert_outcomes(passed=passed)

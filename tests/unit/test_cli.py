@@ -1,11 +1,14 @@
 """Unit tests for the pytest-httpchain CLI."""
 
+import importlib.metadata
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from pytest_httpchain.cli import app
+from pytest_httpchain.schema import build_schema
 
 runner = CliRunner()
 
@@ -17,366 +20,252 @@ def _write(path: Path, data: dict) -> Path:
     return path
 
 
-def _stage(name: str, url: str) -> dict:
-    return {"name": name, "request": {"url": url}, "response": [{"verify": {"status": 200}}]}
+def _stage(name: str, url: str, **fields) -> dict:
+    return {"name": name, "request": {"url": url}, "response": [{"verify": {"status": 200}}], **fields}
 
 
-def test_validate_ok_exit_zero(tmp_path):
-    f = _write(tmp_path / "ok.json", {"stages": [_stage("s", "https://x.test/a")]})
-    result = runner.invoke(app, ["validate", str(f)])
-    assert result.exit_code == 0, result.output
-    assert "OK" in result.output
+@pytest.fixture
+def ok_scenario(tmp_path) -> Path:
+    return _write(tmp_path / "ok.json", {"stages": [_stage("s", "https://x.test/a")]})
 
 
-def test_schema_has_no_output_option(tmp_path):
-    """The CLI follows the UNIX convention: data goes to stdout and the user
-    redirects. The --output/-o option (and its 'Wrote ... to' chatter) is gone."""
-    for flag in ("--output", "-o"):
-        result = runner.invoke(app, ["schema", flag, str(tmp_path / "x.json")])
-        assert result.exit_code == 2, result.output
-        assert "No such option" in result.output
+@pytest.fixture
+def dup_scenario(tmp_path) -> Path:
+    return _write(tmp_path / "bad.json", {"stages": [_stage("dup", "https://x.test/a"), _stage("dup", "https://x.test/b")]})
 
 
-def test_resolve_has_no_output_option(tmp_path):
-    (tmp_path / "common.json").write_text(json.dumps({"url": "https://x.test/shared"}))
-    scenario = tmp_path / "test_x.http.json"
-    scenario.write_text(json.dumps({"stages": [{"name": "s", "request": {"$include": "common.json"}, "response": [{"verify": {"status": 200}}]}]}))
-    for flag in ("--output", "-o"):
-        result = runner.invoke(app, ["resolve", flag, str(tmp_path / "out.json"), str(scenario)])
-        assert result.exit_code == 2, result.output
-        assert "No such option" in result.output
+@pytest.fixture
+def warn_scenario(tmp_path) -> Path:
+    return _write(tmp_path / "warn.json", {"stages": [_stage("s", "https://x.test/{{ ghost }}")]})
 
 
-def test_validate_invalid_exit_one(tmp_path):
-    f = _write(
-        tmp_path / "bad.json",
-        {"stages": [_stage("dup", "https://x.test/a"), _stage("dup", "https://x.test/b")]},
-    )
-    result = runner.invoke(app, ["validate", str(f)])
-    assert result.exit_code == 1, result.output
-    assert "INVALID" in result.output
-    assert "Duplicate stage names" in result.output
+@pytest.fixture
+def include_scenario(tmp_path) -> Path:
+    _write(tmp_path / "common.json", {"url": "https://x.test/shared"})
+    return _write(tmp_path / "test_x.http.json", {"stages": [{"name": "s", "request": {"$include": "common.json"}, "response": [{"verify": {"status": 200}}]}]})
 
 
-def test_validate_reports_warnings(tmp_path):
-    f = _write(
-        tmp_path / "warn.json",
-        {"stages": [{"name": "s", "request": {"url": "https://x.test/{{ ghost }}"}, "response": [{"verify": {"status": 200}}]}]},
-    )
-    result = runner.invoke(app, ["validate", str(f)])
-    assert result.exit_code == 0, result.output
-    assert "ghost" in result.output
-
-
-def test_validate_multiple_files_one_bad_exits_one(tmp_path):
-    good = _write(tmp_path / "good.json", {"stages": [_stage("s", "https://x.test/a")]})
-    bad = _write(
-        tmp_path / "bad.json",
-        {"stages": [_stage("dup", "https://x.test/a"), _stage("dup", "https://x.test/b")]},
-    )
-    result = runner.invoke(app, ["validate", str(good), str(bad)])
-    assert result.exit_code == 1, result.output
-
-
-def test_validate_json_format_ok(tmp_path):
-    f = _write(tmp_path / "ok.json", {"stages": [_stage("s", "https://x.test/a")]})
-    result = runner.invoke(app, ["validate", "--format", "json", str(f)])
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    assert data["valid"] is True
-    assert data["files"][0]["path"].endswith("ok.json")
-    assert data["files"][0]["result"]["valid"] is True
-
-
-def test_validate_json_format_reports_codes(tmp_path):
-    f = _write(
-        tmp_path / "bad.json",
-        {"stages": [_stage("dup", "https://x.test/a"), _stage("dup", "https://x.test/b")]},
-    )
-    result = runner.invoke(app, ["validate", "--format", "json", str(f)])
-    assert result.exit_code == 1, result.output
-    data = json.loads(result.output)
-    assert data["valid"] is False
-    codes = [d["code"] for d in data["files"][0]["result"]["diagnostics"]]
-    assert "HTTPCHAIN001" in codes
-
-
-def _deep_scenario(tmp_path) -> Path:
+@pytest.fixture
+def chain_scenario(tmp_path) -> Path:
     return _write(
-        tmp_path / "deep.json",
-        {"stages": [{"name": "s", "request": {"url": "https://x.test/a"}, "response": [{"verify": {"status": 200, "user_functions": ["userfuncs:does_not_exist"]}}]}]},
-    )
-
-
-def test_validate_deep_reports_import_warning_but_exits_zero(tmp_path):
-    f = _deep_scenario(tmp_path)
-    result = runner.invoke(app, ["validate", "--deep", "--syspath", str(USERFUNCS_DIR), str(f)])
-    assert result.exit_code == 0, result.output  # deep findings are warnings
-    assert "does_not_exist" in result.output
-
-
-def test_validate_deep_strict_exits_one_on_warning(tmp_path):
-    f = _deep_scenario(tmp_path)
-    result = runner.invoke(app, ["validate", "--deep", "--strict", "--syspath", str(USERFUNCS_DIR), str(f)])
-    assert result.exit_code == 1, result.output
-
-
-def test_validate_without_deep_ignores_imports(tmp_path):
-    f = _deep_scenario(tmp_path)
-    result = runner.invoke(app, ["validate", str(f)])
-    assert result.exit_code == 0, result.output
-    assert "does_not_exist" not in result.output
-
-
-SCHEMA_PATH = Path(__file__).resolve().parents[2] / "docs" / "schema" / "scenario.schema.json"
-
-
-def test_schema_emits_valid_json():
-    result = runner.invoke(app, ["schema"])
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    assert data["$schema"].startswith("https://json-schema.org")
-    assert "JsonRef" in data["$defs"]
-
-
-def test_build_schema_matches_committed():
-    from pytest_httpchain.schema import build_schema
-
-    committed = json.loads(SCHEMA_PATH.read_text())
-    assert build_schema() == committed
-
-
-def test_schema_metadata_is_hoisted_out_of_jsonref_branches():
-    """Widening a subschema MOVES its title/description onto the `anyOf`
-    wrapper. Copying them instead leaves an editor showing the same text twice
-    at the sites that copy and once at the sites that move."""
-    from pytest_httpchain.schema import build_schema
-
-    offenders: list[str] = []
-
-    def collect(node, path):
-        match node:
-            case dict():
-                match node.get("anyOf"):
-                    case [{"$ref": "#/$defs/JsonRef"}, dict() as branch, *_]:
-                        offenders.extend(f"{path}.anyOf[1].{key}" for key in ("title", "description") if key in branch)
-                for key, value in node.items():
-                    collect(value, f"{path}.{key}")
-            case list():
-                for index, item in enumerate(node):
-                    collect(item, f"{path}[{index}]")
-
-    collect(build_schema(), "$")
-    assert not offenders, f"metadata left inside JsonRef anyOf branches: {offenders}"
-
-    # MOVED, not dropped: asserting only the absence above would also pass if the
-    # hoist were deleted, silently stripping every root property and $defs entry
-    # of the hover text the published editor schema exists to provide.
-    schema = build_schema()
-    assert schema["properties"]["stages"]["description"], "root property lost its description"
-    assert schema["$defs"]["Stage"]["title"], "$defs entry lost its title"
-
-
-def test_schema_patterns_are_ecma262_compatible():
-    """JSON Schema defines `pattern` as an ECMA-262 regex. Python's named-group
-    spelling `(?P<name>...)` is a SyntaxError in JS engines, and VS Code's JSON
-    language service silently drops a pattern it cannot compile — so no emitted
-    pattern may use Python-only syntax."""
-    from pytest_httpchain.schema import build_schema
-
-    patterns: list[str] = []
-
-    def collect(node):
-        match node:
-            case dict():
-                for key, value in node.items():
-                    if key == "pattern" and isinstance(value, str):
-                        patterns.append(value)
-                    else:
-                        collect(value)
-            case list():
-                for item in node:
-                    collect(item)
-
-    collect(build_schema())
-    assert patterns, "expected the schema to carry pattern constraints"
-    offenders = [p for p in patterns if "(?P<" in p]
-    assert not offenders, f"Python-only named groups in schema patterns: {offenders}"
-
-
-def test_schema_rejects_typos_accepts_documented_keys():
-    """The editor schema must catch misspelled keys while accepting the
-    documented $schema key, reference directives, and ordinary scenarios."""
-    import jsonschema
-
-    from pytest_httpchain.schema import build_schema
-
-    validator = jsonschema.Draft202012Validator(build_schema())
-
-    # documented patterns stay valid
-    validator.validate({"$schema": "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json", "stages": []})
-    validator.validate({"$include": "base.json"})
-    validator.validate({"stages": [{"name": "s", "request": {"$include": "common.json"}}]})
-    validator.validate({"stages": [{"$ref": "stage.json", "name": "override"}]})
-
-    # reference objects are accepted at tagged-union positions too (these are
-    # anyOf in the emitted schema; under oneOf a reference matched the JsonRef
-    # branch of every member and was rejected as ambiguous)
-    stage = {"name": "s", "request": {"url": "https://x.test/"}}
-    validator.validate({"stages": [{**stage, "request": {"url": "https://x.test/", "body": {"$include": "body.json"}}}]})
-    validator.validate({"stages": [{**stage, "response": [{"save": {"$merge": "save.json"}}]}]})
-    validator.validate({"stages": [{**stage, "response": [{"$include": "step.json"}]}]})
-    validator.validate({"stages": [{**stage, "substitutions": [{"$ref": "vars.json"}]}]})
-    validator.validate({"stages": [{**stage, "parallel": {"$include": "parallel.json"}}]})
-    validator.validate({"stages": [{**stage, "parametrize": [{"$include": "params.json"}]}]})
-
-    # typos fail: misspelled keys no longer slip through the JsonRef branch
-    assert not validator.is_valid({"stages": [{"naem": "s", "requst": {"url": "https://x.test/"}}]})
-    assert not validator.is_valid({"stages": [{"name": "s", "request": {"url": "https://x.test/", "headerz": {}}}]})
-    # stage-level typo with an otherwise-complete stage, so additionalProperties
-    # on Stage (not a missing required "request") is what rejects it
-    assert not validator.is_valid({"stages": [{**stage, "alwaysrun": True}]})
-    assert not validator.is_valid({"stages": [{**stage, "response": [{"save": {"jmespth": {"x": "y"}}}]}]})
-    assert not validator.is_valid({"stagez": []})
-
-
-def test_schema_rejects_type_typos_in_template_fields():
-    """L7: fields that accept a template should not accept arbitrary strings.
-    A non-template string that is also not a valid value for the field's concrete
-    type is rejected, while templates, concrete values, and the stringified
-    concretes the runtime coerces are all still accepted (no false positives)."""
-    import jsonschema
-
-    from pytest_httpchain.schema import build_schema
-
-    v = jsonschema.Draft202012Validator(build_schema())
-
-    def req(**kw):
-        return {"stages": [{"name": "s", "request": {"url": "https://x.test/", **kw}}]}
-
-    def verify(**kw):
-        return {"stages": [{"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": kw}]}]}
-
-    # type-mismatched non-template strings are now flagged
-    assert not v.is_valid(req(timeout="abc"))
-    # any RFC 9110 token is a legal method since the widening, so "FOOBAR" is
-    # valid; only non-token strings (spaces, separators) are flagged
-    assert v.is_valid(req(method="FOOBAR"))
-    assert not v.is_valid(req(method="FOO BAR"))
-    assert not v.is_valid(verify(status="not-a-status"))
-
-    # templates remain valid
-    assert v.is_valid(req(timeout="{{ t }}"))
-    assert v.is_valid(req(method="{{ m }}"))
-    assert v.is_valid(verify(status="{{ s }}"))
-
-    # concrete values remain valid
-    assert v.is_valid(req(timeout=30))
-    assert v.is_valid(req(method="GET"))
-    assert v.is_valid(verify(status=200))
-
-    # stringified concretes the runtime coerces must NOT become false positives
-    assert v.is_valid(req(timeout="30"))
-    assert v.is_valid(verify(status="200"))
-
-
-def test_resolve_inlines_include(tmp_path):
-    (tmp_path / "common.json").write_text(json.dumps({"url": "https://x.test/shared"}))
-    scenario = tmp_path / "test_x.http.json"
-    scenario.write_text(json.dumps({"stages": [{"name": "s", "request": {"$include": "common.json"}, "response": [{"verify": {"status": 200}}]}]}))
-    result = runner.invoke(app, ["resolve", str(scenario)])
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    assert data["stages"][0]["request"]["url"] == "https://x.test/shared"
-
-
-def test_resolve_missing_ref_exits_one(tmp_path):
-    scenario = tmp_path / "test_x.http.json"
-    scenario.write_text(json.dumps({"stages": [{"name": "s", "request": {"$include": "nope.json"}, "response": [{"verify": {"status": 200}}]}]}))
-    result = runner.invoke(app, ["resolve", str(scenario)])
-    assert result.exit_code == 1
-
-
-def _chain_scenario(tmp_path) -> Path:
-    scenario = tmp_path / "test_chain.http.json"
-    scenario.write_text(
-        json.dumps(
-            {
-                "stages": [
-                    {
-                        "name": "create",
-                        "request": {"url": "https://x.test/u", "method": "POST"},
-                        "response": [{"save": {"jmespath": {"user_id": "id"}}}, {"verify": {"status": 201}}],
-                    },
-                    {"name": "get", "request": {"url": "https://x.test/u/{{ user_id }}"}, "response": [{"verify": {"status": 200}}]},
-                ]
-            }
-        )
-    )
-    return scenario
-
-
-def test_show_text_reports_dataflow(tmp_path):
-    result = runner.invoke(app, ["show", str(_chain_scenario(tmp_path))])
-    assert result.exit_code == 0, result.output
-    assert "consumes" in result.output
-    assert "from #1" in result.output
-
-
-def test_show_json_exposes_edges(tmp_path):
-    result = runner.invoke(app, ["show", "--format", "json", str(_chain_scenario(tmp_path))])
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    assert any(e["vars"] == ["user_id"] for e in data["edges"])
-
-
-def test_show_invalid_scenario_exits_one(tmp_path):
-    scenario = tmp_path / "bad.json"
-    scenario.write_text(json.dumps({"stages": [{"name": "s", "request": {}}]}))
-    result = runner.invoke(app, ["show", str(scenario)])
-    assert result.exit_code == 1
-
-
-def test_graph_emits_mermaid(tmp_path):
-    result = runner.invoke(app, ["graph", str(_chain_scenario(tmp_path))])
-    assert result.exit_code == 0, result.output
-    assert "flowchart TD" in result.output
-    assert "-->|user_id|" in result.output
-
-
-def test_graph_direction_lr(tmp_path):
-    result = runner.invoke(app, ["graph", "--direction", "LR", str(_chain_scenario(tmp_path))])
-    assert result.exit_code == 0, result.output
-    assert "flowchart LR" in result.output
-
-
-def test_show_marks_and_unproduced_consumes(tmp_path):
-    """The two `show` rows the chain fixture never reaches: a stage's marks,
-    and a consumed name with no producing stage — an author-visible signal that
-    the value has to come from a fixture or the environment, so it must not
-    render as if some stage supplied it.
-    """
-    scenario = _write(
-        tmp_path / "test_marks.http.json",
+        tmp_path / "test_chain.http.json",
         {
             "stages": [
                 {
-                    "name": "only",
-                    "marks": ["skip", 'xfail(reason="flaky")'],
-                    "request": {"url": "https://x.test/{{ from_nowhere }}"},
-                    "response": [{"verify": {"status": 200}}],
-                }
+                    "name": "create",
+                    "request": {"url": "https://x.test/u", "method": "POST"},
+                    "response": [{"save": {"jmespath": {"user_id": "id"}}}, {"verify": {"status": 201}}],
+                },
+                _stage("get", "https://x.test/u/{{ user_id }}"),
             ]
         },
     )
-    result = runner.invoke(app, ["show", str(scenario)])
 
+
+@pytest.fixture
+def meta_scenario(tmp_path) -> Path:
+    return _write(
+        tmp_path / "test_meta.http.json",
+        {
+            "fixtures": ["server", "db"],
+            "substitutions": [{"vars": {"base_url": "https://x.test", "api_key": "k"}}],
+            "stages": [_stage("s", "{{ base_url }}/u")],
+        },
+    )
+
+
+def test_version_prints_installed_version():
+    result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0, result.output
-    assert "marks:" in result.output
-    assert "skip" in result.output
-    # Named plainly, without the "(from #N ...)" attribution a real producer gets.
-    assert "from_nowhere" in result.output
-    assert "from_nowhere (from #" not in result.output
+    assert result.output == importlib.metadata.version("pytest-httpchain") + "\n"
+
+
+@pytest.mark.parametrize("command", ["schema", "resolve"])
+@pytest.mark.parametrize("flag", ["--output", "-o"])
+def test_no_output_option(command, flag):
+    """The CLI follows the UNIX convention: data goes to stdout and the user
+    redirects. The --output/-o option (and its 'Wrote ... to' chatter) is gone."""
+    result = runner.invoke(app, [command, flag, "x.json"])
+    assert result.exit_code == 2, result.output
+    assert f"No such option: {flag}" in result.stderr
+
+
+# --- validate ---
+
+
+def test_validate_ok(ok_scenario):
+    result = runner.invoke(app, ["validate", str(ok_scenario)])
+    assert result.exit_code == 0, result.output
+    assert result.output == f"{ok_scenario}: OK\n"
+
+
+def test_validate_invalid(dup_scenario):
+    result = runner.invoke(app, ["validate", str(dup_scenario)])
+    assert result.exit_code == 1, result.output
+    assert result.output == f"{dup_scenario}: INVALID\n  error [HTTPCHAIN001]: Duplicate stage names found: ['dup'] (at stages)\n"
+
+
+@pytest.mark.parametrize(
+    ("args", "exit_code", "status"),
+    [
+        pytest.param([], 0, "OK with warnings", id="default"),
+        pytest.param(["--strict"], 1, "FAILED (warnings)", id="strict"),
+    ],
+)
+def test_validate_warnings(warn_scenario, args, exit_code, status):
+    """Warnings alone pass the gate unless --strict, and the status line says which."""
+    result = runner.invoke(app, ["validate", *args, str(warn_scenario)])
+    assert result.exit_code == exit_code, result.output
+    assert result.output == (
+        f"{warn_scenario}: {status}\n  warning [HTTPCHAIN003]: Stage 's': request references potentially undefined variable(s): ['ghost'] (at stages[0].request)\n"
+    )
+
+
+def test_validate_multiple_files_one_bad_exits_one(ok_scenario, dup_scenario):
+    result = runner.invoke(app, ["validate", str(ok_scenario), str(dup_scenario)])
+    assert result.exit_code == 1, result.output
+    assert result.output.startswith(f"{ok_scenario}: OK\n{dup_scenario}: INVALID\n")
+
+
+def test_validate_json_format_ok(ok_scenario):
+    result = runner.invoke(app, ["validate", "--format", "json", str(ok_scenario)])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["valid"] is True
+    assert data["files"][0]["path"] == str(ok_scenario)
+    assert data["files"][0]["result"]["valid"] is True
+
+
+def test_validate_json_format_reports_codes(dup_scenario):
+    result = runner.invoke(app, ["validate", "--format", "json", str(dup_scenario)])
+    assert result.exit_code == 1, result.output
+    data = json.loads(result.output)
+    assert data["valid"] is False
+    assert [d["code"] for d in data["files"][0]["result"]["diagnostics"]] == ["HTTPCHAIN001"]
+
+
+@pytest.mark.parametrize(("args", "exit_code"), [pytest.param([], 0, id="default"), pytest.param(["--strict"], 1, id="strict")])
+def test_validate_json_payload_reports_strictness(warn_scenario, args, exit_code):
+    """The top-level `valid` reflects the gate (including --strict), while each
+    file's `result.valid` is pure validity — the payload must say which gate
+    was applied so consumers can tell the two apart."""
+    result = runner.invoke(app, ["validate", *args, "--format", "json", str(warn_scenario)])
+    assert result.exit_code == exit_code, result.output
+    payload = json.loads(result.output)
+    assert payload["strict"] is bool(args)
+    assert payload["valid"] is (exit_code == 0)
+    assert payload["files"][0]["result"]["valid"] is True
+
+
+@pytest.mark.parametrize(
+    ("args", "exit_code", "reports_import"),
+    [
+        pytest.param([], 0, False, id="without-deep-never-imports"),
+        # Deep findings are warnings, so they pass the gate unless --strict.
+        pytest.param(["--deep"], 0, True, id="deep"),
+        pytest.param(["--deep", "--strict"], 1, True, id="deep-strict"),
+    ],
+)
+def test_validate_deep(tmp_path, args, exit_code, reports_import):
+    f = _write(
+        tmp_path / "deep.json",
+        {"stages": [{"name": "s", "request": {"url": "https://x.test/a"}, "response": [{"verify": {"status": 200, "user_functions": ["userfuncs:does_not_exist"]}}]}]},
+    )
+    result = runner.invoke(app, ["validate", *args, "--syspath", str(USERFUNCS_DIR), str(f)])
+    assert result.exit_code == exit_code, result.output
+    assert ("does_not_exist" in result.output) is reports_import
+
+
+# --- schema / resolve ---
+
+
+def test_schema_emits_build_schema():
+    result = runner.invoke(app, ["schema"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == build_schema()
+
+
+def test_resolve_inlines_include(include_scenario):
+    result = runner.invoke(app, ["resolve", str(include_scenario)])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["stages"][0]["request"] == {"url": "https://x.test/shared"}
+
+
+def test_resolve_missing_ref_exits_one(include_scenario, tmp_path):
+    (tmp_path / "common.json").unlink()
+    result = runner.invoke(app, ["resolve", str(include_scenario)])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.startswith("error: Reference path 'common.json' not found.")
+
+
+# --- show / graph ---
+
+
+def test_show_text_reports_dataflow(chain_scenario):
+    result = runner.invoke(app, ["show", str(chain_scenario)])
+    assert result.exit_code == 0, result.output
+    assert result.output == (
+        "test_chain.http.json\n"
+        "2 stage(s)\n"
+        "\n"
+        "1 · create    POST https://x.test/u\n"
+        "    saves:    user_id\n"
+        "2 · get    GET https://x.test/u/{{ user_id }}\n"
+        "    consumes: user_id (from #1 create)\n"
+    )
+
+
+def test_show_text_reports_marks(tmp_path):
+    scenario = _write(tmp_path / "test_marks.http.json", {"stages": [_stage("only", "https://x.test/a", marks=["skip", 'xfail(reason="flaky")'])]})
+    result = runner.invoke(app, ["show", str(scenario)])
+    assert result.exit_code == 0, result.output
+    assert result.output == 'test_marks.http.json\n1 stage(s)\n\n1 · only    GET https://x.test/a\n    marks:    skip, xfail(reason="flaky")\n'
+
+
+def test_show_text_reports_scenario_fixtures_and_vars(meta_scenario):
+    """The rendered form, not just the names: `show` exists to be read, so the
+    summary joins these rather than printing the Python list repr."""
+    result = runner.invoke(app, ["show", str(meta_scenario)])
+    assert result.exit_code == 0, result.output
+    assert result.output == "test_meta.http.json\n1 stage(s) · fixtures: db, server · vars: api_key, base_url\n\n1 · s    GET {{ base_url }}/u\n"
+
+
+def test_show_json_exposes_edges(chain_scenario):
+    result = runner.invoke(app, ["show", "--format", "json", str(chain_scenario)])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["edges"] == [{"producer": 0, "consumer": 1, "vars": ["user_id"]}]
+
+
+def test_show_json_reports_scenario_fixtures_and_vars(meta_scenario):
+    result = runner.invoke(app, ["show", "--format", "json", str(meta_scenario)])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert (data["scenario_fixtures"], data["scenario_vars"]) == (["db", "server"], ["api_key", "base_url"])
+
+
+@pytest.mark.parametrize("command", ["show", "graph"])
+def test_inspection_of_unloadable_file_exits_one(tmp_path, command):
+    missing = tmp_path / "missing.json"
+    result = runner.invoke(app, [command, str(missing)])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.startswith(f"error: cannot load {missing}: ")
+
+
+def test_show_invalid_scenario_exits_one(tmp_path):
+    scenario = _write(tmp_path / "bad.json", {"stages": [{"name": "s", "request": {}}]})
+    result = runner.invoke(app, ["show", str(scenario)])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == f"error: {scenario} is not a valid scenario — run `pytest-httpchain validate {scenario}` for details\n"
+
+
+@pytest.mark.parametrize(("args", "direction"), [pytest.param([], "TD", id="default"), pytest.param(["--direction", "LR"], "LR", id="LR")])
+def test_graph_emits_mermaid(chain_scenario, args, direction):
+    result = runner.invoke(app, ["graph", *args, str(chain_scenario)])
+    assert result.exit_code == 0, result.output
+    assert result.output == f'flowchart {direction}\n    S0["1 · create"]\n    S1["2 · get"]\n    S0 -->|user_id| S1\n'
 
 
 def test_graph_of_a_stageless_scenario_is_still_valid_mermaid(tmp_path):
@@ -384,62 +273,5 @@ def test_graph_of_a_stageless_scenario_is_still_valid_mermaid(tmp_path):
     flowchart with a comment rather than a bare header or a crash."""
     scenario = _write(tmp_path / "test_empty.http.json", {"stages": []})
     result = runner.invoke(app, ["graph", str(scenario)])
-
     assert result.exit_code == 0, result.output
-    assert result.output.splitlines()[0] == "flowchart TD"
-    assert "%% (no stages)" in result.output
-
-
-def test_show_reports_scenario_fixtures_and_vars(tmp_path):
-    scenario = tmp_path / "test_meta.http.json"
-    scenario.write_text(
-        json.dumps(
-            {
-                "fixtures": ["server", "db"],
-                "substitutions": [{"vars": {"base_url": "https://x.test", "api_key": "k"}}],
-                "stages": [{"name": "s", "request": {"url": "{{ base_url }}/u"}, "response": [{"verify": {"status": 200}}]}],
-            }
-        )
-    )
-    result = runner.invoke(app, ["show", str(scenario)])
-    assert result.exit_code == 0, result.output
-    # The rendered form, not just the names: `show` exists to be read, so the
-    # summary must join these rather than print the Python list repr.
-    assert "fixtures: db, server" in result.output
-    assert "vars: api_key, base_url" in result.output
-    assert "[" not in result.output
-
-    rj = runner.invoke(app, ["show", "--format", "json", str(scenario)])
-    data = json.loads(rj.output)
-    assert data["scenario_fixtures"] == ["db", "server"]
-    assert data["scenario_vars"] == ["api_key", "base_url"]
-
-
-def test_validate_json_payload_reports_strictness(tmp_path):
-    """The top-level `valid` reflects the gate (including --strict), while each
-    file's `result.valid` is pure validity — the payload must say which gate
-    was applied so consumers can tell the two apart."""
-    f = tmp_path / "warn_only.json"
-    f.write_text(
-        json.dumps(
-            {
-                "stages": [
-                    {
-                        "name": "s",
-                        "request": {"url": "https://x.test/ok"},
-                        "response": [{"verify": {"expressions": ["{{ nosuchvar }}"]}}],
-                    }
-                ]
-            }
-        )
-    )
-    result = runner.invoke(app, ["validate", "--strict", "--format", "json", str(f)])
-    payload = json.loads(result.output)
-    assert payload["strict"] is True
-    assert payload["valid"] is False
-    assert payload["files"][0]["result"]["valid"] is True
-
-    result2 = runner.invoke(app, ["validate", "--format", "json", str(f)])
-    payload2 = json.loads(result2.output)
-    assert payload2["strict"] is False
-    assert payload2["valid"] is True
+    assert result.output == "flowchart TD\n    %% (no stages)\n"

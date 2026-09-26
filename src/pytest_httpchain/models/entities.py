@@ -115,7 +115,11 @@ def _normalize_stages_input(v: Any) -> Any:
     if isinstance(v, dict):
         result = []
         for name, stage_data in v.items():
-            result.append({**stage_data, "name": name} if isinstance(stage_data, dict) else stage_data)
+            if isinstance(stage_data, dict):
+                stage_data = {**stage_data, "name": name}
+            elif isinstance(stage_data, Stage):
+                stage_data = stage_data.model_copy(update={"name": name})
+            result.append(stage_data)
         return result
 
     return v

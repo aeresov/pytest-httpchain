@@ -6,6 +6,9 @@ where ``$ref``/``$defs`` are standard JSON Schema vocabulary addressed to the
 schema validator — not scenario directives addressed to this resolver.
 """
 
+import pytest
+
+from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
 from pytest_httpchain.jsonref.loader import load_json
 
 
@@ -70,18 +73,21 @@ class TestOpaqueMergeAtomicity:
     opaque position are a merge conflict (no-silent-contradiction), and equal
     values merge as anywhere else."""
 
-    def test_differing_values_at_opaque_position_conflict(self, create_json_files):
+    @pytest.mark.parametrize(
+        ("sibling", "referenced"),
+        [
+            pytest.param({"a": 1}, {"b": 2}, id="dicts-do-not-deep-merge"),
+            pytest.param([1], [2], id="lists-do-not-concatenate"),
+        ],
+    )
+    def test_differing_values_at_opaque_position_conflict(self, create_json_files, sibling, referenced):
         files = create_json_files(
             {
-                "main.json": {"outer": {"$merge": "frag.json", "schema": {"a": 1}}},
-                "frag.json": {"schema": {"b": 2}},
+                "main.json": {"outer": {"$merge": "frag.json", "schema": sibling}},
+                "frag.json": {"schema": referenced},
             }
         )
-        import pytest
-
-        from pytest_httpchain.jsonref.exceptions import ReferenceResolverError
-
-        with pytest.raises(ReferenceResolverError, match="conflict"):
+        with pytest.raises(ReferenceResolverError, match="Merge conflict at schema"):
             load_json(files["main.json"], opaque=schema_positions)
 
     def test_equal_values_at_opaque_position_merge(self, create_json_files):

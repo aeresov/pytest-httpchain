@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-09-26
+
 ### Fixed
 
+- The editor JSON Schema now accepts an `$include`/`$merge`/`$ref` object in place of any model
+  field, not only where a whole named type or a root key is expected. `"response": {"$include":
+  "common.json#/checks"}` (or a shared `substitutions` list, or a base `url`) resolved at runtime
+  but was flagged by the editor.
+- A marker using `**` unpacking (`xfail(**{"strict": True})`) is now rejected as `HTTPCHAIN019`.
+  Its keyword arguments used to be silently dropped, turning a strict xfail into a non-strict one.
+  `*` unpacking was already rejected.
+- In the `{name: stage}` form of `stages`, the key now names a `Stage` instance too (Python API);
+  it overrode only a dict's `name` before.
 - A user-function name (`"module:func"`), an `httpchain_suffix` value, or a scenario file name
   ending in a newline is now rejected. All three were checked with `re.match` against a `^...$`
   pattern, and `$` also matches just before a trailing `\n`. The shared name pattern
@@ -612,7 +623,8 @@ This release carries a test-suite and CI pass.
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.5...v0.15.0
 [0.14.5]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.3...v0.14.4

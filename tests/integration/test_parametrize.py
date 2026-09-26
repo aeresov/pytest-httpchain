@@ -1,36 +1,24 @@
-def test_parametrize_individual(run_scenario):
-    """Test stage parametrize with individual values"""
-    result = run_scenario("parametrize/test_parametrize_individual.http.json")
-    # 3 parametrized test cases
-    result.assert_outcomes(errors=0, failed=0, passed=3)
+import pytest
+
+from tests.integration.helpers import named
 
 
-def test_parametrize_combinations(run_scenario):
-    """Test stage parametrize with combinations"""
-    result = run_scenario("parametrize/test_parametrize_combinations.http.json")
-    # 2 parametrized test cases
-    result.assert_outcomes(errors=0, failed=0, passed=2)
-
-
-def test_parametrize_multiple(run_scenario):
-    """Test multiple parametrize steps (cartesian product)"""
-    result = run_scenario("parametrize/test_parametrize_multiple.http.json")
-    # 2 x 2 = 4 parametrized test cases
-    result.assert_outcomes(errors=0, failed=0, passed=4)
-
-
-def test_parametrize_templated_combinations(run_scenario):
-    """`combinations` given as a single template resolves at collection.
-
-    The resolved value is fed back through CombinationsParameter, because the
-    model's own validation only ever saw the template string. Without that
-    round trip the keys of the first combination decide the parameter names for
-    all of them.
-    """
-    result = run_scenario("parametrize/test_parametrize_templated_combinations.http.json")
-    # 2 combinations, each verifying its own expected_name — so a combination
-    # whose second key was dropped would fail rather than silently pass.
-    result.assert_outcomes(errors=0, failed=0, passed=2)
+@pytest.mark.parametrize(
+    ("scenario", "passed"),
+    named(
+        ("individual", 3),
+        ("combinations", 2),
+        ("multiple", 4),  # 2 x 2: several parametrize steps form a cartesian product
+        # `combinations` given as one template resolves at collection and is
+        # fed back through CombinationsParameter: the model only ever saw the
+        # template string, so without that round trip the first combination's
+        # keys would name the parameters of all of them. Each case verifies its
+        # own expected_name, so a dropped key fails rather than passes.
+        ("templated_combinations", 2),
+    ),
+)
+def test_parametrize(run_scenario, scenario, passed):
+    run_scenario(f"parametrize/test_parametrize_{scenario}.http.json").assert_outcomes(passed=passed)
 
 
 def test_parametrize_templated_combinations_ragged_fails_collection(run_scenario):

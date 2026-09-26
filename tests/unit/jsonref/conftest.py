@@ -1,6 +1,6 @@
 """Shared pytest fixtures for the jsonref tests.
 
-Note: the ``datadir`` fixture used throughout these tests is NOT defined here.
+Note: the ``datadir`` fixture used by some of these tests is NOT defined here.
 It is provided by the third-party ``pytest-datadir`` plugin (a dev dependency),
 which copies the per-module data directory (``<test_module_name>/``) into a
 temporary location and yields its path.
@@ -15,13 +15,8 @@ import pytest
 
 @pytest.fixture
 def create_json_file(tmp_path: Path):
-    """Factory fixture for creating temporary JSON files.
-
-    Usage:
-        def test_example(create_json_file):
-            file = create_json_file("test.json", {"key": "value"})
-            result = load_json(file)
-    """
+    """Factory: ``create_json_file("sub/a.json", content)`` writes ``content``
+    as JSON under ``tmp_path`` (creating directories) and returns the path."""
 
     def _create(name: str, content: Any) -> Path:
         file = tmp_path / name
@@ -33,25 +28,11 @@ def create_json_file(tmp_path: Path):
 
 
 @pytest.fixture
-def create_json_files(tmp_path: Path):
-    """Factory fixture for creating multiple temporary JSON files at once.
-
-    Usage:
-        def test_example(create_json_files):
-            files = create_json_files({
-                "main.json": {"$ref": "other.json"},
-                "other.json": {"value": 42}
-            })
-            result = load_json(files["main.json"])
-    """
+def create_json_files(create_json_file):
+    """Factory: ``create_json_files({name: content, ...})`` writes each file and
+    returns ``{name: path}``."""
 
     def _create(files: dict[str, Any]) -> dict[str, Path]:
-        result = {}
-        for name, content in files.items():
-            file = tmp_path / name
-            file.parent.mkdir(parents=True, exist_ok=True)
-            file.write_text(json.dumps(content))
-            result[name] = file
-        return result
+        return {name: create_json_file(name, content) for name, content in files.items()}
 
     return _create

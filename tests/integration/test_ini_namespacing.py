@@ -7,25 +7,12 @@ knows them, so an ini file setting `suffix` gets the standard unknown-option
 treatment and `--output-dir` is an unrecognized argument.
 """
 
-import json
-
-SCENARIO = json.dumps(
-    {
-        "stages": [
-            {
-                "name": "only",
-                "fixtures": ["server"],
-                "request": {"url": "{{ server }}/ok"},
-                "response": [{"verify": {"status": 200}}],
-            }
-        ]
-    }
-)
+from tests.integration.helpers import stage, write_scenario
 
 
 def _setup(pytester, suffix: str):
     pytester.copy_example("conftest.py")
-    (pytester.path / f"test_one.{suffix}.json").write_text(SCENARIO)
+    write_scenario(pytester.path, {"stages": [stage("only")]}, name=f"test_one.{suffix}.json")
 
 
 def test_namespaced_suffix_works(pytester):
@@ -47,14 +34,9 @@ def test_removed_legacy_suffix_has_no_effect(pytester):
     result.stdout.fnmatch_lines(["*Unknown config option: suffix*"])
 
 
-def test_namespaced_option_via_override_ini(pytester):
-    _setup(pytester, "chain")
-    result = pytester.runpytest("-s", "-o", "httpchain_suffix=chain")
-    result.assert_outcomes(passed=1)
-
-
 def test_override_ini_beats_ini_file(pytester):
-    """pytest's documented precedence: -o overrides the ini file value."""
+    """pytest's documented precedence: -o overrides the ini file value (so the
+    namespaced option is honored through -o at all)."""
     _setup(pytester, "chain")
     pytester.makeini("[pytest]\nhttpchain_suffix = old\n")
     result = pytester.runpytest("-s", "-o", "httpchain_suffix=chain")

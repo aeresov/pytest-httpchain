@@ -79,7 +79,13 @@ def make_marker(mark_str: str) -> pytest.MarkDecorator:
 
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         args = [ast.literal_eval(a) for a in node.args]
-        kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in node.keywords if kw.arg is not None}
+        kwargs: dict[str, Any] = {}
+        for kw in node.keywords:
+            # literal_eval already rejects a `*args` node; a `**kwargs` entry
+            # (arg None) must fail too rather than silently drop its keys.
+            if kw.arg is None:
+                raise ValueError(f"unsupported marker expression: {mark_str} (** unpacking)")
+            kwargs[kw.arg] = ast.literal_eval(kw.value)
         return getattr(pytest.mark, node.func.id)(*args, **kwargs)
 
     raise ValueError(f"unsupported marker expression: {mark_str}")

@@ -4,15 +4,29 @@ import pytest
 from pydantic import ValidationError
 
 from pytest_httpchain.models.entities import (
+    Base64Body,
+    BinaryBody,
     CombinationsParameter,
+    FilesBody,
+    FormBody,
+    GraphQL,
+    GraphQLBody,
     IndividualParameter,
+    JMESPathSave,
+    JsonBody,
+    ParallelForeachConfig,
+    ParallelRepeatConfig,
     Request,
     ResponseBody,
     Scenario,
     SSLConfig,
     Stage,
+    SubstitutionsSave,
+    TextBody,
     UserFunctionKwargs,
+    UserFunctionsSave,
     Verify,
+    XmlBody,
 )
 from tests.unit.models.helpers import assert_error_types
 
@@ -24,39 +38,37 @@ from tests.unit.models.helpers import assert_error_types
         (UserFunctionKwargs, {"name": "mod:func", "kwarg": {}}, "kwarg"),
         (Request, {"url": "https://x.test/", "headerz": {}}, "headerz"),
         (Request, {"url": "https://x.test/", "param": {}}, "param"),
+        (JsonBody, {"json": {"key": "value"}, "extra": "field"}, "extra"),
+        (XmlBody, {"xml": "<root/>", "extra": "field"}, "extra"),
+        (FormBody, {"form": {"key": "value"}, "extra": "field"}, "extra"),
+        (TextBody, {"text": "content", "extra": "field"}, "extra"),
+        (Base64Body, {"base64": "dGVzdA==", "extra": "field"}, "extra"),
+        (BinaryBody, {"binary": "file.bin", "extra": "field"}, "extra"),
+        (FilesBody, {"files": {"f": "file.txt"}, "extra": "field"}, "extra"),
+        (GraphQL, {"query": "{ test }", "extra": "field"}, "extra"),
+        (GraphQLBody, {"graphql": {"query": "{ test }"}, "extra": "field"}, "extra"),
         (ResponseBody, {"containz": ["x"]}, "containz"),
         (Verify, {"statu": 200}, "statu"),
+        # A header matcher object, reached through Verify's str | HeaderMatcher union.
+        (Verify, {"headers": {"content-type": {"equals": "x"}}}, "equals"),
+        (JMESPathSave, {"jmespath": {"x": "y"}, "extra": "field"}, "extra"),
+        (SubstitutionsSave, {"substitutions": [], "extra": "field"}, "extra"),
+        (UserFunctionsSave, {"user_functions": [], "extra": "field"}, "extra"),
         (IndividualParameter, {"individual": {"n": [1]}, "idz": ["a"]}, "idz"),
         (CombinationsParameter, {"combinations": [{"n": 1}], "idz": ["a"]}, "idz"),
-        (
-            Stage,
-            {"name": "s", "alwaysrun": True, "request": {"url": "https://x.test/"}},
-            "alwaysrun",
-        ),
-        (
-            Scenario,
-            {"vars": {"a": 1}, "stages": []},
-            "vars",
-        ),
+        (ParallelRepeatConfig, {"repeat": 10, "extra": "field"}, "extra"),
+        (ParallelForeachConfig, {"foreach": [{"individual": {"x": [1]}}], "extra": "field"}, "extra"),
+        # A base-class field typo, on the variant the Stage discriminator picked.
+        (Stage, {"name": "s", "request": {"url": "https://x.test/"}, "parallel": {"repeat": 2, "max_concurency": 5}}, "max_concurency"),
+        (Stage, {"name": "s", "alwaysrun": True, "request": {"url": "https://x.test/"}}, "alwaysrun"),
+        (Scenario, {"vars": {"a": 1}, "stages": []}, "vars"),
     ],
+    ids=lambda v: v.__name__ if isinstance(v, type) else None,
 )
 def test_unknown_key_rejected(model, data, typo):
     with pytest.raises(ValidationError) as exc_info:
         model.model_validate(data)
     assert_error_types(exc_info, "extra_forbidden", at=typo)
-
-
-def test_parallel_config_extra_key_rejected():
-    """Extra keys are rejected on both parallel variants (incl. base-class fields)."""
-    stage = {
-        "name": "s",
-        "request": {"url": "https://x.test/"},
-        "parallel": {"repeat": 2, "max_concurency": 5},
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        Stage.model_validate(stage)
-    errors = exc_info.value.errors()
-    assert any(e["type"] == "extra_forbidden" and "max_concurency" in e["loc"] for e in errors)
 
 
 def test_schema_key_dropped_at_every_model_position():

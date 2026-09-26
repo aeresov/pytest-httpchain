@@ -1,4 +1,7 @@
+import logging
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -6,7 +9,7 @@ import pytest
 
 from pytest_httpchain.carrier import Carrier
 from pytest_httpchain.constants import ConfigOptions
-from pytest_httpchain.plugin import _sections_will_be_shown, pytest_collect_file, pytest_runtest_makereport
+from pytest_httpchain.plugin import _format_section, _regroup_carrier_items, _sections_will_be_shown, pytest_collect_file, pytest_runtest_makereport
 
 
 class TestPytestConfigure:
@@ -36,8 +39,7 @@ class TestPytestConfigure:
     )
     def test_valid_config(self, pytester, option, value):
         pytester.makeini(f"[pytest]\n{option} = {value}\n")
-        # Should not raise.
-        pytester.parseconfigure()
+        assert pytester.parseconfigure().getini(option) == value
 
     def test_comprehension_cap_restored_on_unconfigure(self, pytester):
         """The cap is a process-wide simpleeval global: an in-process pytester
@@ -86,122 +88,77 @@ class TestPytestConfigure:
             pytester.parseconfigure()
 
 
-class TestPytestCollectFile:
-    def make_parent(self, suffix="http"):
-        parent = MagicMock()
-        parent.config.getini.return_value = suffix
-        return parent
+def _collect_parent(suffix: str) -> MagicMock:
+    parent = MagicMock()
+    parent.config.getini.return_value = suffix
+    return parent
 
-    def test_matches_standard_pattern(self):
-        parent = self.make_parent()
-        file_path = Path("/some/path/test_example.http.json")
 
-        with patch("pytest_httpchain.plugin.JsonModule") as MockJsonModule:
-            MockJsonModule.from_parent.return_value = "mock_module"
-            result = pytest_collect_file(file_path, parent)
+@pytest.mark.parametrize(
+    ("suffix", "filename", "expected_name"),
+    [
+        ("http", "test_example.http.json", "example"),
+        ("http", "test_my_api_test.http.json", "my_api_test"),
+        ("api", "test_endpoint.api.json", "endpoint"),
+        ("my-test", "test_example.my-test.json", "example"),
+        # The suffix is matched literally, regex metacharacters included.
+        ("v1.2", "test_example.v1.2.json", "example"),
+    ],
+)
+def test_collect_file_matches(suffix, filename, expected_name):
+    parent = _collect_parent(suffix)
+    file_path = Path("/some/path") / filename
+    with patch("pytest_httpchain.plugin.JsonModule") as json_module:
+        assert pytest_collect_file(file_path, parent) is json_module.from_parent.return_value
+    json_module.from_parent.assert_called_once_with(parent, path=file_path, name=expected_name)
 
-            assert result == "mock_module"
-            MockJsonModule.from_parent.assert_called_once()
-            call_kwargs = MockJsonModule.from_parent.call_args[1]
-            assert call_kwargs["name"] == "example"
 
-    def test_matches_underscore_in_name(self):
-        parent = self.make_parent()
-        file_path = Path("/some/path/test_my_api_test.http.json")
+@pytest.mark.parametrize(
+    ("suffix", "filename"),
+    [
+        ("http", "test_example.api.json"),
+        ("http", "example.http.json"),
+        ("http", "test_example.http.yaml"),
+        ("http", "test_example.json"),
+        ("http", "test_example.py"),
+        ("http", "test_.http.json"),
+        # Unescaped, the '.' in the suffix would match any character.
+        ("v1.2", "test_example.v1X2.json"),
+    ],
+)
+def test_collect_file_ignores(suffix, filename):
+    assert pytest_collect_file(Path("/some/path") / filename, _collect_parent(suffix)) is None
 
-        with patch("pytest_httpchain.plugin.JsonModule") as MockJsonModule:
-            MockJsonModule.from_parent.return_value = "mock_module"
-            result = pytest_collect_file(file_path, parent)
 
-            assert result == "mock_module"
-            call_kwargs = MockJsonModule.from_parent.call_args[1]
-            assert call_kwargs["name"] == "my_api_test"
+def test_regroup_pulls_each_scenario_together_and_keeps_other_items():
+    """Each scenario class is emitted in stage order at its first item's
+    position; a non-scenario test keeps its place between them."""
 
-    def test_matches_custom_suffix(self):
-        parent = self.make_parent(suffix="api")
-        file_path = Path("/some/path/test_endpoint.api.json")
+    class _A(Carrier):
+        pass
 
-        with patch("pytest_httpchain.plugin.JsonModule") as MockJsonModule:
-            MockJsonModule.from_parent.return_value = "mock_module"
-            result = pytest_collect_file(file_path, parent)
+    class _B(Carrier):
+        pass
 
-            assert result == "mock_module"
+    class _Item:
+        def __init__(self, cls: type | None, stage: int = 0):
+            self.cls = cls
+            self.function = SimpleNamespace(_httpchain_stage_index=stage)
 
-    def test_does_not_match_wrong_suffix(self):
-        parent = self.make_parent(suffix="http")
-        file_path = Path("/some/path/test_example.api.json")
+    a0, a1, b0, plain = _Item(_A, 0), _Item(_A, 1), _Item(_B, 0), _Item(None)
+    items: list[Any] = [a1, plain, b0, a0]
+    _regroup_carrier_items(items, {it: i for i, it in enumerate(items)})
+    assert items == [a0, a1, plain, b0]
 
-        result = pytest_collect_file(file_path, parent)
 
-        assert result is None
+def test_format_section_reports_formatter_failure():
+    """Reporting must never break the report: a formatter that raises becomes
+    the section's text."""
 
-    def test_does_not_match_missing_test_prefix(self):
-        parent = self.make_parent()
-        file_path = Path("/some/path/example.http.json")
+    def broken(_exchange):
+        raise ValueError("boom")
 
-        result = pytest_collect_file(file_path, parent)
-
-        assert result is None
-
-    def test_does_not_match_missing_json_extension(self):
-        parent = self.make_parent()
-        file_path = Path("/some/path/test_example.http.yaml")
-
-        result = pytest_collect_file(file_path, parent)
-
-        assert result is None
-
-    def test_does_not_match_regular_json(self):
-        parent = self.make_parent()
-        file_path = Path("/some/path/test_example.json")
-
-        result = pytest_collect_file(file_path, parent)
-
-        assert result is None
-
-    def test_does_not_match_python_file(self):
-        parent = self.make_parent()
-        file_path = Path("/some/path/test_example.py")
-
-        result = pytest_collect_file(file_path, parent)
-
-        assert result is None
-
-    def test_does_not_match_partial_pattern(self):
-        parent = self.make_parent()
-        file_path = Path("/some/path/test_.http.json")  # empty name
-
-        result = pytest_collect_file(file_path, parent)
-
-        assert result is None
-
-    def test_suffix_with_hyphen(self):
-        parent = self.make_parent(suffix="my-test")
-        file_path = Path("/some/path/test_example.my-test.json")
-
-        with patch("pytest_httpchain.plugin.JsonModule") as MockJsonModule:
-            MockJsonModule.from_parent.return_value = "mock_module"
-            result = pytest_collect_file(file_path, parent)
-
-            assert result == "mock_module"
-
-    def test_suffix_special_chars_escaped(self):
-        # A suffix containing a regex metacharacter ('.') must be matched
-        # literally. pytest_collect_file re.escape()s the suffix, so the '.' only
-        # matches a literal dot — not any character.
-        parent = self.make_parent(suffix="v1.2")
-
-        # Literal match: the dot in the suffix lines up with the dot in the name.
-        literal = Path("/some/path/test_example.v1.2.json")
-        with patch("pytest_httpchain.plugin.JsonModule") as MockJsonModule:
-            MockJsonModule.from_parent.return_value = "mock_module"
-            assert pytest_collect_file(literal, parent) == "mock_module"
-            assert MockJsonModule.from_parent.call_args[1]["name"] == "example"
-
-        # Without escaping, '.' would match any char, so 'v1X2' would match too.
-        # With escaping it must NOT, proving the metacharacter is treated literally.
-        injected = Path("/some/path/test_example.v1X2.json")
-        assert pytest_collect_file(injected, parent) is None
+    assert _format_section("request", broken, object()) == "<Error formatting request: boom>"
 
 
 class TestReportSectionsBuiltOnlyWhenShown:
@@ -209,24 +166,21 @@ class TestReportSectionsBuiltOnlyWhenShown:
     suite of thousands of passing stages nothing ever prints the result — but
     -rA/-rP do print it, so the guard must not cost those runs their output."""
 
-    @staticmethod
-    def _report(*, failed: bool) -> MagicMock:
-        return MagicMock(failed=failed)
-
-    def test_failed_report_is_formatted(self, pytester):
-        assert _sections_will_be_shown(pytester.parseconfigure(), self._report(failed=True))
-
-    def test_passing_report_is_skipped_by_default(self, pytester):
-        """Default reportchars ('fE') renders no PASSES block at all."""
-        assert not _sections_will_be_shown(pytester.parseconfigure(), self._report(failed=False))
-
-    @pytest.mark.parametrize("flag", ["-rA", "-rP", "-rfEP"])
-    def test_passing_report_is_formatted_when_asked_for(self, pytester, flag):
-        assert _sections_will_be_shown(pytester.parseconfigure(flag), self._report(failed=False))
-
-    def test_xfail_tb_formats_non_failing_reports(self, pytester):
-        """--xfail-tb renders the XFAILURES block, whose reports are 'skipped'."""
-        assert _sections_will_be_shown(pytester.parseconfigure("--xfail-tb"), self._report(failed=False))
+    @pytest.mark.parametrize(
+        ("args", "failed", "expected"),
+        [
+            pytest.param((), True, True, id="failed"),
+            # Default reportchars ('fE') renders no PASSES block at all.
+            pytest.param((), False, False, id="passed-default"),
+            pytest.param(("-rA",), False, True, id="passed-rA"),
+            pytest.param(("-rP",), False, True, id="passed-rP"),
+            pytest.param(("-rfEP",), False, True, id="passed-rfEP"),
+            # --xfail-tb renders the XFAILURES block, whose reports are 'skipped'.
+            pytest.param(("--xfail-tb",), False, True, id="xfail-tb"),
+        ],
+    )
+    def test_sections_will_be_shown(self, pytester, args, failed, expected):
+        assert _sections_will_be_shown(pytester.parseconfigure(*args), MagicMock(failed=failed)) is expected
 
     def test_worker_without_terminal_reporter_formats_everything(self, pytester):
         """An xdist worker unregisters the terminal reporter and ships its
@@ -234,7 +188,7 @@ class TestReportSectionsBuiltOnlyWhenShown:
         tell what will be shown, so it must not drop anything."""
         config = pytester.parseconfigure()
         config.pluginmanager.unregister(name="terminalreporter")
-        assert _sections_will_be_shown(config, self._report(failed=False))
+        assert _sections_will_be_shown(config, MagicMock(failed=False))
 
     @staticmethod
     def _run_hook(config, *, failed: bool) -> list[tuple[str, str]]:
@@ -246,6 +200,7 @@ class TestReportSectionsBuiltOnlyWhenShown:
         class _Scenario(Carrier):
             last_request = request
             last_response = response
+            last_exchanges = [(request, response, None)]
 
         report = MagicMock(failed=failed, skipped=False, sections=[])
         # `cls` is reserved by Mock's own constructor, so it is set afterwards.
@@ -257,10 +212,24 @@ class TestReportSectionsBuiltOnlyWhenShown:
             hook.send(report)
         return report.sections
 
-    def test_hook_skips_formatting_for_a_passing_stage(self, pytester):
-        assert self._run_hook(pytester.parseconfigure(), failed=False) == []
+    @pytest.mark.parametrize(
+        ("args", "failed", "expected"),
+        [
+            pytest.param((), False, [], id="passed"),
+            pytest.param((), True, ["HTTP Request", "HTTP Response"], id="failed"),
+            pytest.param(("-rA",), False, ["HTTP Request", "HTTP Response"], id="passed-with-rA"),
+        ],
+    )
+    def test_hook_formats_only_when_the_sections_will_be_read(self, pytester, args, failed, expected):
+        assert [title for title, _ in self._run_hook(pytester.parseconfigure(*args), failed=failed)] == expected
 
-    @pytest.mark.parametrize("failed", [True, False], ids=["failed", "passed-with-rA"])
-    def test_hook_formats_when_the_sections_will_be_read(self, pytester, failed):
-        config = pytester.parseconfigure() if failed else pytester.parseconfigure("-rA")
-        assert [title for title, _ in self._run_hook(config, failed=failed)] == ["HTTP Request", "HTTP Response"]
+    def test_har_write_failure_is_logged_not_raised(self, pytester, tmp_path, caplog):
+        not_a_dir = tmp_path / "file"
+        not_a_dir.write_text("")
+        config = pytester.parseconfigure("--httpchain-output-dir", str(not_a_dir))
+
+        with caplog.at_level(logging.WARNING, logger="pytest_httpchain.plugin"):
+            sections = self._run_hook(config, failed=True)
+
+        assert [title for title, _ in sections] == ["HTTP Request", "HTTP Response"]
+        assert [record.getMessage().split(": ", 1)[0] for record in caplog.records] == ["Failed to write HAR file for t::s"]

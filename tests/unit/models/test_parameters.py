@@ -3,204 +3,87 @@
 import pytest
 from pydantic import ValidationError
 
-from pytest_httpchain.models.entities import (
-    CombinationsParameter,
-    IndividualParameter,
-    Request,
-    Stage,
-)
-from tests.unit.models.helpers import assert_error_types, make_request, make_stage
+from pytest_httpchain.models.entities import CombinationsParameter, IndividualParameter, Stage
+from tests.unit.models.helpers import assert_error_types, stage_dict
 
 
 class TestIndividualParameter:
-    """Tests for IndividualParameter model."""
+    def test_values_round_trip(self):
+        assert IndividualParameter(individual={"user_id": [1, 2, 3]}).individual == {"user_id": [1, 2, 3]}
 
-    def test_individual_single_parameter(self):
-        """Test IndividualParameter with single parameter."""
-        param = IndividualParameter(individual={"user_id": [1, 2, 3]})
-        assert param.individual == {"user_id": [1, 2, 3]}
-
-    def test_individual_string_values(self):
-        """Test IndividualParameter with string values."""
-        param = IndividualParameter(individual={"name": ["alice", "bob", "charlie"]})
-        assert param.individual["name"] == ["alice", "bob", "charlie"]
-
-    def test_individual_with_ids(self):
-        """Test IndividualParameter with custom IDs."""
+    def test_ids_matching_values_accepted(self):
         param = IndividualParameter(
             individual={"status": ["active", "inactive", "pending"]},
             ids=["active_user", "inactive_user", "pending_user"],
         )
         assert param.ids == ["active_user", "inactive_user", "pending_user"]
 
-    def test_individual_ids_count_must_match_values(self):
-        """Test that IDs count must match values count."""
+    def test_ids_count_must_match_values(self):
         with pytest.raises(ValidationError, match="Number of ids.*must match number of values"):
-            IndividualParameter(
-                individual={"x": [1, 2, 3]},
-                ids=["one", "two"],  # Only 2 IDs for 3 values
-            )
+            IndividualParameter(individual={"x": [1, 2, 3]}, ids=["one", "two"])
 
-    def test_individual_empty_values_rejected(self):
-        """Test that empty values list is rejected."""
+    def test_empty_values_rejected(self):
         with pytest.raises(ValidationError) as exc_info:
             IndividualParameter(individual={"x": []})
-        assert_error_types(exc_info, "too_short")
+        assert_error_types(exc_info, "too_short", at="individual")
 
-    def test_individual_with_template_expression(self):
-        """Test IndividualParameter with template expression."""
-        param = IndividualParameter(individual={"items": "{{ item_list }}"})
-        assert param.individual["items"] == "{{ item_list }}"
-
-    def test_individual_template_skips_ids_validation(self):
-        """Test that template values skip IDs count validation."""
-        # Should not raise even though ids count doesn't match template
-        param = IndividualParameter(
-            individual={"items": "{{ item_list }}"},
-            ids=["one", "two"],
-        )
-        assert param.ids == ["one", "two"]
-
-    def test_individual_multi_key_rejected(self):
+    def test_multi_key_rejected(self):
         """M22: more than one parameter per step is rejected, not silently truncated."""
         with pytest.raises(ValidationError) as exc_info:
             IndividualParameter(individual={"x": [1, 2], "y": [3, 4]})
-        assert_error_types(exc_info, "too_long")
+        assert_error_types(exc_info, "too_long", at="individual")
+
+    def test_template_values_skip_ids_count_check(self):
+        """The value count of a template is unknown until it renders."""
+        param = IndividualParameter(individual={"items": "{{ item_list }}"}, ids=["one", "two"])
+        assert (param.individual, param.ids) == ({"items": "{{ item_list }}"}, ["one", "two"])
 
 
 class TestCombinationsParameter:
-    """Tests for CombinationsParameter model."""
+    def test_combinations_round_trip(self):
+        combinations = [{"method": "GET", "path": "/users"}, {"method": "POST", "path": "/users"}, {"method": "DELETE", "path": "/users/1"}]
+        assert CombinationsParameter(combinations=combinations).combinations == combinations
 
-    def test_combinations_single_combination(self):
-        """Test CombinationsParameter with single combination."""
-        param = CombinationsParameter(combinations=[{"x": 1, "y": 2}])
-        assert param.combinations == [{"x": 1, "y": 2}]
+    def test_single_combination_accepted(self):
+        """No other combination to compare keys against."""
+        assert CombinationsParameter(combinations=[{"x": 1, "y": 2}]).combinations == [{"x": 1, "y": 2}]
 
-    def test_combinations_multiple(self):
-        """Test CombinationsParameter with multiple combinations."""
-        param = CombinationsParameter(
-            combinations=[
-                {"method": "GET", "path": "/users"},
-                {"method": "POST", "path": "/users"},
-                {"method": "DELETE", "path": "/users/1"},
-            ]
-        )
-        assert len(param.combinations) == 3
-
-    def test_combinations_with_ids(self):
-        """Test CombinationsParameter with custom IDs."""
-        param = CombinationsParameter(
-            combinations=[{"a": 1}, {"a": 2}],
-            ids=["first", "second"],
-        )
+    def test_ids_matching_combinations_accepted(self):
+        param = CombinationsParameter(combinations=[{"a": 1}, {"a": 2}], ids=["first", "second"])
         assert param.ids == ["first", "second"]
 
-    def test_combinations_ids_count_must_match(self):
-        """Test that IDs count must match combinations count."""
+    def test_ids_count_must_match(self):
         with pytest.raises(ValidationError, match="Number of ids.*must match number of combinations"):
-            CombinationsParameter(
-                combinations=[{"x": 1}, {"x": 2}, {"x": 3}],
-                ids=["one", "two"],  # Only 2 IDs for 3 combinations
-            )
+            CombinationsParameter(combinations=[{"x": 1}, {"x": 2}, {"x": 3}], ids=["one", "two"])
 
     def test_combinations_must_have_same_keys(self):
-        """Test that all combinations must have the same keys."""
-        with pytest.raises(ValidationError, match="different parameters"):
-            CombinationsParameter(
-                combinations=[
-                    {"x": 1, "y": 2},
-                    {"x": 3, "z": 4},  # Different keys
-                ]
-            )
+        with pytest.raises(ValidationError, match="Combination 1 has different parameters than combination 0"):
+            CombinationsParameter(combinations=[{"x": 1, "y": 2}, {"x": 3, "z": 4}])
 
-    def test_combinations_single_allowed_different_structure(self):
-        """Test that single combination doesn't need key consistency check."""
-        # Single combination doesn't trigger consistency check
-        param = CombinationsParameter(combinations=[{"x": 1}])
-        assert len(param.combinations) == 1
-
-    def test_combinations_empty_dict_rejected(self):
-        """Test that empty combination dict is rejected."""
+    def test_empty_combination_rejected(self):
         with pytest.raises(ValidationError) as exc_info:
             CombinationsParameter(combinations=[{}])
-        assert_error_types(exc_info, "too_short")
+        assert_error_types(exc_info, "too_short", at="combinations")
 
-    def test_combinations_empty_list_rejected(self):
+    def test_empty_list_rejected(self):
         """An empty combinations list expands to zero iterations at runtime
         (a hard 'produced zero iterations' failure). Reject it at the model layer
         so it is caught at validation/collection instead, matching the runtime."""
-        with pytest.raises(ValidationError):
-            CombinationsParameter(combinations=[])
-
-    def test_combinations_with_template_expression(self):
-        """Test CombinationsParameter with template expression."""
-        param = CombinationsParameter(combinations="{{ test_combinations }}")
-        assert param.combinations == "{{ test_combinations }}"
-
-    def test_combinations_template_skips_validation(self):
-        """Test that template skips all validations."""
-        # Should not raise even though ids don't match
-        param = CombinationsParameter(
-            combinations="{{ combos }}",
-            ids=["a", "b", "c"],
-        )
-        assert param.ids == ["a", "b", "c"]
-
-
-class TestParameterDiscriminator:
-    """Tests for Parameter discriminated union using raw dicts."""
-
-    def test_discriminator_individual(self):
-        """Test discriminator identifies IndividualParameter."""
-        stage = make_stage(parametrize=[IndividualParameter(individual={"x": [1, 2, 3]})])
-        assert stage.parametrize is not None
-        assert len(stage.parametrize) == 1
-        assert isinstance(stage.parametrize[0], IndividualParameter)
-
-    def test_discriminator_combinations(self):
-        """Test discriminator identifies CombinationsParameter."""
-        stage = make_stage(parametrize=[CombinationsParameter(combinations=[{"x": 1}, {"x": 2}])])
-        assert stage.parametrize is not None
-        assert len(stage.parametrize) == 1
-        assert isinstance(stage.parametrize[0], CombinationsParameter)
-
-    def test_discriminator_mixed_parameters(self):
-        """Test discriminator with mixed parameter types."""
-        stage = make_stage(
-            parametrize=[
-                IndividualParameter(individual={"id": [1, 2]}),
-                CombinationsParameter(combinations=[{"a": 1, "b": 2}, {"a": 3, "b": 4}]),
-            ],
-        )
-        assert stage.parametrize is not None
-        assert isinstance(stage.parametrize[0], IndividualParameter)
-        assert isinstance(stage.parametrize[1], CombinationsParameter)
-
-    def test_discriminator_invalid_type_rejected(self):
-        """Test that invalid parameter type is rejected."""
         with pytest.raises(ValidationError) as exc_info:
-            make_stage(parametrize=[{"invalid": "value"}])
-        assert_error_types(exc_info, "union_tag_invalid")
+            CombinationsParameter(combinations=[])
+        assert_error_types(exc_info, "too_short", at="combinations")
+
+    def test_template_skips_all_checks(self):
+        """Keys and count of a template are unknown until it renders."""
+        param = CombinationsParameter(combinations="{{ combos }}", ids=["a", "b", "c"])
+        assert (param.combinations, param.ids) == ("{{ combos }}", ["a", "b", "c"])
 
 
-class TestParametersInStage:
-    """Tests for Parameters in Stage model."""
-
-    def test_stage_without_parametrize(self):
-        """Test Stage without parametrize field."""
-        stage = Stage(name="test", request=Request(url="https://example.com"))
-        assert stage.parametrize is None
-
-    def test_stage_with_empty_parametrize(self):
-        """Test Stage with empty parametrize list."""
-        stage = make_stage(parametrize=[])
-        assert stage.parametrize == []
-
-    def test_stage_parametrize_with_template_url(self):
-        """Test Stage with parametrize and template URL."""
-        stage = make_stage(
-            request=make_request(url="https://example.com/users/{{ user_id }}"),
-            parametrize=[IndividualParameter(individual={"user_id": [1, 2, 3]})],
-        )
-        assert stage.parametrize is not None
-        assert len(stage.parametrize) == 1
+def test_raw_parameter_dicts_select_models_in_order():
+    stage = Stage.model_validate(
+        stage_dict(parametrize=[{"individual": {"id": [1, 2]}}, {"combinations": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]}]),
+    )
+    assert stage.parametrize == [
+        IndividualParameter(individual={"id": [1, 2]}),
+        CombinationsParameter(combinations=[{"a": 1, "b": 2}, {"a": 3, "b": 4}]),
+    ]

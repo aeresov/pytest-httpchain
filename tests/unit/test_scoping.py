@@ -5,7 +5,10 @@ at runtime (the context builders, value ChainMaps). These tests pin each view
 and, crucially, assert the two views correspond on a concrete scenario.
 """
 
+import pytest
+
 from pytest_httpchain.models import Scenario
+from pytest_httpchain.scoping import TEMPLATE_BUILTINS as SCOPING_BUILTINS
 from pytest_httpchain.scoping import (
     base_global_context,
     extract_template_variables,
@@ -16,6 +19,7 @@ from pytest_httpchain.scoping import (
     with_saves,
     with_stage_substitutions,
 )
+from pytest_httpchain.templates import TEMPLATE_BUILTINS
 
 
 def make_scenario() -> Scenario:
@@ -71,10 +75,11 @@ class TestStageScopes:
 
 class TestContextBuilders:
     def test_layering_order(self):
-        """Each later layer shadows every earlier one: iteration params over
-        stage substitutions over fixtures over saves over scenario vars."""
+        """Each later layer shadows every earlier one: step saves over iteration
+        params over stage substitutions over fixtures over saves over scenario vars."""
         context = base_global_context({"name": "scenario", "svar": 1})
         context = with_saves(context, {"name": "save"})
+        assert context["name"] == "save"
         context = stage_start_context(context, {"name": "fixture"})
         assert context["name"] == "fixture"
         context = with_stage_substitutions(context, {"name": "substitution"})
@@ -116,6 +121,13 @@ class TestContextBuilders:
 
             global_context = with_saves(global_context, dict.fromkeys(scope.saves, "value"))
 
+    def test_response_namespace_shadows_user_variable(self):
+        """`response` is layered last, so neither a user var nor an earlier
+        step's save of that name can hide the HTTP metadata in response steps."""
+        meta = object()
+        iteration = iteration_context(base_global_context({"response": "scenario var"}), {})
+        assert response_step_context(with_saves(iteration, {"response": "step save"}), meta)["response"] is meta
+
     def test_base_global_context_is_pristine_base(self):
         """Saves layer on top; maps[-1] stays the original scenario context,
         which teardown_class relies on to reset between reruns."""
@@ -124,33 +136,30 @@ class TestContextBuilders:
         assert context.maps[-1] == base
 
 
-class TestReferenceExtraction:
-    """Which names a `{{ }}` expression actually references.
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        pytest.param("{{ [y for y in items] }}", {"items"}, id="comprehension-targets-are-local"),
+        # `key=lambda row: ...` must not demand a `row` variable.
+        pytest.param("{{ sorted(items, key=lambda row: row.score) }}", {"items"}, id="lambda-parameter-is-local"),
+        # Positional-only, positional, *args, keyword-only and **kwargs alike:
+        # walking only `args.args` would leave the other four looking undefined.
+        pytest.param("{{ (lambda p, /, a, *rest, b=1, **kw: [p, a, rest, b, kw])(1, 2) }}", set(), id="every-lambda-parameter-kind-is-local"),
+        # A malformed expression still fails at runtime, but the validator must
+        # not go blind: the regex fallback keeps reporting the names it sees.
+        pytest.param("{{ items[ }}", {"items"}, id="unparseable-falls-back-to-identifiers"),
+        pytest.param("{{ len(items) }}", {"items"}, id="builtins-are-not-references"),
+    ],
+)
+def test_template_references(template, expected):
+    """Which names a `{{ }}` expression actually references. Undefined-variable
+    and forward-reference diagnostics and the data-flow graph are all built on
+    this set: a name wrongly included is a false warning on working scenarios, a
+    name wrongly dropped is a missed one."""
+    assert extract_template_variables(template) == expected
 
-    Everything downstream — undefined-variable and forward-reference
-    diagnostics, the data-flow graph — is built on this set, so a name wrongly
-    included is a false warning on working scenarios and a name wrongly dropped
-    is a missed one.
-    """
 
-    def test_comprehension_targets_are_local(self):
-        assert extract_template_variables("{{ [y for y in items] }}") == {"items"}
-
-    def test_lambda_parameters_are_local(self):
-        """A lambda parameter is bound by the lambda, not supplied by the
-        context — `key=lambda row: ...` must not demand a `row` variable."""
-        assert extract_template_variables("{{ sorted(items, key=lambda row: row.score) }}") == {"items"}
-
-    def test_every_lambda_parameter_kind_is_bound(self):
-        """Positional-only, positional, *args, keyword-only and **kwargs alike:
-        walking only `args.args` would leave the other four looking undefined."""
-        assert extract_template_variables("{{ (lambda p, /, a, *rest, b=1, **kw: [p, a, rest, b, kw])(1, 2) }}") == set()
-
-    def test_unparseable_expression_falls_back_to_identifiers(self):
-        """A malformed expression still fails at runtime, but the validator
-        must not go blind: the regex fallback keeps reporting the names it can
-        see rather than silently claiming the expression references nothing."""
-        assert extract_template_variables("{{ items[ }}") == {"items"}
-
-    def test_builtins_are_not_context_references(self):
-        assert extract_template_variables("{{ len(items) }}") == {"items"}
+def test_template_builtins_is_single_source():
+    """M14: the reference extractor uses the canonical TEMPLATE_BUILTINS from the
+    templates package, not a private copy that could drift from the engine."""
+    assert SCOPING_BUILTINS is TEMPLATE_BUILTINS

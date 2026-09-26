@@ -5,282 +5,128 @@ import pytest
 
 from pytest_httpchain.report_formatter import format_request, format_response
 
-
-class TestFormatRequest:
-    def test_simple_get_request(self):
-        request = httpx.Request("GET", "https://example.com/api/users")
-        result = format_request(request)
-
-        assert "GET https://example.com/api/users" in result
-        assert "host: example.com" in result
-
-    def test_request_with_json_body(self):
-        request = httpx.Request(
-            "POST",
-            "https://example.com/api/users",
-            headers={"content-type": "application/json"},
-            json={"name": "Alice", "age": 30},
-        )
-        result = format_request(request)
-
-        assert "POST https://example.com/api/users" in result
-        assert '"name": "Alice"' in result
-        assert '"age": 30' in result
-
-    def test_request_with_non_json_body(self):
-        request = httpx.Request(
-            "POST",
-            "https://example.com/api/data",
-            headers={"content-type": "text/plain"},
-            content=b"Hello, World!",
-        )
-        result = format_request(request)
-
-        assert "POST https://example.com/api/data" in result
-        assert "Hello, World!" in result
-
-    def test_request_with_form_body(self):
-        request = httpx.Request(
-            "POST",
-            "https://example.com/api/login",
-            data={"username": "alice", "password": "secret"},
-        )
-        result = format_request(request)
-
-        assert "POST https://example.com/api/login" in result
-        assert "username=alice" in result
-        assert "password=secret" in result
-
-    def test_request_with_binary_content(self):
-        # Genuinely undecodable bytes: only these earn the binary label.
-        binary_data = bytes(range(256))
-        with pytest.raises(UnicodeDecodeError):
-            binary_data.decode()
-        request = httpx.Request(
-            "POST",
-            "https://example.com/api/upload",
-            headers={"content-type": "application/octet-stream"},
-            content=binary_data,
-        )
-        result = format_request(request)
-
-        assert "POST https://example.com/api/upload" in result
-        assert "<Binary content: 256 bytes>" in result
-
-    def test_request_with_malformed_json_shown_as_text(self):
-        # content-type says JSON but the body fails to parse. It still decodes as
-        # text, so it must be displayed as text — NOT mislabeled binary.
-        request = httpx.Request(
-            "POST",
-            "https://example.com/api/data",
-            headers={"content-type": "application/json"},
-            content=b"{not valid json",
-        )
-        result = format_request(request)
-
-        assert "POST https://example.com/api/data" in result
-        assert "{not valid json" in result
-        assert "Binary content" not in result
-
-    def test_request_with_long_body_truncated(self):
-        long_content = "x" * 2000
-        request = httpx.Request(
-            "POST",
-            "https://example.com/api/data",
-            headers={"content-type": "text/plain"},
-            content=long_content.encode(),
-        )
-        result = format_request(request)
-
-        assert "... (truncated)" in result
-        assert len(result) < 2000 + 500  # truncated + headers overhead
-
-    def test_request_with_empty_body(self):
-        request = httpx.Request("GET", "https://example.com/api/users")
-        result = format_request(request)
-
-        # Should still format without error
-        assert "GET https://example.com/api/users" in result
-
-    def test_request_with_headers(self):
-        request = httpx.Request(
-            "GET",
-            "https://example.com/api/users",
-            headers={"authorization": "Bearer token123", "x-custom": "value"},
-        )
-        result = format_request(request)
-
-        assert "authorization: Bearer token123" in result
-        assert "x-custom: value" in result
-
-    def test_request_with_query_params(self):
-        request = httpx.Request(
-            "GET",
-            "https://example.com/api/users",
-            params={"page": "1", "limit": "10"},
-        )
-        result = format_request(request)
-
-        assert "page=1" in result
-        assert "limit=10" in result
+_UNDECODABLE = bytes(range(256))
+_BIG_JSON = {"data": ["x" * 50] * 200}
 
 
-class TestFormatResponse:
-    def test_simple_response(self):
-        response = httpx.Response(
-            200,
-            headers={"content-type": "text/plain"},
-            content=b"OK",
-        )
-        result = format_response(response)
+@pytest.mark.parametrize(
+    ("request_", "expected"),
+    [
+        pytest.param(
+            httpx.Request("GET", "https://example.com/api/users", params={"page": "1", "limit": "10"}, headers={"authorization": "Bearer token123", "x-custom": "value"}),
+            "GET https://example.com/api/users?page=1&limit=10\nhost: example.com\nauthorization: Bearer token123\nx-custom: value\n",
+            id="no-body",
+        ),
+        pytest.param(
+            httpx.Request("POST", "https://example.com/api/users", headers={"content-type": "application/json"}, json={"name": "Alice", "age": 30}),
+            'POST https://example.com/api/users\nhost: example.com\ncontent-type: application/json\ncontent-length: 25\n\n{\n  "name": "Alice",\n  "age": 30\n}',
+            id="json-pretty-printed",
+        ),
+        pytest.param(
+            httpx.Request("POST", "https://example.com/api/data", headers={"content-type": "text/plain"}, content=b"Hello, World!"),
+            "POST https://example.com/api/data\nhost: example.com\ncontent-type: text/plain\ncontent-length: 13\n\nHello, World!",
+            id="text",
+        ),
+        pytest.param(
+            httpx.Request("POST", "https://example.com/api/login", data={"username": "alice", "password": "secret"}),
+            "POST https://example.com/api/login\nhost: example.com\ncontent-length: 30\ncontent-type: application/x-www-form-urlencoded\n\nusername=alice&password=secret",
+            id="form",
+        ),
+        # Declared JSON that fails to parse still decodes as text, so it is
+        # shown as text — not mislabeled binary.
+        pytest.param(
+            httpx.Request("POST", "https://example.com/api/data", headers={"content-type": "application/json"}, content=b"{not valid json"),
+            "POST https://example.com/api/data\nhost: example.com\ncontent-type: application/json\ncontent-length: 15\n\n{not valid json",
+            id="malformed-json-as-text",
+        ),
+        # Only genuinely undecodable bytes earn the binary label.
+        pytest.param(
+            httpx.Request("POST", "https://example.com/api/upload", headers={"content-type": "application/octet-stream"}, content=_UNDECODABLE),
+            "POST https://example.com/api/upload\nhost: example.com\ncontent-type: application/octet-stream\ncontent-length: 256\n\n<Binary content: 256 bytes>",
+            id="undecodable-as-binary",
+        ),
+        # A streaming body is consumed on send and never buffered.
+        pytest.param(
+            httpx.Request("POST", "https://example.com/upload", content=iter([b"chunk"])),
+            "POST https://example.com/upload\nhost: example.com\ntransfer-encoding: chunked\n\n<Streaming body (e.g. multipart file upload): consumed on send, not captured>",
+            id="streaming-placeholder",
+        ),
+    ],
+)
+def test_format_request(request_, expected):
+    assert format_request(request_) == expected
 
-        assert "200" in result
-        assert "OK" in result
 
-    def test_response_with_json_body(self):
-        json_data = {"id": 1, "name": "Alice"}
-        response = httpx.Response(
-            200,
-            headers={"content-type": "application/json"},
-            content=json.dumps(json_data).encode(),
-        )
-        result = format_response(response)
-
-        assert "200" in result
-        assert '"id": 1' in result
-        assert '"name": "Alice"' in result
-
-    def test_response_with_invalid_json(self):
-        # A body that decodes as text but fails JSON parsing is malformed TEXT,
-        # not binary: show the text, never the binary placeholder.
-        response = httpx.Response(
-            200,
-            headers={"content-type": "application/json"},
-            content=b"not valid json",
-        )
-        result = format_response(response)
-
-        assert "200" in result
-        assert "not valid json" in result
-        assert "binary" not in result.lower()
-
-    def test_response_with_non_textual_content_type(self):
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        pytest.param(
+            httpx.Response(200, headers={"content-type": "text/plain", "x-request-id": "abc123", "cache-control": "no-cache"}, content=b"OK"),
+            "HTTP/1.1 200 OK\ncontent-type: text/plain\nx-request-id: abc123\ncache-control: no-cache\ncontent-length: 2\n\nOK",
+            id="text",
+        ),
+        pytest.param(
+            httpx.Response(500, headers={"content-type": "text/html"}, content=b"<html><body>Internal Server Error</body></html>"),
+            "HTTP/1.1 500 Internal Server Error\ncontent-type: text/html\ncontent-length: 47\n\n<html><body>Internal Server Error</body></html>",
+            id="html",
+        ),
+        pytest.param(
+            httpx.Response(200, headers={"content-type": "application/json"}, content=json.dumps({"id": 1, "name": "Alice"}).encode()),
+            'HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 26\n\n{\n  "id": 1,\n  "name": "Alice"\n}',
+            id="json-pretty-printed",
+        ),
+        # Decodable text that fails JSON parsing is malformed TEXT, not binary.
+        pytest.param(
+            httpx.Response(200, headers={"content-type": "application/json"}, content=b"not valid json"),
+            "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 14\n\nnot valid json",
+            id="malformed-json-as-text",
+        ),
+        # httpx's .json() raises UnicodeDecodeError (not only JSONDecodeError)
+        # for undecodable bytes served as JSON; the formatter degrades to .text
+        # like the carrier's equivalent call sites do.
+        pytest.param(
+            httpx.Response(200, headers={"content-type": "application/json"}, content=b"\xff\xfe\x00b\x00a\x00d"),
+            "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 8\n\n��\x00b\x00a\x00d",
+            id="undecodable-json-as-text",
+        ),
         # A non-textual content type must not dump (possibly mojibake) bytes
         # into the report; it emits a short placeholder instead.
-        binary_data = b"\xff\xfe\x00\x01" + bytes([0x80, 0x81, 0x82])
-        response = httpx.Response(
-            200,
-            headers={"content-type": "application/octet-stream"},
-            content=binary_data,
-        )
-        result = format_response(response)
-
-        assert "200" in result
-        assert f"<Binary content: {len(binary_data)} bytes>" in result
-
-    def test_response_with_binary_content_uses_placeholder(self):
-        # Genuinely undecodable bytes under a non-textual content type: the
-        # report must show the binary placeholder, never the raw (mojibake) bytes.
-        binary_data = bytes(range(256))
-        # Sanity-check that these bytes really do not decode as UTF-8, so the
-        # placeholder assertion below is meaningful rather than incidental.
-        with pytest.raises(UnicodeDecodeError):
-            binary_data.decode()
-        response = httpx.Response(
-            200,
-            headers={"content-type": "application/octet-stream"},
-            content=binary_data,
-        )
-        result = format_response(response)
-
-        assert "200" in result
-        assert f"<Binary content: {len(binary_data)} bytes>" in result
-
-    def test_response_with_headers(self):
-        response = httpx.Response(
-            200,
-            headers={
-                "content-type": "text/plain",
-                "x-request-id": "abc123",
-                "cache-control": "no-cache",
-            },
-            content=b"OK",
-        )
-        result = format_response(response)
-
-        assert "x-request-id: abc123" in result
-        assert "cache-control: no-cache" in result
-
-    def test_response_404_not_found(self):
-        response = httpx.Response(
-            404,
-            headers={"content-type": "application/json"},
-            content=b'{"error": "Not found"}',
-        )
-        result = format_response(response)
-
-        assert "404" in result
-        assert '"error": "Not found"' in result
-
-    def test_response_500_server_error(self):
-        response = httpx.Response(
-            500,
-            headers={"content-type": "text/html"},
-            content=b"<html><body>Internal Server Error</body></html>",
-        )
-        result = format_response(response)
-
-        assert "500" in result
-        assert "Internal Server Error" in result
-
-    def test_response_empty_body(self):
-        response = httpx.Response(
-            204,
-            headers={"content-type": "text/plain"},
-            content=b"",
-        )
-        result = format_response(response)
-
-        assert "204" in result
-
-    def test_response_http_version_fallback(self):
-        response = httpx.Response(
-            200,
-            content=b"OK",
-        )
-        result = format_response(response)
-
-        # Should have HTTP version (defaults to HTTP/1.1)
-        assert "HTTP" in result
+        pytest.param(
+            httpx.Response(200, headers={"content-type": "application/octet-stream"}, content=b"\xff\xfe\x00\x01\x80\x81\x82"),
+            "HTTP/1.1 200 OK\ncontent-type: application/octet-stream\ncontent-length: 7\n\n<Binary content: 7 bytes>",
+            id="non-textual-placeholder",
+        ),
+        pytest.param(
+            httpx.Response(204, headers={"content-type": "text/plain"}, content=b""),
+            "HTTP/1.1 204 No Content\ncontent-type: text/plain\n",
+            id="empty-body",
+        ),
+        # A response whose transport recorded no HTTP version still gets a start line.
+        pytest.param(
+            httpx.Response(200, headers={"content-type": "text/plain"}, content=b"OK", extensions={"http_version": b""}),
+            "HTTP/1.1 200 OK\ncontent-type: text/plain\ncontent-length: 2\n\nOK",
+            id="missing-http-version",
+        ),
+    ],
+)
+def test_format_response(response, expected):
+    assert format_response(response) == expected
 
 
-class TestJsonBodyTruncation:
-    """_MAX_BODY_CHARS promises request/response bodies are capped; the
-    pretty-printed JSON branches must honor it too, not only plain text."""
-
-    def test_large_json_request_body_truncated(self):
-        big = {"data": ["x" * 50] * 200}
-        request = httpx.Request("POST", "https://x.test/", json=big)
-        out = format_request(request)
-        assert "(truncated)" in out
-        assert len(out) < 3000
-
-    def test_large_json_response_body_truncated(self):
-        big = {"data": ["x" * 50] * 200}
-        response = httpx.Response(200, json=big)
-        out = format_response(response)
-        assert "(truncated)" in out
-        assert len(out) < 3000
-
-
-class TestUndecodableJsonResponse:
-    def test_undecodable_bytes_with_json_content_type_do_not_raise(self):
-        """httpx's .json() can raise UnicodeDecodeError (not only
-        JSONDecodeError) for undecodable bytes served as JSON — the formatter
-        must degrade like the carrier's equivalent call sites do."""
-        response = httpx.Response(
-            200,
-            headers={"content-type": "application/json"},
-            content=b"\xff\xfe\x00b\x00a\x00d",
-        )
-        format_response(response)
+@pytest.mark.parametrize(
+    ("formatter", "message", "expected_body"),
+    [
+        pytest.param(
+            format_request,
+            httpx.Request("POST", "https://x.test/", headers={"content-type": "text/plain"}, content=b"x" * 2000),
+            "x" * 1000 + "... (truncated)",
+            id="text-request",
+        ),
+        pytest.param(format_request, httpx.Request("POST", "https://x.test/", json=_BIG_JSON), json.dumps(_BIG_JSON, indent=2)[:1000] + "... (truncated)", id="json-request"),
+        pytest.param(format_response, httpx.Response(200, json=_BIG_JSON), json.dumps(_BIG_JSON, indent=2)[:1000] + "... (truncated)", id="json-response"),
+    ],
+)
+def test_long_bodies_are_truncated(formatter, message, expected_body):
+    """Bodies are capped at 1000 characters, and the pretty-printed JSON
+    branches honor the cap too, not only plain text."""
+    assert formatter(message).split("\n\n", 1)[1] == expected_body

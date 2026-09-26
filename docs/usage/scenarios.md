@@ -62,7 +62,7 @@ Each stage represents a single HTTP request:
 
 ## Stages as List vs Dictionary
 
-Stages can be defined as a list or dictionary. With dictionary format, keys become stage names:
+Stages can be defined as a list or dictionary. With dictionary format, keys become stage names; a `name` inside the stage is overridden by its key:
 
 **List format:**
 

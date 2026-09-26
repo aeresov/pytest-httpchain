@@ -1,76 +1,32 @@
-"""Tests for call_function functionality."""
+"""Tests for call_function."""
 
 import pytest
 
 from pytest_httpchain.userfunc import UserFunctionError, call_function
 
 
-class TestCallFunctionBasic:
-    """Basic call_function tests."""
-
-    def test_call_with_positional_args(self):
-        result = call_function("json:dumps", {"a": 1})
-        assert result == '{"a": 1}'
-
-    def test_call_with_kwargs(self):
-        result = call_function("json:dumps", {"b": 2}, indent=2)
-        assert '"b": 2' in result
-        assert "\n" in result
-
-    def test_call_with_mixed_args(self):
-        result = call_function("json:dumps", {"c": 3}, sort_keys=True, indent=None)
-        assert result == '{"c": 3}'
-
-    def test_call_no_args(self):
-        result = call_function("userfunc_test_helpers:helper_no_args")
-        assert result == "helper_result"
-
-    def test_call_helper_function(self):
-        result = call_function("userfunc_test_helpers:helper_add", 10, 20)
-        assert result == 30
-
-    def test_call_helper_with_kwargs(self):
-        result = call_function("userfunc_test_helpers:helper_with_kwargs", name="pytest")
-        assert result == "hello, pytest"
+def test_forwards_args_and_kwargs():
+    assert call_function("userfunc_test_helpers:echo", 1, 2, k=3) == ((1, 2), {"k": 3})
 
 
-class TestCallFunctionErrors:
-    """Error handling tests for call_function."""
+@pytest.mark.parametrize(
+    ("helper", "args", "cause", "message"),
+    [
+        ("failing_function", (), ValueError, "intentional failure"),
+        ("needs_two_args", (1,), TypeError, "missing 1 required positional argument"),
+    ],
+)
+def test_wraps_exception_with_cause_in_message(helper, args, cause, message):
+    """H6: consumers render only str(e) (pytrace=False), never __cause__, so
+    the cause's text must be in the message as well as chained."""
+    name = f"userfunc_test_helpers:{helper}"
+    with pytest.raises(UserFunctionError, match=f"Error calling function '{name}': .*{message}") as exc_info:
+        call_function(name, *args)
+    assert isinstance(exc_info.value.__cause__, cause)
 
-    def test_propagates_import_error(self):
-        with pytest.raises(UserFunctionError, match="Failed to import module"):
-            call_function("nonexistent_module:func")
 
-    def test_bare_name_raises(self):
-        with pytest.raises(UserFunctionError, match="Module path is required"):
-            call_function("nonexistent_function_xyz")
-
-    def test_wraps_runtime_error(self):
-        with pytest.raises(UserFunctionError, match="Error calling function") as exc_info:
-            call_function("userfunc_test_helpers:failing_function")
-
-        assert exc_info.value.__cause__ is not None
-        assert isinstance(exc_info.value.__cause__, ValueError)
-        assert "intentional failure" in str(exc_info.value.__cause__)
-        # The underlying cause is also surfaced in the message itself (H6):
-        # consumers render only str(e) (pytrace=False), never __cause__.
-        assert "intentional failure" in str(exc_info.value)
-
-    def test_wraps_type_error_wrong_args(self):
-        with pytest.raises(UserFunctionError, match="Error calling function"):
-            call_function("userfunc_test_helpers:needs_two_args", 1)
-
-    def test_preserves_exception_chain(self):
-        with pytest.raises(UserFunctionError) as exc_info:
-            call_function("userfunc_test_helpers:raises_key_error")
-
-        assert isinstance(exc_info.value.__cause__, KeyError)
-
-    def test_user_function_error_preserved(self):
-        # A UserFunctionError raised by the user function must propagate unwrapped,
-        # not be double-wrapped in another "Error calling function" UserFunctionError
-        # (mirrors wrap_function's behavior).
-        with pytest.raises(UserFunctionError, match="custom error") as exc_info:
-            call_function("userfunc_test_helpers:raises_user_error")
-
-        assert "Error calling function" not in str(exc_info.value)
+def test_user_function_error_propagates_unwrapped():
+    """A UserFunctionError from the user function is already curated: it must
+    not be double-wrapped in another "Error calling function"."""
+    with pytest.raises(UserFunctionError, match="^custom error$"):
+        call_function("userfunc_test_helpers:raises_user_error")

@@ -172,8 +172,9 @@ NumberOrTemplate = Annotated[
     WithJsonSchema({"type": "string", "pattern": _NUMBER_OR_TEMPLATE_PATTERN}),
 ]
 
-# Any RFC 9110 token is a legal method (PROPFIND, PURGE, vendor verbs). Sits
-# after the ``HTTPMethod`` branch so common verbs still normalize to the enum.
+# Any RFC 9110 token is a legal method (PROPFIND, PURGE, vendor verbs). The
+# ``HTTPMethod`` branch before it only feeds the JSON Schema's verb autocompletion:
+# the smart union keeps a str input a plain str (only the default is the enum).
 _HTTP_METHOD_TOKEN_PATTERN = r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$"
 
 
