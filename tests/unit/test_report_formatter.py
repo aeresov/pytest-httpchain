@@ -18,8 +18,10 @@ _BIG_JSON = {"data": ["x" * 50] * 200}
             id="no-body",
         ),
         pytest.param(
-            httpx.Request("POST", "https://example.com/api/users", headers={"content-type": "application/json"}, json={"name": "Alice", "age": 30}),
-            'POST https://example.com/api/users\nhost: example.com\ncontent-type: application/json\ncontent-length: 25\n\n{\n  "name": "Alice",\n  "age": 30\n}',
+            # Bytes, not json=: httpx's own JSON encoding (and so content-length)
+            # differs across the supported httpx range.
+            httpx.Request("POST", "https://example.com/api/users", headers={"content-type": "application/json"}, content=json.dumps({"name": "Alice", "age": 30}).encode()),
+            'POST https://example.com/api/users\nhost: example.com\ncontent-type: application/json\ncontent-length: 28\n\n{\n  "name": "Alice",\n  "age": 30\n}',
             id="json-pretty-printed",
         ),
         pytest.param(
