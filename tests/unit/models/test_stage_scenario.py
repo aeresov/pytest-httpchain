@@ -138,9 +138,16 @@ class TestScenarioStages:
             "always_run": True,
         }
 
-    def test_mapping_key_overrides_explicit_name(self):
-        scenario = Scenario.model_validate({"stages": {"dict-key-name": {"name": "explicit-name", "request": {"url": "https://example.com"}}}})
-        assert scenario.stages[0].name == "dict-key-name"
+    @pytest.mark.parametrize(
+        "stage",
+        [
+            pytest.param({"name": "explicit-name", "request": {"url": "https://example.com"}}, id="dict"),
+            # A Stage instance (Python API only) used to keep its own name.
+            pytest.param(make_stage(name="explicit-name"), id="instance"),
+        ],
+    )
+    def test_mapping_key_overrides_explicit_name(self, stage):
+        assert Scenario.model_validate({"stages": {"key-name": stage}}).stages[0].name == "key-name"
 
     @pytest.mark.parametrize(
         ("stages", "error_type"),

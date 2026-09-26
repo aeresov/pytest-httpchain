@@ -105,6 +105,10 @@ def test_make_marker(mark_str, expected):
     [
         ("foo.bar", ValueError),  # attribute access is not a marker expression
         ("skip(reason=some_name)", ValueError),  # only literal arguments
+        # Unpacking is rejected either way; `**` used to be silently dropped,
+        # turning a strict xfail into a non-strict one.
+        ('skip(*["x"])', ValueError),
+        ('xfail(**{"strict": True})', ValueError),
         ("skip(", SyntaxError),
     ],
 )

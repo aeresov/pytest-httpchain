@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The editor JSON Schema now accepts an `$include`/`$merge`/`$ref` object in place of any model
+  field, not only where a whole named type or a root key is expected. `"response": {"$include":
+  "common.json#/checks"}` (or a shared `substitutions` list, or a base `url`) resolved at runtime
+  but was flagged by the editor.
+- A marker using `**` unpacking (`xfail(**{"strict": True})`) is now rejected as `HTTPCHAIN019`.
+  Its keyword arguments used to be silently dropped, turning a strict xfail into a non-strict one.
+  `*` unpacking was already rejected.
+- In the `{name: stage}` form of `stages`, the key now names a `Stage` instance too (Python API);
+  it overrode only a dict's `name` before.
 - A user-function name (`"module:func"`), an `httpchain_suffix` value, or a scenario file name
   ending in a newline is now rejected. All three were checked with `re.match` against a `^...$`
   pattern, and `$` also matches just before a trailing `\n`. The shared name pattern

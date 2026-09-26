@@ -104,6 +104,12 @@ def test_schema_patterns_are_ecma262_compatible():
         pytest.param(_with_stage(substitutions=[{"$ref": "vars.json"}]), id="union-substitution"),
         pytest.param(_with_stage(parallel={"$include": "parallel.json"}), id="union-parallel"),
         pytest.param(_with_stage(parametrize=[{"$include": "params.json"}]), id="union-parametrize"),
+        # Reference objects in place of a whole model field, not only of a
+        # named type: shared checks, a shared step list, a shared base URL.
+        pytest.param(_with_stage(response={"$include": "common.json#/checks"}), id="field-response"),
+        pytest.param(_with_stage(substitutions={"$include": "common.json#/vars"}), id="field-substitutions"),
+        pytest.param(_request(url={"$include": "common.json#/base_url"}), id="field-scalar"),
+        pytest.param(_verify(expressions={"$merge": "common.json#/expressions"}), id="field-nested-model"),
         # Template-accepting fields take templates, concrete values, and the
         # stringified concretes the runtime coerces (no false positives).
         pytest.param(_request(timeout="{{ t }}"), id="timeout-template"),
@@ -133,6 +139,8 @@ def test_schema_accepts_documented_shapes(validator, document):
         pytest.param(_with_stage(alwaysrun=True), id="stage-key"),
         pytest.param(_with_stage(response=[{"save": {"jmespth": {"x": "y"}}}]), id="save-key"),
         pytest.param({"stagez": []}, id="root-key"),
+        # A field's JsonRef branch still demands a directive key.
+        pytest.param(_with_stage(response={"checks": "not a step"}), id="field-without-directive"),
         # L7: a template-accepting field rejects a non-template string that is
         # not a valid value of the field's concrete type either.
         pytest.param(_request(timeout="abc"), id="timeout-type"),

@@ -117,6 +117,7 @@ DIAGNOSED = [
     # M6: a malformed marker crashes collection, so the pre-flight gate errors too.
     ("invalid_scenario_marker.json", [(C.INVALID_MARKER, "marks", r"'skip\('")]),
     ("invalid_stage_marker.json", [(C.INVALID_MARKER, "stages[0].marks", "'foo.bar'")]),
+    ("invalid_marker_unpacking.json", [(C.INVALID_MARKER, "stages[0].marks", r"\*\* unpacking")]),
     ("contradiction_contains.json", [(C.CONTAINS_CONTRADICTION, "stages[0].response[0].verify.body", r"substring\(s\): \['ERROR'\]")]),
     ("contradiction_matches.json", [(C.MATCHES_CONTRADICTION, "stages[0].response[0].verify.body", r"pattern\(s\): \['\^OK\$'\]")]),
     # The scenario-level context never includes fixture values: a guaranteed
