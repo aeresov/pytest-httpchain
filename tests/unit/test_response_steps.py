@@ -16,11 +16,12 @@ from pytest_httpchain.errors import SaveError, VerificationError
 from pytest_httpchain.models import JMESPathSave, Verify
 from pytest_httpchain.models.entities import ResponseBody
 from pytest_httpchain.response_steps import check_rendered_assertions, process_save, process_verify
-from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK
+from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
 
 NOT_JSON = httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
 # The decoder raises RecursionError, which is not a ValueError: a narrower except
 # let it escape the chain-abort machinery, with no report section and no HAR entry.
+# Tests parse it via `on_bounded_stack`, where it overflows on every interpreter.
 TOO_DEEP_JSON = httpx.Response(200, content=TOO_DEEP_TO_PARSE, headers={"content-type": "application/json"})
 UNPARSEABLE = pytest.mark.parametrize("response", [NOT_JSON, TOO_DEEP_JSON], ids=["not-json", "too-deep"])
 
@@ -28,7 +29,7 @@ UNPARSEABLE = pytest.mark.parametrize("response", [NOT_JSON, TOO_DEEP_JSON], ids
 @UNPARSEABLE
 def test_jmespath_save_rejects_non_json_response(response):
     with pytest.raises(SaveError, match="response is not valid JSON"):
-        process_save(JMESPathSave(jmespath={"value": "key"}), response, ChainMap())
+        on_bounded_stack(process_save, JMESPathSave(jmespath={"value": "key"}), response, ChainMap())
 
 
 def test_status_zero_is_not_treated_as_absent():
@@ -60,7 +61,7 @@ class TestBodySchema:
         if content is not None:
             schema_path.write_bytes(content)
         with pytest.raises(VerificationError, match="Error reading body schema file"):
-            process_verify(Verify(body=ResponseBody(schema=str(schema_path))), httpx.Response(200, json={"id": 1}))
+            on_bounded_stack(process_verify, Verify(body=ResponseBody(schema=str(schema_path))), httpx.Response(200, json={"id": 1}))
 
     def test_schema_file_that_is_not_a_json_schema_fails_cleanly(self, tmp_path):
         """Valid JSON, invalid JSON Schema: only compiling it can tell, so the
@@ -98,7 +99,7 @@ class TestBodySchema:
     @UNPARSEABLE
     def test_non_json_response_fails_cleanly(self, response):
         with pytest.raises(VerificationError, match="response is not valid JSON"):
-            process_verify(Verify(body=ResponseBody(schema={"type": "object"})), response)
+            on_bounded_stack(process_verify, Verify(body=ResponseBody(schema={"type": "object"})), response)
 
     @pytest.mark.parametrize(
         ("schema", "match"),
