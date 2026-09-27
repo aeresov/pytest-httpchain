@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A body schema file (`verify.body.schema: "./schemas/x.json"`) whose meta-check crashes now
+  fails the stage with `Invalid JSON Schema in file '...'`. The meta-schema's `format: regex`
+  check expects only `re.error`, so a `pattern` that `re.compile` rejects some other way escaped
+  raw: `a{4294967296}` raised `OverflowError` and about 1000 nested groups raised
+  `RecursionError`. A schema nested a few hundred levels deep overflowed the meta-validator's own
+  recursion the same way. The stage failed with a bare traceback, with no request/response report
+  and no HAR entry. Inline schemas and `validate --deep` already reported these cases cleanly.
+
 ## [0.15.2] - 2026-09-26
 
 ### Fixed
