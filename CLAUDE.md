@@ -81,7 +81,7 @@ src/pytest_httpchain/
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule), chain-contiguity ordering hooks
 ├── factory.py                 # Collection-time test-class factory (create_test_class)
 ├── carrier.py                 # Runtime execution engine (Carrier class): chain state, iteration matrix, threading, reporting
-├── request_builder.py         # Resolved models -> httpx kwargs (build_client_kwargs, build_request_kwargs)
+├── request_builder.py         # Resolved models -> httpx kwargs (build_client_kwargs, build_request_kwargs) and auth flows (build_auth: basic, digest, bearer, user functions)
 ├── response_steps.py          # Meaning of a single verify/save step (process_verify, process_save) — pure, no chain state
 ├── utils.py                   # Marker construction, substitution processing, scenario-relative path resolution
 ├── report_formatter.py        # HTTP request/response formatting for test reports
@@ -141,7 +141,8 @@ run_scenario({"stages": [stage("s", "/headers", request={"timeout": 0.2})]})  # 
 `tests/integration/helpers.py` holds the rest: `stage()` builds a stage against
 the example `server` fixture (GET, expect 200) so an inline scenario spells out
 only what its test is about; `har_entries()` reads the one HAR file a run
-wrote; `named()` builds parametrize rows whose first value is the test id.
+wrote (`HAR_ARGS` makes it write one); `named()` builds parametrize rows whose
+first value is the test id.
 Scenarios that differ only in expected outcome share one parametrized test
 (`test_verify_passes`, `test_save_fails_cleanly`, ...) with the rationale as a
 comment on the row.

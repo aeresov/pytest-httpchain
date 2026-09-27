@@ -1,5 +1,6 @@
 import base64
 import os
+import secrets
 import socket
 import ssl
 import threading
@@ -9,13 +10,27 @@ from http import HTTPStatus
 
 import pytest
 from flask import Flask, request
-from flask_httpauth import HTTPBasicAuth
+from flask_httpauth import HTTPBasicAuth, HTTPDigestAuth, HTTPTokenAuth
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.serving import make_server
 
 app = Flask(__name__)
 auth = HTTPBasicAuth()
 users = {"user": generate_password_hash("pass")}
+
+# Digest keeps the plain password: the server computes the same digest.
+digest_auth = HTTPDigestAuth(realm="examples")
+DIGEST_OPAQUE = "examples-opaque"
+# The nonces issued, kept here instead of in Flask's session (the default),
+# which needs a secret key and the session cookie back with every answer.
+# Module-level like the counter: a scenario's stages each get a server of
+# their own, and the scenario's digest auth answers them all with one nonce.
+_digest_nonces: set[str] = set()
+
+# Tokens /login issued, for /me. "s3cret-" marks them, so a test can tell
+# whether one got out.
+token_auth = HTTPTokenAuth(scheme="Bearer")
+_tokens: set[str] = set()
 
 # Thread-safe counter for parallel tests
 _counter_lock = threading.Lock()
@@ -40,6 +55,39 @@ def verify_password(username, password):
         return username
 
 
+@digest_auth.get_password
+def digest_password(username):
+    return {"user": "pass"}.get(username)
+
+
+@digest_auth.generate_nonce
+def generate_nonce():
+    nonce = secrets.token_hex(16)
+    _digest_nonces.add(nonce)
+    return nonce
+
+
+@digest_auth.verify_nonce
+def verify_nonce(nonce):
+    return nonce in _digest_nonces
+
+
+@digest_auth.generate_opaque
+def generate_opaque():
+    return DIGEST_OPAQUE
+
+
+@digest_auth.verify_opaque
+def verify_opaque(opaque):
+    return opaque == DIGEST_OPAQUE
+
+
+@token_auth.verify_token
+def verify_token(token):
+    if token in _tokens:
+        return "user"
+
+
 # ============ Basic Endpoints ============
 
 
@@ -57,6 +105,29 @@ def bad():
 @auth.login_required
 def answer():
     return {"answer": 42}, HTTPStatus.OK
+
+
+@app.route("/digest", methods=["GET", "POST"])
+@digest_auth.login_required
+def digest_protected():
+    return {"user": digest_auth.current_user()}, HTTPStatus.OK
+
+
+@app.post("/login")
+def login():
+    """A bearer token for the JSON body's username and password, for /me."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not verify_password(data.get("username"), data.get("password", "")):
+        return {"error": "invalid credentials"}, HTTPStatus.UNAUTHORIZED
+    token = f"s3cret-{secrets.token_hex(8)}"
+    _tokens.add(token)
+    return {"token": token}, HTTPStatus.OK
+
+
+@app.get("/me")
+@token_auth.login_required
+def me():
+    return {"user": token_auth.current_user()}, HTTPStatus.OK
 
 
 @app.get("/delay/<int:seconds>")

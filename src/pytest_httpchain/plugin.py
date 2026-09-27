@@ -663,6 +663,17 @@ def _sections_will_be_shown(config: pytest.Config, report: pytest.TestReport) ->
     return terminal_reporter.hasopt("P") or bool(config.option.xfail_tb)
 
 
+def _earlier_hops(history: list[httpx.Response]) -> str:
+    """`` (after ...)`` for the report of a response others came before, which
+    httpx keeps in one history: the redirects followed, and the responses an
+    auth flow answered by sending the request again (a digest challenge's
+    401), which are not redirects."""
+    redirects = sum(1 for hop in history if hop.is_redirect)
+    counts = ((redirects, "redirect"), (len(history) - redirects, "auth exchange"))
+    hops = [f"{count} {noun}{'s' if count != 1 else ''}" for count, noun in counts if count]
+    return f" (after {' and '.join(hops)})" if hops else ""
+
+
 def _format_section[T](what: str, formatter: Callable[[T], str], exchange: T) -> str:
     """A report section body. Reporting must never break the report, so a
     formatter failure becomes the section's text."""
@@ -706,9 +717,8 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
 
         # The shown request is the final hop's, which may differ from what
         # the stage authored; the full chain is in the HAR output.
-        if carrier_class.last_response is not None and carrier_class.last_response.history:
-            hops = len(carrier_class.last_response.history)
-            suffix += f" (after {hops} redirect{'s' if hops != 1 else ''})"
+        if carrier_class.last_response is not None:
+            suffix += _earlier_hops(carrier_class.last_response.history)
 
         if _sections_will_be_shown(item.config, report):
             redaction = item.config.stash[_REDACTION]

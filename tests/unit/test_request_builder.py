@@ -5,19 +5,37 @@ tests/integration/test_body_types.py; this pins the mapping details and the
 error paths a server round trip cannot reach.
 """
 
+import inspect
 import json
 import re
 import ssl
+import threading
+import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
 import trustme
 
 from pytest_httpchain.errors import RequestError, StageExecutionError
-from pytest_httpchain.models import BinaryBody, ClientConfig, FilesBody, Request, SSLConfig
+from pytest_httpchain.models import (
+    AuthCredentials,
+    BasicAuth,
+    BearerAuth,
+    BinaryBody,
+    ClientConfig,
+    DigestAuth,
+    FilesBody,
+    Request,
+    SSLConfig,
+    UserFunctionKwargs,
+    UserFunctionName,
+)
 from pytest_httpchain.models.types import _PROXY_SCHEMES
 from pytest_httpchain.redaction import Redaction
-from pytest_httpchain.request_builder import build_client_kwargs, build_request_kwargs
+from pytest_httpchain.request_builder import build_auth, build_client_kwargs, build_request_kwargs
+from pytest_httpchain.userfunc import UserFunctionError
 from pytest_httpchain.validation import load_scenario
 
 
@@ -270,6 +288,258 @@ def test_relative_url_error_shows_the_url_redacted():
         build_request_kwargs(Request(url="/ok?api_key=s3cret&page=2"))
     with pytest.raises(RequestError, match=re.escape("Request URL '/ok?sig=[REDACTED]' is relative")):
         build_request_kwargs(Request(url="/ok?sig=s3cret"), redaction=Redaction(query_params=["sig"]))
+
+
+def _digest_server(request: httpx.Request) -> httpx.Response:
+    """A digest challenge for a request without credentials, 200 for one with:
+    computing the answer is httpx's, and checking it flask-httpauth's in the
+    integration suite."""
+    if request.headers.get("authorization", "").startswith("Digest "):
+        return httpx.Response(200)
+    return httpx.Response(401, headers={"WWW-Authenticate": 'Digest realm="r", nonce="n1", qop="auth", opaque="o"'})
+
+
+class _Transport(httpx.BaseTransport):
+    """``handler``'s response to each request, which it gets as a real
+    transport does: unread. httpx's MockTransport reads every request before
+    its handler sees it, which would hide a request whose ``.content`` a user
+    function cannot read."""
+
+    def __init__(self, handler: Callable[[httpx.Request], httpx.Response]) -> None:
+        self._handler = handler
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        return self._handler(request)
+
+
+class TestAuth:
+    BASIC = BasicAuth(basic=AuthCredentials(username="u", password="p"))
+
+    @staticmethod
+    def _wire(requests: list[Request], scenario_auth=None, respond=lambda request: httpx.Response(200)) -> tuple[list[httpx.Request], list[httpx.Response]]:
+        """What goes on the wire for ``requests``, sent in turn on one client
+        built with the scenario's ``scenario_auth``, and their responses."""
+        sent = []
+        transport = _Transport(lambda request: sent.append(request) or respond(request))
+        with httpx.Client(**build_client_kwargs(ClientConfig(), SSLConfig(), scenario_auth, None), transport=transport) as http:
+            responses = [http.request(**build_request_kwargs(request)) for request in requests]
+        return sent, responses
+
+    @pytest.mark.parametrize(
+        ("auth", "authorization"),
+        [
+            pytest.param(BASIC, "Basic dTpw", id="basic"),
+            pytest.param(BearerAuth(bearer="tok"), "Bearer tok", id="bearer"),
+        ],
+    )
+    @pytest.mark.parametrize("level", ["scenario", "request"])
+    def test_builtin_sets_the_authorization_header(self, auth, authorization, level):
+        request = Request(url="http://t/", auth=auth if level == "request" else None)
+        [sent], _ = self._wire([request], scenario_auth=auth if level == "scenario" else None)
+        assert sent.headers.get_list("authorization") == [authorization]
+
+    def test_builtin_replaces_an_authorization_header_the_stage_sets(self):
+        """As httpx's BasicAuth does: the scheme sets the header, whatever the
+        request's headers say."""
+        [sent], _ = self._wire([Request(url="http://t/", headers={"Authorization": "Token old"}, auth=BearerAuth(bearer="tok"))])
+        assert sent.headers.get_list("authorization") == ["Bearer tok"]
+
+    def test_digest_replaces_the_stages_header_when_it_answers(self):
+        """Digest has nothing to set before the server's challenge: the first
+        request goes out with the header the stage wrote, and the answer
+        replaces it."""
+        request = Request(url="http://t/", headers={"Authorization": "Token old"}, auth=DigestAuth(digest=AuthCredentials(username="u", password="p")))
+        (challenged, answer), [response] = self._wire([request], respond=_digest_server)
+        assert response.status_code == 200
+        assert challenged.headers.get_list("authorization") == ["Token old"]
+        assert [value.split(" ", 1)[0] for value in answer.headers.get_list("authorization")] == ["Digest"]
+
+    @pytest.mark.parametrize(
+        ("method", "body", "content"),
+        [
+            pytest.param("POST", {"json": {"a": 1}}, b'{"a":1}', id="post"),
+            pytest.param("GET", None, b"", id="get"),
+        ],
+    )
+    def test_digest_answers_the_challenge_in_a_request_of_its_own(self, method, body, content):
+        """httpx's flow added the answer to the request it had sent first, so
+        the challenge in the history, which the HAR file shows, carried
+        credentials it went out without. Both are requests a user function can
+        read: built on the first one's body stream, the copies were unread, so
+        ``response.request.content`` raised ``RequestNotRead``."""
+        request = Request(url="http://t/", method=method, auth=DigestAuth(digest=AuthCredentials(username="u", password="p")), body=body)
+        (challenged, answer), [response] = self._wire([request], respond=_digest_server)
+        assert response.status_code == 200
+        [challenge] = response.history
+        assert (challenge.request, response.request) == (challenged, answer)
+        assert "authorization" not in challenged.headers
+        assert answer.headers["authorization"].startswith('Digest username="u", realm="r", nonce="n1", uri="/"')
+        # The body goes out with both.
+        assert challenged.content == answer.content == content
+
+    def test_digest_counts_each_nonce_use_once_across_threads(self, monkeypatch):
+        """The scenario's digest auth is the shared client's, which a parallel
+        stage's threads send through at once. httpx reads the nonce count and
+        increments it without a lock, around computing the client nonce (made
+        slow here, to widen that window): the threads sent the same count,
+        which a server enforcing replay protection refuses."""
+        client_nonce = httpx.DigestAuth._get_client_nonce
+
+        def slow_client_nonce(self, nonce_count, nonce):
+            time.sleep(0.01)
+            return client_nonce(self, nonce_count, nonce)
+
+        monkeypatch.setattr(httpx.DigestAuth, "_get_client_nonce", slow_client_nonce)
+        sent = []
+        transport = _Transport(lambda request: sent.append(request) or _digest_server(request))
+        with httpx.Client(**build_client_kwargs(ClientConfig(), SSLConfig(), DigestAuth(digest=AuthCredentials(username="u", password="p")), None), transport=transport) as http:
+            http.get("http://t/")  # Challenged: from here on, answered up front.
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                statuses = list(pool.map(lambda _: http.get("http://t/").status_code, range(8)))
+        assert statuses == [200] * 8
+        assert sorted(self._counts(sent)) == [f"{n:08x}" for n in range(1, 10)]
+
+    def test_digest_builds_on_httpx_internals(self):
+        """What `_DigestAuth` counts nonce uses with is httpx.DigestAuth's
+        private state (as of httpx 0.28): if a new httpx renames it, every
+        digest request fails with an AttributeError, and this names what
+        changed."""
+        auth = httpx.DigestAuth("u", "p")
+        assert (auth._last_challenge, auth._nonce_count) == (None, 1)
+        assert list(inspect.signature(auth._build_auth_header).parameters) == ["request", "challenge"]
+
+    @staticmethod
+    def _counts(sent: list[httpx.Request]) -> list[str]:
+        """The ``nc`` of each answer that went out, in the order sent."""
+        return [re.search(r"nc=(\w+)", request.headers["authorization"]).group(1) for request in sent if "authorization" in request.headers]
+
+    def test_digest_counts_on_when_challenged_together_with_one_nonce(self):
+        """httpx restarts the count at 1 for each challenge it answers, the
+        nonce in use included: a parallel stage that is the scenario's first,
+        its requests challenged at once with the one nonce a server hands out
+        (RFC 7616 allows it), answered all with nc=00000001, which a server
+        checking for replays refuses but for one. The count restarts for a new
+        nonce only."""
+        arrived = threading.Barrier(8, timeout=10)
+        sent = []
+
+        def respond(request):
+            if "authorization" not in request.headers:
+                arrived.wait()  # All eight are challenged before any answers.
+            return _digest_server(request)
+
+        transport = _Transport(lambda request: sent.append(request) or respond(request))
+        with httpx.Client(**build_client_kwargs(ClientConfig(), SSLConfig(), DigestAuth(digest=AuthCredentials(username="u", password="p")), None), transport=transport) as http:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                statuses = list(pool.map(lambda _: http.get("http://t/").status_code, range(8)))
+        assert statuses == [200] * 8
+        assert sorted(self._counts(sent)) == [f"{n:08x}" for n in range(1, 9)]
+
+    @pytest.mark.parametrize(
+        ("nonce", "counts"),
+        [
+            # Challenged again with the nonce it answered with (a server's
+            # replay check refusing an answer, say): the count goes on.
+            pytest.param("n1", ["00000001", "00000002", "00000003"], id="same-nonce-counts-on"),
+            # A new nonce (a stale one replaced): its count starts at 1.
+            pytest.param("n2", ["00000001", "00000002", "00000001"], id="new-nonce-restarts"),
+        ],
+    )
+    def test_digest_rechallenged(self, nonce, counts):
+        answers = iter([200, 401, 200])
+
+        def respond(request):
+            if "authorization" not in request.headers:
+                return _digest_server(request)
+            if (status := next(answers)) == 401:
+                return httpx.Response(401, headers={"WWW-Authenticate": f'Digest realm="r", nonce="{nonce}", qop="auth", opaque="o"'})
+            return httpx.Response(status)
+
+        scenario_auth = DigestAuth(digest=AuthCredentials(username="u", password="p"))
+        sent, responses = self._wire([Request(url="http://t/"), Request(url="http://t/")], scenario_auth=scenario_auth, respond=respond)
+        assert [response.status_code for response in responses] == [200, 200]
+        assert self._counts(sent) == counts
+        assert f'nonce="{nonce}"' in sent[-1].headers["authorization"]
+
+    @pytest.mark.parametrize(
+        ("level", "wire_requests"),
+        [
+            # The scenario's flow is the shared client's: it answers the second
+            # request up front with the nonce the first was challenged with.
+            pytest.param("scenario", 3, id="scenario-reuses-the-nonce"),
+            # A request's is built for it, and is challenged each time.
+            pytest.param("request", 4, id="request-challenged-each-time"),
+        ],
+    )
+    def test_digest_challenge_is_answered_once_per_flow(self, level, wire_requests):
+        auth = DigestAuth(digest=AuthCredentials(username="u", password="p"))
+        request = Request(url="http://t/", auth=auth if level == "request" else None)
+        sent, responses = self._wire([request, request], scenario_auth=auth if level == "scenario" else None, respond=_digest_server)
+        assert [response.status_code for response in responses] == [200, 200]
+        assert len(sent) == wire_requests
+
+    @pytest.mark.parametrize(
+        ("auth", "authorization"),
+        [
+            pytest.param(None, ["Basic dTpw"], id="left-out-takes-the-scenarios"),
+            # httpx's auth=None, where leaving it out is USE_CLIENT_DEFAULT.
+            pytest.param(False, [], id="false-sends-none"),
+            pytest.param(BearerAuth(bearer="tok"), ["Bearer tok"], id="request-auth-replaces-the-scenarios"),
+        ],
+    )
+    def test_request_auth_over_the_scenarios(self, auth, authorization):
+        [sent], _ = self._wire([Request(url="http://t/", auth=auth)], scenario_auth=self.BASIC)
+        assert sent.headers.get_list("authorization") == authorization
+
+    def test_false_leaves_a_urls_userinfo_to_httpx(self):
+        """As on a client without auth: httpx sends the userinfo as Basic
+        credentials, which only the scenario's auth would have replaced."""
+        [sent], _ = self._wire([Request(url="http://a:b@t/", auth=False)], scenario_auth=BearerAuth(bearer="tok"))
+        assert sent.headers.get_list("authorization") == ["Basic YTpi"]
+
+    def test_failing_user_function_is_a_request_error(self):
+        """Named in the file, the name is quoted, as any user function's is."""
+        with pytest.raises(RequestError, match="Failed to configure authentication: Failed to import module 'nosuchmodule_xyz'"):
+            build_request_kwargs(Request(url="http://t/", auth="nosuchmodule_xyz:auth"), declared_auth=UserFunctionName("nosuchmodule_xyz:auth"))
+
+    RENDERED_NAME = "auth's template rendered a user function name (not shown, as auth can carry a credential)"
+
+    @pytest.mark.parametrize(
+        ("declared", "rendered", "reason"),
+        [
+            # Basic credentials written as the whole auth: "user:password" has
+            # a name's shape, so it is imported as one, and the failure named
+            # the user name as the module, and the password as the function
+            # when the user name is a module's (test, os, secrets...).
+            pytest.param("{{ creds }}", "s3cret_user:s3cret_pass", "importing its module raised ModuleNotFoundError", id="whole-no-module"),
+            pytest.param("{{ creds }}", "json:s3cret_pass", "its module has no function of that name", id="whole-no-function"),
+            # A name a template renders in part was not in the file either.
+            pytest.param({"name": "json:{{ fn }}"}, {"name": "json:s3cret_pass"}, "its module has no function of that name", id="in-part"),
+        ],
+    )
+    @pytest.mark.parametrize("level", ["scenario", "request"])
+    def test_function_name_a_template_rendered_is_not_quoted(self, declared, rendered, reason, level):
+        declared = Request.model_validate({"url": "http://t/", "auth": declared}).auth
+        auth = Request.model_validate({"url": "http://t/", "auth": rendered}).auth
+        if level == "scenario":
+            with pytest.raises(UserFunctionError) as excinfo:
+                build_client_kwargs(ClientConfig(), SSLConfig(), auth, None, declared_auth=declared)
+        else:
+            with pytest.raises(RequestError) as excinfo:
+                build_request_kwargs(Request(url="http://t/", auth=auth), declared_auth=declared)
+        assert f"{self.RENDERED_NAME} that does not import: {reason}; a built-in scheme is an object" in str(excinfo.value)
+        assert "s3cret" not in str(excinfo.value)
+
+    def test_function_a_template_named_is_called(self):
+        """A name a template rendered that is a function's is imported and
+        called as any other; a failure calling it does not name it either."""
+        declared = UserFunctionKwargs.model_validate({"name": "{{ fn }}", "kwargs": {"username": "u", "password": "p"}})
+        auth = UserFunctionKwargs.model_validate({"name": "httpx:BasicAuth", "kwargs": {"username": "u", "password": "p"}})
+        client_kwargs = build_client_kwargs(ClientConfig(), SSLConfig(), auth, None, declared_auth=declared)
+        with httpx.Client(**client_kwargs, transport=_Transport(lambda request: httpx.Response(200))) as http:
+            assert http.get("http://t/").request.headers["authorization"] == "Basic dTpw"
+        with pytest.raises(UserFunctionError, match=re.escape(f"{self.RENDERED_NAME}, and calling it failed: ")):
+            build_auth(UserFunctionName("httpx:BasicAuth"), UserFunctionName("{{ fn }}"))
 
 
 class TestClientKwargs:

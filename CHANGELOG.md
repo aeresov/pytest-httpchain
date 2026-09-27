@@ -73,9 +73,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template that renders to a relative URL without one fails its stage with the same message,
   before anything is sent, instead of httpx's `Request URL is missing an 'http://' or 'https://'
   protocol`.
+- Built-in authentication, without a Python function: `{"basic": {"username": "...", "password":
+  "..."}}`, `{"digest": {"username": "...", "password": "..."}}` and `{"bearer": "<token>"}`, in the
+  scenario's `auth` or a request's. The values take templates: a scenario's resolve once, against
+  the scenario substitutions (`HTTPCHAIN016`/`HTTPCHAIN017` cover them, as they cover `ssl` and
+  `client`), and a request's with the rest of the request, so `{"bearer": "{{ token }}"}` sends the
+  token a login stage saved, and `validate` reports a token used before the stage that saves it
+  (`HTTPCHAIN004`); `show` and `graph` draw the edge. A credential whose template renders to
+  `null` fails the stage rather than sending the request without credentials, a bearer token may
+  not be empty, and a credential that fails validation is not quoted. The whole `auth` may be one
+  template (`"{{ creds }}"` over a `vars` object), at either level; a user function name a
+  template in `auth` rendered is not quoted when it fails to import either, since credentials
+  rendered as one `"user:password"` string have a name's shape. The scenario's digest auth
+  answers the server's first challenge and then every later request up front, parallel ones
+  included, counting each use of the nonce once as servers checking for replays require; a
+  request's is challenged on each request, and its challenge shows in the HAR export as a request
+  without credentials, as it went out (httpx added the answer to the challenged request). A
+  request's `"auth": false` sends it without the scenario's auth, for a public endpoint in an
+  authenticated scenario; at scenario level `false` fails validation, saying where it belongs.
+  User functions (`"module:function"` or `{"name": ..., "kwargs": ...}`) work as before, for any
+  other scheme; an object mixing `name` with a built-in's key, or two built-ins, fails validation
+  naming the extra key, and `validate --deep` imports only user functions.
 
 ### Fixed
 
+- A failing stage whose response came after a digest challenge (an auth function returning
+  `httpx.DigestAuth`, or the new built-in) was reported as `HTTP Request (after 1 redirect)`: httpx
+  keeps the challenge's `401` in the same history as redirects. The report now counts them apart,
+  `(after 1 auth exchange)`, or `(after 1 redirect and 1 auth exchange)` for both.
+- A request that failed validation once its templates rendered printed the refused value in
+  pydantic's report (`input_value=...`), such as a header's token that rendered to a number; the
+  failure now leaves the values out, as a `client` block's does.
+- A scenario `auth` written as one template (`"{{ creds }}"`) was validated, once rendered, as
+  the user function name it was declared as: one rendering a `{"name": ..., "kwargs": ...}`
+  object failed initialization with pydantic's report, which printed the rendered object, while
+  `validate` passed the file. A request's `auth` rendering a `vars` object failed its stage the
+  same way. Both now take any form of auth, and the scenario's failure leaves the value out.
+- An `auth` written as one template that rendered a string other than a `module:function` name,
+  typically a token (`"auth": "{{ token }}"` for `{"bearer": "{{ token }}"}`), failed with two
+  messages that each quoted it, putting the credential in the report. The failure is now one
+  message, at either level, that says what a string `auth` is and where a token goes without
+  quoting the string.
 - A `combinations` step whose combinations have a single key now hands the stage the bare value.
   The stage got a one-element tuple instead: with `{"combinations": [{"id": 1}, {"id": 2}]}`,
   `/item/{{ id }}` requested `/item/(1,)`, a stage that did not check the value still passed, and

@@ -36,8 +36,11 @@ from pytest_httpchain.carrier import (
 )
 from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.models import (
+    AuthCredentials,
+    BearerAuth,
     ClientConfig,
     CombinationsParameter,
+    DigestAuth,
     IndividualParameter,
     ParallelForeachConfig,
     ParallelRepeatConfig,
@@ -46,6 +49,7 @@ from pytest_httpchain.models import (
     Scenario,
     SSLConfig,
     Stage,
+    UserFunctionKwargs,
     UserFunctionName,
     VarsSubstitution,
     Verify,
@@ -373,6 +377,16 @@ class TestRenderedAwayFields:
             pytest.param("request", Request.model_validate({"url": "{{ x }}"}), "request.url", id="required-field"),
             # A user-function name is a RootModel, dumped as its bare root value.
             pytest.param("auth", UserFunctionName("{{ x }}"), "auth", id="scenario-auth"),
+            # A built-in's credential: not "no auth", which the stage would
+            # have sent unauthenticated or with the scenario's credentials.
+            pytest.param("request", Request.model_validate({"url": "http://t/", "auth": {"bearer": "{{ x }}"}}), "request.auth.bearer", id="request-auth-bearer"),
+            pytest.param(
+                "request",
+                Request.model_validate({"url": "http://t/", "auth": {"basic": {"username": "u", "password": "{{ x }}"}}}),
+                "request.auth.basic.password",
+                id="request-auth-basic-password",
+            ),
+            pytest.param("auth", DigestAuth.model_validate({"digest": {"username": "{{ x }}", "password": "p"}}), "auth.digest.username", id="scenario-auth-digest-username"),
             pytest.param("verify", Verify.model_validate({"user_functions": ["{{ x }}"]}), "verify.user_functions[0]", id="function-name-in-a-list"),
         ],
     )
@@ -466,6 +480,48 @@ class TestRenderedAwayFields:
         _render_declared(declared, context, "model")
 
     @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(False, False, id="false"),
+            pytest.param({"bearer": "tok"}, BearerAuth(bearer="tok"), id="builtin"),
+            pytest.param("mod:fn", UserFunctionName("mod:fn"), id="function-name"),
+        ],
+    )
+    @pytest.mark.parametrize("source", ["saved", "vars"])
+    def test_auth_rendered_whole_takes_any_form(self, value, expected, source):
+        """A request's auth written as one template is whatever it renders to,
+        ``false`` included; only None is refused (above). From ``vars``, an
+        object is a namespace, which stands for the object it was written as:
+        refused, the stage failed where ``validate`` had passed it."""
+        context = ChainMap(VarsSubstitution(vars={"a": value}).vars) if source == "vars" else {"a": value}
+        rendered = _render_declared(Request.model_validate({"url": "http://t/", "auth": "{{ a }}"}), context, "request")
+        assert rendered.auth == expected
+
+    @pytest.mark.parametrize(
+        ("auth", "expected"),
+        [
+            # A whole call from a vars object: its kwargs as written inline,
+            # dicts all the way down.
+            pytest.param("{{ call }}", UserFunctionKwargs(name=UserFunctionName("mod:fn"), kwargs={"config": {"realm": "r"}}), id="call-whole"),
+            # A kwarg a template rendered is handed on as it is, as any user
+            # function's is.
+            pytest.param(
+                {"name": "mod:fn", "kwargs": {"config": "{{ config }}"}},
+                UserFunctionKwargs(name=UserFunctionName("mod:fn"), kwargs={"config": SimpleNamespace(realm="r")}),
+                id="kwarg-rendered",
+            ),
+            # Credentials from a vars object, put in place by the expression.
+            pytest.param("{{ {'digest': login} }}", DigestAuth(digest=AuthCredentials(username="u", password="p")), id="credentials-rendered"),
+        ],
+    )
+    def test_auth_from_vars_objects(self, auth, expected):
+        context = ChainMap(
+            VarsSubstitution(vars={"call": {"name": "mod:fn", "kwargs": {"config": {"realm": "r"}}}, "config": {"realm": "r"}, "login": {"username": "u", "password": "p"}}).vars
+        )
+        rendered = _render_declared(Request.model_validate({"url": "http://t/", "auth": auth}), context, "request")
+        assert rendered.auth == expected
+
+    @pytest.mark.parametrize(
         ("stage", "path", "sent"),
         [
             pytest.param({"parallel": {"repeat": 2, "calls_per_sec": "{{ x }}"}}, "parallel.calls_per_sec", 0, id="parallel"),
@@ -529,6 +585,7 @@ class TestRenderedAwayFields:
         [
             pytest.param({"ssl": {"cert": "{{ x }}"}}, "'ssl.cert' was declared as '{{ x }}' but rendered to None, which would silently disable it", id="ssl"),
             pytest.param({"auth": "{{ x }}"}, "'auth' was declared as '{{ x }}' but rendered to None", id="auth"),
+            pytest.param({"auth": {"bearer": "{{ x }}"}}, "'auth.bearer' was declared as '{{ x }}' but rendered to None", id="auth-bearer"),
             # Every stage's relative URL would have lost its base, or the
             # connection limit (null is "no limit") and the proxy gone quiet.
             *(
@@ -548,6 +605,74 @@ class TestRenderedAwayFields:
         cls = _make_carrier_subclass(scenario=scenario, _initialized=False)
         with pytest.raises(StageExecutionError, match=f"^{re.escape(f'Failed to initialize scenario: {message}')}$"):
             cls._ensure_initialized()
+
+
+class TestScenarioAuthRenderedWhole:
+    """A scenario's auth written as one template is a user function's name
+    until it renders, and it was validated again as one, on its own: a built-in
+    scheme it rendered failed initialization, with pydantic's report quoting
+    the credentials, where ``validate`` passed the file. It is validated
+    against the union now, as a request's auth is within its request."""
+
+    SUBSTITUTIONS = [
+        {
+            "vars": {
+                "login": {"basic": {"username": "u", "password": "p"}},
+                "token": "tok",
+                "leaked": {"bearer": ["s3cret"]},
+                "api_token": "s3cret-token",
+                "creds": "json:s3cret_pass",
+            }
+        }
+    ]
+
+    @staticmethod
+    def _authorization(cls: type[Carrier]) -> str:
+        """The Authorization header the scenario's client auth sets."""
+        assert cls.client is not None
+        request = cls.client.build_request("GET", "http://t/")
+        return next(cls.client.auth.sync_auth_flow(request)).headers["authorization"]
+
+    @pytest.mark.parametrize(
+        ("auth", "authorization"),
+        [
+            pytest.param("{{ login }}", "Basic dTpw", id="vars-object"),
+            pytest.param("{{ {'bearer': token} }}", "Bearer tok", id="built-by-the-expression"),
+        ],
+    )
+    def test_renders_a_builtin(self, auth, authorization):
+        cls = _make_carrier_subclass(scenario=Scenario.model_validate({"substitutions": self.SUBSTITUTIONS, "auth": auth}), _initialized=False)
+        cls._ensure_initialized()
+        try:
+            assert self._authorization(cls) == authorization
+        finally:
+            cls.teardown_class()
+
+    @pytest.mark.parametrize(
+        ("auth", "message"),
+        [
+            pytest.param("{{ leaked }}", "1 validation error for auth\nbearer.bearer\n  Input should be a valid string [type=string_type]", id="refused-credential"),
+            # As when declared: the message says where false belongs.
+            pytest.param("{{ False }}", "1 validation error for auth\n  Value error, false turns the scenario's auth off for one stage", id="false"),
+            # A token for {"bearer": ...} written as the whole auth: a string,
+            # so a user function's name, whose messages quoted it.
+            pytest.param("{{ api_token }}", "1 validation error for auth\n  Value error, Not a user function's 'module:function' name (not shown", id="token-string"),
+            # Basic credentials written as a string have a name's shape, and
+            # fail to import as one: the module found, the function (the
+            # password) not, which the failure named.
+            pytest.param(
+                "{{ creds }}",
+                "auth's template rendered a user function name (not shown, as auth can carry a credential) that does not import: its module has no function of that name",
+                id="credentials-string",
+            ),
+        ],
+    )
+    def test_refused_once_rendered_without_quoting_it(self, auth, message):
+        cls = _make_carrier_subclass(scenario=Scenario.model_validate({"substitutions": self.SUBSTITUTIONS, "auth": auth}), _initialized=False)
+        with pytest.raises(StageExecutionError) as excinfo:
+            cls._ensure_initialized()
+        assert str(excinfo.value).startswith(f"Failed to initialize scenario: {message}")
+        assert "s3cret" not in str(excinfo.value)
 
 
 class TestVerifyObjectsFromVars:

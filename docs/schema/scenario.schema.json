@@ -1,5 +1,48 @@
 {
   "$defs": {
+    "AuthCredentials": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "username": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "title": "Username",
+              "description": "User name (may be a template expression)."
+            },
+            "password": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "title": "Password",
+              "description": "Password (may be a template expression)."
+            }
+          },
+          "required": [
+            "username",
+            "password"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "AuthCredentials",
+      "description": "A user name and password."
+    },
     "Base64Body": {
       "anyOf": [
         {
@@ -28,6 +71,60 @@
         }
       ],
       "title": "Base64Body"
+    },
+    "BasicAuth": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "basic": {
+              "$ref": "#/$defs/AuthCredentials",
+              "description": "HTTP Basic authentication: the credentials go with every request."
+            }
+          },
+          "required": [
+            "basic"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "BasicAuth"
+    },
+    "BearerAuth": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bearer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "examples": [
+                    "{{ access_token }}"
+                  ],
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ],
+              "title": "Bearer",
+              "description": "Token sent as 'Authorization: Bearer <token>' (may be a template expression)."
+            }
+          },
+          "required": [
+            "bearer"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "BearerAuth"
     },
     "BinaryBody": {
       "anyOf": [
@@ -375,6 +472,27 @@
         }
       ],
       "title": "CombinationsParameter"
+    },
+    "DigestAuth": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/AuthCredentials",
+              "description": "HTTP Digest authentication: the credentials answer the server's challenge, which costs the first request a round trip."
+            }
+          },
+          "required": [
+            "digest"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "DigestAuth"
     },
     "FilesBody": {
       "anyOf": [
@@ -1153,22 +1271,6 @@
         {
           "additionalProperties": false,
           "properties": {
-            "auth": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/UserFunctionName"
-                },
-                {
-                  "$ref": "#/$defs/UserFunctionKwargs"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "User function to create custom authentication.",
-              "title": "Auth"
-            },
             "url": {
               "anyOf": [
                 {
@@ -1269,6 +1371,35 @@
               "default": null,
               "description": "Request body configuration.",
               "title": "Body"
+            },
+            "auth": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UserFunctionName"
+                },
+                {
+                  "$ref": "#/$defs/UserFunctionKwargs"
+                },
+                {
+                  "$ref": "#/$defs/BasicAuth"
+                },
+                {
+                  "$ref": "#/$defs/DigestAuth"
+                },
+                {
+                  "$ref": "#/$defs/BearerAuth"
+                },
+                {
+                  "const": false,
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Authentication for this request, over the scenario's: basic, digest or bearer, a user function, or false for none.",
+              "title": "Auth"
             },
             "timeout": {
               "anyOf": [
@@ -2358,29 +2489,6 @@
       "title": "Description",
       "description": "Optional description for this component"
     },
-    "auth": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/JsonRef"
-        },
-        {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/UserFunctionName"
-            },
-            {
-              "$ref": "#/$defs/UserFunctionKwargs"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      ],
-      "title": "Auth",
-      "description": "User function to create custom authentication."
-    },
     "fixtures": {
       "anyOf": [
         {
@@ -2419,6 +2527,38 @@
       ],
       "title": "Marks",
       "description": "pytest markers"
+    },
+    "auth": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserFunctionName"
+            },
+            {
+              "$ref": "#/$defs/UserFunctionKwargs"
+            },
+            {
+              "$ref": "#/$defs/BasicAuth"
+            },
+            {
+              "$ref": "#/$defs/DigestAuth"
+            },
+            {
+              "$ref": "#/$defs/BearerAuth"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      ],
+      "title": "Auth",
+      "description": "Authentication for every request: basic, digest or bearer, or a user function for a custom scheme."
     },
     "ssl": {
       "anyOf": [

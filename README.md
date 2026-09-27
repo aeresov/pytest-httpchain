@@ -52,6 +52,10 @@ A key-value store persists throughout scenario execution. Variables, fixtures, a
 
 A scenario's `client` block sets up the HTTP client all its stages share, once: a base URL their relative URLs are appended to, headers and query parameters sent with every request, timeout, redirects, proxy, HTTP/2 and connection pool. A stage overrides what it needs.
 
+### Authentication
+
+Basic, digest and bearer authentication are built in, for the whole scenario or one request: `"auth": {"bearer": "{{ token }}"}` sends the token a login stage saved. `"auth": false` exempts a public endpoint, and a Python function covers any other scheme.
+
 ### Full pytest integration
 
 Markers, fixtures, parametrization, and other plugins work as expected. You're not locked into a separate ecosystem.

@@ -46,6 +46,10 @@ A key-value store persists throughout scenario execution. Variables, fixtures, a
 -   **JSON Schema** — Validate response structure against a schema
 -   **User functions** — Call Python functions for custom extraction, verification, or authentication
 
+### Authentication
+
+Basic, digest and bearer authentication are built in, for the whole scenario or one request: `"auth": {"bearer": "{{ token }}"}` sends the token a login stage saved. `"auth": false` exempts a public endpoint, and a Python function covers any other scheme.
+
 ### Parametrization
 
 Run stages with different parameter values, similar to pytest's `@pytest.mark.parametrize`.

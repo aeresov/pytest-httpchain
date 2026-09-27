@@ -11,9 +11,10 @@ import warnings
 from collections.abc import Callable
 from contextlib import contextmanager
 from http import HTTPMethod, HTTPStatus
+from types import SimpleNamespace
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, JsonValue, PositiveFloat, PositiveInt, RootModel, Tag, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, JsonValue, PositiveFloat, PositiveInt, RootModel, Tag, TypeAdapter, model_validator
 from pydantic.json_schema import JsonDict
 
 from pytest_httpchain.models.types import (
@@ -41,13 +42,17 @@ from pytest_httpchain.models.types import (
     XMLString,
     convert_namespace_items_to_dict,
     convert_namespace_to_dict,
+    validate_function_import_name,
+    validate_unquoted_partial_template_str,
 )
 from pytest_httpchain.templates import contains_template
 
 
-def _create_discriminator(class_to_tag: dict[type, str]) -> Callable[[Any], str]:
+def _create_discriminator(class_to_tag: dict[type, str], value_to_tag: tuple[tuple[object, str], ...] = ()) -> Callable[[Any], str]:
     """Build a discriminator from a ``{model class: tag}`` mapping (keyed by
-    class, so a rename breaks statically rather than at runtime).
+    class, so a rename breaks statically rather than at runtime), and
+    ``(value, tag)`` pairs for a member that is one constant, told by identity
+    (``False`` is not ``0``, and not ``True`` either).
 
     Unrecognized input yields an invalid tag rather than raising, so pydantic
     reports a located ``union_tag_invalid`` error listing the valid tags — which
@@ -56,6 +61,10 @@ def _create_discriminator(class_to_tag: dict[type, str]) -> Callable[[Any], str]
     tag_fields = set(class_to_tag.values())
 
     def discriminator(v: Any) -> str:
+        for value, tag in value_to_tag:
+            if v is value:
+                return tag
+
         if isinstance(v, dict):
             found = tag_fields & v.keys()
             if found:
@@ -248,11 +257,139 @@ class Fixtured(StrictModel):
     fixtures: list[str] = Field(default_factory=list, description="pytest fixtures")
 
 
-class Authenticated(StrictModel):
-    auth: UserFunctionCall | None = Field(
-        default=None,
-        description="User function to create custom authentication.",
+class AuthCredentials(StrictModel):
+    """A user name and password."""
+
+    username: str = Field(description="User name (may be a template expression).")
+    password: str = Field(description="Password (may be a template expression).")
+
+
+# A namespace here is a `vars` object a template rendered, standing for the
+# credentials it was written as (`"{{ {'basic': creds} }}"`).
+_Credentials = Annotated[AuthCredentials, BeforeValidator(convert_namespace_to_dict)]
+
+
+class BasicAuth(StrictModel):
+    basic: _Credentials = Field(description="HTTP Basic authentication: the credentials go with every request.")
+
+
+class DigestAuth(StrictModel):
+    digest: _Credentials = Field(description="HTTP Digest authentication: the credentials answer the server's challenge, which costs the first request a round trip.")
+
+
+class BearerAuth(StrictModel):
+    # Not empty: "Bearer " authenticates nothing, and `env('TOKEN', '')` or a
+    # save of an empty field rendering it so is a stage failure, as None is.
+    bearer: Annotated[str, Field(min_length=1)] = Field(
+        description="Token sent as 'Authorization: Bearer <token>' (may be a template expression).",
+        examples=["{{ access_token }}"],
     )
+
+
+# A bare string is a user function's import name, and `false` the request's
+# opt-out; an object is told by its key. `true` is no form of auth, and gets
+# the tag error listing those that are.
+get_auth_discriminator = _create_discriminator(
+    {
+        str: "module:function",
+        UserFunctionName: "module:function",
+        UserFunctionKwargs: "name",
+        BasicAuth: "basic",
+        DigestAuth: "digest",
+        BearerAuth: "bearer",
+    },
+    value_to_tag=((False, "false"),),
+)
+
+
+def _auth_namespace_to_dict(v: Any) -> Any:
+    """A whole auth one template rendered from a `vars` object (``"auth":
+    "{{ creds }}"``), as the object it was written as: `vars` makes every
+    object in it a namespace, which no member takes, where the auth written
+    inline would have been dicts all the way down, a user function's kwargs
+    included. Inside an auth written as an object, a namespace is one value a
+    template rendered: a user function's kwargs hand it on as it is, and a
+    built-in's credentials take it as the object (`_Credentials`)."""
+    return convert_namespace_to_dict(v) if isinstance(v, SimpleNamespace) else v
+
+
+def _refuse_auth_string_unquoted(v: Any) -> Any:
+    """A string auth is a user function's ``module:function`` name, or a
+    template; one that is neither is refused here, without quoting it.
+
+    The member it would go to quotes it twice, in the name grammar's message
+    and the template's, and pydantic's ``hide_input_in_errors`` keeps only its
+    own ``input_value`` out, not a validator's message. A whole auth written as
+    one template renders what it was written for, and the natural mistake is a
+    token (``"auth": "{{ token }}"`` for ``{"bearer": "{{ token }}"}``): the
+    stage's failure, and the CI log, would print it.
+    """
+    if isinstance(v, str):
+        if contains_template(v):
+            # Only an empty `{{ }}` is refused, by position.
+            validate_unquoted_partial_template_str(v)
+        else:
+            try:
+                validate_function_import_name(v)
+            except ValueError:
+                raise ValueError(
+                    """Not a user function's 'module:function' name (not shown, as auth can carry a credential); a built-in scheme is an object, such as {"bearer": "<token>"}"""
+                ) from None
+    return v
+
+
+Auth = Annotated[
+    Annotated[
+        Annotated[UserFunctionName, Tag("module:function")]
+        | Annotated[UserFunctionKwargs, Tag("name")]
+        | Annotated[BasicAuth, Tag("basic")]
+        | Annotated[DigestAuth, Tag("digest")]
+        | Annotated[BearerAuth, Tag("bearer")],
+        Discriminator(get_auth_discriminator),
+    ],
+    BeforeValidator(_auth_namespace_to_dict),
+    BeforeValidator(_refuse_auth_string_unquoted),
+]
+
+# A request's auth also takes `false`: none for this request, the scenario's
+# included. The members are Auth's, spelled out: a discriminated union cannot
+# take another one as a member.
+RequestAuth = Annotated[
+    Annotated[
+        Annotated[UserFunctionName, Tag("module:function")]
+        | Annotated[UserFunctionKwargs, Tag("name")]
+        | Annotated[BasicAuth, Tag("basic")]
+        | Annotated[DigestAuth, Tag("digest")]
+        | Annotated[BearerAuth, Tag("bearer")]
+        | Annotated[Literal[False], Tag("false")],
+        Discriminator(get_auth_discriminator),
+    ],
+    BeforeValidator(_auth_namespace_to_dict),
+    BeforeValidator(_refuse_auth_string_unquoted),
+]
+
+
+def _refuse_scenario_auth_false(v: Any) -> Any:
+    """Name what ``false`` is for, instead of pydantic's list of the union's tags."""
+    if v is False:
+        raise ValueError("false turns the scenario's auth off for one stage, so it belongs in a stage's request; to send no auth at all, leave auth out")
+    return v
+
+
+ScenarioAuth = Annotated[Auth, BeforeValidator(_refuse_scenario_auth_false)]
+
+# A scenario's auth is rendered on its own, once, rather than as part of the
+# `Scenario` whose field declares it, so it is validated again here: against
+# the whole union, as a request's is within `Request` (a template declared as a
+# user function's name can render a built-in scheme, `"{{ creds }}"`), and
+# without pydantic's `input_value`, which would print the credentials. Only the
+# outermost validator's `hide_input_in_errors` counts, and this one is it.
+_RENDERED_SCENARIO_AUTH: TypeAdapter[Any] = TypeAdapter(ScenarioAuth, config=ConfigDict(hide_input_in_errors=True, title="auth"))
+
+
+def validate_rendered_scenario_auth(value: Any) -> Auth:
+    """A scenario's ``auth`` once its templates rendered (see above)."""
+    return _RENDERED_SCENARIO_AUTH.validate_python(value)
 
 
 with _suppress_field_shadow_warning("json"):
@@ -325,7 +462,13 @@ def _omit_schema_default(schema: JsonDict) -> None:
     schema.pop("default", None)
 
 
-class Request(Authenticated):
+class Request(StrictModel):
+    # A request is validated again once rendered, which is when its auth's
+    # credentials (and any header's) carry the rendered secret: pydantic's
+    # `input_value` would print it in the stage's failure. The validators'
+    # own messages still say what was refused.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     url: HttpUrlReferenceStr | PartialTemplateStr = Field(
         description="Absolute http(s) URL, or a URL relative to client.base_url (may be a template expression), passed to httpx as written."
     )
@@ -339,6 +482,10 @@ class Request(Authenticated):
     )
     headers: dict[str, str] = Field(default_factory=dict, description="HTTP request headers, over client.headers.")
     body: RequestBody | None = Field(default=None, description="Request body configuration.")
+    auth: RequestAuth | None = Field(
+        default=None,
+        description="Authentication for this request, over the scenario's: basic, digest or bearer, a user function, or false for none.",
+    )
     # Their defaults stand in for the client's (request_builder sends only a
     # declared value), so the schema shows none: an editor would offer them.
     timeout: PositiveFloat | NumberOrTemplate = Field(
@@ -655,8 +802,12 @@ Stages = Annotated[
 ]
 
 
-class Scenario(Marked, Fixtured, Authenticated, Descripted):
+class Scenario(Marked, Fixtured, Descripted):
     fixtures: list[str] = Field(default_factory=list, description="pytest fixtures available to all stages")
+    auth: ScenarioAuth | None = Field(
+        default=None,
+        description="Authentication for every request: basic, digest or bearer, or a user function for a custom scheme.",
+    )
     ssl: SSLConfig = Field(
         default_factory=SSLConfig,
         description="SSL/TLS configuration.",

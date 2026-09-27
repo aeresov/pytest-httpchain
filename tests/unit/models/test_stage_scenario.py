@@ -70,8 +70,8 @@ class TestScenarioSimpleFields:
     """Per-field defaults and round-trips for Scenario's simple fields.
 
     (stages / substitutions have their own classes below because they coerce
-    their inputs rather than storing them verbatim; auth is the same
-    Authenticated field Request has, covered in test_request.py.)"""
+    their inputs rather than storing them verbatim; auth takes the forms
+    Request's does but false, covered in test_request.py.)"""
 
     @pytest.mark.parametrize(
         ("attr", "default"),

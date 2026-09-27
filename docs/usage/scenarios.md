@@ -22,7 +22,7 @@ A scenario is a JSON file that defines a complete test case. The basic structure
 | `description` | string | Optional human-readable description |
 | `marks` | array | pytest markers applied to all stages |
 | `fixtures` | array | pytest fixtures available to all stages |
-| `auth` | string/object | Default authentication for all requests |
+| `auth` | object/string | Authentication for every request: `basic`, `digest`, `bearer` or a user function (see [Authentication](requests.md#authentication)) |
 | `ssl` | object | SSL/TLS configuration |
 | `client` | object | The shared HTTP client: base URL, default headers and query parameters, timeout, redirects, proxy, pool (see [Client configuration](#client-configuration)) |
 | `substitutions` | array/object | Variables and functions for the context |

@@ -18,6 +18,8 @@ from pytest_httpchain.models import (
     Scenario,
     SubstitutionsSave,
     UserFunctionCall,
+    UserFunctionKwargs,
+    UserFunctionName,
     UserFunctionsSave,
     VerifyStep,
     check_json_schema,
@@ -149,13 +151,16 @@ def _function_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                     for alias, call in functions.items():
                         sites.append((call, set(), False, f"{location_prefix}.functions.{alias}"))
 
-    if scenario.auth is not None:
-        sites.append((scenario.auth, set(), True, "auth"))
+    def add_auth_site(auth: Any, location: str) -> None:
+        # Only a user function: the built-in schemes and `false` import nothing.
+        if isinstance(auth, UserFunctionName | UserFunctionKwargs):
+            sites.append((auth, set(), True, location))
+
+    add_auth_site(scenario.auth, "auth")
     add_substitution_sites(scenario.substitutions, "substitutions")
 
     for i, stage in enumerate(scenario.stages):
-        if stage.request.auth is not None:
-            sites.append((stage.request.auth, set(), True, f"stages[{i}].request.auth"))
+        add_auth_site(stage.request.auth, f"stages[{i}].request.auth")
         add_substitution_sites(stage.substitutions, f"stages[{i}].substitutions")
         for k, step in enumerate(stage.response):
             match step:

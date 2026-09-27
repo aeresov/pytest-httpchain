@@ -18,6 +18,7 @@ from pytest_httpchain.plugin import (
     _REDACTION,
     _apply_xdist_group_nodeids,
     _chain_args,
+    _earlier_hops,
     _format_section,
     _regroup_carrier_items,
     _sections_will_be_shown,
@@ -447,6 +448,26 @@ def test_format_section_reports_formatter_failure():
         raise ValueError("boom")
 
     assert _format_section("request", broken, object()) == "<Error formatting request: boom>"
+
+
+def _hop(status: int, **headers: str) -> httpx.Response:
+    return httpx.Response(status, headers=headers)
+
+
+@pytest.mark.parametrize(
+    ("history", "label"),
+    [
+        pytest.param([], "", id="none"),
+        pytest.param([_hop(302, Location="/b")], " (after 1 redirect)", id="redirect"),
+        pytest.param([_hop(301, Location="/b"), _hop(307, Location="/c")], " (after 2 redirects)", id="redirects"),
+        # A digest challenge's 401 is in the same history, and is no redirect.
+        pytest.param([_hop(401, **{"WWW-Authenticate": "Digest"})], " (after 1 auth exchange)", id="auth-exchange"),
+        pytest.param([_hop(302, Location="/b"), _hop(401)], " (after 1 redirect and 1 auth exchange)", id="both"),
+    ],
+)
+def test_earlier_hops_label(history, label):
+    """The report shows the last response httpx got, and says what came before it."""
+    assert _earlier_hops(history) == label
 
 
 class TestReportSectionsBuiltOnlyWhenShown:

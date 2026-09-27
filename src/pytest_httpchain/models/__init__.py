@@ -8,16 +8,22 @@ Key models:
 - Scenario: Root model representing a complete test scenario
 - ClientConfig: The scenario's shared HTTP client (base URL, default headers, pool)
 - Stage: Individual test stage with request and response processing
-- Request: HTTP request configuration (method, URL, headers, body)
+- Request: HTTP request configuration (method, URL, headers, body, auth)
+- Auth: authentication, built in (basic, digest, bearer) or a user function
 - Verify: Response verification rules (status, headers, body, expressions)
 - Save: Data extraction from responses (JMESPath, substitutions, user functions)
 """
 
 from pytest_httpchain.models.entities import (
+    Auth,
+    AuthCredentials,
     Base64Body,
+    BasicAuth,
+    BearerAuth,
     BinaryBody,
     ClientConfig,
     CombinationsParameter,
+    DigestAuth,
     FilesBody,
     FormBody,
     FunctionsDict,
@@ -35,6 +41,7 @@ from pytest_httpchain.models.entities import (
     Parameter,
     Parameters,
     Request,
+    RequestAuth,
     RequestBody,
     ResponseBody,
     Responses,
@@ -58,6 +65,7 @@ from pytest_httpchain.models.entities import (
     XmlBody,
     normalize_list_input,
     parametrize_values_contain_template,
+    validate_rendered_scenario_auth,
 )
 from pytest_httpchain.models.types import check_json_schema, is_relative_url, json_schema_validator_class
 
@@ -88,6 +96,7 @@ __all__ = [
     "FunctionsSubstitution",
     "VarsSubstitution",
     "Request",
+    "RequestAuth",
     "RequestBody",
     "JsonBody",
     "XmlBody",
@@ -102,6 +111,11 @@ __all__ = [
     "UserFunctionCall",
     "UserFunctionName",
     "UserFunctionKwargs",
+    "Auth",
+    "AuthCredentials",
+    "BasicAuth",
+    "DigestAuth",
+    "BearerAuth",
     "SSLConfig",
     "ClientConfig",
     "check_json_schema",
@@ -109,4 +123,5 @@ __all__ = [
     "json_schema_validator_class",
     "parametrize_values_contain_template",
     "normalize_list_input",
+    "validate_rendered_scenario_auth",
 ]

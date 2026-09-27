@@ -1,0 +1,10 @@
+{
+    "auth": false,
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/health" },
+            "response": [{ "verify": { "status": 200 } }]
+        }
+    ]
+}

@@ -1,0 +1,54 @@
+{
+    "description": "Digest auth, scenario-level (one flow the stages share) and request-level",
+    "auth": { "digest": { "username": "user", "password": "pass" } },
+    "stages": [
+        {
+            "name": "challenge_answered",
+            "description": "The requests of the exchange are real requests: a verify function reads their (empty) body",
+            "fixtures": ["server"],
+            "request": { "url": "{{ server }}/digest" },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": { "contains": ["\"user\""] },
+                        "user_functions": [{ "name": "auth:request_body_was", "kwargs": { "expected": "" } }]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "shared_by_parallel_requests",
+            "description": "The scenario's flow answers concurrent requests from several threads",
+            "fixtures": ["server"],
+            "parallel": { "repeat": 8, "max_concurrency": 4 },
+            "request": { "url": "{{ server }}/digest" },
+            "response": [{ "verify": { "status": 200 } }]
+        },
+        {
+            "name": "request_level",
+            "description": "Challenged on its own, the body going out with both requests",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/digest",
+                "method": "POST",
+                "body": { "json": { "a": 1 } },
+                "auth": { "digest": { "username": "user", "password": "pass" } }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "user_functions": [{ "name": "auth:request_body_was", "kwargs": { "expected": "{\"a\":1}" } }]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "wrong_password_refused",
+            "fixtures": ["server"],
+            "request": { "url": "{{ server }}/digest", "auth": { "digest": { "username": "user", "password": "wrong" } } },
+            "response": [{ "verify": { "status": 401 } }]
+        }
+    ]
+}

@@ -49,6 +49,7 @@ from pytest_httpchain.models import (
     Stage,
     SubstitutionsSave,
     VerifyStep,
+    validate_rendered_scenario_auth,
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.request_builder import build_client_kwargs, build_request_kwargs
@@ -372,7 +373,9 @@ def _replaced(structure: Any, keys: _Keys, value: Any) -> Any:
     return type(structure)(_replaced(item, rest, value) if i == key else item for i, item in enumerate(structure))
 
 
-def _render_declared[M: BaseModel](declared: M, context: Mapping[str, Any], where: str, error: type[StageExecutionError] = StageExecutionError) -> M:
+def _render_declared[M: BaseModel](
+    declared: M, context: Mapping[str, Any], where: str, error: type[StageExecutionError] = StageExecutionError, validate: Callable[[Any], M] | None = None
+) -> M:
     """``walk()`` a declared scenario model, refusing any field a template
     rendered to None.
 
@@ -389,6 +392,11 @@ def _render_declared[M: BaseModel](declared: M, context: Mapping[str, Any], wher
     one template rendered whole (a header matcher written as ``"{{ matcher }}"``)
     has no declared fields to compare, so it is checked once validated
     (`_rendered_whole_away`).
+
+    ``validate`` builds the rendered model, by default as the declared one's
+    type. A model rendered on its own that was declared as one member of a
+    union (a scenario's auth: the template string a user function's name
+    takes can render a built-in scheme) passes the union's instead.
 
     The substituted form is checked before validation judges it. Where the None
     is also invalid — a matcher's only field, a required field such as ``url`` —
@@ -407,11 +415,11 @@ def _render_declared[M: BaseModel](declared: M, context: Mapping[str, Any], wher
     # made every default look declared.
     if not contains_template(declared):
         return declared
-    model = type(declared)
+    validate = validate or type(declared).model_validate
     substituted = walk(declared.model_dump(mode="python", exclude_unset=True), context)
     vanished = list(_rendered_away(declared, substituted))
     try:
-        rendered = model.model_validate(substituted)
+        rendered = validate(substituted)
     except ValidationError as e:
         if not vanished:
             raise
@@ -420,7 +428,7 @@ def _render_declared[M: BaseModel](declared: M, context: Mapping[str, Any], wher
         for keys, template in vanished:
             restored = _replaced(restored, keys, template)
         try:
-            model.model_validate(restored)
+            validate(restored)
         except ValidationError as other:
             raise error(f"{refusal}\n{other}") from e
         raise error(refusal) from e
@@ -650,8 +658,8 @@ class Carrier:
 
                 resolved_ssl = _render_declared(scenario.ssl, cls.global_context, "ssl")
                 resolved_client = _render_declared(scenario.client, cls.global_context, "client")
-                resolved_auth = _render_declared(scenario.auth, cls.global_context, "auth") if scenario.auth else None
-                cls._client_kwargs = build_client_kwargs(resolved_client, resolved_ssl, resolved_auth, cls.scenario_dir)
+                resolved_auth = _render_declared(scenario.auth, cls.global_context, "auth", validate=validate_rendered_scenario_auth) if scenario.auth is not None else None
+                cls._client_kwargs = build_client_kwargs(resolved_client, resolved_ssl, resolved_auth, cls.scenario_dir, declared_auth=scenario.auth)
                 cls._client_config = resolved_client
                 cls.client = httpx.Client(**cls._client_kwargs)
             except Exception as e:
@@ -1137,7 +1145,7 @@ class Carrier:
         # Rendering re-validates the model it substitutes into, so no further
         # model_validate is needed here.
         request_model = _render_declared(stage.request, iter_context, "request", RequestError)
-        request_kwargs = build_request_kwargs(request_model, cls.scenario_dir, cls._client_config, cls.redaction)
+        request_kwargs = build_request_kwargs(request_model, cls.scenario_dir, cls._client_config, cls.redaction, declared_auth=stage.request.auth)
 
         if limiter is not None and not cls._acquire_rate_slot(limiter, max_rate_limit_delay, cancel):
             if cancel is not None and cancel.is_set():

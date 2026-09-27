@@ -22,7 +22,7 @@
 | `params` | object | `{}` | Query parameters, merged into any query already in `url` (and over `client.params`) |
 | `headers` | object | `{}` | Request headers (over `client.headers`) |
 | `body` | object | `null` | Request body configuration |
-| `auth` | string/object | `null` | Authentication (overrides scenario-level) |
+| `auth` | object/string/`false` | `null` | [Authentication](#authentication) over the scenario's: `basic`, `digest`, `bearer` or a user function; `false` for none |
 | `timeout` | number | `client.timeout` (`30.0`) | Request timeout in seconds |
 | `allow_redirects` | boolean | `client.follow_redirects` (`true`) | Follow redirects |
 
@@ -296,24 +296,113 @@ Absolute paths pass through unchanged.
 
 ## Authentication
 
-### Scenario-Level Default
+A scenario's `auth` applies to every request, and a request's `auth` replaces it for that request.
+Three schemes are built in:
+
+| `auth` | Sends |
+|--------|-------|
+| `{"basic": {"username": "...", "password": "..."}}` | HTTP Basic credentials with every request |
+| `{"digest": {"username": "...", "password": "..."}}` | HTTP Digest: the credentials answer the server's challenge |
+| `{"bearer": "..."}` | `Authorization: Bearer <token>` |
 
 ```json
 {
-    "auth": "mymodule:get_auth",
+    "substitutions": [{"vars": {"api_user": "{{ env('API_USER') }}", "api_password": "{{ env('API_PASSWORD') }}"}}],
+    "auth": {"basic": {"username": "{{ api_user }}", "password": "{{ api_password }}"}},
     "stages": [
         {
-            "name": "uses_default_auth",
-            "request": {"url": "https://api.example.com/protected"}
+            "name": "uses_the_scenario_auth",
+            "request": {"url": "https://api.example.com/protected"},
+            "response": [{"verify": {"status": 200}}]
         }
     ]
 }
 ```
 
-### Stage-Level Override
+The values may be templates. A scenario's `auth` resolves once, when its first stage runs, against
+the scenario substitutions only, like [`ssl` and `client`](scenarios.md#fixtures): the validator
+reports a fixture (`HTTPCHAIN016`) or an undefined name (`HTTPCHAIN017`) in it. A request's
+resolves with the rest of the request, for each stage and each iteration of a
+[parallel](../advanced/parallel.md) stage, so it can use a token an earlier stage saved:
 
 ```json
 {
+    "stages": [
+        {
+            "name": "login",
+            "request": {
+                "url": "https://api.example.com/login",
+                "method": "POST",
+                "body": {"json": {"username": "demo", "password": "{{ env('DEMO_PASSWORD') }}"}}
+            },
+            "response": [{"verify": {"status": 200}}, {"save": {"jmespath": {"token": "access_token"}}}]
+        },
+        {
+            "name": "profile",
+            "request": {"url": "https://api.example.com/me", "auth": {"bearer": "{{ token }}"}},
+            "response": [{"verify": {"status": 200}}]
+        }
+    ]
+}
+```
+
+-   Basic and bearer set the `Authorization` header, replacing one the stage's `headers` or
+    [`client.headers`](scenarios.md#client-configuration) carry. Digest replaces it when it
+    answers the server's challenge: a request with no challenge to answer yet goes out with the
+    header the stage carries, and if the server accepts that, digest is not used.
+-   A credential whose template renders to `null` fails the stage (for the scenario's `auth`, its
+    initialization), naming the field: `'request.auth.bearer' was declared as '{{ token }}' but
+    rendered to None`. The request is not sent unauthenticated, nor with the scenario's
+    credentials. A bearer token must not be empty either, and every value must be a string.
+-   A credential that fails validation is not quoted in the failure, and the report shows the
+    `Authorization` header as `[REDACTED]` (see
+    [Secrets in reports](../getting-started.md#secrets-in-reports)).
+-   Digest sends a request without credentials first, and sends it again with the answer to the
+    server's `401` challenge. The scenario's digest auth is one for all its requests, so after the
+    first challenge it answers up front with the server's nonce, a parallel stage's concurrent
+    requests included, counting each use of the nonce once (`nc`), as a server that checks for
+    replayed answers requires; a request's own is new for each request, which is challenged every
+    time. A failing stage's report labels its request `(after 1 auth exchange)`, and the HAR
+    export has both requests.
+-   The whole `auth` may be one template, such as `"{{ creds }}"` over a `vars` object written as
+    `{"basic": {...}}`: it is the scheme it renders to. At scenario level, it resolves once, as
+    above. A string it renders is a user function's name, so a token goes in
+    `{"bearer": "{{ token }}"}`: `"auth": "{{ token }}"` fails. So do credentials rendered as one
+    `"user:password"` string, which has the shape of a name and fails to import as one. Neither
+    failure quotes the string: a user function name that a template in `auth` rendered is never
+    shown, only why it failed (`its module has no function of that name`).
+
+### Turning Auth Off for One Request
+
+`"auth": false` sends a request as a scenario without `auth` would, for a public endpoint in an
+authenticated scenario:
+
+```json
+{
+    "auth": {"bearer": "{{ env('API_TOKEN') }}"},
+    "stages": [
+        {
+            "name": "health_check_is_public",
+            "request": {"url": "https://api.example.com/health", "auth": false},
+            "response": [{"verify": {"status": 200}}]
+        }
+    ]
+}
+```
+
+It turns off the scheme only: an `Authorization` header the stage or `client.headers` set is
+still sent, and so is a URL's `user:password@`, which httpx sends as Basic credentials. `false`
+belongs in a request; at scenario level, leave `auth` out.
+
+### Custom Schemes: User Functions
+
+Any other scheme (OAuth2 client credentials, request signing, a token refreshed on expiry) is a
+Python function that returns an `httpx.Auth` (or anything else httpx takes as `auth`), named as
+`"module:function"`, or as an object with `name` and the `kwargs` to call it with:
+
+```json
+{
+    "auth": "mymodule:get_auth",
     "stages": [
         {
             "name": "custom_auth",
@@ -325,13 +414,12 @@ Absolute paths pass through unchanged.
                         "role": "admin"
                     }
                 }
-            }
+            },
+            "response": [{"verify": {"status": 200}}]
         }
     ]
 }
 ```
-
-### Auth Function Example
 
 ```python
 # mymodule.py
@@ -346,6 +434,13 @@ def special_auth(role: str) -> httpx.Auth:
     # Custom auth logic based on role
     return httpx.BasicAuth(role, "secret")
 ```
+
+The `kwargs` values may be templates, resolved as the built-ins' are, and so may the name, which a
+failure to import then does not show (it may be a credential, see above). An object is a user
+function when it has `name`, and a built-in when it has `basic`, `digest` or `bearer`; one with
+several of these keys fails validation, naming the extra one (`auth -> basic -> name: Extra inputs
+are not permitted`). See [httpx's guide](https://www.python-httpx.org/advanced/authentication/#custom-authentication-schemes)
+for writing an `httpx.Auth`.
 
 ## Timeout and Redirects
 

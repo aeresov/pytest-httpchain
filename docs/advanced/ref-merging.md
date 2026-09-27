@@ -272,7 +272,7 @@ A fragment file may carry its own top-level `$schema` key for editor support —
     "ssl": {
         "verify": true
     },
-    "auth": "auth_module:get_default_auth",
+    "auth": {"bearer": "{{ env('API_TOKEN') }}"},
     "client": {
         "base_url": "https://api.example.com",
         "headers": {

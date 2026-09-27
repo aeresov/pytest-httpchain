@@ -267,9 +267,12 @@ scenario initialization: the first stage fails, and every later stage skips). A 
 sets to `null` fails, naming the field and that template, while a key it leaves
 out is simply not checked.
 
-A required field such as `url` or `timeout`, and a header matcher whose only
+A required field such as `url`, `timeout` or a built-in auth's credential
+(`request.auth.bearer`, `auth.basic.password`), and a header matcher whose only
 field rendered to `null`, cannot be switched off, but they fail with the same
 message, naming the field and the template; it just ends at "rendered to None".
+A bearer token that rendered to `null` does not send the request without
+credentials, nor with the scenario's.
 An exact-match header string is a value in the `headers` map rather than a
 field, and fails validation when its template renders to `null`.
 

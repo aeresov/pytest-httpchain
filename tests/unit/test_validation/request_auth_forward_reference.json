@@ -1,0 +1,14 @@
+{
+    "stages": [
+        {
+            "name": "me",
+            "request": { "url": "https://x.test/me", "auth": { "bearer": "{{ token }}" } },
+            "response": [{ "verify": { "status": 200 } }]
+        },
+        {
+            "name": "login",
+            "request": { "url": "https://x.test/login", "method": "POST" },
+            "response": [{ "verify": { "status": 200 } }, { "save": { "jmespath": { "token": "token" } } }]
+        }
+    ]
+}

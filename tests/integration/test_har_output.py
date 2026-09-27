@@ -10,11 +10,7 @@ from datetime import datetime
 
 import pytest
 
-from tests.integration.helpers import har_entries, named, stage
-
-# Relative to the pytester dir, which is the CWD of both in-process and
-# subprocess runs.
-HAR_ARGS = ("-s", "--httpchain-output-dir", "har_out")
+from tests.integration.helpers import HAR_ARGS, har_entries, named, stage
 
 
 @pytest.fixture

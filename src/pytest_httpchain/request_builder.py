@@ -9,7 +9,8 @@ import base64
 import os
 import re
 import ssl
-from collections.abc import Iterable, Mapping
+import threading
+from collections.abc import Generator, Iterable, Mapping
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -19,23 +20,29 @@ import httpx
 
 from pytest_httpchain.errors import RequestError, StageExecutionError
 from pytest_httpchain.models import (
+    Auth,
     Base64Body,
+    BasicAuth,
+    BearerAuth,
     BinaryBody,
     ClientConfig,
+    DigestAuth,
     FilesBody,
     FormBody,
     GraphQLBody,
     JsonBody,
     Request,
+    RequestAuth,
     SSLConfig,
     TextBody,
-    UserFunctionCall,
+    UserFunctionKwargs,
+    UserFunctionName,
     XmlBody,
     is_relative_url,
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
-from pytest_httpchain.templates import TEMPLATE_PATTERN
-from pytest_httpchain.userfunc import UserFunctionError, call_user_function
+from pytest_httpchain.templates import TEMPLATE_PATTERN, contains_template
+from pytest_httpchain.userfunc import UserFunctionError, call_target, call_user_function, import_function
 from pytest_httpchain.utils import resolve_scenario_path
 
 
@@ -133,10 +140,161 @@ def _proxy(url: str, ssl_config: SSLConfig, scenario_dir: Path | None) -> str | 
     return httpx.Proxy(url, ssl_context=context)
 
 
-def build_client_kwargs(client: ClientConfig, ssl_config: SSLConfig, auth: UserFunctionCall | None, scenario_dir: Path | None) -> dict[str, Any]:
+class _BearerAuth(httpx.Auth):
+    """``Authorization: Bearer <token>`` on every request, set as httpx's own
+    BasicAuth sets its header: over one the request's headers carry."""
+
+    def __init__(self, token: str) -> None:
+        self._auth_header = f"Bearer {token}"
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:
+        request.headers["Authorization"] = self._auth_header
+        yield request
+
+
+class _DigestAuth(httpx.DigestAuth):
+    """httpx's DigestAuth, sending each attempt as a request of its own, and
+    safe to share between threads.
+
+    httpx answers a challenge by adding the Authorization header to the
+    request it sent first and sending that again, so the 401 in the response's
+    history, which the HAR file shows, pointed at a request carrying the
+    credentials it had gone out without. The flow is httpx's; what it yields
+    goes out as a copy taken then (`_copy`).
+
+    The scenario's digest auth is the shared client's, which a parallel stage's
+    threads send through at once. Each step of httpx's flow reads and writes
+    the server's last challenge and the count of its nonce's uses, which it
+    increments without a lock: two requests could go out with the same ``nc``,
+    which a server enforcing RFC 7616's replay protection refuses. So each
+    step runs under a lock of the instance's; the exchanges between them do not.
+
+    httpx also restarts the count at 1 for every challenge it answers, the
+    nonce already in use included: requests challenged together (a parallel
+    stage that is the scenario's first, a server handing one nonce to all of
+    them) all answered with ``nc=00000001``, and so did a request challenged
+    again after the count had moved on. The count restarts for a new nonce
+    only (`_answer_on`).
+
+    That builds on httpx.DigestAuth's private state, which no release promises
+    to keep: ``_last_challenge`` (its ``nonce``), ``_nonce_count`` and
+    ``_build_auth_header(request, challenge)``, as of httpx 0.28. The digest
+    tests in tests/unit/test_request_builder.py fail if a new httpx changes
+    them (``test_digest_builds_on_httpx_internals`` first, naming them), and
+    pyproject.toml's httpx requirement points here.
+    """
+
+    def __init__(self, username: str, password: str) -> None:
+        super().__init__(username, password)
+        self._lock = threading.Lock()
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:
+        flow = super().auth_flow(request)
+        with self._lock:
+            to_send = next(flow)
+        while True:
+            response = yield self._copy(to_send)
+            with self._lock:
+                nonce, count = self._nonce(), self._nonce_count
+                try:
+                    to_send = flow.send(response)
+                except StopIteration:
+                    return
+                self._answer_on(to_send, nonce, count)
+
+    def _nonce(self) -> bytes | None:
+        return self._last_challenge.nonce if self._last_challenge is not None else None
+
+    def _answer_on(self, request: httpx.Request, nonce: bytes | None, count: int) -> None:
+        """httpx just answered a challenge in ``request``, restarting ``nc`` at
+        1; ``nonce`` and ``count`` are the ones in use before it. For the same
+        nonce, the answer is built again on its count."""
+        challenge = self._last_challenge
+        if challenge is not None and nonce is not None and challenge.nonce == nonce:
+            self._nonce_count = count
+            request.headers["Authorization"] = self._build_auth_header(request, challenge)
+
+    @staticmethod
+    def _copy(request: httpx.Request) -> httpx.Request:
+        """``request`` as it is now, sharing its body stream, as httpx's
+        redirect follow-ups do. A request built on a stream is not read, so a
+        user function's ``response.request.content`` would raise
+        ``RequestNotRead``: a ``ByteStream`` is read back, as httpx reads one
+        it builds from ``content=`` (plain bytes, replayable). Any other stream
+        is left unread, as it is in the request the stage built."""
+        copy = httpx.Request(request.method, request.url, headers=request.headers.copy(), stream=request.stream, extensions=dict(request.extensions))
+        if isinstance(copy.stream, httpx.ByteStream):
+            copy.read()
+        return copy
+
+
+def _names_by_template(declared: RequestAuth | None) -> bool:
+    """Whether ``declared``, an auth as written, names a user function with a
+    template, whole (``"auth": "{{ creds }}"``) or in part."""
+    match declared:
+        case UserFunctionName(root=name) | UserFunctionKwargs(name=UserFunctionName(root=name)):
+            return contains_template(name)
+        case _:
+            return False
+
+
+# How a failure refers to a user function whose name a template rendered.
+_RENDERED_NAME = "auth's template rendered a user function name (not shown, as auth can carry a credential)"
+
+
+def _call_named_by_template(auth: UserFunctionName | UserFunctionKwargs) -> Any:
+    """`call_user_function`, for a name a template rendered, which a failure
+    does not quote.
+
+    The name was never in the file, and a template renders what it was written
+    for: over basic credentials, ``"auth": "{{ creds }}"`` renders
+    ``"user:password"``, a valid name, so it is imported as one, and the
+    failure named the user name as the module and the password as the
+    function. A failure to import says what fails (`import_function`'s
+    ``quoted``) and where a credential goes.
+    """
+    name, kwargs = call_target(auth)
+    try:
+        func = import_function(name, quoted=False)
+    except UserFunctionError as e:
+        raise UserFunctionError(f"""{_RENDERED_NAME} that does not import: {e}; a built-in scheme is an object, such as {{"bearer": "<token>"}}""") from None
+    try:
+        return func(**kwargs)
+    except Exception as e:
+        raise UserFunctionError(f"{_RENDERED_NAME}, and calling it failed: {e}") from e
+
+
+def build_auth(auth: Auth, declared: RequestAuth | None = None) -> Any:
+    """What httpx takes as ``auth=`` for a resolved `Auth`: a built-in scheme's
+    flow, or whatever the user function returns (any form httpx accepts).
+
+    A new flow per call: a request's digest auth answers its own challenge, and
+    only the scenario's, built once for the shared client, carries the server's
+    nonce from one request to the next. A failing user function raises
+    `UserFunctionError`. ``declared`` is the auth as written, which ``auth``
+    rendered; a user function's name a template in it rendered is not quoted
+    (`_call_named_by_template`).
+    """
+    match auth:
+        case BasicAuth(basic=credentials):
+            return httpx.BasicAuth(credentials.username, credentials.password)
+        case DigestAuth(digest=credentials):
+            return _DigestAuth(credentials.username, credentials.password)
+        case BearerAuth(bearer=token):
+            return _BearerAuth(token)
+        case UserFunctionName() | UserFunctionKwargs() if _names_by_template(declared):
+            return _call_named_by_template(auth)
+        case UserFunctionName() | UserFunctionKwargs():
+            return call_user_function(auth)
+        case _:
+            raise RuntimeError(f"Unhandled auth: {type(auth).__name__}")
+
+
+def build_client_kwargs(client: ClientConfig, ssl_config: SSLConfig, auth: Auth | None, scenario_dir: Path | None, *, declared_auth: Auth | None = None) -> dict[str, Any]:
     """Arguments for the scenario's shared client, from its resolved
-    ``client``, ``ssl`` and ``auth``. ``auth`` is invoked here because httpx
-    wants the resulting flow, not the call description.
+    ``client``, ``ssl`` and ``auth``. ``auth`` is built here (`build_auth`)
+    because httpx wants the resulting flow, not its description;
+    ``declared_auth`` is the scenario's as written.
 
     ``client.params`` is not among them: httpx would merge it into every URL's
     query by decoding and re-encoding the whole query, which is what
@@ -163,7 +321,7 @@ def build_client_kwargs(client: ClientConfig, ssl_config: SSLConfig, auth: UserF
     if (proxy := _client_url(client, "proxy")) is not None:
         kwargs["proxy"] = _proxy(proxy, ssl_config, scenario_dir)
     if auth is not None:
-        kwargs["auth"] = call_user_function(auth)
+        kwargs["auth"] = build_auth(auth, declared_auth)
     return kwargs
 
 
@@ -235,6 +393,8 @@ def build_request_kwargs(
     scenario_dir: Path | None = None,
     client: ClientConfig | None = None,
     redaction: Redaction = DEFAULT_REDACTION,
+    *,
+    declared_auth: RequestAuth | None = None,
 ) -> dict[str, Any]:
     """Arguments for one ``client.request(...)`` call from a resolved `Request`,
     sent on the shared client that the resolved ``client`` configured.
@@ -245,7 +405,7 @@ def build_request_kwargs(
     value from ``$include``/``$merge`` is in): the model's defaults would
     override the client's. ``client.params`` is merged here (`_merge_query`).
     A message quoting the URL shows it through ``redaction``, as the report
-    does.
+    does. ``declared_auth`` is the stage's ``auth`` as written (`build_auth`).
     """
     client = client if client is not None else _DEFAULT_CLIENT
     url = request_model.url
@@ -278,11 +438,20 @@ def build_request_kwargs(
     if "allow_redirects" in declared:
         request_kwargs["follow_redirects"] = request_model.allow_redirects
 
-    if request_model.auth:
-        try:
-            request_kwargs["auth"] = call_user_function(request_model.auth)
-        except UserFunctionError as e:
-            raise RequestError(f"Failed to configure authentication: {e}") from e
+    match request_model.auth:
+        case None:
+            # Left out: httpx applies the client's, the scenario's auth.
+            pass
+        case False:
+            # httpx takes None as "no auth for this request", where leaving
+            # the argument out (its USE_CLIENT_DEFAULT) takes the client's. A
+            # URL's userinfo still applies, as it does on a client without one.
+            request_kwargs["auth"] = None
+        case auth:
+            try:
+                request_kwargs["auth"] = build_auth(auth, declared_auth)
+            except UserFunctionError as e:
+                raise RequestError(f"Failed to configure authentication: {e}") from e
 
     # The Content-Type a form or multipart body is encoded for (see below).
     body_content_type: str | None = None

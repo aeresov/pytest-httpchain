@@ -90,6 +90,10 @@ def _hide_ancestor_project_markers(monkeypatch):
         # An '$include' PROPERTY maps to a schema object, never a string.
         "inline_schema_property_named_include.json",
         "deep_import_ok.json",
+        # The built-in schemes import nothing, and their templates are in
+        # scope: scenario substitutions at scenario level, an earlier save in
+        # a request's.
+        "deep_auth_builtins.json",
         "deep_binary_exists.json",
         "deep_templated_func.json",  # a templated reference cannot be resolved statically
         "deep_sig_var_keyword.json",  # **kwargs makes every supplied name fillable
@@ -143,6 +147,12 @@ DIAGNOSED = [
     # only scenario substitutions.
     ("client_template_fixture_ref.json", [(C.FIXTURE_IN_SCENARIO_TEMPLATE, "client", r"'client' templates: \['token'\]")]),
     ("client_template_undefined.json", [(C.SCENARIO_UNDEFINED_VAR, "client", r"'client' templates: \['api_root'\]")]),
+    # A built-in auth's credentials are templates like any other: a scenario's
+    # resolve against scenario substitutions, a request's in the request's scope.
+    ("scenario_auth_template_undefined.json", [(C.SCENARIO_UNDEFINED_VAR, "auth", r"'auth' templates: \['token'\]")]),
+    ("request_auth_forward_reference.json", [(C.FORWARD_REF, "stages[0].request", r"'token' is referenced before it is saved \(saved in stage 'login'\)")]),
+    # Nothing to turn off at scenario level: the message says where it belongs.
+    ("scenario_auth_false.json", [(C.SCHEMA, "auth", "false turns the scenario's auth off for one stage, so it belongs in a stage's request")]),
     # A relative URL has nowhere to go without client.base_url, whether all of
     # it is literal or only the text before its first template.
     ("relative_url_without_base_url.json", [(C.RELATIVE_URL_WITHOUT_BASE_URL, "stages[0].request.url", r"'/users/1' is relative, but the scenario sets no client.base_url")]),

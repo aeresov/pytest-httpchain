@@ -30,6 +30,8 @@ def _edges(flow) -> list[dict]:
         pytest.param({"request": {"url": "https://x.test/b"}}, [], id="independent"),
         pytest.param({"request": {"url": "https://x.test/{{ x }}"}}, ["x"], id="request"),
         pytest.param({"request": {"url": "https://x.test/{{ x }}", "headers": {"a": "{{ y }}"}}}, ["x", "y"], id="several-vars-one-edge"),
+        # A built-in auth renders per iteration, like the rest of the request.
+        pytest.param({"request": {"url": "https://x.test/", "auth": {"bearer": "{{ x }}"}}}, ["x"], id="request-auth-bearer"),
         pytest.param({"substitutions": [{"vars": {"x": "local"}}], "request": {"url": "https://x.test/{{ x }}"}}, [], id="stage-substitution-shadows"),
         # always_run resolves before stage substitutions exist, so it reads the
         # earlier save even when a stage substitution reuses the name.

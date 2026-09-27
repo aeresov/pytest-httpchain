@@ -1,12 +1,23 @@
 """Unit tests for Request model."""
 
+from functools import partial
 from http import HTTPMethod
 
 import pydantic_core
 import pytest
 from pydantic import AnyHttpUrl, AnyUrl, HttpUrl, ValidationError
 
-from pytest_httpchain.models.entities import Request, UserFunctionKwargs, UserFunctionName
+from pytest_httpchain.models.entities import (
+    AuthCredentials,
+    BasicAuth,
+    BearerAuth,
+    DigestAuth,
+    Request,
+    Scenario,
+    UserFunctionKwargs,
+    UserFunctionName,
+    validate_rendered_scenario_auth,
+)
 from tests.unit.models.helpers import assert_error_types, make_request
 
 
@@ -220,21 +231,120 @@ def test_timeout_must_be_positive(timeout):
     assert_error_types(exc_info, "greater_than", at="timeout")
 
 
-@pytest.mark.parametrize(
-    ("auth", "expected"),
-    [
-        pytest.param("auth:get_credentials", UserFunctionName("auth:get_credentials"), id="name"),
-        pytest.param("auth:{{ auth_func }}", UserFunctionName("auth:{{ auth_func }}"), id="name-template"),
-        pytest.param(
-            {"name": "auth:oauth2", "kwargs": {"client_id": "abc123"}},
-            UserFunctionKwargs(name=UserFunctionName("auth:oauth2"), kwargs={"client_id": "abc123"}),
-            id="kwargs",
-        ),
-    ],
-)
-def test_auth_forms(auth, expected):
-    """A bare name or a {name, kwargs} object (``auth`` is shared with Scenario via Authenticated)."""
-    assert make_request(auth=auth).auth == expected
+_AUTH_FORMS = [
+    pytest.param("auth:get_credentials", UserFunctionName("auth:get_credentials"), id="name"),
+    pytest.param("auth:{{ auth_func }}", UserFunctionName("auth:{{ auth_func }}"), id="name-template"),
+    pytest.param(
+        {"name": "auth:oauth2", "kwargs": {"client_id": "abc123"}},
+        UserFunctionKwargs(name=UserFunctionName("auth:oauth2"), kwargs={"client_id": "abc123"}),
+        id="kwargs",
+    ),
+    pytest.param({"basic": {"username": "u", "password": "p"}}, BasicAuth(basic=AuthCredentials(username="u", password="p")), id="basic"),
+    # Empty credentials are credentials: an API key as the user name, no password.
+    pytest.param({"basic": {"username": "{{ key }}", "password": ""}}, BasicAuth(basic=AuthCredentials(username="{{ key }}", password="")), id="basic-template"),
+    pytest.param({"digest": {"username": "u", "password": "p"}}, DigestAuth(digest=AuthCredentials(username="u", password="p")), id="digest"),
+    pytest.param({"bearer": "{{ token }}"}, BearerAuth(bearer="{{ token }}"), id="bearer"),
+]
+
+
+class TestAuth:
+    @pytest.mark.parametrize(("auth", "expected"), _AUTH_FORMS)
+    def test_request_forms(self, auth, expected):
+        """A string is a user function's name, an object with ``name`` a call
+        with kwargs, and ``basic``/``digest``/``bearer`` the built-ins."""
+        assert make_request(auth=auth).auth == expected
+
+    @pytest.mark.parametrize(("auth", "expected"), _AUTH_FORMS)
+    def test_scenario_forms(self, auth, expected):
+        assert Scenario.model_validate({"auth": auth}).auth == expected
+
+    def test_false_turns_a_requests_auth_off(self):
+        assert make_request(auth=False).auth is False
+
+    def test_false_is_refused_at_scenario_level(self):
+        """Nothing to turn off there: the message says where it belongs,
+        instead of pydantic's list of the union's tags."""
+        with pytest.raises(ValidationError, match="false turns the scenario's auth off for one stage, so it belongs in a stage's request"):
+            Scenario.model_validate({"auth": False})
+
+    @pytest.mark.parametrize(
+        ("auth", "at", "error"),
+        [
+            # Several scheme keys, as every discriminated union in the dialect
+            # takes them: the first by name is the scheme, the rest its extras.
+            pytest.param({"name": "auth:f", "basic": {"username": "u", "password": "p"}}, ("auth", "basic", "name"), "extra_forbidden", id="function-and-builtin"),
+            pytest.param({"bearer": "t", "digest": {"username": "u", "password": "p"}}, ("auth", "bearer", "digest"), "extra_forbidden", id="two-builtins"),
+            pytest.param({"basic": {"username": "u", "password": "p", "realm": "r"}}, ("auth", "basic", "basic", "realm"), "extra_forbidden", id="unknown-credential"),
+            pytest.param({"digest": {"username": "u"}}, ("auth", "digest", "digest", "password"), "missing", id="missing-password"),
+            pytest.param({"basic": {"username": "u", "password": 1234}}, ("auth", "basic", "basic", "password"), "string_type", id="non-string-password"),
+            # "Bearer " authenticates nothing.
+            pytest.param({"bearer": ""}, ("auth", "bearer", "bearer"), "string_too_short", id="empty-token"),
+            pytest.param({"basci": {"username": "u", "password": "p"}}, ("auth",), "union_tag_invalid", id="unknown-scheme"),
+            pytest.param({"kwargs": {"a": 1}}, ("auth",), "union_tag_invalid", id="kwargs-without-name"),
+            # No form of auth: the tag error listing those that are, not a
+            # "false" tag the scenario never wrote.
+            pytest.param(True, ("auth",), "union_tag_invalid", id="true"),
+            pytest.param(0, ("auth",), "union_tag_invalid", id="zero"),
+        ],
+    )
+    def test_malformed_auth_is_refused_where_it_is_wrong(self, auth, at, error):
+        with pytest.raises(ValidationError) as exc_info:
+            make_request(auth=auth)
+        assert [(err["loc"], err["type"]) for err in exc_info.value.errors()] == [(at, error)]
+
+    def test_true_is_refused_at_scenario_level_as_no_form_of_auth(self):
+        """Only false is the request's opt-out, refused at scenario level with a
+        message of its own; true, as anywhere, is no form of auth."""
+        with pytest.raises(ValidationError) as exc_info:
+            Scenario.model_validate({"auth": True})
+        [error] = exc_info.value.errors()
+        assert (error["loc"], error["type"]) == (("auth",), "union_tag_invalid")
+        assert "'false'" not in error["msg"]
+
+    @pytest.mark.parametrize(
+        "auth",
+        [
+            pytest.param({"basic": {"username": "u", "password": ["s3cret"]}}, id="basic"),
+            pytest.param({"digest": {"username": ["s3cret"], "password": "p"}}, id="digest"),
+            pytest.param({"bearer": ["s3cret"]}, id="bearer"),
+            # A key the scheme does not take, whose value pydantic would print.
+            pytest.param({"bearer": "s3cret", "digest": {"username": "u", "password": "s3cret"}}, id="extra-key"),
+            # A whole auth written as one template ("{{ token }}" for
+            # {"bearer": "{{ token }}"}) renders the token, a string, which is
+            # a user function's name: the name's own messages quoted it.
+            pytest.param("s3cret-from-env", id="token-string"),
+            pytest.param("s3cret", id="token-string-shaped-as-a-bare-name"),
+            pytest.param("Bearer s3cret", id="authorization-value-string"),
+        ],
+    )
+    @pytest.mark.parametrize("where", ["request", "scenario"])
+    def test_refused_credential_is_not_quoted(self, auth, where):
+        """A credential is typically rendered from a secret, and the stage's
+        failure prints pydantic's report: its ``input_value`` stays out, both
+        where a request is validated again once rendered, and where a
+        scenario's auth is, on its own (only the outermost validator's setting
+        counts), and so does the value in the validators' own messages."""
+        validate = partial(Request.model_validate, {"url": "https://example.com", "auth": auth}) if where == "request" else partial(validate_rendered_scenario_auth, auth)
+        with pytest.raises(ValidationError) as exc_info:
+            validate()
+        assert "s3cret" not in str(exc_info.value)
+
+    @pytest.mark.parametrize("auth", ["get_auth", "s3cret-token", "mod:", "{{ }}"])
+    def test_string_that_is_no_function_name_is_one_unquoted_error(self, auth):
+        """One error, where the name member and its template branch each gave
+        one quoting the string, and it says what a string auth is and where a
+        token goes. An empty ``{{ }}`` is refused by position, as elsewhere."""
+        with pytest.raises(ValidationError) as exc_info:
+            make_request(auth=auth)
+        [error] = exc_info.value.errors()
+        assert error["loc"] == ("auth",)
+        if auth == "{{ }}":
+            assert error["msg"] == "Value error, Template expression cannot be empty at position 0"
+        else:
+            assert error["msg"] == (
+                "Value error, Not a user function's 'module:function' name (not shown, as auth can carry a credential); "
+                'a built-in scheme is an object, such as {"bearer": "<token>"}'
+            )
 
 
 def test_schema_offers_no_timeout_or_redirect_default():

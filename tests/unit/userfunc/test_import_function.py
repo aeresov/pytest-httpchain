@@ -50,3 +50,28 @@ def test_function_not_in_module():
 def test_non_callable_attribute():
     with pytest.raises(UserFunctionError, match="'os:name' is not callable"):
         import_function("os:name")
+
+
+@pytest.mark.parametrize(
+    ("name", "reason"),
+    [
+        pytest.param("s3cret", "it is not a 'module:function' name", id="not-a-name"),
+        pytest.param("s3cret_user:s3cret_pass", "importing its module raised ModuleNotFoundError", id="no-module"),
+        # The module's own message, which would name it, is left out too.
+        pytest.param("s3cret_boom:s3cret_pass", "importing its module raised RuntimeError", id="module-raises"),
+        pytest.param("json:s3cret_pass", "its module has no function of that name", id="no-function"),
+        pytest.param("string:digits", "what it names is not callable", id="not-callable"),
+    ],
+)
+def test_unquoted_failure_says_only_why(tmp_path, monkeypatch, name, reason):
+    """For a name a template rendered, which can be a credential instead (basic
+    credentials, "user:password", have the shape of a name): the reason, for
+    the caller to say whose name it is, with nothing chained that a traceback
+    would print."""
+    (tmp_path / "s3cret_boom.py").write_text("raise RuntimeError('s3cret_boom is broken')\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    with pytest.raises(UserFunctionError) as exc_info:
+        import_function(name, quoted=False)
+    assert str(exc_info.value) == reason
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__ or exc_info.value.__context__ is None
