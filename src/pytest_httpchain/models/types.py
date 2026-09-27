@@ -8,7 +8,7 @@ import keyword
 import re
 import types
 import xml.etree.ElementTree
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -145,6 +145,20 @@ def convert_namespace_to_dict(v: Any) -> Any:
             return {key: convert_namespace_to_dict(value) for key, value in v.items()}
         case _:
             return v
+
+
+def convert_namespace_items_to_dict(v: Any) -> Any:
+    """Turn a sequence's ``SimpleNamespace`` items into dicts, one level only:
+    the values keep their shape, so a nested ``vars`` object stays
+    attribute-accessible.
+
+    A sequence is whatever pydantic's lax ``list`` takes, i.e. any iterable but
+    text and mappings: a template can render a tuple (``{{ tuple(combos) }}``)
+    and a user function an iterator, and one this skipped would reach the
+    ``list[dict]`` it feeds with its namespaces intact."""
+    if isinstance(v, Iterable) and not isinstance(v, (str, bytes, bytearray, Mapping)):
+        return [dict(vars(item)) if isinstance(item, types.SimpleNamespace) else item for item in v]
+    return v
 
 
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]

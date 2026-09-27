@@ -84,6 +84,10 @@ Any combination of `contains`, `not_contains`, `matches`, `not_matches`
 }
 ```
 
+A matcher can also be one template, such as `"Content-Type": "{{ ct }}"`, with
+`ct` an object in scenario `vars` (`{"contains": "json"}`) or saved from the
+response.
+
 An **absent** header behaves as an empty string for matcher forms — `contains`
 and `matches` fail, `not_contains` and `not_matches` pass vacuously. (Exact
 string form fails for an absent header, as before.)
@@ -276,6 +280,12 @@ the same rule as `$ref`/`$include` — so `"./schemas/user.json"` looks for
 launched from. The same rule applies to every file path in the dialect:
 `body.binary`, `body.files` values, and `ssl.cert`/`ssl.verify`. Absolute paths
 pass through unchanged.
+
+The `schema` can also be one template, rendering a path or the schema itself:
+`"schema": "{{ user_schema }}"`, with `user_schema` a schema object in scenario
+`vars` or saved from an earlier response. Only an inline `schema` is opaque to
+the scenario's reference resolver, though: a `$ref` in `vars` is the resolver's
+to follow, so a schema with `$ref`s of its own belongs inline or in a file.
 
 Either way, `format` is **checked**, not just recorded: a value that does not
 conform to its `format` fails the stage (`'not-an-email' is not a 'email'`).

@@ -4,7 +4,6 @@
 import inspect
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -35,6 +34,22 @@ def _make_stage_method(stage_template: Stage) -> Callable:
         type(self).execute_stage(stage_template, kwargs)
 
     return call_execute_stage
+
+
+def _parametrize_values(stage: Stage, field: str, value: Any) -> list[Any]:
+    """A template-form parametrize step's re-validated values, or a collection
+    error naming the step.
+
+    Both step kinds also accept a template string, so a template rendering to
+    another template passes re-validation as text. Unchecked, pytest would
+    parametrize over its characters (``individual``), and reading the first
+    combination's keys would fail with a bare AttributeError
+    (``combinations``). ``parallel.foreach`` guards the same case at run time
+    (``carrier``).
+    """
+    if not isinstance(value, list):
+        raise StageExecutionError(f"parametrize {field} on stage '{stage.name}' must resolve to a list, got {value!r}")
+    return value
 
 
 def create_test_class(
@@ -99,13 +114,13 @@ def create_test_class(
                         param_values = walk(declared_values, scenario_context)
                         if isinstance(declared_values, str):
                             revalidated = IndividualParameter.model_validate({"individual": {param_names[0]: param_values}, "ids": step.ids})
-                            param_values = revalidated.individual[param_names[0]]
+                            param_values = _parametrize_values(stage, f"individual '{param_names[0]}'", revalidated.individual[param_names[0]])
 
                     case CombinationsParameter(combinations=combinations) if combinations:
-                        resolved_combinations = [vars(item) if isinstance(item, SimpleNamespace) else item for item in walk(combinations, scenario_context)]
+                        resolved_combinations = walk(combinations, scenario_context)
                         if isinstance(combinations, str):
                             revalidated_combos = CombinationsParameter.model_validate({"combinations": resolved_combinations, "ids": step.ids})
-                            resolved_combinations = cast(list[dict[str, Any]], revalidated_combos.combinations)
+                            resolved_combinations = _parametrize_values(stage, "combinations", revalidated_combos.combinations)
                         param_names = list(resolved_combinations[0].keys())
                         # pytest unpacks each argvalue only for several argnames:
                         # a lone key takes the bare value, or its 1-tuple would

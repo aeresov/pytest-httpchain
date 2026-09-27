@@ -43,6 +43,7 @@ from pytest_httpchain.models import (
     SSLConfig,
     Stage,
     UserFunctionName,
+    VarsSubstitution,
     Verify,
 )
 from pytest_httpchain.templates import TemplatesError
@@ -216,6 +217,24 @@ class TestResolvedParallelSettings:
         stage = make_stage(parallel=ParallelForeachConfig(foreach=[step]))
         with pytest.raises(pytest.fail.Exception, match=f"parallel.foreach {field} must resolve to a list"):
             carrier.execute_stage(stage, {})
+
+    @pytest.mark.parametrize("template", ["{{ combos }}", "{{ tuple(combos) }}"])
+    def test_foreach_combinations_template_over_vars(self, template):
+        """``vars`` turns each object into a SimpleNamespace, and walk()'s
+        re-validation of the rendered config refused them as not dicts: the
+        stage failed with pydantic's report, while the same template worked in
+        stage ``parametrize``. A nested object keeps its attribute access, and
+        a tuple of them is taken like a list."""
+        requests: list[httpx.Request] = []
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: requests.append(request) or httpx.Response(200)))
+        substitution = VarsSubstitution(vars={"combos": [{"id": 1, "owner": {"name": "a"}}, {"id": 2, "owner": {"name": "b"}}]})
+        cls = _make_carrier_subclass(client=client, global_context=ChainMap(substitution.vars))
+        stage = Stage.model_validate({"name": "s", "parallel": {"foreach": [{"combinations": template}]}, "request": {"url": "http://mock/item/{{ id }}/{{ owner.name }}"}})
+        try:
+            cls.execute_stage(stage, {})
+        finally:
+            client.close()
+        assert sorted(str(request.url) for request in requests) == ["http://mock/item/1/a", "http://mock/item/2/b"]
 
     @pytest.mark.parametrize(
         ("field", "value"),
@@ -453,6 +472,46 @@ class TestRenderedAwayFields:
         cls = _make_carrier_subclass(scenario=scenario, _initialized=False)
         with pytest.raises(StageExecutionError, match=f"^{re.escape(f'Failed to initialize scenario: {message}')}$"):
             cls._ensure_initialized()
+
+
+class TestVerifyObjectsFromVars:
+    """``vars`` turns each object into a SimpleNamespace, and walk()'s
+    re-validation of a rendered verify step refused one where the step takes an
+    object: a ``body.schema`` or a header matcher written as one template over
+    ``vars`` failed the stage with pydantic's report, while the same template
+    over a saved value worked. Each is now the object it was declared as."""
+
+    @staticmethod
+    def _context(**values):
+        return ChainMap(VarsSubstitution(vars=values).vars)
+
+    @pytest.mark.parametrize(
+        ("verify", "failure"),
+        [
+            pytest.param({"body": {"schema": "{{ schema }}"}}, "Body schema validation failed: '1' is not of type 'integer'", id="schema"),
+            pytest.param({"headers": {"Content-Type": "{{ ct }}"}}, "Header 'Content-Type' (value: 'text/plain; charset=utf-8')", id="matcher"),
+        ],
+    )
+    def test_checks_the_response(self, verify, failure):
+        context = self._context(schema={"type": "object", "properties": {"id": {"type": "integer"}}}, ct={"contains": "json"})
+        stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"verify": verify}]})
+        responses = iter([httpx.Response(200, json={"id": 1}), httpx.Response(200, text='{"id": "1"}')])
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: next(responses)))
+        cls = _make_carrier_subclass(client=client)
+        try:
+            cls._execute_single_iteration(stage, context, {})
+            with pytest.raises(VerificationError, match=f"^{re.escape(failure)}"):
+                cls._execute_single_iteration(stage, context, {})
+        finally:
+            client.close()
+
+    def test_matcher_key_set_to_none_is_refused(self):
+        """As for a matcher saved whole from the response
+        (``TestRenderedAwayFields``): a key it sets to None is refused."""
+        context = self._context(matcher={"contains": None, "not_contains": "error"})
+        with pytest.raises(StageExecutionError) as excinfo:
+            _render_declared(Verify.model_validate({"headers": {"Location": "{{ matcher }}"}}), context, "verify")
+        assert str(excinfo.value) == "'verify.headers.Location.contains' was declared as '{{ matcher }}' but rendered to None, which would silently disable it"
 
 
 @pytest.mark.parametrize(

@@ -125,6 +125,11 @@ A `calls_per_sec` template that renders to `null` fails the stage before any req
 }
 ```
 
+As in stage [`parametrize`](parametrization.md#template-expressions-in-parameters),
+the list can also be one template, such as `"combinations": "{{ matrix }}"` with
+`matrix` a list of objects in scenario `vars`. It is resolved each time the stage
+runs.
+
 ## Dynamic Values with Templates
 
 ```json

@@ -121,6 +121,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two into a name of each scenario's own (`db_test_orders.http.json`). The plugin now adds its
   group only to a scenario that declares none; every stage inherits the declared one, so the chain
   still stays together.
+- A `parallel.foreach` `combinations` step written as one template over scenario `vars`, such as
+  `{"combinations": "{{ combos }}"}`, now runs the stage once per combination. It failed the stage
+  with pydantic's "Input should be a valid dictionary" report, while the same template worked in
+  stage `parametrize`: `vars` makes each object attribute-accessible, and only `parametrize` took
+  such an object for the combination it stands for. The model now does that for both, in a list
+  or any other sequence the template renders (`{{ tuple(combos) }}`), and one level deep, so an
+  object nested inside a combination keeps its attribute access (`{{ owner.name }}`).
+- A `verify.body.schema` or a header matcher written as one template over scenario `vars`, such
+  as `"schema": "{{ user_schema }}"` or `"Content-Type": "{{ ct }}"` with `ct` set to
+  `{"contains": "json"}`, now checks the response. Both failed the stage with pydantic's "Input
+  should be a valid dictionary" report, while the same template over a value saved from a response
+  worked: neither field took a `vars` object for the object it stands for. Now both do, a schema
+  down to every object nested in it.
+- A stage `parametrize` step whose template resolves to another template string now fails
+  collection with a message naming the step and the stage. Both step kinds also accept a template,
+  so the text passed re-validation: an `individual` step then ran one test per character, and a
+  `combinations` step failed collection with a pydantic error for each character. 0.15.2 closed
+  the same gap for `parallel.foreach`.
 
 ### Changed
 

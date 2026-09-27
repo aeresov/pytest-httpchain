@@ -35,6 +35,7 @@ from pytest_httpchain.models.types import (
     TemplateExpressionSchema,
     VariableName,
     XMLString,
+    convert_namespace_items_to_dict,
     convert_namespace_to_dict,
 )
 from pytest_httpchain.templates import contains_template
@@ -350,7 +351,13 @@ Save = Annotated[
 with _suppress_field_shadow_warning("schema"):
 
     class ResponseBody(StrictModel):
-        schema: JSONSchemaInline | SerializablePath | PartialTemplateStr | None = Field(default=None, description="JSON schema for validation.")
+        # A template over `vars` renders an object as a SimpleNamespace, which
+        # stands for the dict it was declared as: converted all the way down, as
+        # a schema is plain JSON. Ahead of the union, keeping its member tags in
+        # pydantic's error locations.
+        schema: Annotated[JSONSchemaInline | SerializablePath | PartialTemplateStr | None, BeforeValidator(convert_namespace_to_dict)] = Field(
+            default=None, description="JSON schema for validation."
+        )
         contains: list[str] = Field(default_factory=list, description="Substrings the response body must contain.")
         not_contains: list[str] = Field(default_factory=list, description="Substrings the response body must NOT contain.")
         matches: list[RegexPattern] = Field(default_factory=list, description="Regex patterns the response body must match.")
@@ -378,7 +385,9 @@ class Verify(Descripted):
         default=None,
         description="Expected HTTP status code: a standard code (autocompleted) or any integer 100-599 (e.g. 499).",
     )
-    headers: dict[str, str | HeaderMatcher] = Field(
+    # A matcher written as one template over `vars` ("{{ ct }}") renders as a
+    # SimpleNamespace, which stands for the matcher object it was declared as.
+    headers: dict[str, Annotated[str | HeaderMatcher, BeforeValidator(convert_namespace_to_dict)]] = Field(
         default_factory=dict,
         description="Expected response headers: a string (exact match) or a matcher object (contains/not_contains/matches/not_matches) per key.",
     )
@@ -446,9 +455,15 @@ class IndividualParameter(StrictModel):
 
 
 class CombinationsParameter(StrictModel):
-    combinations: Annotated[list[Annotated[dict[str, Any], Field(min_length=1)]], Field(min_length=1)] | PartialTemplateStr = Field(
-        description="Non-empty list of parameter combinations (each dict must have at least one parameter) or template expression"
-    )
+    # A template over `vars` renders each combination as a SimpleNamespace,
+    # which stands for the dict it was declared as. Stage `parametrize` and
+    # `parallel.foreach` both re-validate the rendered list here, so one rule
+    # serves both. Converted ahead of the union rather than per item: an item
+    # validator would turn `list[dict[str,any]]` in error locations into its repr.
+    combinations: Annotated[
+        Annotated[list[Annotated[dict[str, Any], Field(min_length=1)]], Field(min_length=1)] | PartialTemplateStr,
+        BeforeValidator(convert_namespace_items_to_dict),
+    ] = Field(description="Non-empty list of parameter combinations (each dict must have at least one parameter) or template expression")
     ids: list[str] | None = Field(default=None, description="Optional IDs for each combination")
 
     @model_validator(mode="after")

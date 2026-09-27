@@ -3,6 +3,7 @@
 import json
 from http import HTTPStatus
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -101,6 +102,16 @@ class TestVerifyHeaders:
         with pytest.raises(ValidationError, match="at least one"):
             Verify(headers={"content-type": {}})
 
+    def test_namespace_is_the_matcher_object(self):
+        """A matcher written as one template over ``vars`` (``"{{ ct }}"``)
+        renders as a SimpleNamespace, which walk()'s re-validation refused as
+        neither a string nor a matcher object. It is the matcher it was
+        declared as, and checked as one: an unknown key is still refused."""
+        assert Verify(headers={"x-type": SimpleNamespace(contains="json")}).headers == {"x-type": HeaderMatcher(contains="json")}
+        with pytest.raises(ValidationError) as exc_info:
+            Verify(headers={"x-type": SimpleNamespace(contain="json")})
+        assert_error_types(exc_info, "extra_forbidden", at="contain")
+
 
 class TestResponseBody:
     def test_defaults(self):
@@ -128,6 +139,13 @@ class TestResponseBody:
     )
     def test_schema_forms(self, schema, expected):
         assert ResponseBody(schema=schema).schema == expected
+
+    def test_schema_from_namespace(self):
+        """A schema in ``vars`` renders as namespaces all the way down, which
+        walk()'s re-validation refused as not a dict. A schema is plain JSON, so
+        every level converts, lists included."""
+        schema = SimpleNamespace(type="object", properties=SimpleNamespace(id=SimpleNamespace(type="integer")), allOf=[SimpleNamespace(required=["id"])])
+        assert ResponseBody(schema=schema).schema == {"type": "object", "properties": {"id": {"type": "integer"}}, "allOf": [{"required": ["id"]}]}
 
     def test_schema_from_file(self, datadir):
         schema = json.loads((datadir / "user_response_schema.json").read_text())

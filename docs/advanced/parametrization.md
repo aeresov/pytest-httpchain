@@ -169,6 +169,15 @@ Values that come from scenario `vars` are exposed as namespaces, so use attribut
 access (`{{ user.id }}`), not subscript (`{{ user['id'] }}`). Plain dicts from
 fixtures or `combinations` parameters keep subscript access.
 
+A `combinations` step can be one template for the whole list, such as
+`"combinations": "{{ test_users }}"`: each object in it is one combination, whose
+keys name the stage parameters (`{{ id }}`, `{{ name }}`). An object nested inside
+a combination from `vars` is a namespace like any other `vars` value.
+
+A template given for a whole list must render a list, or a tuple such as
+`{{ tuple(test_users) }}`. One that renders another template string fails
+collection, naming the step and the stage.
+
 ## Test IDs
 
 Without `ids`, each run's test id is built from its values, as with pytest's own

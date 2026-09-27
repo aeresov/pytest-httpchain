@@ -97,6 +97,13 @@ Define static values:
 }
 ```
 
+Templates read an object in `vars` with attribute access
+(`{{ object_var.nested }}`). Where a field takes a whole object, one template
+naming it stands for that object: a JSON body
+(`"json": "{{ object_var }}"`), GraphQL `variables`, `verify.body.schema`, a
+header matcher, and the `combinations` of a `parametrize` or `parallel.foreach`
+step.
+
 ## Function Substitutions
 
 Bind a name to a Python function so it can be **called** from templates:

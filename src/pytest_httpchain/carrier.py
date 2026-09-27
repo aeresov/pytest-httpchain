@@ -587,7 +587,7 @@ class Carrier:
                 check_cap(math.prod(len(values) for _, values in steps))
 
                 for param_name, values in steps:
-                    additions = [{param_name: value} if param_name is not None else (vars(value) if isinstance(value, SimpleNamespace) else value) for value in values]
+                    additions = [{param_name: value} if param_name is not None else value for value in values]
                     # Clause order is load-bearing: new values outer, accumulated
                     # dicts inner. Swapping them changes the iteration order.
                     iteration_substitutions = [{**existing, **addition} for addition in additions for existing in iteration_substitutions]
