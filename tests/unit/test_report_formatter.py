@@ -1,13 +1,17 @@
 import json
+import tracemalloc
 
 import httpx
 import pytest
 
 from pytest_httpchain.report_formatter import format_request, format_response
-from tests.unit.helpers import TOO_DEEP_TO_PARSE
+from tests.unit.helpers import TOO_DEEP_TO_PARSE, on_bounded_stack
 
 _UNDECODABLE = bytes(range(256))
 _BIG_JSON = {"data": ["x" * 50] * 200}
+_JSON = {"content-type": "application/json"}
+# Parses on every supported interpreter, but pretty-prints in full to 12.5 MB.
+_DEEP_JSON = b"[" * 2_500 + b"]" * 2_500
 
 
 @pytest.mark.parametrize(
@@ -41,13 +45,6 @@ _BIG_JSON = {"data": ["x" * 50] * 200}
             httpx.Request("POST", "https://example.com/api/data", headers={"content-type": "application/json"}, content=b"{not valid json"),
             "POST https://example.com/api/data\nhost: example.com\ncontent-type: application/json\ncontent-length: 15\n\n{not valid json",
             id="malformed-json-as-text",
-        ),
-        # So is JSON too deep to parse (RecursionError, not a ValueError), rather
-        # than an error placeholder that drops the start line and headers too.
-        pytest.param(
-            httpx.Request("POST", "https://example.com/api/data", headers={"content-type": "application/json"}, content=TOO_DEEP_TO_PARSE),
-            "POST https://example.com/api/data\nhost: example.com\ncontent-type: application/json\ncontent-length: 200000\n\n" + "[" * 1000 + "... (truncated)",
-            id="too-deep-json-as-text",
         ),
         # Only genuinely undecodable bytes earn the binary label.
         pytest.param(
@@ -99,13 +96,6 @@ def test_format_request(request_, expected):
             "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 8\n\n��\x00b\x00a\x00d",
             id="undecodable-json-as-text",
         ),
-        # So is JSON too deep to parse (RecursionError, not a ValueError), rather
-        # than an error placeholder that drops the start line and headers too.
-        pytest.param(
-            httpx.Response(200, headers={"content-type": "application/json"}, content=TOO_DEEP_TO_PARSE),
-            "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 200000\n\n" + "[" * 1000 + "... (truncated)",
-            id="too-deep-json-as-text",
-        ),
         # A non-textual content type must not dump (possibly mojibake) bytes
         # into the report; it emits a short placeholder instead.
         pytest.param(
@@ -147,3 +137,39 @@ def test_long_bodies_are_truncated(formatter, message, expected_body):
     """Bodies are capped at 1000 characters, and the pretty-printed JSON
     branches honor the cap too, not only plain text."""
     assert formatter(message).split("\n\n", 1)[1] == expected_body
+
+
+@pytest.mark.parametrize(
+    ("formatter", "message", "start_line"),
+    [
+        pytest.param(format_request, httpx.Request("POST", "https://x.test/", headers=_JSON, content=TOO_DEEP_TO_PARSE), "POST https://x.test/\nhost: x.test", id="request"),
+        pytest.param(format_response, httpx.Response(200, headers=_JSON, content=TOO_DEEP_TO_PARSE), "HTTP/1.1 200 OK", id="response"),
+    ],
+)
+def test_json_too_deep_to_parse_shows_as_text(formatter, message, start_line):
+    """Like malformed JSON, rather than an error placeholder that drops the
+    start line and headers too: the decoder raises RecursionError, which is
+    not a ValueError."""
+    expected = f"{start_line}\ncontent-type: application/json\ncontent-length: 2000000\n\n" + "[" * 1000 + "... (truncated)"
+    assert on_bounded_stack(formatter, message) == expected
+
+
+@pytest.mark.parametrize(
+    ("formatter", "message"),
+    [
+        pytest.param(format_request, httpx.Request("POST", "https://x.test/", headers=_JSON, content=_DEEP_JSON), id="request"),
+        pytest.param(format_response, httpx.Response(200, headers=_JSON, content=_DEEP_JSON), id="response"),
+    ],
+)
+def test_deep_json_renders_only_what_is_shown(formatter, message):
+    """Indentation grows with depth, so a deep body pretty-prints in full to a
+    size quadratic in its own, only to be cut to 1,000 characters. Rendering
+    must stop at the cap (the whole parsed body is about 0.2 MB)."""
+    tracemalloc.start()
+    try:
+        body = formatter(message).split("\n\n", 1)[1]
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert body == "\n".join("  " * level + "[" for level in range(40))[:1000] + "... (truncated)"
+    assert peak < 2_000_000

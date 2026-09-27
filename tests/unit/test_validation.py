@@ -14,7 +14,7 @@ import pytest
 
 import pytest_httpchain.validation.loader as validation_loader
 from pytest_httpchain.validation import SEVERITY, DiagnosticCode, load_scenario, resolve_root_path, validate_scenario
-from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK
+from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
 
 C = DiagnosticCode
 # A stable importable directory so `userfuncs:<name>` refs resolve under --syspath.
@@ -241,7 +241,7 @@ def test_deep_disabled_does_not_check_imports(datadir):
 def test_deep_schema_file_nested_too_deeply(tmp_path, content, message):
     """Generated, not a ``test_validation/`` fixture: the payloads are too big to commit."""
     (tmp_path / "schema.json").write_bytes(content)
-    result = validate_scenario(_write(tmp_path, [_stage(response=[{"verify": {"body": {"schema": "schema.json"}}}])]), deep=True)
+    result = on_bounded_stack(validate_scenario, _write(tmp_path, [_stage(response=[{"verify": {"body": {"schema": "schema.json"}}}])]), deep=True)
 
     assert [(d.code, d.location) for d in result.diagnostics] == [(C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema")]
     assert re.search(message, result.diagnostics[0].message)

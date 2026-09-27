@@ -17,18 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recursion the same way. The stage failed with a bare traceback, with no request/response report
   and no HAR entry. Inline schemas and `validate --deep` already reported these cases cleanly.
 - A deeply nested JSON response now fails the stage cleanly, with its HTTP report sections and HAR
-  entry. CPython's JSON decoder raises `RecursionError` on deep nesting (from 10,000 levels on
-  Python 3.13). `RecursionError` is not a `ValueError`, so it escaped `verify.body.schema` and
-  JMESPath `save` as a bare traceback. Both now fail with "response is not valid JSON", as
-  malformed JSON does. A `verify.body.schema` file nested that deeply now fails the stage with
-  "Error reading body schema file", and `validate --deep` reports it as HTTPCHAIN021. The HTTP
-  report shows such a body as text. Before, the report showed an error placeholder that also
-  dropped the start line and headers.
+  entry. CPython's JSON decoder raises `RecursionError` on deep nesting: from 10,000 levels on
+  Python 3.13, and on 3.14 at a depth set by the stack size. `RecursionError` is not a
+  `ValueError`, so it escaped `verify.body.schema` and JMESPath `save` as a bare traceback. Both
+  now fail with "response is not valid JSON", as malformed JSON does. A `verify.body.schema` file
+  nested that deeply now fails the stage with "Error reading body schema file", and
+  `validate --deep` reports it as HTTPCHAIN021. The HTTP report shows such a body as text. Before,
+  the report showed an error placeholder that also dropped the start line and headers.
 - `verify.body.schema` no longer escapes as a bare `RecursionError` when the body or schema file
   parses but is a few hundred levels deep. Validating against a self-referencing schema recursed
   once per level of the body. Describing a failed check pretty-printed the nested value, inside the
   handler meant to report it. Both now fail the stage cleanly. `validate --deep` no longer crashes
   while describing why such a schema file is invalid, and reports HTTPCHAIN021.
+- The HTTP report no longer renders a deeply nested JSON body in full only to cut it to 1,000
+  characters. Indentation grows with depth, so the full rendering is quadratic in the body's size:
+  a 10 kB body 5,000 levels deep rendered to 50 MB. Rendering now stops at the cap.
 
 ## [0.15.2] - 2026-09-26
 
