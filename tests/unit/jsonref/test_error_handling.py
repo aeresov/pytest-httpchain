@@ -27,8 +27,10 @@ def test_nul_in_reference_path(create_json_file):
         pytest.param(b'{"invalid": json}', json.JSONDecodeError, "Expecting value", id="malformed"),
         # Not a JSONDecodeError: read_text fails before the decoder runs.
         pytest.param(b'{"x": "\xff"}', UnicodeDecodeError, "'utf-8' codec can't decode byte 0xff", id="not-utf-8"),
-        # Not a ValueError at all.
-        pytest.param(TOO_DEEP_TO_PARSE, RecursionError, r"nested too deeply \(.*while decoding a JSON array", id="too-deep-to-parse"),
+        # Not a ValueError at all. 3.14 bounds the decoder by the real stack
+        # size, and with a stack of 16 MB or more it parses this and the
+        # resolver's walk raises instead.
+        pytest.param(TOO_DEEP_TO_PARSE, RecursionError, r"nested too deeply \((.*while decoding a JSON array.*|maximum recursion depth exceeded)\)$", id="too-deep-to-parse"),
         # Parses, but the resolver's own walk spends a frame per level.
         pytest.param(TOO_DEEP_TO_WALK, RecursionError, r"nested too deeply \(maximum recursion depth exceeded\)$", id="too-deep-to-walk"),
     ],

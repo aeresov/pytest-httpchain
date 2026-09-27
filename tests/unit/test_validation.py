@@ -243,8 +243,10 @@ def test_directory_is_not_a_file(tmp_path):
 @pytest.mark.parametrize(
     ("content", "reason"),
     [
-        # The decoder's RecursionError is not a ValueError.
-        pytest.param(TOO_DEEP_TO_PARSE, r"\(.*while decoding a JSON array", id="too-deep-to-parse"),
+        # The decoder's RecursionError is not a ValueError. 3.14 bounds the
+        # decoder by the real stack size, and with a stack of 16 MB or more it
+        # parses this and the resolver's walk raises instead.
+        pytest.param(TOO_DEEP_TO_PARSE, r"\((.*while decoding a JSON array.*|maximum recursion depth exceeded)\)$", id="too-deep-to-parse"),
         # Parses, but the resolver's own walk spends a frame per level.
         pytest.param(TOO_DEEP_TO_WALK, r"\(maximum recursion depth exceeded\)$", id="too-deep-to-walk"),
     ],
