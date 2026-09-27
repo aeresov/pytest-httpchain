@@ -131,6 +131,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`HTTPCHAIN033`). Such a scenario used to collect and, without xdist, pass. Rename the stage
   (`Users: list`), move the `xdist_group` to the scenario's `marks`, or take the `]` out of the
   group name.
+- **BREAKING**: `format` in a `verify.body.schema` is now enforced. It used to be ignored: the
+  documented `{"type": "string", "format": "email"}` accepted `"not-an-email"`, and a stage whose
+  response broke any `format` still passed. The body is now validated with the schema dialect's
+  format checker, so a nonconforming value fails the stage (`'not-an-email' is not a 'email'`).
+  Heads-up: a scenario whose responses never matched their declared formats, and that passed
+  until now, fails after the upgrade. Out of the box `email`, `idn-email`, `ipv4`, `ipv6`, `date`,
+  `uuid`, `regex` and `idn-hostname` are checked. `regex` means Python `re` syntax, not ECMA-262:
+  a response that returns valid JavaScript patterns such as `(?<year>\d{4})` under
+  `"format": "regex"` also fails now. `date-time`, `time`, `hostname`, `uri`, `iri`,
+  `duration` and the other formats that need jsonschema's optional dependencies are checked only
+  once `jsonschema[format-nongpl]` (or `jsonschema[format]`) is installed, and pass any value
+  until then.
 
 ## [0.15.2] - 2026-09-26
 

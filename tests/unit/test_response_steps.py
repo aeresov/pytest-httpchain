@@ -6,6 +6,7 @@ messages and the edge cases a mock server cannot produce cheaply.
 """
 
 import json
+import re
 from collections import ChainMap
 
 import httpx
@@ -65,6 +66,67 @@ class TestBodySchema:
     def test_non_json_response_fails_cleanly(self):
         with pytest.raises(VerificationError, match="response is not valid JSON"):
             process_verify(Verify(body=ResponseBody(schema={"type": "object"})), NOT_JSON)
+
+    @pytest.mark.parametrize(
+        ("fmt", "value"),
+        [
+            ("email", "user@example.com"),
+            ("ipv4", "192.0.2.1"),
+            ("date", "2026-09-27"),
+        ],
+    )
+    def test_conforming_format_passes(self, fmt, value):
+        schema = {"type": "object", "properties": {"v": {"type": "string", "format": fmt}}}
+        process_verify(Verify(body=ResponseBody(schema=schema)), httpx.Response(200, json={"v": value}))
+
+    @pytest.mark.parametrize(
+        ("fmt", "value"),
+        [
+            ("email", "not-an-email"),
+            ("ipv4", "999.0.2.1"),
+            ("date", "2026-13-45"),
+            # `regex` means Python `re` syntax, as the docs say: a valid
+            # ECMA-262 named group is not a 'regex'.
+            ("regex", r"(?<year>\d{4})"),
+            # The checker's `re.compile` raises OverflowError / RecursionError,
+            # which jsonschema does not count as a format failure: they escaped
+            # as a raw traceback with no request/response report.
+            ("regex", "a{4294967296}"),
+            ("regex", "(" * 5000 + ")" * 5000),
+        ],
+        ids=["email", "ipv4", "date", "regex-ecma-only", "regex-overflow", "regex-too-deep"],
+    )
+    def test_nonconforming_format_fails(self, fmt, value):
+        """`format` was only an annotation (no format checker was passed), so
+        the documented `"format": "email"` accepted any string."""
+        schema = {"type": "object", "properties": {"v": {"type": "string", "format": fmt}}}
+        expected = re.escape(f"Body schema validation failed: {value!r} is not a {fmt!r}")
+        with pytest.raises(VerificationError, match=expected):
+            process_verify(Verify(body=ResponseBody(schema=schema)), httpx.Response(200, json={"v": value}))
+
+    @pytest.mark.parametrize(
+        ("dialect", "checked"),
+        [
+            (None, True),
+            ("https://json-schema.org/draft/2020-12/schema", True),
+            ("http://json-schema.org/draft-07/schema#", False),
+        ],
+        ids=["default", "draft-2020-12", "draft-07"],
+    )
+    def test_checked_formats_follow_the_declared_dialect(self, dialect, checked):
+        """The checker is the dialect's own, not jsonschema's catch-all
+        FormatChecker, so `uuid` (defined from Draft 2019-09 on) is checked
+        under the default 2020-12 but not under Draft 7, as the docs promise."""
+        schema = {"type": "object", "properties": {"v": {"type": "string", "format": "uuid"}}}
+        if dialect is not None:
+            schema["$schema"] = dialect
+        verify = Verify(body=ResponseBody(schema=schema))
+        response = httpx.Response(200, json={"v": "nope"})
+        if checked:
+            with pytest.raises(VerificationError, match="'nope' is not a 'uuid'"):
+                process_verify(verify, response)
+        else:
+            process_verify(verify, response)
 
 
 class TestExpressions:

@@ -4,6 +4,7 @@ Pure functions over ``(resolved model, response)`` — no chain state — raisin
 `VerificationError` / `SaveError` on failure. The carrier owns the sequence.
 """
 
+import functools
 import json
 import re
 from collections import ChainMap
@@ -154,8 +155,10 @@ def _verify_body_schema(schema: Any, response: httpx.Response, scenario_dir: Pat
     try:
         # Already meta-checked (inline at model validation, files just above), so
         # instantiate the dialect's validator instead of jsonschema.validate,
-        # which would re-run check_schema on every stage.
-        json_schema_validator_class(schema)(schema).validate(response_json)
+        # which would re-run check_schema on every stage. Either way `format`
+        # is only an annotation unless a format checker is passed.
+        validator_class = json_schema_validator_class(schema)
+        validator_class(schema, format_checker=_format_checker(validator_class)).validate(response_json)
     except jsonschema.ValidationError as e:
         raise VerificationError(f"Body schema validation failed: {e}") from e
     except jsonschema.SchemaError as e:
@@ -164,6 +167,25 @@ def _verify_body_schema(schema: Any, response: httpx.Response, scenario_dir: Pat
         # An unresolvable $ref inside the schema itself must fail the stage
         # cleanly, not escape as a raw traceback past the abort machinery.
         raise VerificationError(f"Cannot resolve $ref in body schema: {e}") from e
+
+
+@functools.cache
+def _format_checker(validator_class: type[jsonschema.protocols.Validator]) -> jsonschema.FormatChecker:
+    """The dialect's own format checker, so the checked formats are the ones
+    the schema's ``$schema`` defines and the installed jsonschema can check,
+    except that a check which crashes counts as a nonconforming value.
+
+    jsonschema turns only the exceptions a checker declares into a format
+    failure, and response data reaches the others: ``regex`` compiles the
+    value with ``re``, which raises OverflowError on ``a{4294967296}`` and
+    RecursionError on deeply nested groups. Those would escape as a raw
+    traceback past the abort machinery, with no request/response report.
+    A value its format's checker cannot process does not conform to it.
+    """
+    checker = jsonschema.FormatChecker(formats=())
+    for name, (func, _declared) in validator_class.FORMAT_CHECKER.checkers.items():
+        checker.checks(name, raises=Exception)(func)
+    return checker
 
 
 def verify_text_matchers(

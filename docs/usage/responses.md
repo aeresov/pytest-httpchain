@@ -277,6 +277,24 @@ launched from. The same rule applies to every file path in the dialect:
 `body.binary`, `body.files` values, and `ssl.cert`/`ssl.verify`. Absolute paths
 pass through unchanged.
 
+Either way, `format` is **checked**, not just recorded: a value that does not
+conform to its `format` fails the stage (`'not-an-email' is not a 'email'`).
+Which formats can be checked depends on the installed `jsonschema`. Out of the
+box, with the default Draft 2020-12 dialect, those are `email` and `idn-email`
+(both only require an `@`), `ipv4`, `ipv6`, `date`, `uuid`, `regex` and
+`idn-hostname` (its `idna` dependency comes with httpx). `regex` is checked
+against Python `re` syntax, not the ECMA-262 syntax JSON Schema specifies, so
+JavaScript-only constructs such as `(?<year>\d{4})` named groups or `\p{Lu}`
+property escapes fail it, and so does a pattern too large for `re` to compile
+(`a{4294967296}`). The others — among them `date-time`, `time`, `hostname`,
+`uri`, `uri-reference`, `iri`, `iri-reference`, `uri-template`,
+`json-pointer`, `relative-json-pointer` and `duration` — need jsonschema's
+optional format dependencies, and until those are installed any value passes
+them. To check them, install `jsonschema[format-nongpl]` (or
+`jsonschema[format]`, which uses the GPL-licensed `rfc3987` for `uri`/`iri`)
+next to pytest-httpchain. A format name the schema's dialect does not define
+(`uuid` under Draft 7, for example) is never checked.
+
 ### User Function Verification
 
 ```json
