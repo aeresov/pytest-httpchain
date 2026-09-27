@@ -46,6 +46,10 @@ def test_verify_passes(run_scenario, scenario, passed):
         # validate cleanly (`status` is optional), so a truthiness gate silently
         # dropped the only assertion and passed green against a 400.
         ("status_rendered_away", {"failed": 1}, "*rendered to None*"),
+        # The same for a header matcher field — here fed by a JMESPath save of a
+        # missing key. Its static sibling keeps the matcher valid, so the
+        # rendered-away `contains` was simply not checked.
+        ("header_matcher_rendered_away", {"failed": 1}, "*'verify.headers.X-Custom-Header.contains' was declared as '{{ expected_value }}' but rendered to None*"),
     ),
 )
 def test_verify_fails_cleanly(run_scenario, scenario, outcomes, line):

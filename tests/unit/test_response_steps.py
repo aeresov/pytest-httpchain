@@ -14,7 +14,7 @@ import pytest
 from pytest_httpchain.errors import SaveError, VerificationError
 from pytest_httpchain.models import JMESPathSave, Verify
 from pytest_httpchain.models.entities import ResponseBody
-from pytest_httpchain.response_steps import check_rendered_assertions, process_save, process_verify
+from pytest_httpchain.response_steps import process_save, process_verify
 
 NOT_JSON = httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
 
@@ -67,32 +67,6 @@ class TestBodySchema:
             process_verify(Verify(body=ResponseBody(schema={"type": "object"})), NOT_JSON)
 
 
-class TestRenderedAwayAssertions:
-    """A declared assertion that a template rendered to None must fail loudly:
-    both models re-validate cleanly, so otherwise it is silently dropped and a
-    500 passes green."""
-
-    @pytest.mark.parametrize(
-        ("declared", "match"),
-        [
-            (Verify(status="{{ expected }}"), "'status'.*rendered to None"),
-            (Verify(body=ResponseBody(schema="{{ schema_path }}")), "body.schema.*rendered to None"),
-        ],
-        ids=["status", "body-schema"],
-    )
-    def test_rendered_away_assertion_is_rejected(self, declared, match):
-        with pytest.raises(VerificationError, match=match):
-            check_rendered_assertions(declared, Verify())
-
-    @pytest.mark.parametrize(
-        ("declared", "rendered"),
-        [(Verify(), Verify()), (Verify(status="{{ expected }}"), Verify(status=200))],
-        ids=["undeclared", "survived"],
-    )
-    def test_live_assertions_are_not_flagged(self, declared, rendered):
-        check_rendered_assertions(declared, rendered)
-
-
 class TestExpressions:
     def test_bools_pass(self):
         process_verify(Verify(expressions=[True, True]), httpx.Response(200))
@@ -110,9 +84,9 @@ class TestExpressions:
             # Forgetting the `{{ }}` leaves an always-truthy string behind.
             pytest.param("response.status == 200", "str", id="missing-braces"),
             pytest.param("", "str", id="falsy-str"),
-            # Why `expressions` needs no check_rendered_assertions entry:
-            # substitution rewrites the list element-wise, so a rendered-away
-            # entry arrives here as None and fails the bool contract.
+            # Why `expressions` needs nothing from the carrier's rendered-away
+            # guard: substitution rewrites the list element-wise, so a
+            # rendered-away entry arrives here as None and fails the bool contract.
             pytest.param(None, "NoneType", id="rendered-away"),
         ],
     )

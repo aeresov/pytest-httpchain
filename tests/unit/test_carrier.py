@@ -5,6 +5,7 @@ response_steps (test_request_builder.py, test_response_steps.py); the HTTP
 round trip itself is the integration suite's.
 """
 
+import re
 import ssl
 import threading
 import time
@@ -16,6 +17,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 import trustme
+from pydantic import ValidationError
 from pyrate_limiter import Duration, Limiter, Rate
 
 import pytest_httpchain.carrier as carrier_module
@@ -25,16 +27,22 @@ from pytest_httpchain.carrier import (
     _context_dump,
     _parallel_int,
     _parallel_number,
+    _render_declared,
     fresh_scenario_state,
 )
-from pytest_httpchain.errors import RequestError, StageExecutionError
+from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.models import (
     CombinationsParameter,
     IndividualParameter,
     ParallelForeachConfig,
     ParallelRepeatConfig,
+    Request,
+    ResponseBody,
     Scenario,
     SSLConfig,
+    Stage,
+    UserFunctionName,
+    Verify,
 )
 from pytest_httpchain.templates import TemplatesError
 from tests.unit.models.helpers import make_stage
@@ -226,6 +234,224 @@ class TestResolvedParallelSettings:
         settings = {"repeat": 2, "max_concurrency": 2, "calls_per_sec": None, "max_rate_limit_delay": 60, field: value}
         with pytest.raises(StageExecutionError, match=field):
             _make_carrier_subclass()._run_iterations(make_stage(), ChainMap(), [{}, {}], ParallelRepeatConfig.model_construct(**settings))
+
+
+def _header_matcher(field: str) -> Verify:
+    """A matcher whose ``field`` is templated beside a static check, so it
+    still re-validates (a matcher needs one field set) once ``field`` is gone."""
+    static = "not_contains" if field == "contains" else "contains"
+    return Verify.model_validate({"headers": {"Location": {field: "{{ x }}", static: "/items"}}})
+
+
+class TestRenderedAwayFields:
+    """A field the scenario declared, whose template rendered to None, fails the
+    stage. walk() re-validates the rendered model, but an optional field accepts
+    None, so it arrived looking undeclared: the assertion went unchecked, the
+    setting unapplied, and the stage was green. Only ``status`` and
+    ``body.schema`` used to be guarded; the guard now covers every model the
+    carrier renders. Where validation rejects the None as well, the same message
+    replaces pydantic's report for it."""
+
+    RENDERS_NONE = ChainMap({"x": None})
+
+    @pytest.mark.parametrize(
+        ("where", "declared", "path"),
+        [
+            pytest.param("verify", Verify(status="{{ x }}"), "verify.status", id="verify-status"),
+            pytest.param("verify", Verify(body=ResponseBody(schema="{{ x }}")), "verify.body.schema", id="verify-body-schema"),
+            *(
+                pytest.param("verify", _header_matcher(field), f"verify.headers.Location.{field}", id=f"header-{field}")
+                for field in ("contains", "not_contains", "matches", "not_matches")
+            ),
+            # No limiter at all: the stage ran unthrottled.
+            pytest.param("parallel", ParallelRepeatConfig.model_validate({"repeat": 2, "calls_per_sec": "{{ x }}"}), "parallel.calls_per_sec", id="calls-per-sec"),
+            # Sent unauthenticated, or with the scenario-level credentials.
+            pytest.param("request", Request.model_validate({"url": "http://t/", "auth": "{{ x }}"}), "request.auth", id="request-auth"),
+            # Connected without the client certificate.
+            pytest.param("ssl", SSLConfig(cert="{{ x }}"), "ssl.cert", id="ssl-cert"),
+        ],
+    )
+    def test_rendered_away_field_is_refused(self, where, declared, path):
+        with pytest.raises(StageExecutionError) as excinfo:
+            _render_declared(declared, self.RENDERS_NONE, where)
+        assert str(excinfo.value) == f"'{path}' was declared as " + "'{{ x }}' but rendered to None, which would silently disable it"
+
+    @pytest.mark.parametrize(
+        ("where", "declared", "path"),
+        [
+            # A matcher's only field: pydantic's report asked the scenario to
+            # "set at least one of: contains, ..." — the field it did set.
+            pytest.param("verify", Verify.model_validate({"headers": {"Location": {"contains": "{{ x }}"}}}), "verify.headers.Location.contains", id="single-field-matcher"),
+            # A required field, which pydantic reported as "URL input should be
+            # a string or URL", naming neither the template nor the None.
+            pytest.param("request", Request.model_validate({"url": "{{ x }}"}), "request.url", id="required-field"),
+            # A user-function name is a RootModel, dumped as its bare root value.
+            pytest.param("auth", UserFunctionName("{{ x }}"), "auth", id="scenario-auth"),
+            pytest.param("verify", Verify.model_validate({"user_functions": ["{{ x }}"]}), "verify.user_functions[0]", id="function-name-in-a-list"),
+        ],
+    )
+    def test_rendered_away_field_validation_rejects_is_named(self, where, declared, path):
+        """Nothing is silently disabled here — validation rejects the None — but
+        the failure is still the guard's, naming the field and the template,
+        without the "silently disable" clause that would not be true."""
+        with pytest.raises(StageExecutionError) as excinfo:
+            _render_declared(declared, self.RENDERS_NONE, where)
+        assert str(excinfo.value) == f"'{path}' was declared as " + "'{{ x }}' but rendered to None"
+        assert isinstance(excinfo.value.__cause__, ValidationError)
+
+    @pytest.mark.parametrize(
+        "template",
+        [
+            pytest.param("{{ {'contains': x, 'not_contains': 'error'} }}", id="built-by-the-expression"),
+            # Saved whole from the response: a JMESPath multiselect such as
+            # `{contains: no_such_key, not_contains: 'error'}` gives the key null.
+            pytest.param("{{ matcher }}", id="saved-whole"),
+        ],
+    )
+    def test_matcher_rendered_whole_is_refused_too(self, template):
+        """A header matcher written as one template is a string until it renders,
+        so its fields are known only from the validated matcher: a key the
+        rendered mapping set to None is refused like a declared field (the static
+        sibling kept the matcher valid, and ``contains`` went unchecked)."""
+        context = self.RENDERS_NONE.new_child({"matcher": {"contains": None, "not_contains": "error"}})
+        with pytest.raises(StageExecutionError) as excinfo:
+            _render_declared(Verify.model_validate({"headers": {"Location": template}}), context, "verify")
+        assert str(excinfo.value) == f"'verify.headers.Location.contains' was declared as {template!r} but rendered to None, which would silently disable it"
+
+    @pytest.mark.parametrize(
+        ("declared", "context", "path", "invalid"),
+        [
+            # None is a valid auth: before, the refusal alone was reported, and
+            # the url error was only in its __cause__.
+            pytest.param(Request.model_validate({"url": "{{ u }}", "auth": "{{ x }}"}), {"u": "not a url", "x": None}, "request.auth", "url", id="beside-a-none-that-validates"),
+            pytest.param(
+                Verify.model_validate({"status": "{{ u }}", "headers": {"H": {"contains": "{{ x }}", "not_contains": "e"}}}),
+                {"u": 999, "x": None},
+                "verify.headers.H.contains",
+                "status",
+                id="beside-a-matcher-field",
+            ),
+            # None is invalid for timeout too, but that is the refusal's to say:
+            # the report lists only what else is wrong.
+            pytest.param(
+                Request.model_validate({"url": "{{ u }}", "timeout": "{{ x }}"}), {"u": "not a url", "x": None}, "request.timeout", "url", id="beside-a-none-that-is-rejected"
+            ),
+        ],
+    )
+    def test_other_validation_errors_are_reported_under_the_refusal(self, declared, context, path, invalid):
+        """A rendered-away field does not hide a validation error it did not
+        cause, nor take the blame for it: the refusal comes first, then
+        pydantic's report on the rest, found by validating again with the
+        declared templates back in place."""
+        with pytest.raises(StageExecutionError) as excinfo:
+            _render_declared(declared, context, path.split(".")[0])
+        refusal, report = str(excinfo.value).split("\n", 1)
+        assert refusal == f"'{path}' was declared as " + "'{{ x }}' but rendered to None"
+        assert {line.split(".")[0] for line in report.splitlines()[1:] if not line.startswith(" ")} == {invalid}
+
+    def test_invalid_value_other_than_none_keeps_the_validation_report(self):
+        """Only a rendered-away field is the guard's to name: any other value
+        validation rejects surfaces as pydantic reports it."""
+        with pytest.raises(ValidationError, match="timeout"):
+            _render_declared(Request.model_validate({"url": "http://t/", "timeout": "{{ x }}"}), {"x": "slow"}, "request")
+
+    @pytest.mark.parametrize(
+        ("declared", "context"),
+        [
+            pytest.param(Verify(), RENDERS_NONE, id="undeclared"),
+            pytest.param(Verify(status="{{ x }}"), {"x": 200}, id="rendered-to-a-value"),
+            # A JSON body of null, which request_builder sends as such.
+            pytest.param(Request.model_validate({"url": "http://t/", "body": {"json": "{{ x }}"}}), RENDERS_NONE, id="json-body"),
+            pytest.param(Verify(description="{{ x }}"), RENDERS_NONE, id="description"),
+            # Values handed on rather than fields left undeclared: a query
+            # parameter (httpx sends `?q=`), a user-function kwarg.
+            pytest.param(Request.model_validate({"url": "http://t/", "params": {"q": "{{ x }}"}}), RENDERS_NONE, id="param-value"),
+            pytest.param(Request.model_validate({"url": "http://t/", "auth": {"name": "mod:fn", "kwargs": {"token": "{{ x }}"}}}), RENDERS_NONE, id="kwarg-value"),
+            # The same in a call a template rendered whole: kwargs is a map.
+            pytest.param(
+                Request.model_validate({"url": "http://t/", "auth": "{{ call }}"}), {"call": {"name": "mod:fn", "kwargs": {"token": None}}}, id="kwarg-value-rendered-whole"
+            ),
+            # A matcher rendered whole checks only the keys it has: a left-out
+            # key was never declared.
+            pytest.param(Verify.model_validate({"headers": {"Location": "{{ matcher }}"}}), {"matcher": {"not_contains": "error"}}, id="matcher-rendered-whole"),
+        ],
+    )
+    def test_none_that_means_something_passes(self, declared, context):
+        _render_declared(declared, context, "model")
+
+    @pytest.mark.parametrize(
+        ("stage", "path", "sent"),
+        [
+            pytest.param({"parallel": {"repeat": 2, "calls_per_sec": "{{ x }}"}}, "parallel.calls_per_sec", 0, id="parallel"),
+            pytest.param({"request": {"url": "http://mock/ok", "auth": "{{ x }}"}}, "request.auth", 0, id="request"),
+            pytest.param(
+                {"response": [{"verify": {"headers": {"Location": {"contains": "{{ x }}", "not_contains": "error"}}}}]}, "verify.headers.Location.contains", 1, id="verify"
+            ),
+        ],
+    )
+    def test_stage_fails_instead_of_passing_green(self, stage, path, sent):
+        """Each of a stage's render sites is guarded: against a server
+        answering 200, every one of these stages used to pass. A bad setting
+        fails the stage before anything goes on the wire."""
+        requests = []
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: requests.append(request) or httpx.Response(200, headers={"Location": "/items/1"})))
+        cls = _make_carrier_subclass(client=client, global_context=self.RENDERS_NONE)
+        try:
+            with pytest.raises(pytest.fail.Exception, match=re.escape(f"'{path}' was declared as")):
+                cls.execute_stage(Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, **stage}), {})
+        finally:
+            client.close()
+        assert len(requests) == sent
+
+    @pytest.mark.parametrize(
+        ("stage", "error", "message"),
+        [
+            pytest.param(
+                {"request": {"url": "http://mock/ok", "auth": "{{ x }}"}},
+                RequestError,
+                "'request.auth' was declared as '{{ x }}' but rendered to None, which would silently disable it",
+                id="request",
+            ),
+            # Nothing to disable (a function name cannot be None), but the
+            # failure is still the named SaveError, not pydantic's report.
+            pytest.param(
+                {"response": [{"save": {"user_functions": ["{{ x }}"]}}]}, SaveError, "'save.user_functions[0]' was declared as '{{ x }}' but rendered to None", id="save"
+            ),
+            pytest.param(
+                {"response": [{"verify": {"status": "{{ x }}"}}]},
+                VerificationError,
+                "'verify.status' was declared as '{{ x }}' but rendered to None, which would silently disable it",
+                id="verify",
+            ),
+        ],
+    )
+    def test_each_step_refuses_with_its_own_error(self, stage, error, message):
+        """Every render site of an iteration goes through the guard, and the
+        refusal is that step's failure type."""
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+        cls = _make_carrier_subclass(client=client)
+        try:
+            with pytest.raises(StageExecutionError) as excinfo:
+                cls._execute_single_iteration(Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, **stage}), self.RENDERS_NONE, {})
+        finally:
+            client.close()
+        assert type(excinfo.value) is error
+        assert str(excinfo.value) == message
+
+    @pytest.mark.parametrize(
+        ("declared", "message"),
+        [
+            pytest.param({"ssl": {"cert": "{{ x }}"}}, "'ssl.cert' was declared as '{{ x }}' but rendered to None, which would silently disable it", id="ssl"),
+            pytest.param({"auth": "{{ x }}"}, "'auth' was declared as '{{ x }}' but rendered to None", id="auth"),
+        ],
+    )
+    def test_scenario_initialization_fails(self, declared, message):
+        """The scenario-level render sites: ``ssl`` and ``auth`` resolve once, at
+        initialization."""
+        scenario = Scenario.model_validate({"substitutions": [{"vars": {"x": None}}], **declared})
+        cls = _make_carrier_subclass(scenario=scenario, _initialized=False)
+        with pytest.raises(StageExecutionError, match=f"^{re.escape(f'Failed to initialize scenario: {message}')}$"):
+            cls._ensure_initialized()
 
 
 @pytest.mark.parametrize(

@@ -231,6 +231,43 @@ from fixtures or `combinations` parameters.
 
 Note: Comprehension length is limited by `httpchain_max_comprehension_length` config.
 
+### Templates that render to `null`
+
+A template can render to `null`: `get()` without a default, or a JMESPath save
+of a key the response did not have. On an optional setting or check, `null`
+reads as "not declared", so instead of quietly switching it off the stage
+fails, naming the field and the template as written:
+
+```
+'verify.headers.Content-Type.contains' was declared as '{{ expected_ct }}' but rendered to None, which would silently disable it
+```
+
+This covers every optional field that takes a template: `verify.status`,
+`verify.body.schema`, the header matcher fields (`contains`, `not_contains`,
+`matches`, `not_matches`), `parallel.calls_per_sec`, `request.auth`, and
+scenario-level `ssl.cert` (which fails scenario initialization: the first stage
+fails, and every later stage skips). A header matcher written as one template
+(`"Content-Type": "{{ matcher }}"`) is covered too: a key the rendered matcher
+sets to `null` fails, naming the field and that template, while a key it leaves
+out is simply not checked.
+
+A required field such as `url` or `timeout`, and a header matcher whose only
+field rendered to `null`, cannot be switched off, but they fail with the same
+message, naming the field and the template; it just ends at "rendered to None".
+An exact-match header string is a value in the `headers` map rather than a
+field, and fails validation when its template renders to `null`.
+
+If something else in the same request, verify step or setting is invalid too,
+pydantic's report on it follows the message, so the `null` is never blamed for
+an error it did not cause.
+
+Where `null` is itself a value, it is passed on as one:
+
+-   a JSON body (`"json": "{{ payload }}"`) sends the JSON document `null`;
+-   a query parameter or form field is sent with an empty value (`?q=`);
+-   an auth function kwarg or a substitution variable receives `None`;
+-   `always_run` is evaluated for truthiness, so `null` means "do not run".
+
 ## Stage-Level Substitutions
 
 Override or add variables for specific stages:

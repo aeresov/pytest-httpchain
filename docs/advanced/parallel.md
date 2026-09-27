@@ -95,6 +95,8 @@ This sends 1000 requests with:
 
 The limit is shared by the stage's concurrent iterations, and by them only: each stage execution gets a fresh in-process budget, so consecutive stages, other scenarios, and pytest-xdist workers are not throttled against each other (with `-n 4`, four scenarios using `calls_per_sec: 100` can together reach 400 rps against one API). When a request cannot get a slot, it waits up to `max_rate_limit_delay` seconds (default 60); if none frees up in that window the request fails with a `Rate limit exceeded` error.
 
+A `calls_per_sec` template that renders to `null` fails the stage before any request is sent, rather than running it unthrottled (see [Templates that render to `null`](../usage/substitutions.md#templates-that-render-to-null)).
+
 ## Foreach with Combinations
 
 ```json

@@ -98,6 +98,14 @@ def build_request_kwargs(request_model: Request, scenario_dir: Path | None = Non
         case None:
             pass
 
+        case JsonBody(json=None):
+            # httpx reads json=None as "no body", so a declared null — literal,
+            # or a template that rendered to None — went out exactly like an
+            # undeclared body. Sent as the JSON document it is instead.
+            request_kwargs["content"] = b"null"
+            if not any(name.lower() == "content-type" for name in request_model.headers):
+                request_kwargs["headers"] = {**request_model.headers, "Content-Type": "application/json"}
+
         case JsonBody(json=data):
             request_kwargs["json"] = data
 

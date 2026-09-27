@@ -18,6 +18,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template that draws them at random (`uuid4()`, `rand()`, `randint()`) gives every
   pytest-xdist worker different ids, and the run stops with "Different tests were collected";
   give such a step explicit `ids`, as `individual` and multi-key `combinations` already needed.
+- A template that renders to `null` no longer silently switches off an optional check or setting.
+  Only `verify.status` and `verify.body.schema` were guarded. A header matcher field such as
+  `{"Content-Type": {"contains": "{{ expected_ct }}", "not_contains": "text/html"}}`, with
+  `expected_ct` from a JMESPath save of a missing key, simply went unchecked and the stage passed;
+  `parallel.calls_per_sec: "{{ get('rate') }}"` without a `rate` ran the stage with no rate limit;
+  a stage-level `auth` sent the request unauthenticated, or with the scenario-level credentials
+  when the scenario had its own `auth`; `ssl.cert` connected without the client certificate.
+  Every model the engine renders is now compared with its declared form, and an optional field
+  whose template rendered to `null` fails the stage (for `ssl`, scenario initialization) naming
+  the field and the template as written:
+  `'verify.headers.Content-Type.contains' was declared as '{{ expected_ct }}' but rendered to None, which would silently disable it`.
+  Optional fields added later are covered too, and so is a matcher written as one template
+  (`"Content-Type": "{{ matcher }}"`, with `matcher` saved from the response): a key it sets to
+  `null` fails the same way, while a key it leaves out is simply not checked. The
+  `status`/`body.schema` failure now reads the same way, and so does a field where validation
+  rejects `null` anyway, with the message ending at "rendered to None": a matcher whose only
+  field rendered to `null` failed with "Header matcher must set at least one of: contains, ...",
+  asking for the field the scenario had set, and a required field such as `url` with pydantic's
+  type errors ("URL input should be a string or URL"); neither named the template. When
+  something else in the same model is invalid as well, pydantic's report on it follows the
+  message.
+- A JSON body of `null` is sent as the JSON document `null`. `{"json": null}`, or a `json` template
+  that rendered to `null`, went out as an empty request with no `Content-Type`, exactly like a
+  request without a body. It is now `null` with `Content-Type: application/json`, unless the
+  request sets its own content type.
 
 ## [0.15.2] - 2026-09-26
 

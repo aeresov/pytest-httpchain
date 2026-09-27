@@ -73,27 +73,10 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
     return step_saved
 
 
-def check_rendered_assertions(declared: Verify, rendered: Verify) -> None:
-    """Raise when an assertion the scenario declared rendered away to nothing.
-
-    ``status`` and ``body.schema`` are optional, so a template resolving to
-    ``None`` re-validates cleanly and `process_verify` would simply not run that
-    check — turning an upstream mistake (a JMESPath save of a missing key,
-    ``get()`` without a default) into a green stage. "Never declared" and
-    "declared but rendered to nothing" must never look the same to a test runner.
-    """
-    for field, declared_value, rendered_value in (
-        ("status", declared.status, rendered.status),
-        ("body.schema", declared.body.schema, rendered.body.schema),
-    ):
-        if declared_value is not None and rendered_value is None:
-            raise VerificationError(f"Verify '{field}' was declared as {declared_value!r} but rendered to None, which would silently drop the assertion")
-
-
 def process_verify(verify_model: Verify, response: httpx.Response, scenario_dir: Path | None = None) -> None:
     """Run one verify step's assertions, raising `VerificationError` on the first failure."""
-    # `is not None`, not truthiness: a rendered-away assertion must not be
-    # indistinguishable from an undeclared one (see `check_rendered_assertions`).
+    # `is not None`, not truthiness: None means undeclared, and only that — the
+    # carrier refuses an assertion a template rendered to None before this runs.
     if verify_model.status is not None and response.status_code != verify_model.status:
         raise VerificationError(f"Status code doesn't match: expected {verify_model.status}, got {response.status_code}")
 
@@ -116,10 +99,11 @@ def process_verify(verify_model: Verify, response: httpx.Response, scenario_dir:
 
     for i, expression in enumerate(verify_model.expressions):
         # An expression is a predicate, not a value. Truthiness alone would pass a
-        # stage on "{{ response.status }}" against a 500, and a template that
-        # rendered away to None needs no `check_rendered_assertions` entry here:
-        # the list keeps its declared length through substitution, so a vanished
-        # entry is a non-bool and fails right below.
+        # stage on "{{ response.status }}" against a 500, and an entry that
+        # rendered away to None needs nothing from the carrier's rendered-away
+        # guard (which watches model fields, not list items): the list keeps its
+        # declared length through substitution, so it is a non-bool and fails
+        # right below.
         if not isinstance(expression, bool):
             raise VerificationError(f"Verify expression {i} must evaluate to bool, got {type(expression).__name__} ({expression!r}), a value written where a condition belongs")
         if not expression:

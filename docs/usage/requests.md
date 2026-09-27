@@ -78,6 +78,9 @@
 }
 ```
 
+`"json": null`, or a template that renders to `null`, sends the JSON document
+`null` (with `Content-Type: application/json` unless the request sets its own).
+
 ### Form Data (URL-encoded)
 
 ```json

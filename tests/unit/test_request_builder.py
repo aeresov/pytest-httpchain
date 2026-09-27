@@ -5,6 +5,7 @@ tests/integration/test_body_types.py; this pins the mapping details and the
 error paths a server round trip cannot reach.
 """
 
+import httpx
 import pytest
 
 from pytest_httpchain.errors import RequestError
@@ -43,3 +44,19 @@ def test_allow_redirects_maps_to_follow_redirects(declared, follow):
     """httpx defaults follow_redirects to False, so silently dropping the
     mapping would flip the plugin's documented follow-by-default behavior."""
     assert build_request_kwargs(Request.model_validate({"url": "http://t/", **declared}))["follow_redirects"] is follow
+
+
+@pytest.mark.parametrize(
+    ("headers", "content_type"),
+    [({}, "application/json"), ({"content-type": "application/vnd.api+json"}, "application/vnd.api+json")],
+    ids=["default-content-type", "declared-content-type"],
+)
+def test_json_null_is_sent_as_a_json_document(headers, content_type):
+    """httpx reads ``json=None`` as "no body": a declared null (literal, or a
+    template that rendered to None) went out as an empty request with no
+    content type, exactly like an undeclared body."""
+    sent = []
+    with httpx.Client(transport=httpx.MockTransport(lambda request: sent.append(request) or httpx.Response(200))) as client:
+        client.request(**build_request_kwargs(Request.model_validate({"url": "http://t/", "method": "POST", "headers": headers, "body": {"json": None}})))
+    assert sent[0].content == b"null"
+    assert sent[0].headers.get_list("content-type") == [content_type]

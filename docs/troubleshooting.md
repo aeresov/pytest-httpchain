@@ -90,6 +90,15 @@ saved as `HTTPCHAIN004`, naming the stage *and* the phase it appears in.
 "{{ 'prefix_' + name }}"
 ```
 
+### "was declared as ... but rendered to None"
+
+A setting or check — a header matcher field, `verify.status`,
+`parallel.calls_per_sec`, `request.auth`, `ssl.cert`, `url`, ... — was written
+as a template that rendered to `null`, typically `get()` without a default or a
+JMESPath save of a key the response did not have. Fix where the value comes
+from, or give `get()` a default. See
+[Templates that render to `null`](usage/substitutions.md#templates-that-render-to-null).
+
 ### Comprehension Limits
 
 If you hit `MAX_COMPREHENSION_LENGTH` errors, either:

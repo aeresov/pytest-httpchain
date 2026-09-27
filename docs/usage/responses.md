@@ -48,6 +48,9 @@ Use template expressions:
 }
 ```
 
+A `status` template that renders to `null` fails the stage rather than skipping
+the check (see [Templates that render to `null`](substitutions.md#templates-that-render-to-null)).
+
 ### Headers
 
 A **string** value is matched by exact, full-string equality — not substring. A
@@ -84,6 +87,13 @@ Any combination of `contains`, `not_contains`, `matches`, `not_matches`
 An **absent** header behaves as an empty string for matcher forms — `contains`
 and `matches` fail, `not_contains` and `not_matches` pass vacuously. (Exact
 string form fails for an absent header, as before.)
+
+A matcher field whose template renders to `null` fails the stage, naming the
+field and the template, even when another field of the same matcher still holds
+a check: it is never quietly skipped. The same holds for a matcher written as
+one template, such as `"Content-Type": "{{ matcher }}"` with `matcher` saved
+from the response: a key it sets to `null` fails, and only a key it leaves out
+goes unchecked.
 
 ### Expression Verification
 

@@ -19,7 +19,7 @@ import threading
 import time
 import warnings
 from collections import ChainMap
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -30,14 +30,15 @@ from typing import Any, ClassVar
 
 import httpx
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, RootModel, ValidationError
 from pyrate_limiter import Duration, Limiter, Rate
 
-from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError
+from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.har_writer import Exchange
 from pytest_httpchain.models import (
     CombinationsParameter,
     IndividualParameter,
+    JsonBody,
     ParallelConfig,
     ParallelForeachConfig,
     ParallelRepeatConfig,
@@ -48,7 +49,7 @@ from pytest_httpchain.models import (
     VerifyStep,
 )
 from pytest_httpchain.request_builder import build_client_kwargs, build_request_kwargs
-from pytest_httpchain.response_steps import check_rendered_assertions, process_save, process_verify
+from pytest_httpchain.response_steps import process_save, process_verify
 from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     base_global_context,
@@ -58,7 +59,7 @@ from pytest_httpchain.scoping import (
     with_saves,
     with_stage_substitutions,
 )
-from pytest_httpchain.templates import TemplatesError, walk
+from pytest_httpchain.templates import TemplatesError, contains_template, walk
 from pytest_httpchain.utils import process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
 
@@ -155,6 +156,155 @@ def _parallel_values(field: str, value: Any) -> list[Any]:
     return value
 
 
+def _none_is_a_value(model: BaseModel, field: str) -> bool:
+    """The fields exempt from `_render_declared`: None there is something the
+    scenario can mean, not a setting that vanished — a JSON body of ``null``
+    (``request_builder`` sends it as such) and free-text descriptions."""
+    return field == "description" or (isinstance(model, JsonBody) and field == "json")
+
+
+# Where a value sits in a dumped model: field names and dict keys, list indices.
+type _Keys = tuple[str | int, ...]
+
+
+def _rendered_away(declared: Any, substituted: Any, keys: _Keys = ()) -> Iterator[tuple[_Keys, str]]:
+    """``(keys, template)`` for each model field that was declared but rendered
+    to None, ``keys`` locating it in ``substituted``.
+
+    ``substituted`` is ``declared`` dumped and substituted but not yet
+    validated, so it is read alongside the declared models, which say what is a
+    model field and what a dict value; dicts and lists are followed to the
+    models inside them (``verify.headers`` holds its matchers in a dict). Only
+    model fields count: a dict value or list item that renders to None — a query
+    parameter, a user-function kwarg — is a value handed on, not a field left
+    undeclared. Only a string can render to None (walk() maps containers
+    element-wise and dumps other models to dicts first), so what was declared is
+    always a template.
+    """
+
+    def field(declared_value: Any, substituted_value: Any, field_keys: _Keys) -> Iterator[tuple[_Keys, str]]:
+        if isinstance(declared_value, RootModel):
+            # Dumped as its bare root value, not as {"root": ...}: the root is the
+            # field, at the model's own place (a user-function name).
+            declared_value = declared_value.root
+        if declared_value is not None and substituted_value is None:
+            yield field_keys, declared_value
+        else:
+            yield from _rendered_away(declared_value, substituted_value, field_keys)
+
+    match declared, substituted:
+        case RootModel(), _:
+            yield from field(declared, substituted, keys)
+        case BaseModel(), dict():
+            for name in type(declared).model_fields:
+                if not _none_is_a_value(declared, name):
+                    yield from field(getattr(declared, name), substituted[name], (*keys, name))
+        case dict(), dict():
+            for key, declared_value in declared.items():
+                if key in substituted:
+                    yield from _rendered_away(declared_value, substituted[key], (*keys, key))
+        case list() | tuple(), list() | tuple():
+            # Substitution rewrites a sequence element-wise, so the lengths match.
+            for i, (declared_value, substituted_value) in enumerate(zip(declared, substituted, strict=True)):
+                yield from _rendered_away(declared_value, substituted_value, (*keys, i))
+
+
+def _rendered_whole_away(declared: Any, rendered: Any, keys: _Keys = ()) -> Iterator[tuple[_Keys, str]]:
+    """`_rendered_away` for a model that one template rendered whole: a header
+    matcher written as ``"{{ {'contains': ct, 'not_contains': 'text/html'} }}"``,
+    or saved from the response and used as ``"{{ matcher }}"``.
+
+    Declared as a single string, such a model's fields are known only once
+    validation has built it, so ``rendered`` is the validated model. A field the
+    rendered mapping set explicitly (``model_fields_set``) to None is refused; one
+    it left out was never declared.
+    """
+    match declared, rendered:
+        case BaseModel(), BaseModel() if type(declared) is type(rendered):
+            for name in type(declared).model_fields:
+                yield from _rendered_whole_away(getattr(declared, name), getattr(rendered, name), (*keys, name))
+        case (str() as template, BaseModel()) | (RootModel(root=str() as template), BaseModel()):
+            for name in type(rendered).model_fields:
+                if name in rendered.model_fields_set and getattr(rendered, name) is None and not _none_is_a_value(rendered, name):
+                    yield (*keys, name), template
+        case dict(), dict():
+            for key, declared_value in declared.items():
+                if key in rendered:
+                    yield from _rendered_whole_away(declared_value, rendered[key], (*keys, key))
+        case list() | tuple(), list() | tuple():
+            for i, (declared_value, rendered_value) in enumerate(zip(declared, rendered, strict=True)):
+                yield from _rendered_whole_away(declared_value, rendered_value, (*keys, i))
+
+
+def _replaced(structure: Any, keys: _Keys, value: Any) -> Any:
+    """``structure`` with ``value`` at ``keys``, copied along the way."""
+    if not keys:
+        return value
+    key, rest = keys[0], keys[1:]
+    if isinstance(structure, dict):
+        return {**structure, key: _replaced(structure[key], rest, value)}
+    return type(structure)(_replaced(item, rest, value) if i == key else item for i, item in enumerate(structure))
+
+
+def _render_declared[M: BaseModel](declared: M, context: Mapping[str, Any], where: str, error: type[StageExecutionError] = StageExecutionError) -> M:
+    """``walk()`` a declared scenario model, refusing any field a template
+    rendered to None.
+
+    walk() re-validates what it renders, but an optional field accepts None: a
+    template that rendered away — a JMESPath save of a missing key, ``get()``
+    without a default — validates cleanly, and the consumer then treats the field
+    as never declared. A header matcher or ``verify.status`` goes unchecked,
+    ``calls_per_sec`` stops limiting, ``ssl.cert`` or ``auth`` is not applied,
+    and the stage is green. "Never declared" and "declared but rendered to
+    nothing" must never look the same, so every model the carrier renders goes
+    through here, and a new optional field is covered without being listed:
+    exempting one (`_none_is_a_value`) is the explicit choice. ``where`` names
+    the model in the message; ``error`` is the failure type of the step. A model
+    one template rendered whole (a header matcher written as ``"{{ matcher }}"``)
+    has no declared fields to compare, so it is checked once validated
+    (`_rendered_whole_away`).
+
+    The substituted form is checked before validation judges it. Where the None
+    is also invalid — a matcher's only field, a required field such as ``url`` —
+    pydantic's report names neither the template nor the None (a matcher's even
+    asks for a field the scenario did set), so the same message is raised
+    instead, without the claim that the None would have disabled anything. Which
+    errors the Nones account for is settled by putting the declared templates
+    back, which validated in those places before: whatever still fails is
+    reported as pydantic has it, under the refusal.
+    """
+    # walk()'s own model step (hands back a model with no template untouched;
+    # otherwise dump, substitute, re-validate), taken apart at the re-validation.
+    if not contains_template(declared):
+        return declared
+    model = type(declared)
+    substituted = walk(declared.model_dump(mode="python"), context)
+    vanished = list(_rendered_away(declared, substituted))
+    try:
+        rendered = model.model_validate(substituted)
+    except ValidationError as e:
+        if not vanished:
+            raise
+        refusal = _rendered_to_none(where, *vanished[0])
+        restored = substituted
+        for keys, template in vanished:
+            restored = _replaced(restored, keys, template)
+        try:
+            model.model_validate(restored)
+        except ValidationError as other:
+            raise error(f"{refusal}\n{other}") from e
+        raise error(refusal) from e
+    vanished = vanished or list(_rendered_whole_away(declared, rendered))
+    if vanished:
+        raise error(f"{_rendered_to_none(where, *vanished[0])}, which would silently disable it")
+    return rendered
+
+
+def _rendered_to_none(where: str, keys: _Keys, template: str) -> str:
+    path = where + "".join(f"[{key}]" if isinstance(key, int) else f".{key}" for key in keys)
+    return f"'{path}' was declared as {template!r} but rendered to None"
+
+
 def fresh_scenario_state() -> dict[str, Any]:
     """The per-scenario mutable class state, in its pristine form.
 
@@ -231,8 +381,8 @@ class Carrier:
                 if not cls._context_resolved_at_collection:
                     cls.global_context = base_global_context(process_substitutions(scenario.substitutions))
 
-                resolved_ssl = walk(scenario.ssl, cls.global_context)
-                resolved_auth = walk(scenario.auth, cls.global_context) if scenario.auth else None
+                resolved_ssl = _render_declared(scenario.ssl, cls.global_context, "ssl")
+                resolved_auth = _render_declared(scenario.auth, cls.global_context, "auth") if scenario.auth else None
                 cls.client = httpx.Client(**build_client_kwargs(resolved_ssl, resolved_auth, cls.scenario_dir))
             except Exception as e:
                 cls._init_failed = str(e)
@@ -305,7 +455,7 @@ class Carrier:
                 logger.debug("global context on start: %s", _context_dump(cls.global_context))
                 logger.debug("local context on start: %s", _context_dump(local_context))
 
-            parallel_config: ParallelConfig | None = walk(stage.parallel, local_context) if stage.parallel else None
+            parallel_config: ParallelConfig | None = _render_declared(stage.parallel, local_context, "parallel") if stage.parallel else None
             iteration_substitutions = cls._build_iteration_substitutions(parallel_config, cls.max_parallel_iterations)
 
             total = len(iteration_substitutions)
@@ -475,6 +625,8 @@ class Carrier:
                 # Guarded rather than cast: the config arrives walk()-resolved,
                 # and a resolved value can still be unusable (see `_parallel_number`).
                 max_concurrency = _parallel_int("max_concurrency", parallel_config.max_concurrency)
+                # None is "never declared" here: `_render_declared` already
+                # refused a template that rendered to None.
                 calls_per_sec = _parallel_int("calls_per_sec", parallel_config.calls_per_sec) if parallel_config.calls_per_sec is not None else None
                 max_rate_limit_delay = _parallel_number("max_rate_limit_delay", parallel_config.max_rate_limit_delay)
                 limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec is not None else None
@@ -589,9 +741,9 @@ class Carrier:
 
         iter_context = iteration_context(local_context, iter_vars)
 
-        # walk() re-validates the model it substitutes into, so no further
+        # Rendering re-validates the model it substitutes into, so no further
         # model_validate is needed here.
-        request_model = walk(stage.request, iter_context)
+        request_model = _render_declared(stage.request, iter_context, "request", RequestError)
         request_kwargs = build_request_kwargs(request_model, cls.scenario_dir)
 
         if limiter is not None and not cls._acquire_rate_slot(limiter, max_rate_limit_delay, cancel):
@@ -624,7 +776,7 @@ class Carrier:
                         # and re-evaluate already-rendered values — so response-
                         # derived text containing '{{ }}' would be executed as an
                         # expression.
-                        save_model = step.save if isinstance(step.save, SubstitutionsSave) else walk(step.save, step_context)
+                        save_model = step.save if isinstance(step.save, SubstitutionsSave) else _render_declared(step.save, step_context, "save", SaveError)
                         step_saved = process_save(save_model, response, step_context)
                         # The static HTTPCHAIN027 check cannot see dynamically
                         # produced keys, so the shadowing is surfaced here too.
@@ -645,12 +797,10 @@ class Carrier:
                         saved_context.update(step_saved)
 
                     case VerifyStep():
-                        verify_model = walk(step.verify, step_context)
-                        # Compared against the pre-walk step, the only place both
-                        # forms are in scope: process_verify sees the rendered
-                        # model alone and cannot tell an absent assertion from
-                        # one a template rendered away.
-                        check_rendered_assertions(step.verify, verify_model)
+                        # Through the guard, not a bare walk(): process_verify sees
+                        # the rendered model alone and cannot tell an absent
+                        # assertion from one a template rendered away.
+                        verify_model = _render_declared(step.verify, step_context, "verify", VerificationError)
                         process_verify(verify_model, response, cls.scenario_dir)
 
                     case _:
