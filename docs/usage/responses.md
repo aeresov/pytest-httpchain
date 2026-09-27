@@ -28,6 +28,20 @@ Or using dictionary format for organization:
 
 ## Verify Steps
 
+A verify step holds any mix of the checks below. They run in this order, and
+the first that fails fails the stage:
+
+1. `status`
+2. `headers`
+3. `jmespath`
+4. `expressions`
+5. `user_functions`
+6. `body.schema`
+7. `body.contains`, `body.not_contains`, `body.matches`, `body.not_matches`
+
+The entries of one check run in the order they are written. To run checks in
+another order, put them in separate verify steps: steps run in order too.
+
 ### Status Code
 
 ```json
@@ -164,9 +178,147 @@ one template, such as `"Content-Type": "{{ matcher }}"` with `matcher` saved
 from the response: a key it sets to `null` fails, and only a key it leaves out
 goes unchecked.
 
+### JMESPath Assertions
+
+`jmespath` asserts on the JSON response body directly. Each key is a
+[JMESPath](https://jmespath.org) expression, and its value is what the
+expression must give: a value to equal, or a matcher object.
+
+```json
+{
+    "verify": {
+        "jmespath": {
+            "data.id": "{{ user_id }}",
+            "length(items)": 3,
+            "items[0].name": {"matches": "^A"},
+            "meta": {"eq": {"page": 1}},
+            "price": {"gt": 0, "lt": 100},
+            "tags": {"contains": "new", "length": 2},
+            "deleted_at": null
+        }
+    }
+}
+```
+
+A **value** that is not an object (a string, number, boolean, `null` or array)
+must equal what the expression gives, by JSON equality: a boolean never equals
+a number (`true` is not `1`), an integer equals the same number written with a
+fraction (`1` is `1.0`), and arrays and objects are compared element by
+element with the same rules. Text is not a number either: `"42"` does not equal
+`42`.
+
+An **object** is always a matcher, and every key it sets must hold:
+
+| Key | Holds when the value... |
+|-----|-------------------------|
+| `eq` | equals the operand (JSON equality, as above) |
+| `ne` | does not equal the operand |
+| `gt`, `ge`, `lt`, `le` | is a number `>`, `>=`, `<`, `<=` the operand, which is a number too |
+| `contains` | is a string holding the operand as a substring, an array holding an element equal to it, or an object holding it as a key |
+| `not_contains` | is a string, array or object that does not |
+| `matches` | is a string the operand, a regex, matches (`re.search`) |
+| `not_matches` | is a string the regex does not match |
+| `type` | is of that JSON type: `string`, `number`, `integer`, `boolean`, `array`, `object` or `null` |
+| `length` | is a string, array or object of that many characters, elements or keys |
+
+`integer` is a number written without a fraction or exponent (`1`, not `1.0`
+or `1e0`), `number` is any number, and neither is a boolean. A value a key
+cannot judge fails the check rather than passing it: `gt` on a string,
+`matches` on a number, `contains` on `null`.
+
+To compare with an object, give it as `eq`: `"meta": {"eq": {"page": 1}}`. A
+literal object in its place is a matcher with unknown keys, and fails
+validation saying so:
+
+```
+An object here is a matcher, and 'page' is not one of its keys (eq, ne, gt, ge, lt, le,
+contains, not_contains, matches, not_matches, type, length); to compare with an object,
+give it as eq: {"eq": {...}}
+```
+
+A literal object whose keys all happen to be a matcher's is read as that
+matcher. When its values are no operands (`"role": {"type": "admin"}`), it
+fails validation with the matcher's own errors and the same hint beside them.
+When they are (`{"type": "string"}`, a JSON Schema fragment), it is a valid
+matcher and checks as one, so an object like that must be given as `eq` to be
+compared: `{"eq": {"type": "string"}}`.
+
+A failure names the expression, what was expected and what the body held,
+the last cut short when it is long:
+
+```
+JMESPath 'data.id' doesn't match: expected 42, got 43
+JMESPath 'price' doesn't match: expected lt 100, got 120.5
+JMESPath 'tags' doesn't match: expected length 2, got ["new"] (length 1)
+JMESPath 'name': gt needs a number, got "Alice" (string)
+```
+
+The body is parsed once per verify step, by the first check that reads it,
+`jmespath` or `body.schema`; one that is not JSON fails the stage
+(`Cannot check verify.jmespath, response is not valid JSON: ...`), and so does
+one nested too deeply for Python's parser. So does an expression that cannot
+be evaluated against the body, naming why: a function given a value it does
+not take (`JMESPath 'keys(items)' cannot be evaluated against the response
+body: keys() needs object, got [1, 2] (array)`) or an array holding one
+(`join() needs array-string, got an array holding 1 (number)`), `ceil()` of a
+number too large for Python (`1e400`), or a function JMESPath does not have or
+a wrong number of arguments, which it finds only when it calls the function,
+so `validate` does not.
+
+**Templates.** Values and matcher operands take templates, rendered like every
+other verify field's: against the context, the `response` namespace and what
+earlier steps saved. Keys are JMESPath and are never rendered, so a template
+in one is caught: `"data.{{ field }}"` is not valid JMESPath and fails
+validation saying a key cannot hold a template, and one that still is (a
+quoted string such as `"'{{ x }}'"`, evaluated as written) gets the
+`HTTPCHAIN029` warning. Put the template in the value the key maps to.
+
+What is written decides what a template renders, not what it renders to. A
+template written where a value goes renders the value to compare with, an
+object included, whatever its keys: `"meta": "{{ saved_meta }}"` passes only
+when `meta` equals the object saved earlier, by JSON equality. A matcher is
+written as an object, and its operands take templates
+(`"price": {"gt": "{{ low }}", "lt": "{{ high }}"}`); unlike a
+[header matcher](#headers), it cannot come whole from one
+template. A header's expected value is a string, so an object rendered there
+can only be a matcher; a JMESPath value can be any JSON, an object too.
+
+A value template that renders to `null` is compared with `null`, since `null`
+is a value there. A matcher operand's template that renders to `null` fails
+the stage instead, naming the operand and the template, as other checks do
+(see [Templates that render to `null`](substitutions.md#templates-that-render-to-null)):
+it most likely lost the value it was written for. To compare with `null`,
+write `null`.
+
+**Missing paths.** JMESPath gives `null` for a path that is not there, so
+`null`, `{"eq": null}` and `{"type": "null"}` pass both for a missing key and
+for a key holding `null`, and `{"ne": null}` fails both. Where the difference
+matters, ask the object holding the key: `contains` on an object tests its
+keys.
+
+```json
+{
+    "verify": {
+        "jmespath": {
+            "data": {"contains": "deleted_at"},
+            "data.deleted_at": null
+        }
+    }
+}
+```
+
+passes only when `deleted_at` is there and `null`; `{"not_contains":
+"deleted_at"}` passes only when it is missing.
+
 ### Expression Verification
 
-Evaluate template expressions, each of which must evaluate to a boolean. Expressions are evaluated against the **context** — saved variables, fixtures, and substitutions — plus the reserved **`response` metadata namespace** (see below). For response *body* data, save what you want to assert on first, then reference it:
+Evaluate template expressions, each of which must evaluate to a boolean. Expressions are evaluated against the **context** — saved variables, fixtures, and substitutions — plus the reserved **`response` metadata namespace** (see below).
+
+To check one value in the body, use [`jmespath`](#jmespath-assertions).
+Expressions are for logic across values: two fields compared with each other,
+a sum, a value against the response metadata. Save the body values the
+expression needs first, then reference them; the saved names stay in the
+context for later steps and stages:
 
 ```json
 {
@@ -174,16 +326,15 @@ Evaluate template expressions, each of which must evaluate to a boolean. Express
         {
             "save": {
                 "jmespath": {
-                    "items": "items",
-                    "status": "status"
+                    "total": "total",
+                    "prices": "items[*].price"
                 }
             }
         },
         {
             "verify": {
                 "expressions": [
-                    "{{ len(items) > 0 }}",
-                    "{{ status == 'ok' }}"
+                    "{{ total == sum(prices) }}"
                 ]
             }
         }
@@ -233,7 +384,8 @@ The name `response` is reserved inside response steps: a variable, save, or
 fixture with that name is shadowed there (the validator warns with
 `HTTPCHAIN027`). It is only in scope in response steps — referencing it in a
 request template is an error. The response **body** is deliberately not in the
-namespace; extract body data with a `save` step.
+namespace; assert on body data with [`jmespath`](#jmespath-assertions), or
+extract it with a `save` step.
 
 Response facets beyond the metadata — e.g. the raw body text — can be captured with a [save user function](#user-function-save), which receives the `httpx.Response`:
 
@@ -512,6 +664,11 @@ def extract_with_args(response: httpx.Response, key: str) -> dict[str, Any]:
                         "status": 201,
                         "headers": {
                             "Content-Type": "application/json; charset=utf-8"
+                        },
+                        "jmespath": {
+                            "name": "Test User",
+                            "id": {"type": "integer"},
+                            "created_at": {"ne": null}
                         }
                     }
                 },
@@ -544,9 +701,10 @@ def extract_with_args(response: httpx.Response, key: str) -> dict[str, Any]:
                 {
                     "verify": {
                         "status": 200,
-                        "expressions": [
-                            "{{ created_at is not None }}"
-                        ]
+                        "jmespath": {
+                            "id": "{{ user_id }}",
+                            "created_at": "{{ created_at }}"
+                        }
                     }
                 }
             ]

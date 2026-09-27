@@ -10,7 +10,7 @@ import types
 import xml.etree.ElementTree
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, get_args
 
 import graphql
 import httpx
@@ -25,6 +25,8 @@ from pydantic import (
     Field,
     JsonValue,
     PlainSerializer,
+    StrictFloat,
+    StrictInt,
     TypeAdapter,
     ValidatorFunctionWrapHandler,
     WithJsonSchema,
@@ -87,6 +89,24 @@ def validate_json_schema_inline(v: dict[str, Any]) -> dict[str, Any]:
 
 
 validate_jmespath_expression = create_string_validator(jmespath.compile, "Invalid JMESPath expression")
+
+
+def validate_jmespath_key(v: str) -> str:
+    """A ``verify.jmespath`` key: a JMESPath expression, which is never rendered.
+
+    Only values are substituted, so a template in a key reaches JMESPath as
+    written, and ``{{`` is not JMESPath: a key with one that fails to compile
+    is refused saying why. One that compiles (``'{{ x }}'``, a JMESPath string
+    literal) is HTTPCHAIN029's to report, as a templated key is anywhere.
+    """
+    try:
+        jmespath.compile(v)
+    except Exception as e:
+        if re.search(TEMPLATE_PATTERN, v):
+            raise ValueError("Invalid JMESPath expression: a key is never rendered, only the value it maps to, so it cannot hold a template") from e
+        raise ValueError("Invalid JMESPath expression") from e
+    return v
+
 
 validate_regex_pattern = create_string_validator(re.compile, "Invalid regular expression")
 
@@ -174,6 +194,7 @@ def convert_namespace_items_to_dict(v: Any) -> Any:
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
 FunctionImportName = Annotated[str, AfterValidator(validate_function_import_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
+JMESPathKey = Annotated[str, AfterValidator(validate_jmespath_key)]
 JSONSchemaInline = Annotated[dict[str, Any], AfterValidator(validate_json_schema_inline)]
 SerializablePath = Annotated[Path, PlainSerializer(lambda x: str(x), return_type=str)]
 RegexPattern = Annotated[str, AfterValidator(validate_regex_pattern)]
@@ -442,6 +463,16 @@ def is_status_class(value: object) -> bool:
     that is neither."""
     return isinstance(value, str) and re.fullmatch(_STATUS_CLASS_PATTERN, value) is not None
 
+
+# `verify.jmespath` operands, compared with values a JSON body holds.
+# A number as JSON has it: an int or a float, never a bool (an int to Python)
+# and never text, so a template rendering "5" is refused, not compared as 5.
+JsonNumber = StrictInt | StrictFloat
+# A length is a count: a non-negative int, as strictly.
+JsonLength = Annotated[StrictInt, Field(ge=0)]
+# The JSON types a `type` matcher names, spelled as JSON Schema spells them.
+JsonTypeName = Literal["string", "number", "integer", "boolean", "array", "object", "null"]
+JSON_TYPE_NAMES: tuple[str, ...] = get_args(JsonTypeName)
 
 Base64String = Annotated[str, AfterValidator(validate_base64)]
 NamespaceFromDict = Annotated[Any, AfterValidator(convert_dict_to_namespace)]

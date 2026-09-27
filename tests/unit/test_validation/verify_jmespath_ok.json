@@ -1,0 +1,23 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/users/1" },
+            "response": [
+                { "save": { "jmespath": { "owner": "data.owner" } } },
+                {
+                    "verify": {
+                        "jmespath": {
+                            "data.id": "{{ owner }}",
+                            "code": "{{ response.status }}",
+                            "length(data.tags)": 2,
+                            "data.name": { "matches": "^A", "type": "string" },
+                            "data.meta": { "eq": { "page": 1 } },
+                            "data.deleted_at": null
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

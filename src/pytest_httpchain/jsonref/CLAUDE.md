@@ -19,11 +19,20 @@ Features:
 ## Public API
 
 ```python
-from pytest_httpchain.jsonref import load_json, ReferenceResolverError, InvalidJSONError
+from pytest_httpchain.jsonref import load_json, json_equal, ReferenceResolverError, InvalidJSONError
 
 # Load JSON with $ref resolution
 data = load_json(path, max_parent_traversal_depth=3, root_path=None, opaque=None, atomic=None)
+
+# Equality as JSON means it: True is not 1, 1 is 1.0, containers compared member by member
+json_equal([True, {"a": 1}], [True, {"a": 1.0}])  # True
+json_equal([True], [1])  # False
 ```
+
+`json_equal` is the one definition of JSON equality in the plugin: the sibling
+merge uses it (an equal value keeps, a different one conflicts), and so do
+`verify.jmespath` (`response_steps`) and the validator's contradiction checks
+on it. It lives here, the lowest layer that needs it, so all three agree.
 
 ### Opaque subtrees
 
@@ -48,9 +57,20 @@ recursive dict merge — two foreign-vocabulary subtrees are never blended.
 matching position merges atomically, as an opaque one does, but its content
 is resolved as usual (a `$include` inside it still works). It is for lists
 whose entries are alternatives, where concatenation would widen what they
-accept: pytest-httpchain passes `validation.is_alternatives_position`, which
-matches `verify.status`. Both predicates compose across file boundaries the
-same way.
+accept, and for values that are one expected value, where concatenating or
+blending would assert what neither side wrote: pytest-httpchain passes
+`validation.merges_whole`, which matches `verify.status`, each
+`verify.jmespath` expectation and each operand of a matcher there. Both
+predicates compose across file boundaries the same way.
+
+The merge root itself is exempt from `atomic`: a reference written *at* an
+atomic position with siblings beside it (`{"$merge": "common.json#/price",
+"lt": 100}`) is one value composed on purpose, not two written for the same
+position, so it merges key by key as anywhere else. Only a value that arrives
+at the position from both sides of an enclosing reference is kept whole. So
+the consumer marks the positions one level down too when they hold one value
+each (a matcher's operands): there two values *are* written for the same
+position, and a key by key merge of the root must still keep each whole.
 
 ## Key Behaviors
 
@@ -64,7 +84,7 @@ All three directives (`$include`, `$merge`, `$ref`) work identically:
 A relative reference path is tried against the referencing file's directory first, then against `root_path`; the first existing file wins. When BOTH exist, the file-relative one is used and `AmbiguousReferenceWarning` (from `pytest_httpchain.warnings`) is emitted — the validator surfaces it as `HTTPCHAIN026`.
 
 ### Deep Merging
-When `$include` (or `$ref`) has sibling properties, they are merged **additively** with the referenced content: sibling keys are added, lists are **concatenated** (except at opaque and atomic positions), and nested dicts are merged recursively. There is **no** last-wins override — a sibling that would override an existing scalar (or conflicts by type) raises `ReferenceResolverError` (`Merge conflict at <path>`) rather than silently winning. `null` is a value like any other (not an override or a hole): a `null` paired with a different value at the same path is a conflict, while equal values — including two `null`s — merge fine. The whole policy lives in ONE place, `plumbing/reference.py`: `_SIBLING_MERGER` (a custom `deepmerge.Merger`) whose fallback and type-conflict strategies raise through `_raise_on_conflict`, and `_build_atomic_aware_merger`, the same merger with the opaque and atomic positions kept whole by that same function.
+When `$include` (or `$ref`) has sibling properties, they are merged **additively** with the referenced content: sibling keys are added, lists are **concatenated** (except at opaque and atomic positions), and nested dicts are merged recursively. There is **no** last-wins override — a sibling that would override an existing scalar (or conflicts by type) raises `ReferenceResolverError` (`Merge conflict at <path>`) rather than silently winning. Equal is `json_equal`, at any depth, so a position kept whole conflicts on `[true]` against `[1]`. `null` is a value like any other (not an override or a hole): a `null` paired with a different value at the same path is a conflict, while equal values — including two `null`s — merge fine. The whole policy lives in ONE place, `plumbing/reference.py`: `_SIBLING_MERGER` (a custom `deepmerge.Merger`) whose fallback and type-conflict strategies raise through `_raise_on_conflict`, and `_build_atomic_aware_merger`, the same merger with the opaque and atomic positions kept whole by that same function.
 ```json
 {
   "$include": "base.json",

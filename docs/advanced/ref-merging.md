@@ -191,6 +191,8 @@ A `$ref` (or `$include`/`$merge`) and its sibling properties are combined by **a
 
 `null` is not an exception: it is a value like any other, not an override or a hole. A `null` paired with a different value at the same path is a merge conflict; two `null`s merge fine.
 
+Equal means equal as JSON, at any depth: `true` and `1` differ, and so do `[true]` and `[1]`, while `1` and `1.0` are one value.
+
 > **References add, they don't override.** To change a value a fragment already sets, don't merge over it — keep that key out of the shared fragment (so the local scenario is its only writer), or point the `$ref` at a sub-node that omits it. Trying to replace a referenced scalar with a different one is a load-time error by design, so a shared fragment can never be silently contradicted.
 
 ### Status lists merge whole
@@ -220,6 +222,59 @@ Merge conflict at verify.status
 
 To accept more codes, list them all in one place. A reference *inside* `status`
 (`"status": {"$include": "codes.json#/accepted"}`) still resolves as usual.
+
+### JMESPath expectations merge whole
+
+What one [`verify.jmespath`](../usage/responses.md#jmespath-assertions)
+expression must give is one value, so it merges like a scalar too. Concatenated,
+a sibling's `["b"]` on a fragment's `["a"]` would assert `["a", "b"]`, which
+neither wrote, and two objects under `eq` would blend into a third. An equal
+expectation is kept and a different one, a matcher included, is a merge
+conflict; different expressions still merge side by side:
+
+**common.json:**
+```json
+{
+    "checks": {"verify": {"jmespath": {"tags": ["a"], "price": {"gt": 0}, "meta": {"eq": {"page": 1}}}}}
+}
+```
+
+```json
+{"$merge": "common.json#/checks", "verify": {"jmespath": {"count": 3}}}
+```
+
+adds the `count` check to the fragment's three, while
+
+```json
+{"$merge": "common.json#/checks", "verify": {"jmespath": {"price": {"lt": 100}}}}
+```
+
+fails with `Merge conflict at verify.jmespath.price`: write the whole matcher
+in one place, or build it from the shared one by writing the reference at the
+expectation itself. There its siblings are one value composed on purpose, not
+a second one written for the same expression, so they merge key by key:
+
+```json
+{"verify": {"jmespath": {"price": {"$merge": "common.json#/checks/verify/jmespath/price", "lt": 100}}}}
+```
+
+checks `{"gt": 0, "lt": 100}`. A key both sides give is one operand, and must
+still agree whole, an array or an object as much as a number:
+
+```json
+{"verify": {"jmespath": {"meta": {"$merge": "common.json#/checks/verify/jmespath/meta", "eq": {"size": 2}}}}}
+```
+
+fails with `Merge conflict at eq` rather than checking `{"page": 1, "size": 2}`,
+which neither side wrote, and two `contains` arrays conflict rather than
+concatenate. To build an operand from a shared one, write the reference inside
+it:
+
+```json
+{"verify": {"jmespath": {"meta": {"eq": {"$merge": "common.json#/checks/verify/jmespath/meta/eq", "size": 2}}}}}
+```
+
+checks `{"eq": {"page": 1, "size": 2}}`.
 
 ## Composing Scenarios
 

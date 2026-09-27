@@ -10,12 +10,31 @@ value.
 import warnings
 from collections.abc import Callable
 from contextlib import contextmanager
+from dataclasses import dataclass
 from http import HTTPMethod, HTTPStatus
 from types import SimpleNamespace
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, LiteralString, Self, cast
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, JsonValue, PositiveFloat, PositiveInt, RootModel, Tag, TypeAdapter, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Discriminator,
+    Field,
+    JsonValue,
+    PositiveFloat,
+    PositiveInt,
+    RootModel,
+    Tag,
+    TypeAdapter,
+    ValidationError,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    WithJsonSchema,
+    model_validator,
+)
 from pydantic.json_schema import JsonDict
+from pydantic_core import InitErrorDetails, PydanticCustomError
 
 from pytest_httpchain.models.types import (
     Base64String,
@@ -25,7 +44,11 @@ from pytest_httpchain.models.types import (
     HttpMethodToken,
     HttpUrlReferenceStr,
     JMESPathExpression,
+    JMESPathKey,
+    JsonLength,
+    JsonNumber,
     JSONSchemaInline,
+    JsonTypeName,
     NamespaceFromDict,
     NamespaceOrDict,
     NumberOrTemplate,
@@ -596,6 +619,158 @@ class HeaderMatcher(StrictModel):
         return self
 
 
+# An operand compared as JSON. A template over `vars` renders an object as a
+# SimpleNamespace, which stands for the object it was written as.
+_JsonOperand = Annotated[JsonValue, BeforeValidator(convert_namespace_to_dict)]
+
+
+def _operand_schema(schema: JsonDict) -> None:
+    """A matcher key's schema: no default, which an editor would offer (a key
+    left out is not a check), and no null where null is not an operand."""
+    schema.pop("default", None)
+    branches = schema.get("anyOf")
+    if isinstance(branches, list) and {"type": "null"} in branches:
+        branches.remove({"type": "null"})
+        if len(branches) == 1 and isinstance(only := branches[0], dict):
+            del schema["anyOf"]
+            schema.update(only)
+
+
+_EQ_HINT = 'to compare with an object, give it as eq: {"eq": {...}}'
+
+# The validation context of a model re-validated once its templates rendered
+# (`validate_rendered_verify`): it validated as declared before, so what can
+# fail now is a rendered value, never how the scenario was written.
+_RENDERED = object()
+
+
+class JMESPathMatcher(StrictModel):
+    """Matcher for the value one JMESPath expression extracts from the response
+    body; every key given must hold. To compare with an object, give it as eq."""
+
+    model_config = ConfigDict(json_schema_extra={"minProperties": 1})
+
+    # A key the scenario sets is a check, one it leaves out is not
+    # (`model_fields_set`): a null operand is compared like any other JSON value
+    # where one can be (eq, ne, contains, not_contains), so None cannot stand
+    # for "not set" there, and elsewhere null is refused.
+    NULL_OPERANDS: ClassVar[frozenset[str]] = frozenset({"eq", "ne", "contains", "not_contains"})
+
+    eq: _JsonOperand = Field(default=None, description="Equal to this JSON value (true is not 1; 1 equals 1.0).", json_schema_extra=_omit_schema_default)
+    ne: _JsonOperand = Field(default=None, description='Not equal to this JSON value; {"ne": null} for a value that is there and not null.', json_schema_extra=_omit_schema_default)
+    gt: JsonNumber | TemplateExpressionOnly | None = Field(default=None, description="A number greater than this.", json_schema_extra=_operand_schema)
+    ge: JsonNumber | TemplateExpressionOnly | None = Field(default=None, description="A number greater than or equal to this.", json_schema_extra=_operand_schema)
+    lt: JsonNumber | TemplateExpressionOnly | None = Field(default=None, description="A number less than this.", json_schema_extra=_operand_schema)
+    le: JsonNumber | TemplateExpressionOnly | None = Field(default=None, description="A number less than or equal to this.", json_schema_extra=_operand_schema)
+    contains: _JsonOperand = Field(
+        default=None,
+        description="A string holding this substring, an array holding an element equal to this, or an object holding this key.",
+        json_schema_extra=_omit_schema_default,
+    )
+    not_contains: _JsonOperand = Field(
+        default=None,
+        description="A string without this substring, an array without an element equal to this, or an object without this key.",
+        json_schema_extra=_omit_schema_default,
+    )
+    matches: RegexPattern | PartialTemplateStr | None = Field(default=None, description="A string this regex matches (re.search).", json_schema_extra=_operand_schema)
+    not_matches: RegexPattern | PartialTemplateStr | None = Field(default=None, description="A string this regex does not match (re.search).", json_schema_extra=_operand_schema)
+    type: JsonTypeName | TemplateExpressionOnly | None = Field(
+        default=None,
+        description="A value of this JSON type: integer is a number written without a fraction or exponent, number any number; neither is a boolean.",
+        json_schema_extra=_operand_schema,
+    )
+    length: JsonLength | TemplateExpressionOnly | None = Field(
+        default=None, description="A string, array or object of this length (characters, elements, keys).", json_schema_extra=_operand_schema
+    )
+
+    @model_validator(mode="after")
+    def _checks_something(self) -> Self:
+        if not self.model_fields_set:
+            raise ValueError(f'JMESPath matcher must set at least one of: {", ".join(type(self).model_fields)}; to compare with an empty object, write {{"eq": {{}}}}')
+        for name in self.model_fields_set - self.NULL_OPERANDS:
+            if getattr(self, name) is None:
+                raise ValueError(f"JMESPath matcher's {name} must not be null; null is an operand of eq, ne, contains and not_contains only")
+        return self
+
+    # Defined last, so it wraps the checks above too: pydantic applies a
+    # model's validators in the order they are defined, each around the last.
+    @model_validator(mode="wrap")
+    @classmethod
+    def _object_is_a_matcher(cls, data: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo) -> Any:
+        """An object in a ``verify.jmespath`` value is a matcher, always: a
+        literal object written for equality lands here, and gets told where it
+        belongs. One with a key no matcher has fails with that alone, rather
+        than pydantic's "extra inputs are not permitted"; one whose keys are all
+        a matcher's but whose values are not its operands (``{"type":
+        "admin"}``) fails as a matcher, and gets the same hint beside those
+        errors. A rendered matcher (`validate_rendered_verify`) was one as
+        declared: only its rendered operands can fail, and the hint is noise."""
+        if not isinstance(data, dict) or info.context is _RENDERED:
+            return handler(data)
+        unknown = [key for key in data if key not in cls.model_fields and key != "$schema"]
+        if unknown:
+            raise ValueError(f"An object here is a matcher, and {', '.join(map(repr, unknown))} is not one of its keys ({', '.join(cls.model_fields)}); {_EQ_HINT}")
+        try:
+            return handler(data)
+        except ValidationError as e:
+            if not data:
+                # Its own message says how to compare with an empty object.
+                raise
+            # Kept as they were (each type and message, in pydantic's order),
+            # with the hint as one more error at the object itself. Each is
+            # re-raised as a custom error of the same type and message, as a
+            # built-in one would need its own context back to be re-raised.
+            errors: list[InitErrorDetails] = [
+                {"type": PydanticCustomError(cast(LiteralString, error["type"]), cast(LiteralString, error["msg"])), "loc": error["loc"], "input": error["input"]}
+                for error in e.errors()
+            ]
+            hint = PydanticCustomError("jmespath_matcher", cast(LiteralString, f"An object here is a matcher; {_EQ_HINT}"))
+            raise ValidationError.from_exception_data(e.title, [*errors, {"type": hint, "loc": (), "input": data}]) from None
+
+
+def _jmespath_expectation_tag(v: Any) -> str:
+    """An object is a matcher, whatever its keys; anything else is a value, and
+    so is whatever a value declared as one rendered (`_DeclaredValue`)."""
+    if isinstance(v, _DeclaredValue):
+        return "value"
+    return "matcher" if isinstance(v, dict | JMESPathMatcher) else "value"
+
+
+@dataclass(frozen=True, slots=True)
+class _DeclaredValue:
+    """A ``verify.jmespath`` expectation the scenario declared as a value (a
+    template), once rendered: still a value, whatever it rendered to. Only an
+    object the scenario writes is a matcher; one a template renders where a
+    value was written is the value to compare with (`validate_rendered_verify`)."""
+
+    value: Any
+
+
+def _declared_value(v: Any) -> Any:
+    """The rendered value a `_DeclaredValue` carries, as JSON: a template over
+    ``vars`` renders an object as a SimpleNamespace, which stands for it."""
+    return convert_namespace_to_dict(v.value) if isinstance(v, _DeclaredValue) else v
+
+
+# A value compared by JSON equality: anything but an object, which is a matcher.
+# The schema says so, so an editor holds a literal object to the matcher's keys.
+_JsonEqualityValue = Annotated[
+    JsonValue,
+    WithJsonSchema({"type": ["string", "number", "boolean", "null", "array"], "description": "Equal to this JSON value (true is not 1; 1 equals 1.0)."}),
+]
+
+JMESPathExpectation = Annotated[
+    Annotated[
+        Annotated[JMESPathMatcher, Tag("matcher")] | Annotated[_JsonEqualityValue, BeforeValidator(_declared_value), Tag("value")],
+        Discriminator(_jmespath_expectation_tag),
+    ],
+    # Ahead of the union: a namespace is the object it stands for, so a matcher
+    # as it stands. Rendered where a value was declared, it arrives wrapped in a
+    # `_DeclaredValue` instead, and `_declared_value` converts it as a value.
+    BeforeValidator(convert_namespace_to_dict),
+]
+
+
 # One expected status: a code, `HTTPStatus` first for the schema's
 # autocompletion, or a class such as "2xx"; a template renders to either.
 ExpectedStatus = HTTPStatus | StatusCode | StatusClass | NumberOrTemplate
@@ -620,6 +795,16 @@ class Verify(Descripted):
         default_factory=dict,
         description="Expected response headers: a string (exact match) or a matcher object (contains/not_contains/matches/not_matches) per key.",
     )
+    # Keys are never rendered (walk() substitutes values), values are.
+    jmespath: dict[JMESPathKey, JMESPathExpectation] = Field(
+        default_factory=dict,
+        description=(
+            "Assertions on the JSON response body: a JMESPath expression per key, mapped to the value it must equal "
+            "(any JSON value but an object) or to a matcher object (eq, ne, gt, ge, lt, le, contains, not_contains, "
+            "matches, not_matches, type, length). A missing path extracts null."
+        ),
+        examples=[{"data.id": "{{ user_id }}", "length(items)": 3, "items[0].name": {"matches": "^A"}, "meta": {"eq": {"page": 1}}}],
+    )
     expressions: list[TemplateExpressionSchema] = Field(
         default_factory=list,
         description=(
@@ -632,6 +817,23 @@ class Verify(Descripted):
     )
     user_functions: FunctionsList = Field(default_factory=list, description="Functions to process response data.")
     body: ResponseBody = Field(default_factory=ResponseBody)
+
+
+def validate_rendered_verify(declared: Verify, value: Any) -> Verify:
+    """A verify step once its templates rendered: `Verify` again, but each
+    ``verify.jmespath`` expectation keeps the kind it was declared as.
+
+    Re-validation alone cannot tell a matcher the scenario wrote from an object
+    a value's template rendered (``"meta": "{{ saved }}"``): both arrive as a
+    dict, and the union takes a dict for a matcher. Read as one, a rendered
+    object whose keys happen to be a matcher's (``{"type": "object"}``, a saved
+    JSON Schema fragment) would be checked as that matcher, and could pass where
+    the objects differ. So what was declared decides: a value stays a value
+    (`_DeclaredValue`) and is compared by equality, whatever it rendered to."""
+    values = {expression for expression, expected in declared.jmespath.items() if not isinstance(expected, JMESPathMatcher)}
+    if values and isinstance(value, dict) and isinstance(expectations := value.get("jmespath"), dict):
+        value = {**value, "jmespath": {expression: _DeclaredValue(expected) if expression in values else expected for expression, expected in expectations.items()}}
+    return Verify.model_validate(value, context=_RENDERED)
 
 
 class SaveStep(StrictModel):

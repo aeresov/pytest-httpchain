@@ -100,8 +100,8 @@ def is_inline_schema_position(path: tuple[str | int, ...]) -> bool:
 
 def is_alternatives_position(path: tuple[str | int, ...]) -> bool:
     """True for raw-JSON positions whose list holds alternatives, any one of
-    which passes: ``verify.status`` (passed to the loader as its ``atomic``
-    predicate).
+    which passes: ``verify.status`` (one half of the loader's ``atomic``
+    predicate, `merges_whole`).
 
     Everywhere else a longer list checks more, so a sibling list merged onto a
     fragment's is concatenated. Here concatenation would widen the check: a
@@ -110,6 +110,42 @@ def is_alternatives_position(path: tuple[str | int, ...]) -> bool:
     merge conflict.
     """
     return _verify_subpath(path) == ("status",)
+
+
+def is_jmespath_expectations_position(path: tuple[str | int, ...]) -> bool:
+    """True for raw-JSON positions holding a ``verify.jmespath`` mapping, whose
+    keys are JMESPath expressions rather than names sent on the wire."""
+    return _verify_subpath(path) == ("jmespath",)
+
+
+def is_expected_value_position(path: tuple[str | int, ...]) -> bool:
+    """True for raw-JSON positions holding what one ``verify.jmespath``
+    expression must be (a value it must equal, or a matcher), and for each
+    operand of such a matcher.
+
+    An expected value is one value, not a list of checks: a sibling's
+    ``["b"]`` concatenated onto a fragment's ``["a"]`` would assert
+    ``["a", "b"]``, which neither side wrote, and two objects under ``eq``
+    would blend into a third. So the expectation merges as a whole, as a
+    scalar does: equal keeps, different is a merge conflict. Different
+    expressions still merge key by key.
+
+    A matcher's operand is one value for the same reason. It only merges with
+    another when a reference is written at the expectation itself (the merge
+    root is exempt from ``atomic``, so ``{"$merge": ..., "lt": 100}`` composes
+    a matcher key by key): an ``eq`` or ``contains`` both sides give must then
+    agree whole, as a ``gt`` does. One level below the expectation is always
+    an operand: an array expectation is kept whole before its items are
+    reached, and a reference with siblings is an object.
+    """
+    subpath = _verify_subpath(path)
+    return subpath is not None and len(subpath) in (2, 3) and subpath[0] == "jmespath"
+
+
+def merges_whole(path: tuple[str | int, ...]) -> bool:
+    """The loader's ``atomic`` predicate: `is_alternatives_position` or
+    `is_expected_value_position`."""
+    return is_alternatives_position(path) or is_expected_value_position(path)
 
 
 def load_scenario_json(path: Path, *, root_path: Path | None = None, ref_parent_traversal_depth: int = 3) -> dict[str, Any]:
@@ -125,7 +161,7 @@ def load_scenario_json(path: Path, *, root_path: Path | None = None, ref_parent_
         max_parent_traversal_depth=ref_parent_traversal_depth,
         root_path=root_path,
         opaque=is_inline_schema_position,
-        atomic=is_alternatives_position,
+        atomic=merges_whole,
     )
 
 

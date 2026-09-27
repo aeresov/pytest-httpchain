@@ -126,6 +126,11 @@ def test_schema_patterns_are_ecma262_compatible():
         pytest.param(_verify(status="2XX"), id="status-class-uppercase"),
         pytest.param(_verify(status=[200, 201]), id="status-list"),
         pytest.param(_verify(status=["2xx", 304, "{{ s }}"]), id="status-list-mixed"),
+        pytest.param(
+            _verify(jmespath={"a": 1, "b": [{"id": 1}], "c": None, "d": "{{ x }}", "e": {"eq": {"page": 1}}, "f": {"ne": None, "gt": 0, "type": "{{ t }}"}}),
+            id="jmespath-values-and-matchers",
+        ),
+        pytest.param(_verify(jmespath={"a": {"$include": "common.json#/expected"}}), id="jmespath-include"),
     ],
 )
 def test_schema_accepts_documented_shapes(validator, document):
@@ -153,6 +158,12 @@ def test_schema_accepts_documented_shapes(validator, document):
         pytest.param(_verify(status="6xx"), id="status-class-unknown"),
         pytest.param(_verify(status=[]), id="status-list-empty"),
         pytest.param(_verify(status=[200, "abc"]), id="status-list-entry-type"),
+        # An object is a matcher: a literal one for equality belongs under eq.
+        pytest.param(_verify(jmespath={"meta": {"page": 1}}), id="jmespath-literal-object"),
+        pytest.param(_verify(jmespath={"meta": {}}), id="jmespath-empty-matcher"),
+        pytest.param(_verify(jmespath={"price": {"gt": None}}), id="jmespath-null-bound"),
+        pytest.param(_verify(jmespath={"price": {"gt": "5"}}), id="jmespath-numeric-text"),
+        pytest.param(_verify(jmespath={"price": {"type": "int"}}), id="jmespath-type-unknown"),
     ],
 )
 def test_schema_rejects_typos(validator, document):

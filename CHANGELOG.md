@@ -111,9 +111,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of alternatives accepts more, so a negative test's `[404]` beside a shared `["2xx"]` would have
   passed on a 200. An equal list is kept and a different one is a merge conflict, as a differing
   single code always was.
+- `verify.jmespath` asserts on the JSON response body directly, where a value had to be saved first
+  and then tested in an expression, leaving the saved name in the context. Each key is a JMESPath
+  expression, mapped to the value it must equal or to a matcher: `{"data.id": "{{ user_id }}",
+  "length(items)": 3, "price": {"gt": 0, "lt": 100}, "meta": {"eq": {"page":
+  1}}}`. Equality is JSON's: `true` never equals `1`, `1` equals `1.0`, and arrays and objects
+  compare element by element. An object written in the scenario is always a matcher, with the keys
+  `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `contains`, `not_contains`, `matches`, `not_matches`, `type`
+  and `length`, every one given must hold, and a value one cannot judge (`gt` on a string) fails
+  the check; a literal object written for equality fails validation pointing at `eq`, beside the
+  matcher's own errors when its keys are all a matcher's (`{"type": "admin"}`). A template written
+  where a value goes renders the value to compare with, an object included, whatever its keys:
+  `"meta": "{{ saved_meta }}"` compares by equality, and a matcher is written as an object, its
+  operands templated. A failure names the expression, the expected value and the actual one, cut
+  short when long: `JMESPath 'price' doesn't match: expected lt 100, got
+  120.5`. The checks run after `headers` and before `expressions`, the order of a verify step's
+  checks is now documented, and the body is parsed once per step, shared with `body.schema`; one
+  that is not JSON, or is nested too deeply to parse, fails the stage, and so does an expression
+  that cannot be evaluated against it, naming why (`keys() needs object, got [1, 2] (array)`,
+  `join() needs array-string, got an array holding 1 (number)`, `ceil()` of `1e400`). Keys are
+  never rendered: one holding a template fails validation, or gets `HTTPCHAIN029` when it is still
+  valid JMESPath (`'{{ x }}'`). Values and operands are rendered, in the response step's scope,
+  which `validate` checks and `show`/`graph` count as consuming what they read. A value template
+  rendering to `null` compares with `null`; an operand template rendering to `null` fails the stage
+  like other rendered-away checks, `eq` and `ne` included, since there `null` would be compared in
+  place of the lost value: the message says to write `null` for that. A missing path gives `null`,
+  as JMESPath has it; `contains` on the parent object tells a missing key from a null one.
+  `HTTPCHAIN006` counts `jmespath` as an assertion, and `HTTPCHAIN007`/`HTTPCHAIN008` flag a
+  matcher whose `contains` and `not_contains` are the same JSON value, or whose `matches` and
+  `not_matches` are the same pattern. A `$merge`/`$include` sibling's expectation for an expression
+  a fragment already checks merges whole, as `status` does: equal keeps, anything else is a merge
+  conflict. A reference written at the expectation itself, `{"$merge": "common.json#/price", "lt":
+  100}`, composes one matcher key by key, and an operand both sides give must agree whole: two `eq`
+  arrays or objects conflict rather than concatenate or blend, as two `gt` numbers do.
 
 ### Fixed
 
+- `verify.body.schema` against a body Python's `json` cannot read though it is not malformed, an
+  integer longer than 4300 digits or an array nested some thousand levels deep, escaped the stage
+  as a raw `ValueError` or `RecursionError` traceback, past the chain's abort handling and its
+  request/response report. It now fails the stage: `Cannot validate schema, response is not valid
+  JSON: ...`, or `... response JSON is nested too deeply to parse: ...`.
+- A `$merge`/`$include` sibling beside a fragment at a position that merges whole, an inline
+  `verify.body.schema` or a `verify.status` list, was compared with Python's equality inside
+  lists and objects, where `true == 1`: `{"const": true}` beside `{"const": 1}` kept one and
+  dropped the other without a conflict. Equality there is now JSON's at every depth, as it was
+  for a single value.
 - A failing stage whose response came after a digest challenge (an auth function returning
   `httpx.DigestAuth`, or the new built-in) was reported as `HTTP Request (after 1 redirect)`: httpx
   keeps the challenge's `401` in the same history as redirects. The report now counts them apart,

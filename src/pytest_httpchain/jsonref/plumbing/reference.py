@@ -9,6 +9,7 @@ from typing import Any, Self
 
 from deepmerge import STRATEGY_END, Merger
 
+from pytest_httpchain.jsonref.equality import json_equal
 from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, InvalidJSONError, ReferenceResolverError
 from pytest_httpchain.jsonref.plumbing.circular import CircularDependencyTracker
 from pytest_httpchain.jsonref.plumbing.path import parse_json_pointer, validate_ref_path
@@ -27,9 +28,11 @@ def _raise_on_conflict(config: Any, path: list[Any], base: Any, nxt: Any) -> Any
 
     Used as both the fallback and the type-conflict strategy, so no-last-wins
     holds for every combination, nulls included. Equality is judged in JSON
-    terms, where Python's ``True == 1`` must not pass as equal.
+    terms (`json_equal`), where Python's ``True == 1`` must not pass as equal,
+    at any depth: two lists or objects an atomic position keeps whole are equal
+    only if every member is, so ``[true]`` and ``[1]`` conflict.
     """
-    if isinstance(base, bool) == isinstance(nxt, bool) and base == nxt:
+    if json_equal(base, nxt):
         return base
     location = ".".join(str(part) for part in path) or "root"
     raise ReferenceResolverError(f"Merge conflict at {location}")
@@ -50,10 +53,17 @@ def _build_atomic_aware_merger(atomic: PositionPredicate, base_path: tuple[str |
 
     ``base_path`` is the reference site's position, since deepmerge's ``path`` is
     relative to the merge root.
+
+    The merge root itself is exempt. A position is atomic because two whole
+    values written for it, a fragment's and a sibling's of some enclosing
+    reference, must not blend into a third. A reference written *at* the
+    position with siblings beside it (``{"$merge": "common.json#/price",
+    "lt": 100}``) is one value composed on purpose, so it merges as anywhere
+    else, key by key.
     """
 
     def keep_whole_at_atomic(config: Any, path: list[Any], base: Any, nxt: Any) -> Any:
-        if atomic(base_path + tuple(path)):
+        if path and atomic(base_path + tuple(path)):
             return _raise_on_conflict(config, path, base, nxt)
         return STRATEGY_END
 

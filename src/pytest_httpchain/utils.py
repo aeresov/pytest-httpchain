@@ -1,5 +1,6 @@
 """Small helpers shared by the collection and runtime paths: markers,
-substitution resolution, and scenario-relative paths.
+substitution resolution, scenario-relative paths, and the location paths
+messages print.
 
 ``process_substitutions`` raises ``StageExecutionError`` even when called at
 collection time (the collection caller re-wraps it into a ``CollectError``)
@@ -9,6 +10,7 @@ rather than introducing a second error type for the same malformed input.
 import ast
 import json
 import logging
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -28,6 +30,21 @@ def optional_as_list(value: Any) -> list[Any]:
     """None -> [], anything else -> [value]: adapts HeaderMatcher's optional
     single-value fields to the list-based shared checks."""
     return [] if value is None else [value]
+
+
+# A dict key that reads as one path segment. Others ("data.id", a JMESPath
+# expression in `verify.jmespath`) are bracketed and quoted, so the path stays
+# unambiguous: verify.jmespath["data.id"].eq.
+_PLAIN_KEY = re.compile(r"[\w-]+")
+
+
+def path_segment(key: str | int) -> str:
+    """One step of a location path as the validator and the runtime print it:
+    ``[0]`` for a list index, ``.name`` for a key that reads as one segment,
+    and ``["data.id"]`` for any other key."""
+    if isinstance(key, int):
+        return f"[{key}]"
+    return f".{key}" if _PLAIN_KEY.fullmatch(key) else f"[{json.dumps(key)}]"
 
 
 def resolve_scenario_path(scenario_dir: Path | None, value: str | Path) -> Path:

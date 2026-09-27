@@ -204,15 +204,23 @@ def test_resolve_missing_ref_exits_one(include_scenario, tmp_path):
     assert result.stderr.startswith("error: Reference path 'common.json' not found.")
 
 
-def test_resolve_merges_status_lists_as_collection_does(tmp_path):
+@pytest.mark.parametrize(
+    ("shared", "sibling", "where"),
+    [
+        pytest.param({"status": ["2xx"]}, {"status": [404]}, "verify.status", id="status"),
+        pytest.param({"jmespath": {"tags": ["a"]}}, {"jmespath": {"tags": ["b"]}}, "verify.jmespath.tags", id="jmespath-expectation"),
+    ],
+)
+def test_resolve_merges_whole_values_as_collection_does(tmp_path, shared, sibling, where):
     """A sibling status list is not concatenated onto a fragment's (which would
-    widen the check), in the printed document as at collection."""
-    _write(tmp_path / "common.json", {"ok": {"verify": {"status": ["2xx"]}}})
-    step = {"$merge": "common.json#/ok", "verify": {"status": [404]}}
+    widen the check), nor a jmespath expectation onto one (which would assert
+    what neither wrote), in the printed document as at collection."""
+    _write(tmp_path / "common.json", {"ok": {"verify": shared}})
+    step = {"$merge": "common.json#/ok", "verify": sibling}
     scenario = _write(tmp_path / "test_x.http.json", {"stages": [{**_stage("s", "https://x.test/a"), "response": [step]}]})
     result = runner.invoke(app, ["resolve", str(scenario)])
     assert result.exit_code == 1
-    assert result.stderr == "error: Merge conflict at verify.status\n"
+    assert result.stderr == f"error: Merge conflict at {where}\n"
 
 
 @pytest.mark.parametrize("command", ["resolve", "show", "graph"])

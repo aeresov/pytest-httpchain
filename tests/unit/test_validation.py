@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import pytest_httpchain.validation.loader as validation_loader
+from pytest_httpchain.models import JMESPathMatcher
 from pytest_httpchain.validation import SEVERITY, DiagnosticCode, load_scenario, resolve_root_path, validate_scenario
 
 C = DiagnosticCode
@@ -54,6 +55,9 @@ def _hide_ancestor_project_markers(monkeypatch):
         "valid_scenario.json",
         "valid_markers.json",
         "verify_template_expression_ok.json",
+        # jmespath alone asserts something (no HTTPCHAIN006), and its values
+        # see the response namespace and a prior step's save.
+        "verify_jmespath_ok.json",
         "schema_key_tolerated.json",  # the editor-integration "$schema" key is stripped by the loader
         # Names a template may reference without being flagged undefined:
         "parametrize_individual.json",
@@ -137,6 +141,28 @@ DIAGNOSED = [
     ("stage_name_node_id_separator.json", [(C.NODE_ID_SEPARATOR_IN_STAGE_NAME, "stages[0].name", r"'Users::list' contains '::'")]),
     ("contradiction_contains.json", [(C.CONTAINS_CONTRADICTION, "stages[0].response[0].verify.body", r"substring\(s\): \['ERROR'\]")]),
     ("contradiction_matches.json", [(C.MATCHES_CONTRADICTION, "stages[0].response[0].verify.body", r"pattern\(s\): \['\^OK\$'\]")]),
+    # A jmespath matcher holds one operand per key; contains operands are JSON
+    # values, compared as the check compares them (1 is 1.0).
+    (
+        "contradiction_jmespath_contains.json",
+        [
+            (
+                C.CONTAINS_CONTRADICTION,
+                'stages[0].response[0].verify.jmespath["users[*].id"]',
+                r"jmespath 'users\[\*\]\.id' verification both requires and forbids 1 \(contains and not_contains\)",
+            )
+        ],
+    ),
+    (
+        "contradiction_jmespath_matches.json",
+        [
+            (
+                C.MATCHES_CONTRADICTION,
+                "stages[0].response[0].verify.jmespath.name",
+                r"""jmespath 'name' verification both requires and forbids pattern "\^A" \(matches and not_matches\)""",
+            )
+        ],
+    ),
     # The scenario-level context never includes fixture values: a guaranteed
     # crash at scenario initialization.
     (
@@ -166,6 +192,11 @@ DIAGNOSED = [
     ("no_response_validation.json", [(C.NO_VERIFY, "stages[0]", "no response validation")]),
     # A no-op verify step still counts as a verify step: NO_VERIFY stays quiet.
     ("noop_verify.json", [(C.NOOP_VERIFY, "stages[0].response[0].verify", "asserts nothing")]),
+    # An object is a matcher, always: one written for equality is told to use eq.
+    (
+        "verify_jmespath_literal_object.json",
+        [(C.SCHEMA, "stages -> 0 -> response -> 0 -> verify -> verify -> jmespath -> meta -> matcher", r"'page' is not one of its keys .*give it as eq")],
+    ),
     # M2: a plain-string expression is never the bool an expression must be.
     ("verify_nontemplate_expression.json", [(C.NONTEMPLATE_EXPRESSION, "stages[0].response[0].verify", "is not a template")]),
     # Scenario fixtures sit above the global context: the save is unreadable.
@@ -330,6 +361,108 @@ class TestStatusListMerge:
         scenario, raw = load_scenario(write([_stage(response=[step])]))
         assert raw["stages"][0]["response"][0]["verify"] == expected
         assert scenario.stages[0].response[0].verify.status == ["2xx"]
+
+
+class TestJmespathExpectationMerge:
+    """What one verify.jmespath expression must be is one value: a sibling's
+    array concatenated onto a fragment's asserted an array neither wrote, and
+    two objects under eq blended into a third. An expectation merges as a
+    scalar does, equal keeps and different is a merge conflict; different
+    expressions still merge key by key."""
+
+    CHECKS = {"verify": {"jmespath": {"tags": ["a"], "meta": {"eq": {"page": 1}}, "price": {"gt": 0}}}}
+
+    @pytest.fixture
+    def write(self, tmp_path):
+        (tmp_path / "common.json").write_text(json.dumps({"checks": self.CHECKS}))
+        return lambda step: _write(tmp_path, [_stage(response=[step])])
+
+    @pytest.mark.parametrize(
+        ("jmespath", "where"),
+        [
+            pytest.param({"tags": ["b"]}, "tags", id="array-not-concatenated"),
+            pytest.param({"meta": {"eq": {"size": 2}}}, "meta", id="eq-object-not-blended"),
+            # A matcher is one expectation too: keys of two are not combined.
+            pytest.param({"price": {"lt": 100}}, "price", id="matcher-keys-not-combined"),
+            pytest.param({"price": 5}, "price", id="value-beside-a-matcher"),
+        ],
+    )
+    def test_different_expectation_is_a_merge_conflict(self, write, jmespath, where):
+        result = validate_scenario(write({"$merge": "common.json#/checks", "verify": {"jmespath": jmespath}}))
+        assert [(d.code, d.message) for d in result.diagnostics] == [(C.REF_ERROR, f"JSON reference resolution error: Merge conflict at verify.jmespath.{where}")]
+
+    @pytest.mark.parametrize(
+        ("jmespath", "where"),
+        [
+            # JSON equality at any depth: Python's [True] == [1] kept the
+            # fragment's and dropped the sibling's without a conflict.
+            pytest.param({"flags": [1]}, "flags", id="bool-vs-int-in-array"),
+            pytest.param({"meta": {"eq": {"active": 1}}}, "meta", id="bool-vs-int-in-object"),
+        ],
+    )
+    def test_true_is_not_one_when_merging(self, tmp_path, jmespath, where):
+        (tmp_path / "flags.json").write_text(json.dumps({"verify": {"jmespath": {"flags": [True], "meta": {"eq": {"active": True}}}}}))
+        result = validate_scenario(_write(tmp_path, [_stage(response=[{"$merge": "flags.json", "verify": {"jmespath": jmespath}}])]))
+        assert [(d.code, d.message) for d in result.diagnostics] == [(C.REF_ERROR, f"JSON reference resolution error: Merge conflict at verify.jmespath.{where}")]
+
+    @pytest.mark.parametrize(
+        ("expectation", "merged"),
+        [
+            pytest.param({"$merge": "common.json#/checks/verify/jmespath/price", "lt": 100}, JMESPathMatcher(gt=0, lt=100), id="matcher"),
+            pytest.param({"eq": {"$merge": "common.json#/checks/verify/jmespath/meta/eq", "size": 2}}, JMESPathMatcher(eq={"page": 1, "size": 2}), id="inside-eq"),
+        ],
+    )
+    def test_merge_written_at_an_expectation_composes_it(self, write, expectation, merged):
+        """A ``$merge`` written at the expectation itself is one value composed
+        on purpose, not two written for it: its siblings merge key by key, as
+        they do one level down, inside eq."""
+        scenario, _ = load_scenario(write({"verify": {"jmespath": {"price": expectation}}}))
+        assert scenario.stages[0].response[0].verify.jmespath["price"] == merged
+
+    @pytest.mark.parametrize(
+        ("fragment", "sibling"),
+        [
+            pytest.param({"gt": 0}, {"gt": 1}, id="number"),
+            # Each operand is one value, as the expectation is: the arrays were
+            # concatenated into eq [1, 2] and the objects blended into
+            # {"page": 1, "size": 5}, which neither side wrote, without a conflict.
+            pytest.param({"eq": [1]}, {"eq": [2]}, id="eq-array-not-concatenated"),
+            pytest.param({"eq": {"page": 1}}, {"eq": {"size": 5}}, id="eq-object-not-blended"),
+            pytest.param({"ne": [1]}, {"ne": [2]}, id="ne-array-not-concatenated"),
+            pytest.param({"contains": ["a"]}, {"contains": ["b"]}, id="contains-element-not-concatenated"),
+            pytest.param({"not_contains": {"a": 1}}, {"not_contains": {"b": 1}}, id="not-contains-element-not-blended"),
+            pytest.param({"eq": [True]}, {"eq": [1]}, id="true-is-not-one"),
+        ],
+    )
+    def test_an_operand_both_sides_give_must_agree_whole(self, tmp_path, fragment, sibling):
+        """A ``$merge`` at the expectation composes the matcher key by key, but
+        a key both sides give is one operand: equal keeps, different conflicts,
+        an array or object as much as a number."""
+        (tmp_path / "matcher.json").write_text(json.dumps(fragment))
+        key = next(iter(sibling))
+        result = validate_scenario(_write(tmp_path, [_stage(response=[{"verify": {"jmespath": {"x": {"$merge": "matcher.json", **sibling}}}}])]))
+        assert [(d.code, d.message) for d in result.diagnostics] == [(C.REF_ERROR, f"JSON reference resolution error: Merge conflict at {key}")]
+
+    @pytest.mark.parametrize(
+        ("operand", "equal"),
+        [
+            pytest.param({"eq": {"page": 1, "tags": ["a"]}}, {"eq": {"page": 1.0, "tags": ["a"]}}, id="equal-object"),
+            pytest.param({"contains": ["a"]}, {"contains": ["a"]}, id="equal-array"),
+        ],
+    )
+    def test_an_equal_operand_keeps(self, tmp_path, operand, equal):
+        (tmp_path / "matcher.json").write_text(json.dumps(operand))
+        scenario, _ = load_scenario(_write(tmp_path, [_stage(response=[{"verify": {"jmespath": {"x": {"$merge": "matcher.json", "lt": 100, **equal}}}}])]))
+        assert scenario.stages[0].response[0].verify.jmespath["x"] == JMESPathMatcher(lt=100, **operand)
+
+    def test_equal_expectations_keep_and_other_expressions_merge(self, write):
+        scenario, raw = load_scenario(write({"$merge": "common.json#/checks", "verify": {"jmespath": {"tags": ["a"], "count": 3}}}))
+        assert raw["stages"][0]["response"][0]["verify"]["jmespath"] == {**self.CHECKS["verify"]["jmespath"], "count": 3}
+        assert scenario.stages[0].response[0].verify.jmespath["tags"] == ["a"]
+
+    def test_include_inside_an_expectation_resolves(self, write):
+        scenario, _ = load_scenario(write({"verify": {"jmespath": {"meta": {"$include": "common.json#/checks/verify/jmespath/meta"}}}}))
+        assert scenario.stages[0].response[0].verify.jmespath["meta"].eq == {"page": 1}
 
 
 @pytest.mark.parametrize(

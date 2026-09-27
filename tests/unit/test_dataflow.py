@@ -56,6 +56,10 @@ def _edges(flow) -> list[dict]:
         pytest.param({"response": [{"verify": {"expressions": ["{{ x != '' }}"]}}, {"save": {"jmespath": {"x": "b"}}}]}, ["x"], id="reference-before-own-resave"),
         # An entry of a status list takes a template of its own.
         pytest.param({"response": [{"verify": {"status": ["{{ x }}", 304]}}]}, ["x"], id="verify-status-list-entry"),
+        # A verify.jmespath value and a matcher operand are rendered; the
+        # expression, a key, never is.
+        pytest.param({"response": [{"verify": {"jmespath": {"id": "{{ x }}", "tags": {"contains": "{{ y }}"}}}}]}, ["x", "y"], id="verify-jmespath-values"),
+        pytest.param({"response": [{"verify": {"jmespath": {"'{{ x }}'": 1}}}]}, [], id="verify-jmespath-key"),
     ],
 )
 def test_consumer_of_earlier_saves(consumer, expected):

@@ -6,6 +6,7 @@ round trip itself is the integration suite's.
 """
 
 import contextvars
+import json
 import re
 import ssl
 import threading
@@ -774,6 +775,109 @@ class TestVerifyStatusRendered:
         assert isinstance(excinfo.value.__cause__, ValidationError)
         assert re.match(r"\d+ validation errors? for Verify\nstatus", str(excinfo.value))
         assert excinfo.value.response is not None
+
+
+class TestVerifyJmespathRendered:
+    """``verify.jmespath`` values are rendered with the response step's context,
+    as every verify field is, and then checked as if written so, each as the
+    kind it was declared as: a value stays a value, whatever it renders. The
+    None rule splits on where the template sits: a value is compared with null,
+    a matcher key is a declared field the rendered-away guard refuses."""
+
+    BODY = {"data": {"id": 42, "owner": 42, "meta": {"page": 1}}, "deleted_at": None, "code": 200}
+
+    @classmethod
+    def _run(cls, response: list, context: ChainMap, body: object = BODY) -> None:
+        """Run one stage against a 200 whose JSON body is ``body``."""
+        stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": response})
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)))
+        carrier = _make_carrier_subclass(client=client)
+        try:
+            carrier._execute_single_iteration(stage, context, {})
+        finally:
+            client.close()
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            pytest.param([{"verify": {"jmespath": {"data.id": "{{ uid }}", "data.meta": {"eq": "{{ meta }}"}}}}], id="context"),
+            # The response namespace and a prior step's save are in scope, as
+            # for any response step.
+            pytest.param([{"verify": {"jmespath": {"code": "{{ response.status }}"}}}], id="response-namespace"),
+            pytest.param([{"save": {"jmespath": {"owner": "data.owner"}}}, {"verify": {"jmespath": {"data.id": "{{ owner }}"}}}], id="prior-save"),
+            pytest.param([{"verify": {"jmespath": {"data.id": {"gt": "{{ uid - 1 }}", "type": "{{ kind }}"}, "data.meta": {"length": "{{ one }}"}}}}], id="matcher-keys"),
+        ],
+    )
+    @pytest.mark.parametrize("source", ["saved", "vars"])
+    def test_rendered_value_is_checked(self, response, source):
+        values = {"uid": 42, "meta": {"page": 1}, "kind": "integer", "one": 1}
+        self._run(response, ChainMap(VarsSubstitution(vars=values).vars) if source == "vars" else ChainMap(values))
+
+    def test_rendered_value_mismatch_fails(self):
+        with pytest.raises(VerificationError, match=r"^JMESPath 'data.id' doesn't match: expected 41, got 42$"):
+            self._run([{"verify": {"jmespath": {"data.id": "{{ uid }}"}}}], ChainMap({"uid": 41}))
+
+    def test_value_rendered_to_none_is_compared_with_null(self):
+        """A value is not a field: its template rendering to None stands for
+        null, which the path must then hold."""
+        response = [{"verify": {"jmespath": {"deleted_at": "{{ gone }}"}}}]
+        self._run(response, ChainMap({"gone": None}))
+        with pytest.raises(VerificationError, match=r"^JMESPath 'deleted_at' doesn't match: expected null, got 1$"):
+            self._run(response, ChainMap({"gone": None}), {"deleted_at": 1})
+
+    @pytest.mark.parametrize("key", ["eq", "ne", "contains", "not_contains"])
+    def test_operand_rendered_to_none_is_refused(self, key):
+        """null is an operand here, so the None validates and would disable
+        nothing, but it would compare with null in place of the value the
+        template was written for (a save of a missing key): refused, saying how
+        to compare with null. Quoted, since the expression is not a plain name."""
+        with pytest.raises(VerificationError) as excinfo:
+            self._run([{"verify": {"jmespath": {"data.id": {key: "{{ x }}"}}}}], ChainMap({"x": None}))
+        assert str(excinfo.value) == f"'verify.jmespath[\"data.id\"].{key}' was declared as " + "'{{ x }}' but rendered to None; to compare with null, write null"
+
+    @pytest.mark.parametrize(
+        "matcher",
+        [
+            pytest.param({"gt": "{{ x }}"}, id="only-key"),
+            # Beside a static key the matcher would still validate without it.
+            pytest.param({"gt": "{{ x }}", "lt": 100}, id="beside-a-static-key"),
+        ],
+    )
+    def test_key_rendered_to_none_is_refused(self, matcher):
+        """null is no operand of gt: validation refuses it, and the guard names
+        the template instead."""
+        with pytest.raises(VerificationError) as excinfo:
+            self._run([{"verify": {"jmespath": {"code": matcher}}}], ChainMap({"x": None}))
+        assert str(excinfo.value) == "'verify.jmespath.code.gt' was declared as '{{ x }}' but rendered to None"
+
+    @pytest.mark.parametrize(
+        ("rendered", "actual"),
+        [
+            pytest.param({"page": 1}, "data.meta", id="object"),
+            # Keys a matcher also has make it no matcher: a saved JSON Schema
+            # fragment, compared as one, passed against any object.
+            pytest.param({"type": "object"}, "shape", id="matcher-keys"),
+            pytest.param({"length": 1}, "sized", id="length-key"),
+            pytest.param({"eq": None, "gt": 0}, "operands", id="null-operand"),
+        ],
+    )
+    @pytest.mark.parametrize("source", ["saved", "vars"])
+    def test_object_rendered_at_a_value_is_compared_as_one(self, rendered, actual, source):
+        """What was declared decides, not what rendered: a template where a
+        value is written renders a value, an object included, compared by JSON
+        equality. Only an object the scenario writes is a matcher, so one whose
+        keys happen to be a matcher's is never checked as that matcher, and an
+        explicit null member is an operand of nothing."""
+        body = {"data": {"meta": {"page": 1}}, "shape": {"type": "object"}, "sized": {"length": 1}, "operands": {"eq": None, "gt": 0}}
+        context = ChainMap(VarsSubstitution(vars={"expected": rendered}).vars) if source == "vars" else ChainMap({"expected": rendered})
+        self._run([{"verify": {"jmespath": {actual: "{{ expected }}"}}}], context, body)
+        with pytest.raises(VerificationError) as excinfo:
+            self._run([{"verify": {"jmespath": {"code": "{{ expected }}"}}}], context, {"code": {"type": "array"}})
+        assert str(excinfo.value) == f"JMESPath 'code' doesn't match: expected {json.dumps(rendered)}, got " + '{"type": "array"}'
+
+    def test_rendered_object_in_an_array_is_compared(self):
+        response = [{"verify": {"jmespath": {"items": ["{{ first }}", 2]}}}]
+        self._run(response, ChainMap(VarsSubstitution(vars={"first": {"length": 1}}).vars), {"items": [{"length": 1}, 2.0]})
 
 
 @pytest.mark.parametrize(

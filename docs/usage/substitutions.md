@@ -267,6 +267,21 @@ scenario initialization: the first stage fails, and every later stage skips). A 
 sets to `null` fails, naming the field and that template, while a key it leaves
 out is simply not checked.
 
+So are the operands of a [`verify.jmespath`](responses.md#jmespath-assertions)
+matcher, `eq`, `ne`, `contains` and `not_contains` included, although `null` is
+an operand they take. There the `null` would not switch the check off but
+compare with `null` in place of the value the template was written for, so
+the message says how to mean it instead:
+
+```
+'verify.jmespath["data.id"].eq' was declared as '{{ user_id }}' but rendered to None; to compare with null, write null
+```
+
+A `verify.jmespath` value is not a field. Its template that renders to `null`
+compares with `null`, and one that renders an object is compared as that
+object, even one shaped like a matcher (`{"ne": null}`): a matcher is written
+as an object, never rendered whole.
+
 A required field such as `url`, `timeout` or a built-in auth's credential
 (`request.auth.bearer`, `auth.basic.password`), and a header matcher whose only
 field rendered to `null`, cannot be switched off, but they fail with the same
@@ -284,6 +299,8 @@ an error it did not cause.
 Where `null` is itself a value, it is passed on as one:
 
 -   a JSON body (`"json": "{{ payload }}"`) sends the JSON document `null`;
+-   a `verify.jmespath` value (`"deleted_at": "{{ gone }}"`) is compared with
+    `null`;
 -   a query parameter or form field is sent with an empty value (`?q=`);
 -   an auth function kwarg or a substitution variable receives `None`;
 -   `always_run` is evaluated for truthiness, so `null` means "do not run".

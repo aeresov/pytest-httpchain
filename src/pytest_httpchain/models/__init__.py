@@ -10,7 +10,7 @@ Key models:
 - Stage: Individual test stage with request and response processing
 - Request: HTTP request configuration (method, URL, headers, body, auth)
 - Auth: authentication, built in (basic, digest, bearer) or a user function
-- Verify: Response verification rules (status, headers, body, expressions)
+- Verify: Response verification rules (status, headers, JMESPath, body, expressions)
 - Save: Data extraction from responses (JMESPath, substitutions, user functions)
 """
 
@@ -32,6 +32,8 @@ from pytest_httpchain.models.entities import (
     GraphQLBody,
     HeaderMatcher,
     IndividualParameter,
+    JMESPathExpectation,
+    JMESPathMatcher,
     JMESPathSave,
     JsonBody,
     ParallelConfig,
@@ -66,8 +68,9 @@ from pytest_httpchain.models.entities import (
     normalize_list_input,
     parametrize_values_contain_template,
     validate_rendered_scenario_auth,
+    validate_rendered_verify,
 )
-from pytest_httpchain.models.types import check_json_schema, is_relative_url, is_status_class, json_schema_validator_class
+from pytest_httpchain.models.types import JSON_TYPE_NAMES, check_json_schema, is_relative_url, is_status_class, json_schema_validator_class
 
 __all__ = [
     "Scenario",
@@ -86,6 +89,8 @@ __all__ = [
     "SaveStep",
     "Verify",
     "HeaderMatcher",
+    "JMESPathExpectation",
+    "JMESPathMatcher",
     "ResponseBody",
     "Save",
     "JMESPathSave",
@@ -118,6 +123,7 @@ __all__ = [
     "BearerAuth",
     "SSLConfig",
     "ClientConfig",
+    "JSON_TYPE_NAMES",
     "check_json_schema",
     "is_relative_url",
     "is_status_class",
@@ -125,4 +131,5 @@ __all__ = [
     "parametrize_values_contain_template",
     "normalize_list_input",
     "validate_rendered_scenario_auth",
+    "validate_rendered_verify",
 ]

@@ -13,6 +13,7 @@ AUX = ("verify.py", "verify/schema.json")
         ("status", 2),
         ("headers", 1),
         ("expressions", 1),
+        ("jmespath", 2),
         ("user_function", 1),
         ("body_schema", 2),
         ("body_contains", 1),
@@ -50,6 +51,8 @@ def test_verify_passes(run_scenario, scenario, passed):
         # missing key. Its static sibling keeps the matcher valid, so the
         # rendered-away `contains` was simply not checked.
         ("header_matcher_rendered_away", {"failed": 1}, "*'verify.headers.X-Custom-Header.contains' was declared as '{{ expected_value }}' but rendered to None*"),
+        # JSON equality, not Python's: `true == 1` would have passed the stage.
+        ("jmespath_mismatch", {"failed": 1}, "*JMESPath 'active' doesn't match: expected 1, got true*"),
     ),
 )
 def test_verify_fails_cleanly(run_scenario, scenario, outcomes, line):

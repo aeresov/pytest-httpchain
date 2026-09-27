@@ -11,6 +11,7 @@ door: ``request_builder`` (models -> httpx arguments), ``response_steps`` (one
 verify/save step), ``scoping`` (context layering).
 """
 
+import functools
 import inspect
 import json
 import logging
@@ -27,7 +28,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NamedTuple
 
 import httpx
 import pytest
@@ -40,6 +41,7 @@ from pytest_httpchain.models import (
     ClientConfig,
     CombinationsParameter,
     IndividualParameter,
+    JMESPathMatcher,
     JsonBody,
     ParallelConfig,
     ParallelForeachConfig,
@@ -50,6 +52,7 @@ from pytest_httpchain.models import (
     SubstitutionsSave,
     VerifyStep,
     validate_rendered_scenario_auth,
+    validate_rendered_verify,
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.request_builder import build_client_kwargs, build_request_kwargs
@@ -64,7 +67,7 @@ from pytest_httpchain.scoping import (
     with_stage_substitutions,
 )
 from pytest_httpchain.templates import TemplatesError, contains_template, walk
-from pytest_httpchain.utils import process_substitutions
+from pytest_httpchain.utils import path_segment, process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
 
 logger = logging.getLogger(__name__)
@@ -289,32 +292,51 @@ def _none_is_a_value(model: BaseModel, field: str) -> bool:
     return field == "description" or (isinstance(model, JsonBody) and field == "json")
 
 
+def _none_is_compared(model: BaseModel, field: str) -> bool:
+    """The fields where a None is not "undeclared" but an operand the check
+    compares with: a `JMESPathMatcher`'s eq, ne, contains and not_contains,
+    where the scenario writes null to mean null. A template there that rendered
+    to None is still refused (it more likely lost the value it was written
+    for), but it would not have disabled the check."""
+    return isinstance(model, JMESPathMatcher) and field in JMESPathMatcher.NULL_OPERANDS
+
+
 # Where a value sits in a dumped model: field names and dict keys, list indices.
 type _Keys = tuple[str | int, ...]
 
 
-def _rendered_away(declared: Any, substituted: Any, keys: _Keys = ()) -> Iterator[tuple[_Keys, str]]:
-    """``(keys, template)`` for each model field that was declared but rendered
-    to None, ``keys`` locating it in ``substituted``.
+class _Vanished(NamedTuple):
+    """A declared field a template rendered to None: where it sits, the
+    template as written, and whether None is an operand there
+    (`_none_is_compared`)."""
+
+    keys: _Keys
+    template: str
+    compared: bool = False
+
+
+def _rendered_away(declared: Any, substituted: Any, keys: _Keys = ()) -> Iterator[_Vanished]:
+    """Each model field that was declared but rendered to None, ``keys``
+    locating it in ``substituted``.
 
     ``substituted`` is ``declared`` dumped and substituted but not yet
     validated, so it is read alongside the declared models, which say what is a
     model field and what a dict value; dicts and lists are followed to the
     models inside them (``verify.headers`` holds its matchers in a dict). Only
     model fields count: a dict value or list item that renders to None — a query
-    parameter, a user-function kwarg — is a value handed on, not a field left
-    undeclared. Only a string can render to None (walk() maps containers
-    element-wise and dumps other models to dicts first), so what was declared is
-    always a template.
+    parameter, a user-function kwarg, a ``verify.jmespath`` value compared with
+    null — is a value handed on, not a field left undeclared. Only a string can
+    render to None (walk() maps containers element-wise and dumps other models
+    to dicts first), so what was declared is always a template.
     """
 
-    def field(declared_value: Any, substituted_value: Any, field_keys: _Keys) -> Iterator[tuple[_Keys, str]]:
+    def field(declared_value: Any, substituted_value: Any, field_keys: _Keys, compared: bool = False) -> Iterator[_Vanished]:
         if isinstance(declared_value, RootModel):
             # Dumped as its bare root value, not as {"root": ...}: the root is the
             # field, at the model's own place (a user-function name).
             declared_value = declared_value.root
         if declared_value is not None and substituted_value is None:
-            yield field_keys, declared_value
+            yield _Vanished(field_keys, declared_value, compared)
         else:
             yield from _rendered_away(declared_value, substituted_value, field_keys)
 
@@ -325,7 +347,7 @@ def _rendered_away(declared: Any, substituted: Any, keys: _Keys = ()) -> Iterato
             # Only the declared fields were dumped (`_render_declared`).
             for name in type(declared).model_fields:
                 if name in substituted and not _none_is_a_value(declared, name):
-                    yield from field(getattr(declared, name), substituted[name], (*keys, name))
+                    yield from field(getattr(declared, name), substituted[name], (*keys, name), _none_is_compared(declared, name))
         case dict(), dict():
             for key, declared_value in declared.items():
                 if key in substituted:
@@ -336,7 +358,7 @@ def _rendered_away(declared: Any, substituted: Any, keys: _Keys = ()) -> Iterato
                 yield from _rendered_away(declared_value, substituted_value, (*keys, i))
 
 
-def _rendered_whole_away(declared: Any, rendered: Any, keys: _Keys = ()) -> Iterator[tuple[_Keys, str]]:
+def _rendered_whole_away(declared: Any, rendered: Any, keys: _Keys = ()) -> Iterator[_Vanished]:
     """`_rendered_away` for a model that one template rendered whole: a header
     matcher written as ``"{{ {'contains': ct, 'not_contains': 'text/html'} }}"``,
     or saved from the response and used as ``"{{ matcher }}"``.
@@ -345,6 +367,10 @@ def _rendered_whole_away(declared: Any, rendered: Any, keys: _Keys = ()) -> Iter
     validation has built it, so ``rendered`` is the validated model. A field the
     rendered mapping set explicitly (``model_fields_set``) to None is refused; one
     it left out was never declared.
+
+    A `JMESPathMatcher`, whose null operands (`_none_is_compared`) this would
+    misread, is never rendered whole: a template where a ``verify.jmespath``
+    value is written renders a value (`validate_rendered_verify`).
     """
     match declared, rendered:
         case BaseModel(), BaseModel() if type(declared) is type(rendered):
@@ -353,7 +379,7 @@ def _rendered_whole_away(declared: Any, rendered: Any, keys: _Keys = ()) -> Iter
         case (str() as template, BaseModel()) | (RootModel(root=str() as template), BaseModel()):
             for name in type(rendered).model_fields:
                 if name in rendered.model_fields_set and getattr(rendered, name) is None and not _none_is_a_value(rendered, name):
-                    yield (*keys, name), template
+                    yield _Vanished((*keys, name), template)
         case dict(), dict():
             for key, declared_value in declared.items():
                 if key in rendered:
@@ -405,7 +431,9 @@ def _render_declared[M: BaseModel](
     instead, without the claim that the None would have disabled anything. Which
     errors the Nones account for is settled by putting the declared templates
     back, which validated in those places before: whatever still fails is
-    reported as pydantic has it, under the refusal.
+    reported as pydantic has it, under the refusal. Where None is an operand
+    (`_none_is_compared`) it validates but disables nothing either: the
+    message says how to compare with null instead.
     """
     # walk()'s own model step (hands back a model with no template untouched;
     # otherwise dump, substitute, re-validate), taken apart at the re-validation.
@@ -423,9 +451,9 @@ def _render_declared[M: BaseModel](
     except ValidationError as e:
         if not vanished:
             raise
-        refusal = _rendered_to_none(where, *vanished[0])
+        refusal = _rendered_to_none(where, vanished[0])
         restored = substituted
-        for keys, template in vanished:
+        for keys, template, _ in vanished:
             restored = _replaced(restored, keys, template)
         try:
             validate(restored)
@@ -434,13 +462,15 @@ def _render_declared[M: BaseModel](
         raise error(refusal) from e
     vanished = vanished or list(_rendered_whole_away(declared, rendered))
     if vanished:
-        raise error(f"{_rendered_to_none(where, *vanished[0])}, which would silently disable it")
+        first = vanished[0]
+        raise error(_rendered_to_none(where, first) if first.compared else f"{_rendered_to_none(where, first)}, which would silently disable it")
     return rendered
 
 
-def _rendered_to_none(where: str, keys: _Keys, template: str) -> str:
-    path = where + "".join(f"[{key}]" if isinstance(key, int) else f".{key}" for key in keys)
-    return f"'{path}' was declared as {template!r} but rendered to None"
+def _rendered_to_none(where: str, vanished: _Vanished) -> str:
+    path = where + "".join(map(path_segment, vanished.keys))
+    message = f"'{path}' was declared as {vanished.template!r} but rendered to None"
+    return f"{message}; to compare with null, write null" if vanished.compared else message
 
 
 def fresh_chain_state() -> dict[str, Any]:
@@ -1201,7 +1231,9 @@ class Carrier:
                         # Through the guard, not a bare walk(): process_verify sees
                         # the rendered model alone and cannot tell an absent
                         # assertion from one a template rendered away.
-                        verify_model = _render_declared(step.verify, step_context, "verify", VerificationError)
+                        # Rendered as declared: a verify.jmespath value stays a
+                        # value, an object it rendered included.
+                        verify_model = _render_declared(step.verify, step_context, "verify", VerificationError, validate=functools.partial(validate_rendered_verify, step.verify))
                         process_verify(verify_model, response, cls.scenario_dir, cls.redaction)
 
                     case _:

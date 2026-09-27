@@ -25,8 +25,8 @@ not free their numbers for reuse.
 | `HTTPCHAIN004` | warning | Variable referenced before it is saved or defined — saved by a later stage or by a later step of the same stage's response, or defined by a later substitution step (ordering / data-flow) |
 | `HTTPCHAIN005` | warning | Stage has no verify step (no response validation) |
 | `HTTPCHAIN006` | warning | Verify step asserts nothing (no-op) |
-| `HTTPCHAIN007` | error | Body or header matcher `contains`/`not_contains` list the same substring |
-| `HTTPCHAIN008` | error | Body or header matcher `matches`/`not_matches` list the same pattern |
+| `HTTPCHAIN007` | error | Body or header matcher `contains`/`not_contains` list the same substring, or a `verify.jmespath` matcher's `contains` and `not_contains` are the same JSON value |
+| `HTTPCHAIN008` | error | Body, header or `verify.jmespath` matcher `matches`/`not_matches` list the same pattern |
 | `HTTPCHAIN009` | warning | Saved variable is shadowed by a scenario-level fixture |
 | `HTTPCHAIN010` | error | File not found |
 | `HTTPCHAIN011` | error | Path is not a file |
@@ -47,7 +47,7 @@ not free their numbers for reuse.
 | `HTTPCHAIN026` | warning | `$ref` path matches files under both lookup bases (ambiguous) |
 | `HTTPCHAIN027` | warning | User-defined name shadowed by the reserved `response` namespace |
 | `HTTPCHAIN028` | warning | Scenario directive (`$include`/`$merge`, or file-path `$ref`) inside an inline JSON Schema — not resolved there |
-| `HTTPCHAIN029` | warning | Template expression in a dict **key** — only values are substituted, so the key is sent literally |
+| `HTTPCHAIN029` | warning | Template expression in a dict **key** — only values are substituted, so the key is sent literally (a `verify.jmespath` key is evaluated as written; one that is not valid JMESPath fails validation instead) |
 | `HTTPCHAIN030` | warning | Template expression in a `functions` substitution's **kwargs** — kwargs are passed to the function unrendered, so it arrives as literal text |
 | `HTTPCHAIN031` | error | `xdist_group` marker in a **stage's** `marks`, naming a group the scenario does not declare — under `--dist loadgroup` it runs that stage apart from the rest of the scenario; put it in the scenario's `marks` (see [pytest-xdist](advanced/parallel.md#running-scenarios-in-parallel-with-pytest-xdist)) |
 | `HTTPCHAIN032` | error | Stage name contains `::`, pytest's node-id separator — the stage cannot be run by its node id, and `--dist loadscope` runs it apart from the rest of the scenario |

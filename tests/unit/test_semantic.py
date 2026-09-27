@@ -102,6 +102,103 @@ def test_status_templates_are_checked_in_every_form(status):
     assert undefined == [("stages[0].response", "Stage 's': response references potentially undefined variable(s): ['nope']")]
 
 
+@pytest.mark.parametrize(
+    "jmespath",
+    [
+        pytest.param({"id": "{{ nope }}"}, id="value"),
+        pytest.param({"tags": ["{{ nope }}"]}, id="array-entry"),
+        pytest.param({"id": {"gt": "{{ nope }}"}}, id="matcher-key"),
+        pytest.param({"meta": {"eq": {"page": "{{ nope }}"}}}, id="eq-object-member"),
+    ],
+)
+def test_jmespath_templates_are_checked_in_the_response_step_scope(jmespath):
+    """``verify.jmespath`` values render in the response step's scope, as
+    every verify field's do, wherever in the value the template sits."""
+    diags = _check([{**_STAGE, "response": [{"verify": {"jmespath": jmespath}}]}])
+    assert [(d.code, d.location, d.message) for d in diags] == [
+        (DiagnosticCode.UNDEFINED_VAR, "stages[0].response", "Stage 's': response references potentially undefined variable(s): ['nope']")
+    ]
+
+
+def test_jmespath_templates_see_what_a_response_step_sees():
+    """The response namespace and a prior step's save are in scope; a later
+    step's save is a forward reference, as the runtime would find it."""
+    response = [
+        {"save": {"jmespath": {"owner": "data.owner"}}},
+        {"verify": {"jmespath": {"data.id": "{{ owner }}", "code": "{{ response.status }}", "next": "{{ later }}"}}},
+        {"save": {"jmespath": {"later": "data.next"}}},
+    ]
+    diags = _check([{**_STAGE, "response": response}])
+    assert [(d.code, d.location, d.message) for d in diags] == [
+        (DiagnosticCode.FORWARD_REF, "stages[0].response", "Stage 's': response step references 'later' before the save that produces it — steps resolve in order")
+    ]
+
+
+@pytest.mark.parametrize("key", ["'{{ nope }}'", '"{{ nope }}"'], ids=["string-literal", "quoted-field-name"])
+def test_jmespath_key_is_never_a_reference(key):
+    """A key is never rendered: a template in one that compiles as JMESPath (a
+    string literal, a quoted field name) is HTTPCHAIN029's, not a reference to
+    an undefined name, and it is evaluated as written, not sent."""
+    diags = _check([{**_STAGE, "response": [{"verify": {"jmespath": {key: "x"}}}]}])
+    assert [(d.code, d.location, d.message) for d in diags] == [
+        (
+            DiagnosticCode.TEMPLATE_IN_KEY,
+            "stages[0].response[0].verify.jmespath",
+            f"Key {key!r} contains a template expression, but a verify.jmespath key is never rendered — JMESPath evaluates it as written. "
+            "Write the template in the value the key maps to.",
+        )
+    ]
+
+
+def test_key_named_jmespath_elsewhere_is_sent_literally():
+    """Only a verify step's jmespath holds expressions: a request body object
+    under keys that happen to read verify.jmespath is sent as any other."""
+    request = {"url": "http://server/x", "method": "POST", "body": {"json": {"verify": {"jmespath": {"{{ k }}": 1}}}}}
+    diags = _check([{**_STAGE, "request": request}])
+    assert [(d.code, d.message) for d in diags] == [
+        (
+            DiagnosticCode.TEMPLATE_IN_KEY,
+            "Key '{{ k }}' contains a template expression, but only values are substituted — the key is sent literally. "
+            "Move the dynamic part into the value, or build the object in a user function.",
+        )
+    ]
+
+
+@pytest.mark.parametrize("jmespath", [{"id": 1}, {"id": None}, {"id": {"ne": None}}], ids=["value", "null", "matcher"])
+def test_jmespath_alone_is_an_assertion(jmespath):
+    """HTTPCHAIN006: a verify step with only jmespath asserts something."""
+    diags = _check([{**_STAGE, "response": [{"verify": {"jmespath": jmespath}}]}])
+    assert diags == []
+
+
+@pytest.mark.parametrize(
+    ("matcher", "contradicts"),
+    [
+        pytest.param({"contains": "x", "not_contains": "x"}, True, id="same-substring"),
+        pytest.param({"contains": [1, {"a": 2}], "not_contains": [1.0, {"a": 2}]}, True, id="equal-as-json"),
+        # null is an operand: an array must both hold and lack a null.
+        pytest.param({"contains": None, "not_contains": None}, True, id="both-null"),
+        pytest.param({"contains": "{{ response.status }}", "not_contains": "{{ response.status }}"}, True, id="same-template"),
+        pytest.param({"contains": True, "not_contains": 1}, False, id="true-is-not-1"),
+        pytest.param({"contains": "1", "not_contains": 1}, False, id="text-is-not-a-number"),
+        pytest.param({"contains": None}, False, id="not_contains-unset"),
+        pytest.param({"matches": "^A", "not_matches": "^a"}, False, id="different-patterns"),
+    ],
+)
+def test_jmespath_contains_contradiction(matcher, contradicts):
+    """HTTPCHAIN007 for a jmespath matcher: contains and not_contains the same
+    JSON value, as the check compares them, can never both hold."""
+    diags = _check([{**_STAGE, "response": [{"verify": {"jmespath": {"items": matcher}}}]}])
+    assert [(d.code, d.location) for d in diags] == ([(DiagnosticCode.CONTAINS_CONTRADICTION, "stages[0].response[0].verify.jmespath.items")] if contradicts else [])
+
+
+def test_empty_jmespath_asserts_nothing():
+    diags = _check([{**_STAGE, "response": [{"verify": {"jmespath": {}}}]}])
+    assert [(d.code, d.message) for d in diags] == [
+        (DiagnosticCode.NOOP_VERIFY, "Stage 's': verify step asserts nothing (no status, headers, jmespath, expressions, user functions, or body checks)")
+    ]
+
+
 def test_dataflow_locations_are_indexed_json_paths():
     """`Diagnostic.location` is documented as a machine-routable address, so an
     unnamed stage must still produce a usable one (it used to be "")."""

@@ -42,7 +42,7 @@ A key-value store persists throughout scenario execution. Variables, fixtures, a
 
 ### Response Processing
 
--   **JMESPath** — Extract values from JSON responses directly
+-   **JMESPath** — Assert on values in JSON responses directly (`"jmespath": {"data.id": 42, "items": {"length": 3}}`), or extract them for later stages
 -   **JSON Schema** — Validate response structure against a schema
 -   **User functions** — Call Python functions for custom extraction, verification, or authentication
 

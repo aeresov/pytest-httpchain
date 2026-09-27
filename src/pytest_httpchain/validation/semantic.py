@@ -3,6 +3,7 @@
 Each check family is a generator of `Diagnostic`; `check_scenario` composes them.
 """
 
+import json
 import re
 import warnings
 from collections import Counter
@@ -12,9 +13,11 @@ from urllib.parse import urlparse
 
 import pytest
 
+from pytest_httpchain.jsonref import json_equal
 from pytest_httpchain.models import (
     FunctionsSubstitution,
     HeaderMatcher,
+    JMESPathMatcher,
     SaveStep,
     Scenario,
     Substitution,
@@ -38,8 +41,9 @@ from pytest_httpchain.scoping import (
     substitution_step_refs,
 )
 from pytest_httpchain.templates import TEMPLATE_PATTERN, contains_template, is_complete_template
-from pytest_httpchain.utils import make_marker, optional_as_list, xdist_group_names
+from pytest_httpchain.utils import make_marker, optional_as_list, path_segment, xdist_group_names
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ScenarioInfo, diag
+from pytest_httpchain.validation.loader import is_jmespath_expectations_position
 
 
 def _scenario_fixtures(scenario: Scenario) -> list[str]:
@@ -342,8 +346,8 @@ def _relative_url_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
 
 def _verify_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
     """HTTPCHAIN005/006/007/008/018: stages without verification, verify steps
-    that assert nothing, non-template expressions, and contradictory body or
-    header declarations."""
+    that assert nothing, non-template expressions, and contradictory body,
+    header or jmespath matcher declarations."""
     for i, stage in enumerate(scenario.stages):
         if not any(isinstance(step, VerifyStep) for step in stage.response):
             yield diag(DiagnosticCode.NO_VERIFY, f"Stage '{stage.name}' has no response validation (no verify step)", location=f"stages[{i}]")
@@ -357,7 +361,7 @@ def _verify_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
             if _is_noop_verify(verify):
                 yield diag(
                     DiagnosticCode.NOOP_VERIFY,
-                    f"Stage '{stage.name}': verify step asserts nothing (no status, headers, expressions, user functions, or body checks)",
+                    f"Stage '{stage.name}': verify step asserts nothing (no status, headers, jmespath, expressions, user functions, or body checks)",
                     location=location,
                 )
 
@@ -394,12 +398,17 @@ def _verify_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                     not_matches=optional_as_list(expected.not_matches),
                 )
 
+            for expression, expected in verify.jmespath.items():
+                if isinstance(expected, JMESPathMatcher):
+                    yield from _jmespath_contradiction_diagnostics(stage.name, expression, f"{location}.jmespath{path_segment(expression)}", expected)
+
 
 def _is_noop_verify(verify: Verify) -> bool:
     body = verify.body
     return (
         verify.status is None
         and not verify.headers
+        and not verify.jmespath
         and not verify.expressions
         and not verify.user_functions
         and body.schema is None
@@ -433,6 +442,25 @@ def _contradiction_diagnostics(
         overlap = {str(value) for value in required} & {str(value) for value in forbidden}
         if overlap:
             yield diag(code, f"Stage '{stage_name}': {what} both requires and forbids {noun}: {sorted(overlap)}", location=location)
+
+
+def _jmespath_contradiction_diagnostics(stage_name: str, expression: str, location: str, matcher: JMESPathMatcher) -> Iterator[Diagnostic]:
+    """HTTPCHAIN007/008 for a ``verify.jmespath`` matcher, whose keys hold one
+    operand each: contains and not_contains the same JSON value, matches and
+    not_matches the same pattern. No value passes both.
+
+    A key counts as set by ``model_fields_set``, since null is an operand of
+    contains and not_contains. The contains operands are JSON values, compared
+    as the check compares them (`json_equal`: 1 is 1.0, true is not 1); the
+    patterns are compared as written. Either may be a template, compared as
+    unrendered text, as `_contradiction_diagnostics` does.
+    """
+    what = f"Stage '{stage_name}': jmespath {expression!r} verification both requires and forbids"
+    keys = matcher.model_fields_set
+    if {"contains", "not_contains"} <= keys and json_equal(matcher.contains, matcher.not_contains):
+        yield diag(DiagnosticCode.CONTAINS_CONTRADICTION, f"{what} {json.dumps(matcher.contains, ensure_ascii=False)} (contains and not_contains)", location=location)
+    if {"matches", "not_matches"} <= keys and matcher.matches == matcher.not_matches:
+        yield diag(DiagnosticCode.MATCHES_CONTRADICTION, f"{what} pattern {json.dumps(matcher.matches, ensure_ascii=False)} (matches and not_matches)", location=location)
 
 
 def _inline_schema_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
@@ -556,25 +584,32 @@ def _template_key_diagnostics(test_data: dict[str, Any]) -> Iterator[Diagnostic]
     warning, just a wrong request.
     """
 
-    def templated_keys(node: Any, location: str) -> Iterator[tuple[str, str]]:
+    def templated_keys(node: Any, location: str, path: tuple[str | int, ...]) -> Iterator[tuple[str, str, tuple[str | int, ...]]]:
         match node:
             case dict():
                 for key, value in node.items():
                     child = f"{location}.{key}" if location else str(key)
                     if isinstance(key, str) and re.search(TEMPLATE_PATTERN, key):
-                        yield key, location
-                    yield from templated_keys(value, child)
+                        yield key, location, path
+                    yield from templated_keys(value, child, (*path, key))
             case list():
                 for index, item in enumerate(node):
-                    yield from templated_keys(item, f"{location}[{index}]")
+                    yield from templated_keys(item, f"{location}[{index}]", (*path, index))
 
-    for key, location in templated_keys(test_data, ""):
-        yield diag(
-            DiagnosticCode.TEMPLATE_IN_KEY,
-            f"Key {key!r} contains a template expression, but only values are substituted — the key is sent literally. "
-            f"Move the dynamic part into the value, or build the object in a user function.",
-            location=location or None,
-        )
+    for key, location, path in templated_keys(test_data, "", ()):
+        if is_jmespath_expectations_position(path):
+            # Only one that compiles gets here (a quoted string or field name):
+            # the model refuses the rest, saying why.
+            message = (
+                f"Key {key!r} contains a template expression, but a verify.jmespath key is never rendered — JMESPath evaluates it as written. "
+                f"Write the template in the value the key maps to."
+            )
+        else:
+            message = (
+                f"Key {key!r} contains a template expression, but only values are substituted — the key is sent literally. "
+                f"Move the dynamic part into the value, or build the object in a user function."
+            )
+        yield diag(DiagnosticCode.TEMPLATE_IN_KEY, message, location=location or None)
 
 
 def _template_kwargs_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:

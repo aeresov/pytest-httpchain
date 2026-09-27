@@ -92,11 +92,12 @@ saved as `HTTPCHAIN004`, naming the stage *and* the phase it appears in.
 
 ### "was declared as ... but rendered to None"
 
-A setting or check — a header matcher field, `verify.status`,
-`parallel.calls_per_sec`, `request.auth`, `ssl.cert`, `url`, ... — was written
-as a template that rendered to `null`, typically `get()` without a default or a
-JMESPath save of a key the response did not have. Fix where the value comes
-from, or give `get()` a default. See
+A setting or check — a header matcher field, `verify.status`, a
+`verify.jmespath` matcher operand, `parallel.calls_per_sec`, `request.auth`,
+`ssl.cert`, `url`, ... — was written as a template that rendered to `null`,
+typically `get()` without a default or a JMESPath save of a key the response
+did not have. Fix where the value comes from, or give `get()` a default; where
+a `verify.jmespath` operand was meant to be `null`, write `null`. See
 [Templates that render to `null`](usage/substitutions.md#templates-that-render-to-null).
 
 ### Comprehension Limits
@@ -124,6 +125,7 @@ Common causes:
 -   Status code mismatch
 -   Missing or incorrect response headers
 -   JMESPath expression returns `null` instead of expected value
+-   A `verify.jmespath` value equal in Python but not in JSON: `expected 1, got true`, `expected "42", got 42` (see [JMESPath Assertions](usage/responses.md#jmespath-assertions))
 -   JSON Schema validation failure
 
 ### `[REDACTED]` in a Report

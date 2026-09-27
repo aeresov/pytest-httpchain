@@ -963,6 +963,204 @@
       ],
       "title": "IndividualParameter"
     },
+    "JMESPathMatcher": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "eq": {
+              "$ref": "#/$defs/JsonValue",
+              "description": "Equal to this JSON value (true is not 1; 1 equals 1.0)."
+            },
+            "ne": {
+              "$ref": "#/$defs/JsonValue",
+              "description": "Not equal to this JSON value; {\"ne\": null} for a value that is there and not null."
+            },
+            "gt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "title": "Gt",
+              "description": "A number greater than this."
+            },
+            "ge": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "title": "Ge",
+              "description": "A number greater than or equal to this."
+            },
+            "lt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "title": "Lt",
+              "description": "A number less than this."
+            },
+            "le": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "title": "Le",
+              "description": "A number less than or equal to this."
+            },
+            "contains": {
+              "$ref": "#/$defs/JsonValue",
+              "description": "A string holding this substring, an array holding an element equal to this, or an object holding this key."
+            },
+            "not_contains": {
+              "$ref": "#/$defs/JsonValue",
+              "description": "A string without this substring, an array without an element equal to this, or an object without this key."
+            },
+            "matches": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "title": "Matches",
+              "description": "A string this regex matches (re.search)."
+            },
+            "not_matches": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "title": "Not Matches",
+              "description": "A string this regex does not match (re.search)."
+            },
+            "type": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "string",
+                        "number",
+                        "integer",
+                        "boolean",
+                        "array",
+                        "object",
+                        "null"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "title": "Type",
+              "description": "A value of this JSON type: integer is a number written without a fraction or exponent, number any number; neither is a boolean."
+            },
+            "length": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "title": "Length",
+              "description": "A string, array or object of this length (characters, elements, keys)."
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "title": "JMESPathMatcher",
+      "description": "Matcher for the value one JMESPath expression extracts from the response\nbody; every key given must hold. To compare with an object, give it as eq."
+    },
     "JMESPathSave": {
       "anyOf": [
         {
@@ -2365,6 +2563,49 @@
               ],
               "title": "Headers",
               "description": "Expected response headers: a string (exact match) or a matcher object (contains/not_contains/matches/not_matches) per key."
+            },
+            "jmespath": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/JMESPathMatcher"
+                      },
+                      {
+                        "description": "Equal to this JSON value (true is not 1; 1 equals 1.0).",
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null",
+                          "array"
+                        ]
+                      }
+                    ]
+                  },
+                  "examples": [
+                    {
+                      "data.id": "{{ user_id }}",
+                      "items[0].name": {
+                        "matches": "^A"
+                      },
+                      "length(items)": 3,
+                      "meta": {
+                        "eq": {
+                          "page": 1
+                        }
+                      }
+                    }
+                  ],
+                  "type": "object"
+                }
+              ],
+              "title": "Jmespath",
+              "description": "Assertions on the JSON response body: a JMESPath expression per key, mapped to the value it must equal (any JSON value but an object) or to a matcher object (eq, ne, gt, ge, lt, le, contains, not_contains, matches, not_matches, type, length). A missing path extracts null."
             },
             "expressions": {
               "anyOf": [

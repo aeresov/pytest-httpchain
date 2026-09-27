@@ -4,7 +4,7 @@ import pytest
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain.templates import TemplatesError
-from pytest_httpchain.utils import make_marker, process_substitutions, request_content, xdist_group_names
+from pytest_httpchain.utils import make_marker, path_segment, process_substitutions, request_content, xdist_group_names
 
 # The functions these tests import live in a module of their own; see its
 # docstring for why they are not defined here.
@@ -142,3 +142,19 @@ def test_xdist_group_names_reads_names_as_xdist_does():
 )
 def test_request_content(request_, expected):
     assert request_content(request_) == expected
+
+
+@pytest.mark.parametrize(
+    ("key", "segment"),
+    [
+        pytest.param(0, "[0]", id="index"),
+        pytest.param("status", ".status", id="name"),
+        pytest.param("X-Custom-Header", ".X-Custom-Header", id="header-name"),
+        # A JMESPath expression as a key: dotted, it would read as two steps.
+        pytest.param("data.id", '["data.id"]', id="dotted"),
+        pytest.param("items[0]", '["items[0]"]', id="brackets"),
+        pytest.param('a"b', '["a\\"b"]', id="quote"),
+    ],
+)
+def test_path_segment(key, segment):
+    assert path_segment(key) == segment
