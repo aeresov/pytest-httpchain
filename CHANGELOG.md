@@ -112,8 +112,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the scenarios the new `HTTPCHAIN031` to `HTTPCHAIN033` reject (see Added), two more split a chain.
   Under loadgroup, a scenario in a directory such as `[smoke]`: the automatic group is named after
   the scenario's node id, and xdist ignores a group whose name has a `]` with no `@` after it, so
-  every stage was scheduled alone. The plugin now replaces `]` and `@` in that name. Under loadscope, a test id containing `::`, from a parametrize step's `ids` or values (such
-  as `"::1"`) or from a class-scoped fixture's `params`. pytest itself handles such an id, so it
+  every stage was scheduled alone. The plugin now replaces `]` and `@` in that name. Under
+  loadscope, a test id containing `::`, from a parametrize step's `ids` or values (such as
+  `"::1"`) or from a class-scoped fixture's `params`. pytest itself handles such an id, so it
   fails collection only under loadscope, naming the ids.
 - An `xdist_group` in a scenario's own `marks` now works as it does for any pytest test: scenarios
   declaring the same group run on one worker under `--dist loadgroup`, one after the other, where
@@ -237,6 +238,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which passed until now with the error only logged, fails after the upgrade. Call the factory in
   each stage that needs the resource, or, to share one across stages, provide it from a
   `class`-scoped fixture.
+- The `httpx` floor is raised to 0.27.1. httpx 0.27.0 percent-encodes a `\` in a URL path, so
+  `{{ server }}/a\b` reached the server as `/a%5Cb` there, not as written (see Fixed).
 
 ## [0.15.2] - 2026-09-26
 
