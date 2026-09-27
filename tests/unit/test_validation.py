@@ -14,7 +14,7 @@ import pytest
 
 import pytest_httpchain.validation.loader as validation_loader
 from pytest_httpchain.validation import SEVERITY, DiagnosticCode, load_scenario, resolve_root_path, validate_scenario
-from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK
+from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
 
 C = DiagnosticCode
 # A stable importable directory so `userfuncs:<name>` refs resolve under --syspath.
@@ -230,6 +230,26 @@ def test_deep_disabled_does_not_check_imports(datadir):
     assert validate_scenario(datadir / "deep_import_missing.json").diagnostics == []
 
 
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        # The decoder's RecursionError is not a ValueError.
+        pytest.param(TOO_DEEP_TO_PARSE, "Schema file is not valid JSON: .*while decoding a JSON array", id="too-deep-to-parse"),
+        pytest.param(b'{"items": ' * 1_000 + b"{}" + b"}" * 1_000, "not a valid JSON Schema", id="too-deep-to-check"),
+        # The meta-check fails cleanly, but the error's str() pretty-prints the
+        # deep `type` value, inside the except clause.
+        pytest.param(b'{"type": ' + TOO_DEEP_TO_WALK + b"}", "not a valid JSON Schema: .* is not valid under any of the given schemas", id="too-deep-to-describe"),
+    ],
+)
+def test_deep_schema_file_nested_too_deeply(tmp_path, content, message):
+    """Generated, not a ``test_validation/`` fixture: the payloads are too big to commit."""
+    (tmp_path / "schema.json").write_bytes(content)
+    result = on_bounded_stack(validate_scenario, _write(tmp_path, [_stage(response=[{"verify": {"body": {"schema": "schema.json"}}}])]), deep=True)
+
+    assert [(d.code, d.location) for d in result.diagnostics] == [(C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema")]
+    assert re.search(message, result.diagnostics[0].message)
+
+
 def test_wrong_extension_warns(datadir):
     result = validate_scenario(datadir / "wrong_extension.txt")
     assert _codes(result) == [C.WRONG_EXTENSION]
@@ -243,10 +263,8 @@ def test_directory_is_not_a_file(tmp_path):
 @pytest.mark.parametrize(
     ("content", "reason"),
     [
-        # The decoder's RecursionError is not a ValueError. 3.14 bounds the
-        # decoder by the real stack size, and with a stack of 16 MB or more it
-        # parses this and the resolver's walk raises instead.
-        pytest.param(TOO_DEEP_TO_PARSE, r"\((.*while decoding a JSON array.*|maximum recursion depth exceeded)\)$", id="too-deep-to-parse"),
+        # The decoder's RecursionError is not a ValueError.
+        pytest.param(TOO_DEEP_TO_PARSE, r"\(.*while decoding a JSON array", id="too-deep-to-parse"),
         # Parses, but the resolver's own walk spends a frame per level.
         pytest.param(TOO_DEEP_TO_WALK, r"\(maximum recursion depth exceeded\)$", id="too-deep-to-walk"),
     ],
@@ -257,7 +275,7 @@ def test_file_nested_too_deeply_is_a_parse_error(tmp_path, content, reason):
     are too big to commit."""
     path = tmp_path / "test_x.http.json"
     path.write_bytes(b'{"stages": ' + content + b"}")
-    result = validate_scenario(path)
+    result = on_bounded_stack(validate_scenario, path)
 
     assert [(d.code, d.location) for d in result.diagnostics] == [(C.PARSE_ERROR, None)]
     assert re.search(f"^Failed to parse JSON file: nested too deeply {reason}", result.diagnostics[0].message)

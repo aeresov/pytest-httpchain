@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from pytest_httpchain.cli import app
 from pytest_httpchain.schema import build_schema
-from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK
+from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
 
 runner = CliRunner()
 # typer renders usage errors through rich, which colours them whenever
@@ -272,7 +272,7 @@ def test_undecodable_file_exits_one_with_an_error_line(tmp_path, command, conten
     and a RecursionError is not even a ValueError."""
     scenario = tmp_path / "test_x.http.json"
     scenario.write_bytes(content)
-    result = runner.invoke(app, [command, str(scenario)])
+    result = on_bounded_stack(runner.invoke, app, [command, str(scenario)])
     assert result.exit_code == 1
     assert result.stdout == ""
     prefix = "error: " if command == "resolve" else f"error: cannot load {scenario}: "
