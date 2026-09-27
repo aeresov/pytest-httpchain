@@ -158,6 +158,14 @@ returns a dict is accessed with subscript (`config()['environment']`).
 
 Use `{{ expression }}` syntax in any request value. Expressions support Python syntax via simpleeval.
 
+Each template holds exactly one expression: `{{ a; b }}` fails the stage
+rather than evaluating only `a` (a `;` inside a string literal is fine). Any
+error while evaluating a template, including turning an interpolated value into
+text, fails the stage with a message naming the template. A template that is the
+whole value keeps the value as it is; a query parameter's value is turned into
+text only when the request is built, and a failure there names the parameter
+(see [Requests](requests.md)).
+
 !!! note
     Only **values** are substituted. A template in a dict *key* — a header name,
     a query parameter name, a JSON body key — is never rendered and is sent

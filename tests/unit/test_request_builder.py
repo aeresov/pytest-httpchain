@@ -88,6 +88,27 @@ def test_unparseable_url_is_a_request_error():
         build_request_kwargs(Request(url="http://t:port/{{ x }}", params={"limit": 10}))
 
 
+class _Unprintable:
+    def __str__(self) -> str:
+        raise RuntimeError("no text form")
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        # A whole-string template keeps its raw value, and params are Any, so
+        # the str() happens in httpx's param encoding — which ran outside any
+        # handler and escaped as the raw ValueError with the plugin's traceback.
+        pytest.param(2**100000, r"ValueError: Exceeds the limit \(4300 digits\)", id="int-past-digit-limit"),
+        pytest.param(_Unprintable(), "RuntimeError: no text form", id="str-raises"),
+        pytest.param(["ok", _Unprintable()], "RuntimeError: no text form", id="list-item-str-raises"),
+    ],
+)
+def test_param_without_text_form_is_a_request_error(value, message):
+    with pytest.raises(RequestError, match=f"Cannot convert query parameter 'n' to text: {message}"):
+        build_request_kwargs(Request(url="http://t/items?page=2", params={"n": value}))
+
+
 @pytest.mark.parametrize(("declared", "follow"), [({}, True), ({"allow_redirects": False}, False)], ids=["default", "disabled"])
 def test_allow_redirects_maps_to_follow_redirects(declared, follow):
     """httpx defaults follow_redirects to False, so silently dropping the

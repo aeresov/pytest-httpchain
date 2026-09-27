@@ -1,3 +1,4 @@
+import ast
 import os
 import re
 from collections.abc import Mapping
@@ -107,13 +108,26 @@ def _build_evaluator(context: Mapping[str, Any]) -> EvalWithCompoundTypes:
     )
 
 
-def _eval_expr(evaluator: EvalWithCompoundTypes, expr: str) -> Any:
-    """Evaluate one expression; every failure becomes a `TemplatesError`."""
+def _eval_expr(evaluator: EvalWithCompoundTypes, expr: str, *, as_text: bool = False) -> Any:
+    """Evaluate one expression; every failure becomes a `TemplatesError`.
+
+    ``as_text`` returns the value's ``str()`` for interpolation. That runs in
+    here because it can raise too — an int past Python's digit limit, an object
+    whose ``__str__`` fails — and must fail the same way.
+    """
     # Rebuilt in its original {{ … }} form: an f-string would collapse the braces
     # and show text that is not in the user's scenario.
     display = "{{ " + expr + " }}"
     try:
-        return evaluator.eval(expr)
+        # simpleeval parses in exec mode and, handed `a; b`, evaluates only `a`
+        # behind a mere warning — so `{{ ok == True; False }}` passed a verify.
+        # Parse here to refuse that, and hand simpleeval the one statement; an
+        # empty parse is left to simpleeval, which refuses it itself.
+        statements = ast.parse(expr.strip()).body
+        if len(statements) > 1:
+            raise InvalidExpression(f"a template holds one expression, not {len(statements)} statements separated by ';'")
+        value = evaluator.eval(expr, statements[0] if statements else None)
+        return str(value) if as_text else value
     except NameNotDefined as e:
         raise TemplatesError(f"Undefined variable in expression '{display}': {e}") from e
     except FunctionNotDefined as e:
@@ -140,7 +154,7 @@ def _sub_string(line: str, evaluator: EvalWithCompoundTypes) -> Any:
         return _eval_expr(evaluator, expr)
 
     def _repl(match: re.Match[str]) -> str:
-        return str(_eval_expr(evaluator, match.group("expr").strip()))
+        return _eval_expr(evaluator, match.group("expr").strip(), as_text=True)
 
     return re.sub(TEMPLATE_PATTERN, _repl, line)
 

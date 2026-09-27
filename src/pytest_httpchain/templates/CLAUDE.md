@@ -58,6 +58,7 @@ validator depend on them, so treat them as API, not internals):
 - Surrounding whitespace still counts as a single expression: `walk(" {{ 42 }} ", {})` returns `42` (int), not `" 42 "`. The whole-string check (`_sub_string`) uses the same whitespace-tolerant predicate (`extract_template_expression`) as `is_complete_template`, which the models use to type a field as `TemplateExpression` — so schema validation and runtime evaluation agree. The padding (spaces, tabs, newlines) is dropped.
 - Mixed content returns string: `walk("Value: {{ 42 }}", {})` returns `"Value: 42"`
 - Single-line only: the pattern is not compiled with `re.DOTALL`, so an expression spanning newlines is not recognised as a template. Keep each `{{ ... }}` on one line (move multi-line logic into a user function).
+- One expression per template: `walk("{{ a; b }}", ...)` raises `TemplatesError`. simpleeval parses in exec mode and would evaluate only `a` behind a `MultipleExpressions` warning, so `_eval_expr` parses first and hands simpleeval the single statement.
 
 ### Trailing `}}` in dict/set literals (gotcha)
 The template delimiter is `}}`, and the matcher stops at the first `}}`. So a dict or set literal whose own closing brace sits immediately before the template's closing braces produces three consecutive `}` (`...}}}`), and the expression is truncated at the wrong place — the result is a broken or wrong evaluation, not an error you can easily spot.
@@ -118,4 +119,4 @@ walk("{{ env('HOME', '/tmp') }}", {})  # value of $HOME or "/tmp"
 - Scenario files are **trusted** input: treat them like code, not like untrusted data. Anyone who can author or edit a scenario can run arbitrary Python via templates.
 - `simpleeval` reduces accidental footguns (it rejects `__import__`, `open`, dunder/attribute access, etc.), but it is **not** a hardened sandbox. Upstream explicitly disclaims sandboxing, so do **not** rely on it as a security boundary against hostile expressions.
 - `env()` exposes the entire process environment, and context callables (user functions, factory fixtures) execute arbitrary Python by design.
-- Evaluation errors are raised as `TemplatesError`.
+- Evaluation errors are raised as `TemplatesError` — including the `str()` that interpolates a value into a string, which can raise too (an int past Python's digit limit, a failing `__str__`).

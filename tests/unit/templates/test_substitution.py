@@ -103,6 +103,8 @@ class TestWalk:
         ("{{ bool(0) }}", {}, False),
         ("{{ bool([]) }}", {}, False),
         ("{{ bool([1]) }}", {}, True),
+        # A ';' inside a string literal separates no statements.
+        ("{{ 'a;b' + x }}", {"x": ";c"}, "a;b;c"),
     ],
 )
 def test_expression_value(expr, context, expected):
@@ -208,6 +210,11 @@ def test_contains_template(obj, expected):
     assert contains_template(obj) is expected
 
 
+class _Unprintable:
+    def __str__(self) -> str:
+        raise RuntimeError("no text form")
+
+
 class TestWalkErrorMessages:
     @pytest.mark.parametrize(
         ("expr", "context", "expected_match"),
@@ -249,6 +256,29 @@ class TestWalkErrorMessages:
         with pytest.raises(TemplatesError, match=r"CustomBoom in expression '\{\{ boom\(\) \}\}': kaboom from user function") as exc_info:
             walk("{{ boom() }}", {"boom": boom})
         assert isinstance(exc_info.value.__cause__, CustomBoom)
+
+    @pytest.mark.parametrize(
+        ("template", "context", "expected_match"),
+        [
+            # Python refuses to render an int past 4300 digits as text.
+            pytest.param("x {{ 2 ** 100000 }}", {}, r"ValueError in expression '\{\{ 2 \*\* 100000 \}\}': Exceeds the limit", id="int-digit-limit"),
+            pytest.param("x {{ value }}", {"value": _Unprintable()}, r"RuntimeError in expression '\{\{ value \}\}': no text form", id="raising-str"),
+        ],
+    )
+    def test_interpolation_that_cannot_render_is_a_templates_error(self, template, context, expected_match):
+        """Interpolating a value calls str() on it, which can raise too. That
+        call ran outside the expression's error handling, so its raw exception
+        escaped a stage as a plugin traceback instead of failing it."""
+        with pytest.raises(TemplatesError, match=expected_match):
+            walk(template, context)
+
+    @pytest.mark.parametrize("template", ["{{ ok == True; False }}", "x {{ ok; False }}"], ids=["whole-string", "interpolated"])
+    def test_multiple_statements_are_rejected(self, template):
+        """simpleeval parses in exec mode and evaluated only the first of
+        `a; b`, behind a mere warning — so this verify expression came out
+        True, and the stage passed on half of what it asserts."""
+        with pytest.raises(TemplatesError, match=r"Invalid expression '\{\{ .*; False \}\}': a template holds one expression, not 2 statements"):
+            walk(template, {"ok": True})
 
 
 @pytest.mark.parametrize("name", sorted(TEMPLATE_BUILTINS))

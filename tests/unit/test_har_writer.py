@@ -209,14 +209,17 @@ class TestSerializationFamilies:
 
         assert [h["value"] for h in headers if h["name"] == "set-cookie"] == set_cookies
 
-    def test_query_string_extracted(self):
-        req = httpx.Request("GET", "https://x.com/p?a=1&b=2&a=3")
+    def test_query_string_keeps_wire_order(self):
+        """One record per pair, in the order the URL carries them — as postData
+        params already were. parse_qs grouped a repeated name's values under
+        its first occurrence, recording this query as a, a, b."""
+        req = httpx.Request("GET", "https://x.com/p?a=1&b=2&a=3&empty=")
         entry = request_response_to_har_entry(req, httpx.Response(200, request=req))
-        # Repeated keys are preserved as separate entries, per HAR.
         assert entry["request"]["queryString"] == [
             {"name": "a", "value": "1"},
-            {"name": "a", "value": "3"},
             {"name": "b", "value": "2"},
+            {"name": "a", "value": "3"},
+            {"name": "empty", "value": ""},
         ]
 
     def test_repeated_form_values_are_separate_scalar_params(self):

@@ -188,6 +188,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   redirect that turns the request into a `GET` (a `302` or `303`, or a `301` answering a `POST`)
   was never affected. A multipart (`files`) upload's body is still reported as not captured, on
   the first request and on a `307`/`308` follow-up alike: only a plain-bytes body is read back.
+- A template holding more than one statement, such as the verify expression
+  `{{ ok == True; False }}`, fails the stage instead of evaluating only its first part. simpleeval,
+  which evaluates templates, stops at the first `;` and merely warns about the rest, so that
+  expression came out `True` and the stage passed on half of what it checks. It now fails with
+  `Invalid expression '{{ ok == True; False }}': a template holds one expression, not 2 statements
+  separated by ';'`. A `;` inside a string literal is unaffected. Like any other syntax error in a
+  template, this is reported when the stage runs; `validate` does not parse expressions.
+- A value that cannot be turned into text fails the stage with a message naming where it was
+  used: the template it is interpolated into, or the query parameter it is the value of.
+  `"{{ server }}/items?n={{ 2 ** 100000 }}"`, a number past the 4300 digits Python converts to
+  text, or a value whose `__str__` raises, failed the stage with the raw `ValueError` (or whatever
+  `__str__` raised) and the plugin's internal traceback, without naming the template. It now
+  reads like any other failing expression:
+  `ValueError in expression '{{ 2 ** 100000 }}': Exceeds the limit (4300 digits) ...`. The same
+  template as the whole value of a query parameter, `"params": {"n": "{{ 2 ** 100000 }}"}`, keeps
+  the number as a number, which is turned into text only when the request is built; that failed
+  the same raw way and now fails with `Cannot convert query parameter 'n' to text: ValueError: ...`.
+- The HAR export records a request's query string in the order the URL carries it. A repeated
+  name's values were grouped under its first occurrence, so `?a=1&b=2&a=3` was recorded as `a=1`,
+  `a=3`, `b=2` in `queryString`; form `postData` params already kept their order.
 
 ### Changed
 

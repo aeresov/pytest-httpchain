@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, parse_qsl, urlparse
+from urllib.parse import parse_qsl, urlparse
 
 import httpx
 
@@ -69,8 +69,9 @@ def _format_headers(headers: httpx.Headers) -> list[dict[str, str]]:
 
 
 def _format_query_string(url: httpx.URL) -> list[dict[str, str]]:
-    params = parse_qs(urlparse(str(url)).query, keep_blank_values=True)
-    return [{"name": name, "value": value} for name, values in params.items() for value in values]
+    # parse_qsl, not parse_qs: the latter groups a repeated name's values under
+    # its first occurrence, so `a=1&b=2&a=3` would be recorded as a, a, b.
+    return [{"name": name, "value": value} for name, value in parse_qsl(urlparse(str(url)).query, keep_blank_values=True)]
 
 
 def _mime_type(content_type: str) -> str:

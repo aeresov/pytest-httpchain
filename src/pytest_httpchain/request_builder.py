@@ -78,6 +78,21 @@ def _read_file(path: Path, declared: Any, missing: str, unreadable: str) -> byte
         raise RequestError(f"{unreadable} '{declared}': {e}") from e
 
 
+def _encode_param(key: str, value: Any) -> str:
+    """``key``'s ``key=value`` segment(s), encoded as httpx encodes params.
+
+    httpx turns each value into text with ``str()``, which a whole-string
+    template's raw value can refuse: an int past Python's digit limit, or an
+    object whose ``__str__`` raises. That runs before the request is sent, so
+    it is caught here and reported against the parameter as a `RequestError`,
+    instead of escaping as the raw exception.
+    """
+    try:
+        return str(httpx.QueryParams({key: value}))
+    except Exception as e:
+        raise RequestError(f"Cannot convert query parameter '{key}' to text: {type(e).__name__}: {e}") from e
+
+
 def _merge_query(query: str, params: dict[str, Any]) -> str:
     """The URL's raw ``query`` with ``params`` merged in.
 
@@ -91,7 +106,7 @@ def _merge_query(query: str, params: dict[str, Any]) -> str:
     ``q=%E9`` (not UTF-8) went out as ``q=%EF%BF%BD``, ``a=1&b=2&a=3`` as
     ``a=1&a=3&b=2``, and ``a=1;b=2`` as ``a=1%3Bb%3D2``.
     """
-    pending = {key: str(httpx.QueryParams({key: value})) for key, value in params.items()}
+    pending = {key: _encode_param(key, value) for key, value in params.items()}
     segments = []
     for segment in query.split("&"):
         key = unquote_plus(segment.partition("=")[0])

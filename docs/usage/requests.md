@@ -79,8 +79,11 @@ set goes out just as it would without `params`, in the same place: a bare `flag`
 escape that is not UTF-8 such as `q=%E9`, and a `;` inside a parameter are all left alone. Names
 are compared decoded, so the `params` key `"sort"` also replaces `so%72t=name`. Values from
 `params` are encoded as form data (a space becomes `+`, `&` becomes `%26`), and a key whose value
-is an empty list is removed from the query. The HTTP report section and the HAR export show the
-URL that was sent.
+is an empty list is removed from the query. A value that is not a string is turned into text
+first (`true`/`false` for a boolean, nothing for `null`); one that cannot be, such as a
+`"{{ 2 ** 100000 }}"` past the 4300 digits Python converts to text or a fixture's object whose
+`__str__` raises, fails the stage with `Cannot convert query parameter 'n' to text: ...`. The
+HTTP report section and the HAR export show the URL that was sent.
 
 ## Headers
 
