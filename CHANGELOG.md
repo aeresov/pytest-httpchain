@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A `combinations` step whose combinations have a single key now hands the stage the bare value.
+  The stage got a one-element tuple instead: with `{"combinations": [{"id": 1}, {"id": 2}]}`,
+  `/item/{{ id }}` requested `/item/(1,)`, a stage that did not check the value still passed, and
+  `validate` reported nothing. Both a literal list and a template resolving to one were affected;
+  `parallel.foreach` was not. Such a step now behaves exactly like `individual`, generated test
+  ids included (`[1]` instead of `[id0]`). Because the ids now come from the values, a
+  template that draws them at random (`uuid4()`, `rand()`, `randint()`) gives every
+  pytest-xdist worker different ids, and the run stops with "Different tests were collected";
+  give such a step explicit `ids`, as `individual` and multi-key `combinations` already needed.
+
 ## [0.15.2] - 2026-09-26
 
 ### Fixed

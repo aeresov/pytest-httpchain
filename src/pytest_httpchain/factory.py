@@ -107,7 +107,13 @@ def create_test_class(
                             revalidated_combos = CombinationsParameter.model_validate({"combinations": resolved_combinations, "ids": step.ids})
                             resolved_combinations = cast(list[dict[str, Any]], revalidated_combos.combinations)
                         param_names = list(resolved_combinations[0].keys())
-                        param_values = [tuple(combo[name] for name in param_names) for combo in resolved_combinations]
+                        # pytest unpacks each argvalue only for several argnames:
+                        # a lone key takes the bare value, or its 1-tuple would
+                        # reach the request as "(1,)".
+                        if len(param_names) == 1:
+                            param_values = [combo[param_names[0]] for combo in resolved_combinations]
+                        else:
+                            param_values = [tuple(combo[name] for name in param_names) for combo in resolved_combinations]
 
                     case _:
                         raise RuntimeError(f"Unhandled parametrize step: {type(step).__name__}")

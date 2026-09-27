@@ -74,6 +74,10 @@ Run a stage with multiple parameter combinations:
 }
 ```
 
+Every combination must have the same keys, and each key becomes a stage
+parameter. A single key works too: the step then behaves exactly like
+`individual` with the same values.
+
 ### With Custom IDs
 
 ```json
@@ -154,6 +158,30 @@ Parameter values can use template expressions:
 Values that come from scenario `vars` are exposed as namespaces, so use attribute
 access (`{{ user.id }}`), not subscript (`{{ user['id'] }}`). Plain dicts from
 fixtures or `combinations` parameters keep subscript access.
+
+## Test IDs
+
+Without `ids`, each run's test id is built from its values, as with pytest's own
+parametrize: a string, number or boolean appears as is (`[1]`, `[GET-/users]`),
+anything else as its parameter name and position (`[user0]`).
+
+A template that draws values at random (`uuid4()`, `rand()`, `randint()`) is
+resolved when the scenario is collected, and every
+[pytest-xdist](parallel.md#running-scenarios-in-parallel-with-pytest-xdist)
+worker collects on its own. Each worker then gets different ids, and the run
+stops with "Different tests were collected between gw0 and gw1". Give such a
+step explicit `ids`:
+
+```json
+{
+    "parametrize": [
+        {
+            "combinations": "{{ [{'token': uuid4()} for _ in range(2)] }}",
+            "ids": ["token_a", "token_b"]
+        }
+    ]
+}
+```
 
 ## Complete Example
 
