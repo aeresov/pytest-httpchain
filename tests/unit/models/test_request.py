@@ -100,11 +100,49 @@ class TestUrl:
             Request(url=url)
 
     @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param("/users/1", id="path-absolute"),
+            pytest.param("users/1?page=2", id="path-relative"),
+            pytest.param("?page=2", id="query-only"),
+            # Anything without a scheme is a relative reference: this was
+            # refused as not a URL, and is a path under client.base_url now.
+            pytest.param("not-a-url", id="bare-word"),
+            # As written, as an absolute URL is: nothing normalizes these.
+            pytest.param("/static/%2e%2e/ok", id="encoded-dot-segment"),
+            pytest.param("/a\\b", id="backslash"),
+            pytest.param("1a:b", id="colon-after-a-non-scheme"),
+        ],
+    )
+    def test_relative_url_kept_as_written(self, url):
+        """A relative URL is completed by the scenario's client.base_url; the
+        model cannot see whether there is one (HTTPCHAIN034 and the request
+        builder report it when there is not)."""
+        assert Request(url=url).url == url
+
+    @pytest.mark.parametrize(
+        ("url", "message"),
+        [
+            pytest.param(" /users/1", "URL must not start or end with a space or control character", id="leading-space"),
+            pytest.param("/users/1\n", "URL must not start or end with a space or control character", id="trailing-newline"),
+            pytest.param("/a\tb", "Invalid URL: Invalid non-printable ASCII character", id="tab"),
+            # httpx keeps only the path of a network-path reference, dropping the host.
+            pytest.param("//other.example/x", "URL must not start with '//' without a scheme", id="network-path"),
+            # httpx reads the ':' as an empty scheme and drops it.
+            pytest.param(":8080/x", "Relative URL must not start with ':'", id="leading-colon"),
+        ],
+    )
+    def test_relative_url_httpx_would_not_send_as_written_rejected(self, url, message):
+        with pytest.raises(ValidationError, match=message):
+            Request(url=url)
+
+    @pytest.mark.parametrize(
         ("url", "error_type"),
         [
-            ("not-a-url", "url_parsing"),
-            ("/relative/path", "url_parsing"),
+            ("", "url_parsing"),
             ("ftp://example.com/", "url_scheme"),
+            # A scheme makes it absolute, so it is not taken for a relative path.
+            ("localhost:8080/x", "url_scheme"),
             ("http://", "url_parsing"),
             # The WHATWG parser still judges host and port.
             ("http://exa mple.com/", "url_parsing"),
@@ -197,3 +235,11 @@ def test_timeout_must_be_positive(timeout):
 def test_auth_forms(auth, expected):
     """A bare name or a {name, kwargs} object (``auth`` is shared with Scenario via Authenticated)."""
     assert make_request(auth=auth).auth == expected
+
+
+def test_schema_offers_no_timeout_or_redirect_default():
+    """Not set, these take client.timeout and client.follow_redirects, which
+    the model defaults only stand in for. An editor inserting a schema default
+    would declare it, and a declared value overrides the client's."""
+    properties = Request.model_json_schema()["properties"]
+    assert [name for name in ("timeout", "allow_redirects") if "default" in properties[name]] == []

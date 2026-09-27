@@ -22,6 +22,7 @@ from pytest_httpchain.models import (
     UserFunctionKwargs,
     Verify,
     VerifyStep,
+    is_relative_url,
     parametrize_values_contain_template,
 )
 from pytest_httpchain.scoping import (
@@ -64,6 +65,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagno
         *_scenario_template_diagnostics(test_data, set(fixtures), scenario_sub_names),
         *_reserved_name_diagnostics(vars_defined | vars_saved | set(fixtures)),
         *_dataflow_diagnostics(scenario, test_data),
+        *_relative_url_diagnostics(scenario),
         *_verify_diagnostics(scenario),
         *_inline_schema_diagnostics(scenario),
         *_marker_diagnostics(scenario),
@@ -147,8 +149,8 @@ def _scenario_template_diagnostics(test_data: dict[str, Any], fixtures: set[str]
     The ``substitutions`` list itself resolves strictly in order (the runtime
     computes each step's context before that step's names land), so its entries
     are checked against only PRIOR steps' names — a forward or same-step
-    reference crashes exactly like an undefined one. ``auth``/``ssl`` resolve
-    after the whole list and see every name.
+    reference crashes exactly like an undefined one. ``auth``, ``ssl`` and
+    ``client`` resolve after the whole list and see every name.
     """
     for key in SCENARIO_TEMPLATE_FIELDS:
         if key == "substitutions":
@@ -310,6 +312,31 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iter
                 DiagnosticCode.UNDEFINED_VAR,
                 f"Stage '{stage.name}': {phase} references potentially undefined variable(s): {sorted(names)}",
                 location=f"stages[{i}].{phase}",
+            )
+
+
+def _relative_url_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
+    """HTTPCHAIN034: a stage URL relative to a ``client.base_url`` the scenario
+    does not set, so the request has nowhere to go.
+
+    A templated URL counts once its literal text before the first template
+    makes it relative (``/users/{{ id }}``). One starting with a template
+    (``{{ server }}/users``) is known only once rendered: the request builder
+    fails that stage instead, with the same message.
+    """
+    if scenario.client.base_url is not None:
+        return
+    for i, stage in enumerate(scenario.stages):
+        url = stage.request.url
+        template = re.search(TEMPLATE_PATTERN, url)
+        # The literal text before a template is relative when it already ends
+        # the first segment (a `/`, `?` or `#`) without a `:`, which a scheme needs.
+        if is_relative_url(url) if template is None else re.match(r"[^:/?#]*[/?#]", url[: template.start()]):
+            yield diag(
+                DiagnosticCode.RELATIVE_URL_WITHOUT_BASE_URL,
+                f"Stage '{stage.name}': request URL {url!r} is relative, but the scenario sets no client.base_url to resolve it against. "
+                f"Set client.base_url, or make the URL absolute.",
+                location=f"stages[{i}].request.url",
             )
 
 

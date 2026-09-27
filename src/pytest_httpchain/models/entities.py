@@ -14,25 +14,29 @@ from http import HTTPMethod, HTTPStatus
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, JsonValue, PositiveFloat, PositiveInt, RootModel, Tag, model_validator
+from pydantic.json_schema import JsonDict
 
 from pytest_httpchain.models.types import (
     Base64String,
+    BaseUrlStr,
     FunctionImportName,
     GraphQLQuery,
     HttpMethodToken,
-    HttpUrlStr,
+    HttpUrlReferenceStr,
     JMESPathExpression,
     JSONSchemaInline,
     NamespaceFromDict,
     NamespaceOrDict,
     NumberOrTemplate,
     PartialTemplateStr,
+    ProxyUrlStr,
     RegexPattern,
     SerializablePath,
     StatusCode,
     TemplateExpression,
     TemplateExpressionOnly,
     TemplateExpressionSchema,
+    UnquotedPartialTemplateStr,
     VariableName,
     XMLString,
     convert_namespace_items_to_dict,
@@ -162,6 +166,51 @@ class SSLConfig(StrictModel):
     )
 
 
+class ClientConfig(StrictModel):
+    """Settings of the HTTP client all the scenario's stages share. What a stage
+    sets in its own request (url, headers, params, timeout, allow_redirects)
+    wins over them."""
+
+    # The docstring is the schema's description, for editors. A stage's timeout
+    # and allow_redirects win only where it declares them (`model_fields_set`,
+    # see request_builder): their model defaults would otherwise hide these.
+
+    # Credentials live here (headers, params, the URLs' userinfo), typically
+    # rendered from the environment once per scenario: a value that then fails
+    # validation must not be printed, in the scenario's initialization failure
+    # or in every later stage's skip reason, which repeats it. The URL fields'
+    # own messages do not quote it either (`validate_proxy_url`).
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    base_url: BaseUrlStr | UnquotedPartialTemplateStr | None = Field(
+        default=None,
+        description="Absolute http(s) URL without a query or fragment. A relative request.url is appended to its path.",
+        examples=["https://api.example.com/v1", "{{ api_root }}"],
+    )
+    headers: dict[str, str] = Field(default_factory=dict, description="Headers sent with every request; a stage's request.headers override them by name, case-insensitively.")
+    params: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Query parameters sent with every request, unless its URL or request.params already sets the key.",
+    )
+    timeout: PositiveFloat | NumberOrTemplate = Field(default=30.0, description="Timeout in seconds for requests that do not set request.timeout.")
+    follow_redirects: Literal[True, False] | TemplateExpressionOnly = Field(default=True, description="Whether requests that do not set request.allow_redirects follow redirects.")
+    max_redirects: PositiveInt | NumberOrTemplate = Field(default=20, description="Redirects a request follows at most before it fails.")
+    proxy: ProxyUrlStr | UnquotedPartialTemplateStr | None = Field(
+        default=None,
+        description="Proxy for every request (http, https, socks5 or socks5h URL); replaces the proxy environment variables.",
+        examples=["http://proxy.example.com:8080", "{{ proxy_url }}"],
+    )
+    http2: Literal[True, False] | TemplateExpressionOnly = Field(
+        default=True,
+        description="Offer HTTP/2, used when the server negotiates it; the requests to that server then share one connection, 100 at a time at most.",
+    )
+    max_connections: PositiveInt | NumberOrTemplate | None = Field(
+        default=None,
+        description="Connections the pool opens at most; null (the default) for no limit, which leaves parallel.max_concurrency to bound them.",
+    )
+    max_keepalive_connections: PositiveInt | NumberOrTemplate | None = Field(default=20, description="Idle connections the pool keeps open for reuse at most; null for no limit.")
+
+
 class UserFunctionName(RootModel):
     root: FunctionImportName | PartialTemplateStr = Field(
         description="Name of the function to be called.",
@@ -272,17 +321,36 @@ RequestBody = Annotated[
 ]
 
 
+def _omit_schema_default(schema: JsonDict) -> None:
+    schema.pop("default", None)
+
+
 class Request(Authenticated):
-    url: HttpUrlStr | PartialTemplateStr = Field(description="Absolute http(s) URL (may be a template expression), passed to httpx as written.")
+    url: HttpUrlReferenceStr | PartialTemplateStr = Field(
+        description="Absolute http(s) URL, or a URL relative to client.base_url (may be a template expression), passed to httpx as written."
+    )
     method: HTTPMethod | HttpMethodToken | TemplateExpressionOnly = Field(
         default=HTTPMethod.GET,
         description="HTTP method: a standard verb (autocompleted) or any RFC 9110 token (e.g. PROPFIND, PURGE).",
     )
-    params: dict[str, Any] = Field(default_factory=dict, description="URL query parameters, merged into any query already in the URL; a key in both takes the value given here.")
-    headers: dict[str, str] = Field(default_factory=dict, description="HTTP request headers.")
+    params: dict[str, Any] = Field(
+        default_factory=dict,
+        description="URL query parameters, merged into any query already in the URL and over client.params; a key in both takes the value given here.",
+    )
+    headers: dict[str, str] = Field(default_factory=dict, description="HTTP request headers, over client.headers.")
     body: RequestBody | None = Field(default=None, description="Request body configuration.")
-    timeout: PositiveFloat | NumberOrTemplate = Field(default=30.0, description="Request timeout in seconds.")
-    allow_redirects: Literal[True, False] | TemplateExpressionOnly = Field(default=True, description="Whether to follow redirects.")
+    # Their defaults stand in for the client's (request_builder sends only a
+    # declared value), so the schema shows none: an editor would offer them.
+    timeout: PositiveFloat | NumberOrTemplate = Field(
+        default=30.0,
+        description="Request timeout in seconds. Not set, client.timeout applies (30 by default).",
+        json_schema_extra=_omit_schema_default,
+    )
+    allow_redirects: Literal[True, False] | TemplateExpressionOnly = Field(
+        default=True,
+        description="Whether to follow redirects. Not set, client.follow_redirects applies (true by default).",
+        json_schema_extra=_omit_schema_default,
+    )
 
 
 class VarsSubstitution(Descripted):
@@ -592,6 +660,10 @@ class Scenario(Marked, Fixtured, Authenticated, Descripted):
     ssl: SSLConfig = Field(
         default_factory=SSLConfig,
         description="SSL/TLS configuration.",
+    )
+    client: ClientConfig = Field(
+        default_factory=ClientConfig,
+        description="The shared HTTP client: base URL, default headers and query parameters, timeout, redirects, proxy, HTTP/2 and connection pool.",
     )
     stages: Stages = Field(default_factory=list, description="Ordered list (or name-keyed mapping) of stages to execute.")
     substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")

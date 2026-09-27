@@ -1,0 +1,71 @@
+{
+    "description": "client.base_url completes relative URLs; client headers and params go with every request, and a stage's own win",
+    "marks": ["usefixtures('api_root')"],
+    "client": {
+        "base_url": "{{ env('HTTPCHAIN_EXAMPLE_API_ROOT') }}",
+        "headers": {
+            "X-Client": "httpchain",
+            "X-Override": "client"
+        },
+        "params": {
+            "category": "books",
+            "sort": "name"
+        }
+    },
+    "stages": [
+        {
+            "name": "path_after_base_url",
+            "request": { "url": "/user/1" },
+            "response": [ { "verify": { "status": 200, "body": { "contains": ["Alice"] } } } ]
+        },
+        {
+            "name": "path_without_leading_slash",
+            "request": { "url": "user/2" },
+            "response": [ { "verify": { "status": 200, "body": { "contains": ["Bob"] } } } ]
+        },
+        {
+            "name": "stage_header_overrides_by_name",
+            "request": {
+                "url": "/headers",
+                "headers": { "x-override": "stage" }
+            },
+            "response": [
+                { "save": { "jmespath": { "sent": "received_headers" } } },
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ sent['X-Client'] == 'httpchain' }}",
+                            "{{ sent['X-Override'] == 'stage' }}"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "stage_params_win_per_key",
+            "request": {
+                "url": "/search",
+                "params": { "sort": "price" }
+            },
+            "response": [
+                { "save": { "jmespath": { "category": "category", "sort": "sort" } } },
+                { "verify": { "status": 200, "expressions": ["{{ category == 'books' }}", "{{ sort == 'price' }}"] } }
+            ]
+        },
+        {
+            "name": "url_query_wins_over_client_params",
+            "request": { "url": "/search?category=music" },
+            "response": [
+                { "save": { "jmespath": { "category": "category", "sort": "sort" } } },
+                { "verify": { "status": 200, "expressions": ["{{ category == 'music' }}", "{{ sort == 'name' }}"] } }
+            ]
+        },
+        {
+            "name": "absolute_url_ignores_base_url",
+            "fixtures": ["server"],
+            "request": { "url": "{{ server }}/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

@@ -1,0 +1,10 @@
+{
+    "substitutions": [ { "vars": { "user_id": 1 } } ],
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "users/{{ user_id }}" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

@@ -52,6 +52,7 @@ not free their numbers for reuse.
 | `HTTPCHAIN031` | error | `xdist_group` marker in a **stage's** `marks`, naming a group the scenario does not declare — under `--dist loadgroup` it runs that stage apart from the rest of the scenario; put it in the scenario's `marks` (see [pytest-xdist](advanced/parallel.md#running-scenarios-in-parallel-with-pytest-xdist)) |
 | `HTTPCHAIN032` | error | Stage name contains `::`, pytest's node-id separator — the stage cannot be run by its node id, and `--dist loadscope` runs it apart from the rest of the scenario |
 | `HTTPCHAIN033` | error | Scenario's `xdist_group` name has a `]` after its last `@` — pytest-xdist ignores such a group, so `--dist loadgroup` does not keep the scenario's stages together |
+| `HTTPCHAIN034` | error | Stage `request.url` is relative (`/users/1`, or `/users/{{ id }}`), but the scenario's `client` sets no `base_url` to resolve it against (see [Client configuration](usage/scenarios.md#client-configuration)) |
 
 ## Deep (opt-in) checks
 

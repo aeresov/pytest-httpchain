@@ -1,0 +1,14 @@
+{
+    "fixtures": ["token"],
+    "client": {
+        "base_url": "https://api.example.com",
+        "headers": { "Authorization": "Bearer {{ token }}" }
+    },
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "/me" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

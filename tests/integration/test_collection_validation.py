@@ -41,6 +41,15 @@ def test_fixture_var_conflict_fails_collection(pytester):
     result.stdout.fnmatch_lines(["*Conflicting fixtures and vars*"])
 
 
+def test_relative_url_without_base_url_fails_collection(pytester):
+    """HTTPCHAIN034 is an error: without client.base_url the request has
+    nowhere to go, and the stage would fail every run."""
+    _write(pytester, "test_relative.http.json", {"stages": [_stage("s", "/users/1")]})
+    result = pytester.runpytest("--collect-only")
+    assert result.ret != 0
+    result.stdout.fnmatch_lines(["*HTTPCHAIN034*'/users/1' is relative, but the scenario sets no client.base_url*"])
+
+
 def test_undefined_variable_warns_at_collection(pytester):
     _write(
         pytester,

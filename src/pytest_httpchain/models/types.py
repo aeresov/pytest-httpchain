@@ -103,15 +103,25 @@ def validate_template_expression(v: str) -> str:
     return v
 
 
-def validate_partial_template_str(v: str) -> str:
+def _check_partial_template_str(v: str, got: str) -> str:
     matches = list(re.finditer(TEMPLATE_PATTERN, v))
     if not matches:
-        raise ValueError(f"Must contain at least one template expression like '{{{{ expr }}}}', got: {v!r}")
+        raise ValueError(f"Must contain at least one template expression like '{{{{ expr }}}}'{got}")
 
     for match in matches:
         if not match.group("expr").strip():
             raise ValueError(f"Template expression cannot be empty at position {match.start()}")
     return v
+
+
+def validate_partial_template_str(v: str) -> str:
+    return _check_partial_template_str(v, f", got: {v!r}")
+
+
+def validate_unquoted_partial_template_str(v: str) -> str:
+    """`validate_partial_template_str` for a value that can carry credentials,
+    whose message does not quote it (see `validate_proxy_url`)."""
+    return _check_partial_template_str(v, "")
 
 
 def validate_function_import_name(v: str) -> str:
@@ -171,6 +181,9 @@ XMLString = Annotated[str, AfterValidator(validate_xml)]
 GraphQLQuery = Annotated[str, AfterValidator(validate_graphql_query)]
 TemplateExpression = Annotated[str, AfterValidator(validate_template_expression)]
 PartialTemplateStr = Annotated[str, AfterValidator(validate_partial_template_str)]
+# The template branch beside `BaseUrlStr` and `ProxyUrlStr`: a URL they refuse
+# is refused here as well, and must not be quoted here either.
+UnquotedPartialTemplateStr = Annotated[str, AfterValidator(validate_unquoted_partial_template_str)]
 
 # Editor-schema only: these tighten the `string` branch of `concrete | template`
 # fields so an editor flags e.g. timeout "abc", without affecting runtime
@@ -228,8 +241,55 @@ _WHATWG_HTTP_URL = TypeAdapter(AnyHttpUrl)
 _C0_CONTROL_OR_SPACE = "".join(map(chr, range(0x21)))
 
 
-def validate_http_url(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
-    """Validate an absolute http(s) URL with a host, keeping it as written.
+# RFC 3986's scheme. A URL starting with one is absolute; anything else is a
+# relative reference (whose first segment cannot hold a ':' for this reason).
+_URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+
+# The proxy schemes httpx accepts (the socks ones need its `socks` extra).
+_PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
+
+
+def is_relative_url(url: str) -> bool:
+    """Whether ``url`` is a relative reference, which ``client.base_url``
+    completes, rather than an absolute URL.
+
+    The one test the model, the request builder and the validator share, so
+    all three read a URL the same way.
+    """
+    return not _URL_SCHEME.match(url)
+
+
+def _literal_url(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
+    """The URL string a wrap validator judges.
+
+    A pydantic URL object, which a single-expression template can render to
+    (a pydantic-settings field, say), stands for its string, as it did when
+    the field was ``HttpUrl``. A string with a template in it is the engine's
+    to render, so it is not a literal URL here: it is left to
+    ``PartialTemplateStr``, which refuses an empty ``{{ }}`` that would
+    otherwise pass here and fail only when rendered.
+    """
+    v: str = handler(str(value) if isinstance(value, AnyUrl | pydantic_core.Url) else value)
+    if template := re.search(TEMPLATE_PATTERN, v):
+        raise ValueError(f"Not a literal URL: it contains a template expression at position {template.start()}")
+    return v
+
+
+def _invalid_url(e: httpx.InvalidURL, v: str, quote: bool) -> ValueError:
+    """httpx's parse error, as a URL check reports it.
+
+    Unquoted, a URL with an ``@`` in it loses httpx's reason too: the reason
+    quotes the part httpx could not parse, and that can be the credentials
+    before the ``@``. A ``/`` in a password ends the authority early, so
+    ``http://user:pa/ss@host`` is ``Invalid port: 'pa'`` to httpx.
+    """
+    if quote or "@" not in v:
+        return ValueError(f"Invalid URL: {e}")
+    return ValueError("Invalid URL (httpx's reason is not shown, as it can quote the credentials before the '@')")
+
+
+def _check_http_url(v: str, *, quote: bool = True) -> None:
+    """Check an absolute http(s) URL with a host, as written.
 
     pydantic's ``HttpUrl`` handed back the URL WHATWG-normalized, and that is
     what was sent: ``/static/%2e%2e/ok`` went out as ``/ok``, a ``\\`` in the
@@ -252,40 +312,118 @@ def validate_http_url(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
     ``[0:0::1]`` reach the address WHATWG read; ``127.0.0.1.``, which WHATWG
     trims, fails when sent.
 
-    A string with a template in it is the engine's to render, so it is not a
-    literal URL here: it is left to ``PartialTemplateStr``, which refuses an
-    empty ``{{ }}`` that would otherwise pass here and fail only when rendered.
-
-    A pydantic URL object, which a single-expression template can render to
-    (a pydantic-settings field, say), stands for its string, as it did when
-    the field was ``HttpUrl``.
+    ``quote=False`` keeps the URL out of the messages (see `validate_proxy_url`).
     """
-    v: str = handler(str(value) if isinstance(value, AnyUrl | pydantic_core.Url) else value)
-    if template := re.search(TEMPLATE_PATTERN, v):
-        raise ValueError(f"Not a literal URL: it contains a template expression at position {template.start()}")
+    got = f", got: {v!r}" if quote else ""
     _WHATWG_HTTP_URL.validate_python(v)
     if v != v.strip(_C0_CONTROL_OR_SPACE):
-        raise ValueError(f"URL must not start or end with a space or control character, got: {v!r}")
+        raise ValueError(f"URL must not start or end with a space or control character{got}")
     try:
         url = httpx.URL(v)
     except httpx.InvalidURL as e:
-        raise ValueError(f"Invalid URL: {e}") from e
+        raise _invalid_url(e, v, quote) from e
     if url.scheme not in ("http", "https") or not url.host:
-        raise ValueError(f"URL must start with 'http://' or 'https://' and a host, got: {v!r}")
+        raise ValueError(f"URL must start with 'http://' or 'https://' and a host{got}")
     # httpx found a host, so `v` is `scheme://authority...`; httpx's authority
     # runs to the first `/`, `?` or `#`.
     authority = re.split(r"[/?#]", v.split("://", 1)[1], maxsplit=1)[0]
     if "\\" in authority:
-        raise ValueError(f"URL must not contain '\\' before its path (a browser reads it as '/', httpx as part of the host), got: {v!r}")
+        raise ValueError(f"URL must not contain '\\' before its path (a browser reads it as '/', httpx as part of the host){got}")
     if "%" in url.host:
-        raise ValueError(f"URL host must not be percent-encoded (httpx sends it undecoded), got: {v!r}")
+        raise ValueError(f"URL host must not be percent-encoded (httpx sends it undecoded){got}")
+
+
+def _check_relative_url(v: str) -> None:
+    """Check a relative reference, which httpx appends to ``client.base_url``'s
+    path as written (see `validate_http_url_reference`).
+
+    Refused where httpx would not send what is written: surrounding C0
+    controls or spaces, as for an absolute URL; a leading ``//``, a
+    network-path reference whose host httpx drops, keeping only its path; a
+    leading ``:``, which httpx reads as an empty scheme and drops; and
+    anything httpx cannot parse.
+    """
+    if v != v.strip(_C0_CONTROL_OR_SPACE):
+        raise ValueError(f"URL must not start or end with a space or control character, got: {v!r}")
+    if v.startswith("//"):
+        raise ValueError(f"URL must not start with '//' without a scheme (httpx would drop the host and append the path to client.base_url), got: {v!r}")
+    if v.startswith(":"):
+        raise ValueError(f"Relative URL must not start with ':' (httpx drops it), got: {v!r}")
+    try:
+        httpx.URL(v)
+    except httpx.InvalidURL as e:
+        raise ValueError(f"Invalid URL: {e}") from e
+
+
+def validate_http_url_reference(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
+    """Validate a request URL, keeping it as written: an absolute http(s) URL
+    (`_check_http_url`), or a relative reference (`_check_relative_url`),
+    which the scenario's ``client.base_url`` completes.
+
+    Whether there is a base_url is not this field's to know: the validator
+    reports a relative URL without one (HTTPCHAIN034), and so does the request
+    builder, for a template that renders to one. Anything without a scheme is
+    a relative reference, so ``not-a-url`` is a path now; ``ftp://x`` or
+    ``http:/x`` still fail as absolute URLs.
+    """
+    v = _literal_url(value, handler)
+    if v and is_relative_url(v):
+        _check_relative_url(v)
+    else:
+        _check_http_url(v)
     return v
 
 
-# Passed to httpx as written; the schema keeps HttpUrl's `format: uri` hint.
-HttpUrlStr = Annotated[
+def validate_base_url(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
+    """Validate ``client.base_url``: an absolute http(s) URL without a query or
+    fragment. httpx appends a relative URL to the base URL's raw path, query
+    included, so ``https://h/v1?x=1`` would put every stage's path in its
+    query. Its messages do not quote it, as a proxy's do not."""
+    v = _literal_url(value, handler)
+    _check_http_url(v, quote=False)
+    if "?" in v or "#" in v:
+        raise ValueError("base_url must not have a query or fragment (the stage's URL would be appended after it; put default query parameters in client.params)")
+    return v
+
+
+def validate_proxy_url(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
+    """Validate a proxy URL as httpx accepts one: an http, https, socks5 or
+    socks5h URL with a host. The socks schemes need httpx's ``socks`` extra,
+    which the client reports when it is missing.
+
+    The messages do not quote the URL, nor do those of ``client.base_url``:
+    their userinfo is credentials (httpx sends it as ``Proxy-Authorization``
+    or ``Authorization``), and the value is usually rendered from a secret,
+    at scenario initialization, whose failure message is also the skip reason
+    of every later stage. ``ClientConfig`` hides pydantic's ``input_value``
+    for the same reason.
+    """
+    v = _literal_url(value, handler)
+    if v != v.strip(_C0_CONTROL_OR_SPACE):
+        raise ValueError("URL must not start or end with a space or control character")
+    try:
+        url = httpx.URL(v)
+    except httpx.InvalidURL as e:
+        raise _invalid_url(e, v, quote=False) from e
+    if url.scheme not in _PROXY_SCHEMES or not url.host:
+        raise ValueError("Proxy URL must start with 'http://', 'https://', 'socks5://' or 'socks5h://' and a host")
+    return v
+
+
+# Passed to httpx as written; the schemas keep HttpUrl's `format: uri` hint.
+HttpUrlReferenceStr = Annotated[
     str,
-    WrapValidator(validate_http_url),
+    WrapValidator(validate_http_url_reference),
+    WithJsonSchema({"type": "string", "format": "uri-reference", "minLength": 1}),
+]
+BaseUrlStr = Annotated[
+    str,
+    WrapValidator(validate_base_url),
+    WithJsonSchema({"type": "string", "format": "uri", "minLength": 1}),
+]
+ProxyUrlStr = Annotated[
+    str,
+    WrapValidator(validate_proxy_url),
     WithJsonSchema({"type": "string", "format": "uri", "minLength": 1}),
 ]
 

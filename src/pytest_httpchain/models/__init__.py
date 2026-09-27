@@ -6,6 +6,7 @@ All models use Pydantic V2 with discriminated unions for flexible body types.
 
 Key models:
 - Scenario: Root model representing a complete test scenario
+- ClientConfig: The scenario's shared HTTP client (base URL, default headers, pool)
 - Stage: Individual test stage with request and response processing
 - Request: HTTP request configuration (method, URL, headers, body)
 - Verify: Response verification rules (status, headers, body, expressions)
@@ -15,6 +16,7 @@ Key models:
 from pytest_httpchain.models.entities import (
     Base64Body,
     BinaryBody,
+    ClientConfig,
     CombinationsParameter,
     FilesBody,
     FormBody,
@@ -57,7 +59,7 @@ from pytest_httpchain.models.entities import (
     normalize_list_input,
     parametrize_values_contain_template,
 )
-from pytest_httpchain.models.types import check_json_schema, json_schema_validator_class
+from pytest_httpchain.models.types import check_json_schema, is_relative_url, json_schema_validator_class
 
 __all__ = [
     "Scenario",
@@ -101,7 +103,9 @@ __all__ = [
     "UserFunctionName",
     "UserFunctionKwargs",
     "SSLConfig",
+    "ClientConfig",
     "check_json_schema",
+    "is_relative_url",
     "json_schema_validator_class",
     "parametrize_values_contain_template",
     "normalize_list_input",

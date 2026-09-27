@@ -66,6 +66,251 @@
       ],
       "title": "BinaryBody"
     },
+    "ClientConfig": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "base_url": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "uri",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "examples": [
+                    "https://api.example.com/v1",
+                    "{{ api_root }}"
+                  ]
+                }
+              ],
+              "title": "Base Url",
+              "description": "Absolute http(s) URL without a query or fragment. A relative request.url is appended to its path."
+            },
+            "headers": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ],
+              "title": "Headers",
+              "description": "Headers sent with every request; a stage's request.headers override them by name, case-insensitively."
+            },
+            "params": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              ],
+              "title": "Params",
+              "description": "Query parameters sent with every request, unless its URL or request.params already sets the key."
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    }
+                  ],
+                  "default": 30.0
+                }
+              ],
+              "title": "Timeout",
+              "description": "Timeout in seconds for requests that do not set request.timeout."
+            },
+            "follow_redirects": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        true,
+                        false
+                      ],
+                      "type": "boolean"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    }
+                  ],
+                  "default": true
+                }
+              ],
+              "title": "Follow Redirects",
+              "description": "Whether requests that do not set request.allow_redirects follow redirects."
+            },
+            "max_redirects": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    }
+                  ],
+                  "default": 20
+                }
+              ],
+              "title": "Max Redirects",
+              "description": "Redirects a request follows at most before it fails."
+            },
+            "proxy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "uri",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "examples": [
+                    "http://proxy.example.com:8080",
+                    "{{ proxy_url }}"
+                  ]
+                }
+              ],
+              "title": "Proxy",
+              "description": "Proxy for every request (http, https, socks5 or socks5h URL); replaces the proxy environment variables."
+            },
+            "http2": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        true,
+                        false
+                      ],
+                      "type": "boolean"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    }
+                  ],
+                  "default": true
+                }
+              ],
+              "title": "Http2",
+              "description": "Offer HTTP/2, used when the server negotiates it; the requests to that server then share one connection, 100 at a time at most."
+            },
+            "max_connections": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Max Connections",
+              "description": "Connections the pool opens at most; null (the default) for no limit, which leaves parallel.max_concurrency to bound them."
+            },
+            "max_keepalive_connections": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": 20
+                }
+              ],
+              "title": "Max Keepalive Connections",
+              "description": "Idle connections the pool keeps open for reuse at most; null for no limit."
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "title": "ClientConfig",
+      "description": "Settings of the HTTP client all the scenario's stages share. What a stage\nsets in its own request (url, headers, params, timeout, allow_redirects)\nwins over them."
+    },
     "CombinationsParameter": {
       "anyOf": [
         {
@@ -932,7 +1177,7 @@
                 {
                   "anyOf": [
                     {
-                      "format": "uri",
+                      "format": "uri-reference",
                       "minLength": 1,
                       "type": "string"
                     },
@@ -943,7 +1188,7 @@
                 }
               ],
               "title": "Url",
-              "description": "Absolute http(s) URL (may be a template expression), passed to httpx as written."
+              "description": "Absolute http(s) URL, or a URL relative to client.base_url (may be a template expression), passed to httpx as written."
             },
             "method": {
               "anyOf": [
@@ -974,7 +1219,7 @@
                 }
               ],
               "title": "Params",
-              "description": "URL query parameters, merged into any query already in the URL; a key in both takes the value given here."
+              "description": "URL query parameters, merged into any query already in the URL and over client.params; a key in both takes the value given here."
             },
             "headers": {
               "anyOf": [
@@ -989,7 +1234,7 @@
                 }
               ],
               "title": "Headers",
-              "description": "HTTP request headers."
+              "description": "HTTP request headers, over client.headers."
             },
             "body": {
               "anyOf": [
@@ -1040,12 +1285,11 @@
                       "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
                       "type": "string"
                     }
-                  ],
-                  "default": 30.0
+                  ]
                 }
               ],
               "title": "Timeout",
-              "description": "Request timeout in seconds."
+              "description": "Request timeout in seconds. Not set, client.timeout applies (30 by default)."
             },
             "allow_redirects": {
               "anyOf": [
@@ -1065,12 +1309,11 @@
                       "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
                       "type": "string"
                     }
-                  ],
-                  "default": true
+                  ]
                 }
               ],
               "title": "Allow Redirects",
-              "description": "Whether to follow redirects."
+              "description": "Whether to follow redirects. Not set, client.follow_redirects applies (true by default)."
             }
           },
           "required": [
@@ -2188,6 +2431,18 @@
       ],
       "title": "ssl",
       "description": "SSL/TLS configuration."
+    },
+    "client": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "$ref": "#/$defs/ClientConfig"
+        }
+      ],
+      "title": "client",
+      "description": "The shared HTTP client: base URL, default headers and query parameters, timeout, redirects, proxy, HTTP/2 and connection pool."
     },
     "stages": {
       "anyOf": [

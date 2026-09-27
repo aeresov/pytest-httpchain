@@ -273,14 +273,13 @@ A fragment file may carry its own top-level `$schema` key for editor support —
         "verify": true
     },
     "auth": "auth_module:get_default_auth",
-    "substitutions": [
-        {
-            "vars": {
-                "base_url": "https://api.example.com",
-                "timeout": 30
-            }
-        }
-    ]
+    "client": {
+        "base_url": "https://api.example.com",
+        "headers": {
+            "Accept": "application/json"
+        },
+        "timeout": 30
+    }
 }
 ```
 
@@ -292,13 +291,17 @@ A fragment file may carry its own top-level `$schema` key for editor support —
         {
             "name": "test",
             "request": {
-                "url": "{{ base_url }}/test",
-                "timeout": "{{ timeout }}"
+                "url": "/test"
             }
         }
     ]
 }
 ```
+
+The [`client` block](../usage/scenarios.md#client-configuration) gives every stage the base URL,
+headers and timeout, so the stages spell out only their own path. A value a stage takes from a
+reference counts as the stage's own: a request fragment `$include`d with `"timeout": 30` keeps 30
+seconds whatever `client.timeout` says.
 
 ## Security: Path Traversal Limits
 

@@ -1,0 +1,21 @@
+{
+    "substitutions": [ { "vars": { "api_root": "https://api.example.com/v1", "user_id": 1 } } ],
+    "client": { "base_url": "{{ api_root }}" },
+    "stages": [
+        {
+            "name": "literal",
+            "request": { "url": "/users/1" },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "templated",
+            "request": { "url": "users/{{ user_id }}" },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "absolute",
+            "request": { "url": "https://other.example.com/health" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

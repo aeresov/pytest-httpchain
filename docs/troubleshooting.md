@@ -142,6 +142,14 @@ pytest -o httpchain_redact_headers= -o httpchain_redact_query_params=
 -   Check URL for typos
 -   Ensure network connectivity
 
+### "Request URL ... is relative"
+
+A URL without a scheme (`/users/1`) is relative to the scenario's `client.base_url`, and there is
+none. Set `base_url` in the scenario's [`client` block](usage/scenarios.md#client-configuration), or
+make the URL absolute. A literal relative URL fails collection with `HTTPCHAIN034`; one a template
+rendered fails its stage. With a `base_url`, remember that httpx appends the URL to the base
+URL's path: with `https://api.example.com/v1`, `/users/1` requests `/v1/users/1`, not `/users/1`.
+
 ### SSL/TLS Errors
 
 Use SSL configuration to handle certificate issues:
@@ -168,7 +176,8 @@ Or specify a custom CA bundle:
 
 ### Timeout Errors
 
-Increase the timeout for slow endpoints:
+Increase the timeout for slow endpoints (or for every stage of a scenario, with
+[`client.timeout`](usage/scenarios.md#client-configuration)):
 
 ```json
 {

@@ -1,4 +1,5 @@
 import base64
+import os
 import socket
 import ssl
 import threading
@@ -20,11 +21,17 @@ users = {"user": generate_password_hash("pass")}
 _counter_lock = threading.Lock()
 _counter = 0
 
+# Requests that reached /barrier (see there).
+_barrier = threading.Condition()
+_arrived = 0
+
 
 def reset_counter():
-    global _counter
+    global _counter, _arrived
     with _counter_lock:
         _counter = 0
+    with _barrier:
+        _arrived = 0
 
 
 @auth.verify_password
@@ -65,6 +72,21 @@ def delay_ms(ms: int):
     # whole seconds of sleep per run.
     time.sleep(ms / 1000)
     return {"delayed_ms": ms}, HTTPStatus.OK
+
+
+@app.get("/barrier/<int:parties>")
+def barrier(parties: int):
+    """Answer once ``parties`` requests are in flight together, or 504 after
+    ``?timeout=`` seconds (5 by default): anything capping concurrency below
+    ``parties``, such as a connection pool, keeps them from ever meeting. A
+    concurrency test built on it passes in no more time than the requests take
+    to arrive, whatever the machine's speed, and fails with a status."""
+    global _arrived
+    with _barrier:
+        _arrived += 1
+        _barrier.notify_all()
+        met = _barrier.wait_for(lambda: _arrived >= parties, timeout=float(request.args.get("timeout", 5)))
+    return {"arrived": _arrived}, HTTPStatus.OK if met else HTTPStatus.GATEWAY_TIMEOUT
 
 
 # ============ Echo Endpoints (for body type tests) ============
@@ -337,6 +359,43 @@ def server():
         yield url
 
 
+# The environment variables `api_root` and `https_proxy` export their URL in.
+API_ROOT_ENV = "HTTPCHAIN_EXAMPLE_API_ROOT"
+HTTPS_PROXY_ENV = "HTTPCHAIN_EXAMPLE_HTTPS_PROXY"
+
+
+@contextmanager
+def _exported(name: str, value: str):
+    """``value`` in the environment variable ``name`` for the block."""
+    previous = os.environ.get(name)
+    os.environ[name] = value
+    try:
+        yield value
+    finally:
+        if previous is None:
+            del os.environ[name]
+        else:
+            os.environ[name] = previous
+
+
+@pytest.fixture(scope="class")
+def api_root():
+    """The app served for a whole scenario, its URL exported as
+    ``HTTPCHAIN_EXAMPLE_API_ROOT``.
+
+    A scenario's ``client`` block resolves once, against scenario substitutions
+    only, never a fixture (HTTPCHAIN016), so a base URL comes from the scenario
+    or from the environment, as a real suite's would:
+    ``"base_url": "{{ env('HTTPCHAIN_EXAMPLE_API_ROOT') }}"``. A scenario asks
+    for this with ``usefixtures('api_root')`` in its marks, which sets the
+    variable up before its first stage builds the client; class scope serves
+    all its stages from the one server.
+    """
+    reset_counter()
+    with _run_app() as url, _exported(API_ROOT_ENV, url):
+        yield url
+
+
 # Scenario-level ``ssl`` is resolved once, before any fixture value can reach a
 # template (a scenario-level template referencing a fixture is HTTPCHAIN017), so
 # a scenario cannot interpolate a fixture-provided certificate path. The TLS
@@ -393,6 +452,27 @@ def mtls_server():
     ca.issue_cert("client@example.com").private_key_and_cert_chain_pem.write_to_path(HTTPS_CLIENT_BUNDLE)
 
     with _run_app(context) as url:
+        yield url
+
+
+@pytest.fixture(scope="class")
+def https_proxy():
+    """The app over TLS as the scenario's proxy, its URL exported as
+    ``HTTPCHAIN_EXAMPLE_HTTPS_PROXY``, like ``api_root``'s.
+
+    It demands a client certificate, so a request through it that succeeds
+    shows both halves of ``ssl`` reached the proxy's own TLS connection: the
+    CA bundle at ``ca.pem`` (or ``verify: false``) and the certificate at
+    ``client.pem``. The app answers a proxy's absolute-form request as its
+    own, whatever host it names.
+    """
+    import trustme
+
+    ca = trustme.CA()
+    context = _tls_server_context(ca, require_client_cert=True)
+    ca.issue_cert("client@example.com").private_key_and_cert_chain_pem.write_to_path(HTTPS_CLIENT_BUNDLE)
+
+    with _run_app(context) as url, _exported(HTTPS_PROXY_ENV, url):
         yield url
 
 

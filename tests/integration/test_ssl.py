@@ -69,3 +69,33 @@ def test_missing_client_certificate_fails_handshake(run_scenario):
     # shows the alert. Pinning the OpenSSL spelling made this Linux-only.
     output = result.stdout.str()
     assert "CERTIFICATE_REQUIRED" in output or "10054" in output, output
+
+
+@pytest.mark.parametrize(
+    ("ssl_config", "passed"),
+    [
+        pytest.param({"verify": "ca.pem", "cert": "client.pem"}, True, id="ca-bundle-and-cert"),
+        pytest.param({"verify": False, "cert": "client.pem"}, True, id="verify-off-and-cert"),
+        # The default `ssl` keeps httpx's check of a proxy, as for one from
+        # HTTPS_PROXY (the system's CAs and certifi's), which trusts no
+        # throwaway CA: the negative control for the two rows above.
+        pytest.param({}, False, id="default-ssl"),
+    ],
+)
+def test_https_proxy_is_checked_with_the_scenarios_ssl(run_scenario, ssl_config, passed):
+    """httpx checked an ``https`` proxy's certificate against certifi's bundle
+    whatever ``ssl`` said, so a proxy signed by a private CA failed even with
+    ``verify: false``. The proxy here also demands a client certificate."""
+    scenario = {
+        "marks": ["usefixtures('https_proxy')"],
+        "ssl": ssl_config,
+        "client": {"proxy": "{{ env('HTTPCHAIN_EXAMPLE_HTTPS_PROXY') }}"},
+        "stages": [{"name": "through_the_proxy", "request": {"url": "http://unresolvable.invalid/ok"}, "response": [{"verify": {"status": 200}}]}],
+    }
+    result = run_scenario(scenario)
+
+    if passed:
+        result.assert_outcomes(passed=1)
+    else:
+        result.assert_outcomes(failed=1)
+        result.stdout.fnmatch_lines(["*CERTIFICATE_VERIFY_FAILED*"])

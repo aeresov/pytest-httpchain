@@ -62,6 +62,22 @@ def test_rejected_header_value_is_redacted_in_the_failure_message(run_scenario):
     assert "authorization: [REDACTED]" in output
 
 
+def test_relative_url_failure_message_is_redacted(run_scenario):
+    """A URL a template renders relative, without a client.base_url, fails
+    before anything is sent, so no report section follows the message: the
+    message itself hides the credential, by the configured list."""
+    scenario = {
+        "substitutions": [{"vars": {"path": "/ok?sig=s3cret-sig&page=2"}}],
+        "stages": [{"name": "relative", "request": {"url": "{{ path }}"}}],
+    }
+    result = run_scenario(scenario, args=("-s", "-o", "httpchain_redact_query_params=sig"))
+
+    result.assert_outcomes(failed=1)
+    output = result.stdout.str()
+    assert "s3cret" not in output
+    assert "Request URL '/ok?sig=[REDACTED]&page=2' is relative" in output
+
+
 def test_configured_list_replaces_the_default(run_scenario):
     """A list names every header to redact: Authorization is shown once the
     list leaves it out."""

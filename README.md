@@ -48,6 +48,10 @@ A key-value store persists throughout scenario execution. Variables, fixtures, a
 -   **JSON Schema** — Validate response structure against a schema
 -   **User functions** — Call Python functions for custom extraction, verification, or [authentication](https://www.python-httpx.org/advanced/authentication/#custom-authentication-schemes)
 
+### Scenario-wide client settings
+
+A scenario's `client` block sets up the HTTP client all its stages share, once: a base URL their relative URLs are appended to, headers and query parameters sent with every request, timeout, redirects, proxy, HTTP/2 and connection pool. A stage overrides what it needs.
+
 ### Full pytest integration
 
 Markers, fixtures, parametrization, and other plugins work as expected. You're not locked into a separate ecosystem.
@@ -58,6 +62,9 @@ Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix i
 
 ```json
 {
+    "client": {
+        "base_url": "https://api.example.com"
+    },
     "substitutions": [
         {
             "vars": {
@@ -68,7 +75,7 @@ Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix i
     "stages": {
         "get_user": {
             "request": {
-                "url": "https://api.example.com/users/{{ user_id }}"
+                "url": "/users/{{ user_id }}"
             },
             "response": [
                 {
@@ -88,7 +95,7 @@ Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix i
         "update_user": {
             "fixtures": ["now_utc"],
             "request": {
-                "url": "https://api.example.com/users/{{ user_id }}",
+                "url": "/users/{{ user_id }}",
                 "method": "PUT",
                 "body": {
                     "json": {
@@ -110,7 +117,7 @@ Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix i
         "cleanup": {
             "always_run": true,
             "request": {
-                "url": "https://api.example.com/cleanup",
+                "url": "/cleanup",
                 "method": "POST"
             }
         }
@@ -133,9 +140,10 @@ def now_utc():
 
 Scenario we created:
 
+-   the scenario's HTTP client gets a base URL, so every stage gives only its path
 -   common data context is seeded with the first variable `user_id`
 -   **get_user**  
-    url is assembled using `user_id` variable from common data context  
+    url is assembled using `user_id` variable from common data context, and appended to the base URL  
     HTTP GET call is made  
     we verify the call returned code 200  
     assuming JSON body is returned, we extract a value by JMESPath expression `user.name` and save it to common data context under `user_name` key

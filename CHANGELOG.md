@@ -38,6 +38,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Bodies and DEBUG logs are not redacted. HAR files stay complete by default, as a HAR is usually
   replayed; the new `httpchain_har_redact = true` applies the same rules to their URLs, headers,
   cookies and query strings.
+- A scenario-level `client` block configures the HTTP client all its stages share:
+  `{"client": {"base_url": "https://api.example.com/v1", "headers": {"Accept": "application/json"}}}`.
+  With `base_url`, a stage's `request.url` may be relative (`/users/1`), and httpx appends it to
+  the base URL's path: `https://api.example.com/v1` and `/users/1` give
+  `https://api.example.com/v1/users/1` (a leading `/` does not return to the host's root, as it
+  would in a browser), an absolute stage URL ignores `base_url`, and both are still sent as
+  written. `headers` go with every request, a stage's `request.headers` overriding them by name,
+  case-insensitively; a `Content-Type` among them labels every request body except a `form` or
+  `files` one, which keeps the type it is encoded in (`application/x-www-form-urlencoded`, or
+  `multipart/form-data` with the boundary between its parts). `params` are added to every request's
+  query unless the stage already sets the key, in its URL or its `params`, and like those they are
+  merged into the URL's query without re-encoding it. `timeout` and `follow_redirects` are the
+  defaults for the stages that do not set `request.timeout` or `request.allow_redirects` (30
+  seconds and `true` when neither does): a stage's own value wins, including one written equal to
+  the default or brought in by `$include`/`$merge`. `max_redirects`, `proxy` (which replaces the
+  proxy environment variables), `http2` (default `true`), `max_connections` and
+  `max_keepalive_connections` (default 20) map onto httpx's settings. An `https://` proxy's own
+  TLS connection follows the scenario's `ssl` as the servers' do once `ssl` sets `verify: false`, a
+  CA bundle or a `cert` (given the URL alone, httpx checks the proxy against certifi's bundle
+  whatever `ssl` says); with the default `ssl` it is checked as httpx checks a proxy from
+  `HTTPS_PROXY`, against the system's CA store and certifi's bundle. Templates in `client` resolve
+  once per scenario, against the scenario substitutions only, like `ssl` and `auth`
+  (`HTTPCHAIN016`/`HTTPCHAIN017` cover them), and one rendering to `null` on `base_url`, `proxy` or
+  a pool limit fails initialization rather than dropping the setting, and so does one rendering
+  to text that is still a template (`{{ ... }}`), which httpx would otherwise take as it is. A
+  `client` value that fails validation is reported without the value, which may be a credential
+  (a proxy URL's password, a header's token). `base_url` may not have a query or fragment (httpx
+  would append the path after them); put default query parameters in `params`. A URL without a
+  scheme is now a relative URL, so `not-a-url`, which failed schema validation, fails as
+  `HTTPCHAIN034` unless the scenario sets `base_url`.
+- `HTTPCHAIN034` (error): a stage `request.url` that is relative, all of it or the text before
+  its first template (`/users/{{ id }}`), while the scenario's `client` sets no `base_url`. A
+  template that renders to a relative URL without one fails its stage with the same message,
+  before anything is sent, instead of httpx's `Request URL is missing an 'http://' or 'https://'
+  protocol`.
 
 ### Fixed
 
@@ -226,6 +261,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The HAR export records a request's query string in the order the URL carries it. A repeated
   name's values were grouped under its first occurrence, so `?a=1&b=2&a=3` was recorded as `a=1`,
   `a=3`, `b=2` in `queryString`; form `postData` params already kept their order.
+- A `parallel` stage is no longer held to 100 requests in flight whatever its `max_concurrency`.
+  The shared client kept httpx's default pool of 100 connections, so the rest of the iterations
+  waited for a free connection: 150 concurrent requests to an endpoint answering in a second took
+  over two seconds, and a load test measured the pool rather than the server. The pool now has no
+  connection limit unless the new `client.max_connections` sets one, leaving `max_concurrency` to
+  bound the connections. This is over HTTP/1.1. Under HTTP/2, which the client offers by default
+  and an HTTPS server may negotiate, all the requests to that server share one connection, which
+  httpx holds to 100 requests at once (fewer if the server allows fewer) whatever the pool: a
+  stage that needs more in flight sets `client.http2` to `false`.
 
 ### Changed
 
@@ -259,8 +303,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Heads-up: a tool or test that read a token back from a report, or matched a header check's
   message on a cookie's value, sees `[REDACTED]` after the upgrade; set `httpchain_redact_headers`
   and `httpchain_redact_query_params` to an empty value to get the previous output.
-- The `httpx` floor is raised to 0.27.1. httpx 0.27.0 percent-encodes a `\` in a URL path, so
-  `{{ server }}/a\b` reached the server as `/a%5Cb` there, not as written (see Fixed).
+- The shared client opens as many HTTP/1.1 connections as the requests in flight need (see
+  Fixed). Heads-up: a `parallel` stage with a `max_concurrency` above 100 now really runs that
+  many requests at once against a server that speaks HTTP/1.1; set `client.max_connections` to
+  keep a server from seeing more connections than it did.
+- The `httpx` floor is raised to 0.28.0, the first release that takes the `socks5h://` proxy URLs
+  the new `client.proxy` accepts (see Added). httpx 0.27.0 also percent-encoded a `\` in a URL
+  path, so `{{ server }}/a\b` reached the server as `/a%5Cb` there, not as written (see Fixed).
+  Heads-up: an environment that pins httpx below 0.28 has to lift the pin to upgrade.
 
 ## [0.15.2] - 2026-09-26
 

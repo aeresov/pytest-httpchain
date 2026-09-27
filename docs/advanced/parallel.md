@@ -28,6 +28,23 @@ Execute the same request N times in parallel:
 
 This sends 100 requests with up to 10 concurrent connections.
 
+Over HTTP/1.1, `max_concurrency` is what bounds the connections: the scenario's HTTP client opens
+as many as there are requests in flight, unless its
+[`client.max_connections`](../usage/scenarios.md#client-configuration) sets a limit. httpx's own
+default of 100 connections, which the client used to keep, held a stage with a higher
+`max_concurrency` to 100 requests at a time, the rest waiting for a connection: 150 concurrent
+requests to an endpoint answering in a second took over two seconds.
+
+HTTP/2 works differently. The client offers it by default, and an HTTPS server that negotiates it
+gets all the requests to it on a single connection, as streams, of which httpx keeps at most 100
+open at once (fewer if the server allows fewer). A stage above that runs 100 requests at a time
+whatever its `max_concurrency`, the rest waiting for a stream, and no `client.max_connections`
+changes that. To have more in flight against such a server, set
+[`client.http2`](../usage/scenarios.md#client-configuration) to `false`: every request then gets
+an HTTP/1.1 connection of its own. That also sidesteps a weakness of httpx's HTTP/2 connection
+under threads: with close to 100 iterations opening streams on it at once, one of them now and then
+fails with an HTTP/2 protocol error or a reset stream, through no fault of the server.
+
 ## Foreach Mode
 
 Execute a request for each parameter combination in parallel:
@@ -64,7 +81,7 @@ Execute a request for each parameter combination in parallel:
 |--------|------|---------|-------------|
 | `repeat` | integer | - | Number of times to repeat the request |
 | `foreach` | array | - | Parameter sets to iterate over |
-| `max_concurrency` | integer | 10 | Maximum concurrent requests |
+| `max_concurrency` | integer | 10 | Maximum concurrent requests (and HTTP/1.1 connections, unless `client.max_connections` is lower); at most 100 run at once over HTTP/2 |
 | `calls_per_sec` | integer | null | Rate limit (requests per second) |
 | `max_rate_limit_delay` | integer | 60 | Max seconds a request waits for a rate-limit slot before failing |
 

@@ -78,6 +78,9 @@ def _hide_ancestor_project_markers(monkeypatch):
         # be called a forward reference.
         "response_opaque_save_no_false_forward_ref.json",
         "substitution_function_kwargs_literal_ok.json",  # only a template is dead text
+        # client.base_url (templated from scenario substitutions) completes a
+        # relative URL, literal or after a template; an absolute one ignores it.
+        "relative_url_with_base_url.json",
         # $ref/$defs inside verify.body.schema are JSON Schema vocabulary, in
         # every response-step shape and through a spliced-in stage fragment.
         "inline_schema_standard_ref.json",
@@ -135,6 +138,17 @@ DIAGNOSED = [
     (
         "scenario_template_fixture_ref.json",
         [(C.FIXTURE_IN_SCENARIO_TEMPLATE, "substitutions", r"\['srv'\]"), (C.FIXTURE_IN_SCENARIO_TEMPLATE, "ssl", r"\['ca_path'\]")],
+    ),
+    # `client` resolves once per scenario, like ssl and auth: no fixtures, and
+    # only scenario substitutions.
+    ("client_template_fixture_ref.json", [(C.FIXTURE_IN_SCENARIO_TEMPLATE, "client", r"'client' templates: \['token'\]")]),
+    ("client_template_undefined.json", [(C.SCENARIO_UNDEFINED_VAR, "client", r"'client' templates: \['api_root'\]")]),
+    # A relative URL has nowhere to go without client.base_url, whether all of
+    # it is literal or only the text before its first template.
+    ("relative_url_without_base_url.json", [(C.RELATIVE_URL_WITHOUT_BASE_URL, "stages[0].request.url", r"'/users/1' is relative, but the scenario sets no client.base_url")]),
+    (
+        "relative_url_template_after_prefix.json",
+        [(C.RELATIVE_URL_WITHOUT_BASE_URL, "stages[0].request.url", r"'users/\{\{ user_id \}\}' is relative, but the scenario sets no client.base_url")],
     ),
     ("undefined_variables.json", [(C.UNDEFINED_VAR, "stages[0].request", r"\['undefined_var'\]")]),
     # response/status_code/body only reach save/verify handlers, never templates.

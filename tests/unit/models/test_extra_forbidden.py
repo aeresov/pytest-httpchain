@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from pytest_httpchain.models.entities import (
     Base64Body,
     BinaryBody,
+    ClientConfig,
     CombinationsParameter,
     FilesBody,
     FormBody,
@@ -35,6 +36,8 @@ from tests.unit.models.helpers import assert_error_types
     ("model", "data", "typo"),
     [
         (SSLConfig, {"verify": True, "verfy": False}, "verfy"),
+        (ClientConfig, {"base_url": "https://x.test/", "base_uri": "https://x.test/"}, "base_uri"),
+        (ClientConfig, {"max_connection": 5}, "max_connection"),
         (UserFunctionKwargs, {"name": "mod:func", "kwarg": {}}, "kwarg"),
         (Request, {"url": "https://x.test/", "headerz": {}}, "headerz"),
         (Request, {"url": "https://x.test/", "param": {}}, "param"),

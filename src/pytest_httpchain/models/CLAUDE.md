@@ -18,6 +18,27 @@ VALUE (not `ids`) contains a `{{ }}` template. Single source of truth shared by
 the factory (decides whether scenario substitutions must resolve at collection
 time) and the validator (reports that as the `HTTPCHAIN025` info diagnostic).
 
+`is_relative_url(url)` — True when a URL has no scheme, i.e. it is a relative
+reference that the scenario's `client.base_url` completes. Shared by the
+request-URL type (`HttpUrlReferenceStr`, which checks an absolute and a relative
+URL differently), the request builder (fails a stage whose rendered URL is
+relative without a base_url) and the validator (`HTTPCHAIN034`).
+
+## URL types
+
+URLs are validated but passed to httpx as written, never normalized:
+`HttpUrlReferenceStr` (a request URL: absolute http(s), or relative),
+`BaseUrlStr` (`client.base_url`: absolute, no query or fragment) and
+`ProxyUrlStr` (`client.proxy`: http, https, socks5 or socks5h). Each refuses a
+string containing a `{{ }}` so the `PartialTemplateStr` branch beside it takes
+it, and refuses what httpx would send differently from what is written.
+
+`BaseUrlStr` and `ProxyUrlStr` never quote the URL they refuse, and their
+template branch is `UnquotedPartialTemplateStr`, which does not either: the
+userinfo is credentials, usually rendered from the environment when the
+scenario initializes. `ClientConfig` sets `hide_input_in_errors` for the same
+reason, which keeps pydantic's `input_value` out of its errors.
+
 ## Common Patterns
 
 ### Discriminated Unions

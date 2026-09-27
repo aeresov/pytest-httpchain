@@ -37,6 +37,7 @@ from pyrate_limiter import Duration, Limiter, Rate
 from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.har_writer import Exchange
 from pytest_httpchain.models import (
+    ClientConfig,
     CombinationsParameter,
     IndividualParameter,
     JsonBody,
@@ -320,8 +321,9 @@ def _rendered_away(declared: Any, substituted: Any, keys: _Keys = ()) -> Iterato
         case RootModel(), _:
             yield from field(declared, substituted, keys)
         case BaseModel(), dict():
+            # Only the declared fields were dumped (`_render_declared`).
             for name in type(declared).model_fields:
-                if not _none_is_a_value(declared, name):
+                if name in substituted and not _none_is_a_value(declared, name):
                     yield from field(getattr(declared, name), substituted[name], (*keys, name))
         case dict(), dict():
             for key, declared_value in declared.items():
@@ -399,10 +401,14 @@ def _render_declared[M: BaseModel](declared: M, context: Mapping[str, Any], wher
     """
     # walk()'s own model step (hands back a model with no template untouched;
     # otherwise dump, substitute, re-validate), taken apart at the re-validation.
+    # Only the declared fields are dumped, so the rendered model keeps the
+    # declared one's `model_fields_set`: a request's timeout and redirect
+    # setting count only where declared (`request_builder`), and a full dump
+    # made every default look declared.
     if not contains_template(declared):
         return declared
     model = type(declared)
-    substituted = walk(declared.model_dump(mode="python"), context)
+    substituted = walk(declared.model_dump(mode="python", exclude_unset=True), context)
     vanished = list(_rendered_away(declared, substituted))
     try:
         rendered = model.model_validate(substituted)
@@ -464,6 +470,7 @@ def fresh_scenario_state() -> dict[str, Any]:
         "_initialized": False,
         "_init_failed": None,
         "_client_kwargs": None,
+        "_client_config": None,
         "_chain_key": None,
     }
 
@@ -595,6 +602,8 @@ class Carrier:
     _initialized: ClassVar[bool] = False
     _init_failed: ClassVar[str | None] = None
     _client_kwargs: ClassVar[dict[str, Any] | None] = None
+    # The resolved `client` block, for what each request applies itself (params, the base_url check).
+    _client_config: ClassVar[ClientConfig | None] = None
     _chain_key: ClassVar[Hashable | None] = None
     _context_resolved_at_collection: ClassVar[bool] = False
 
@@ -616,7 +625,8 @@ class Carrier:
 
     @classmethod
     def _ensure_initialized(cls) -> None:
-        """Resolve scenario substitutions and build the shared client on first use.
+        """Resolve scenario substitutions, ``ssl``, ``client`` and ``auth``, and
+        build the shared client on first use.
 
         Deferred from collection so ``--collect-only`` and IDE discovery neither
         run user code nor allocate a client per scenario. Runs at most once per
@@ -639,8 +649,10 @@ class Carrier:
                     cls.global_context = base_global_context(process_substitutions(scenario.substitutions))
 
                 resolved_ssl = _render_declared(scenario.ssl, cls.global_context, "ssl")
+                resolved_client = _render_declared(scenario.client, cls.global_context, "client")
                 resolved_auth = _render_declared(scenario.auth, cls.global_context, "auth") if scenario.auth else None
-                cls._client_kwargs = build_client_kwargs(resolved_ssl, resolved_auth, cls.scenario_dir)
+                cls._client_kwargs = build_client_kwargs(resolved_client, resolved_ssl, resolved_auth, cls.scenario_dir)
+                cls._client_config = resolved_client
                 cls.client = httpx.Client(**cls._client_kwargs)
             except Exception as e:
                 cls._init_failed = str(e)
@@ -1125,7 +1137,7 @@ class Carrier:
         # Rendering re-validates the model it substitutes into, so no further
         # model_validate is needed here.
         request_model = _render_declared(stage.request, iter_context, "request", RequestError)
-        request_kwargs = build_request_kwargs(request_model, cls.scenario_dir)
+        request_kwargs = build_request_kwargs(request_model, cls.scenario_dir, cls._client_config, cls.redaction)
 
         if limiter is not None and not cls._acquire_rate_slot(limiter, max_rate_limit_delay, cancel):
             if cancel is not None and cancel.is_set():

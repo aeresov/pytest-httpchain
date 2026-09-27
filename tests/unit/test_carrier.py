@@ -36,6 +36,7 @@ from pytest_httpchain.carrier import (
 )
 from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.models import (
+    ClientConfig,
     CombinationsParameter,
     IndividualParameter,
     ParallelForeachConfig,
@@ -50,6 +51,7 @@ from pytest_httpchain.models import (
     Verify,
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
+from pytest_httpchain.request_builder import build_client_kwargs
 from pytest_httpchain.templates import TemplatesError
 from tests.unit.models.helpers import make_stage
 
@@ -144,6 +146,66 @@ class TestSSLClientWiring:
             assert isinstance(cls.client, httpx.Client)
         finally:
             cls.client.close()
+
+
+class TestClientWiring:
+    """The scenario's ``client`` block -> the shared client, and the requests
+    sent on it."""
+
+    def test_templates_resolve_against_scenario_substitutions(self, monkeypatch):
+        """Once per scenario, like ``ssl`` and ``auth``; the resolved block is
+        kept for what each request applies itself (params, the base_url check)."""
+        captured: dict = {}
+        monkeypatch.setattr("pytest_httpchain.carrier.httpx.Client", lambda **kwargs: captured.update(kwargs))
+        scenario = Scenario.model_validate(
+            {
+                "substitutions": [{"vars": {"api": "https://api.test/v1", "conns": 50, "key": "k"}}],
+                "client": {"base_url": "{{ api }}", "max_connections": "{{ conns }}", "params": {"api_key": "{{ key }}"}},
+            }
+        )
+        cls = _make_carrier_subclass(scenario=scenario, _initialized=False)
+        cls._ensure_initialized()
+        assert (captured["base_url"], captured["limits"].max_connections) == ("https://api.test/v1", 50)
+        assert cls._client_config.params == {"api_key": "k"}
+
+    def test_initialization_failure_does_not_quote_the_proxy(self):
+        """A proxy's credentials usually come from the environment. One that
+        renders malformed fails initialization without them, in the message
+        every later stage repeats as its skip reason too (the model's own
+        messages are pinned in tests/unit/models/test_client_config.py)."""
+        scenario = Scenario.model_validate(
+            {"substitutions": [{"vars": {"proxy": "http://user:pa/s3cret@proxy.internal:3128"}}], "client": {"proxy": "{{ proxy }}"}},
+        )
+        cls = _make_carrier_subclass(scenario=scenario, _initialized=False)
+        for _ in range(2):
+            with pytest.raises(StageExecutionError, match=r"(?s)^Failed to initialize scenario: .*\nproxy\..*Invalid URL") as excinfo:
+                cls._ensure_initialized()
+            assert "s3cret" not in str(excinfo.value)
+            assert "'pa'" not in str(excinfo.value)
+
+    def test_rendered_request_keeps_its_declared_fields(self):
+        """Rendering dumped every field, defaults included, so the rendered
+        request declared a timeout and a redirect setting it never had, and
+        they overrode the client's."""
+        rendered = _render_declared(Request.model_validate({"url": "{{ u }}", "headers": {"A": "{{ a }}"}}), {"u": "http://t/", "a": "1"}, "request")
+        assert rendered.model_fields_set == {"url", "headers"}
+
+    @pytest.mark.parametrize(("declared", "timeout"), [({}, 5), ({"timeout": "{{ t }}"}, 60)], ids=["client-default", "stage-declared"])
+    def test_templated_request_takes_the_clients_defaults(self, declared, timeout):
+        client_config = ClientConfig(base_url="http://mock/v1", timeout=5, follow_redirects=False)
+        sent = []
+        transport = httpx.MockTransport(lambda request: sent.append(request) or httpx.Response(302, headers={"Location": "/elsewhere"}))
+        client = httpx.Client(**build_client_kwargs(client_config, SSLConfig(), None, None), transport=transport)
+        cls = _make_carrier_subclass(client=client, _client_config=client_config)
+        stage = Stage.model_validate({"name": "s", "request": {"url": "{{ path }}", **declared}})
+        try:
+            result = cls._execute_single_iteration(stage, ChainMap({"path": "/users/1", "t": 60}), {})
+        finally:
+            client.close()
+        # Joined to the base URL, with the client's redirect setting: not followed.
+        assert [str(request.url) for request in sent] == ["http://mock/v1/users/1"]
+        assert result.response.status_code == 302
+        assert sent[0].extensions["timeout"]["read"] == timeout
 
 
 def test_exhausted_rate_limit_blocks_for_the_delay_then_fails():
@@ -347,7 +409,7 @@ class TestRenderedAwayFields:
         [
             # None is a valid auth: before, the refusal alone was reported, and
             # the url error was only in its __cause__.
-            pytest.param(Request.model_validate({"url": "{{ u }}", "auth": "{{ x }}"}), {"u": "not a url", "x": None}, "request.auth", "url", id="beside-a-none-that-validates"),
+            pytest.param(Request.model_validate({"url": "{{ u }}", "auth": "{{ x }}"}), {"u": "ftp://t/", "x": None}, "request.auth", "url", id="beside-a-none-that-validates"),
             pytest.param(
                 Verify.model_validate({"status": "{{ u }}", "headers": {"H": {"contains": "{{ x }}", "not_contains": "e"}}}),
                 {"u": 999, "x": None},
@@ -358,7 +420,7 @@ class TestRenderedAwayFields:
             # None is invalid for timeout too, but that is the refusal's to say:
             # the report lists only what else is wrong.
             pytest.param(
-                Request.model_validate({"url": "{{ u }}", "timeout": "{{ x }}"}), {"u": "not a url", "x": None}, "request.timeout", "url", id="beside-a-none-that-is-rejected"
+                Request.model_validate({"url": "{{ u }}", "timeout": "{{ x }}"}), {"u": "ftp://t/", "x": None}, "request.timeout", "url", id="beside-a-none-that-is-rejected"
             ),
         ],
     )
@@ -467,11 +529,21 @@ class TestRenderedAwayFields:
         [
             pytest.param({"ssl": {"cert": "{{ x }}"}}, "'ssl.cert' was declared as '{{ x }}' but rendered to None, which would silently disable it", id="ssl"),
             pytest.param({"auth": "{{ x }}"}, "'auth' was declared as '{{ x }}' but rendered to None", id="auth"),
+            # Every stage's relative URL would have lost its base, or the
+            # connection limit (null is "no limit") and the proxy gone quiet.
+            *(
+                pytest.param(
+                    {"client": {field: "{{ x }}"}},
+                    f"'client.{field}' was declared as " + "'{{ x }}' but rendered to None, which would silently disable it",
+                    id=f"client-{field}",
+                )
+                for field in ("base_url", "proxy", "max_connections", "max_keepalive_connections")
+            ),
         ],
     )
     def test_scenario_initialization_fails(self, declared, message):
-        """The scenario-level render sites: ``ssl`` and ``auth`` resolve once, at
-        initialization."""
+        """The scenario-level render sites: ``ssl``, ``client`` and ``auth``
+        resolve once, at initialization."""
         scenario = Scenario.model_validate({"substitutions": [{"vars": {"x": None}}], **declared})
         cls = _make_carrier_subclass(scenario=scenario, _initialized=False)
         with pytest.raises(StageExecutionError, match=f"^{re.escape(f'Failed to initialize scenario: {message}')}$"):

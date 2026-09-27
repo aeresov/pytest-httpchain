@@ -56,7 +56,7 @@ from pytest_httpchain.templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN
 RESPONSE_META_NAME = "response"
 
 # Fields resolved once per scenario, against only the scenario substitutions.
-SCENARIO_TEMPLATE_FIELDS = ("substitutions", "auth", "ssl")
+SCENARIO_TEMPLATE_FIELDS = ("substitutions", "auth", "ssl", "client")
 
 # --------------------------------------------------------------------------- #
 # Name extraction: which names a scenario fragment defines or references.

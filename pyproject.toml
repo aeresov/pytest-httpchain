@@ -8,9 +8,11 @@ authors = [{ name = "Alexander Eresov", email = "aeresov@gmail.com" }]
 dependencies = [
     "deepmerge>=2.0",
     "graphql-core>=3.0.0",
-    # 0.27.0 percent-encodes a `\` in a URL path (`/a%5Cb`), so a URL the
-    # plugin sends as written did not reach the server as written.
-    "httpx[http2]>=0.27.1",
+    # 0.28.0 is the first release that takes a socks5h:// proxy, which
+    # client.proxy accepts. (0.27.0 also percent-encoded a `\` in a URL path,
+    # `/a%5Cb`, so a URL the plugin sends as written did not reach the server
+    # as written.)
+    "httpx[http2]>=0.28.0",
     "jmespath>=1.0.0",
     "jsonschema>=4.18.0",
     "pydantic>=2.13.4",
@@ -58,6 +60,9 @@ dev = [
     # the regroup's defense against a user-installed pytest-order.
     "pytest-order>=1.3.0",
     "pytest-xdist>=3.8.0",
+    # httpx's SOCKS support (its `socks` extra), which users install
+    # themselves: the tests build a client for every client.proxy scheme.
+    "socksio>=1.0.0",
     "trustme>=1.1.0",
 ]
 docs = [
