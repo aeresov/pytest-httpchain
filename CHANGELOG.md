@@ -70,6 +70,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused at collection like any other empty template. httpx itself still resolves a literal
   `..` segment, as curl does; write it as `%2e%2e` to send it. A URL may now be up to 65,536
   characters, httpx's own limit, and the editor schema drops the 2083-character `maxLength`.
+- A scenario that lists a `class`-scoped (or broader) fixture with `params` in its `fixtures` runs
+  its whole chain once per param. It ran every param's first stage before any second one: with a
+  `tenant` fixture over `[a, b]`, `create[a]`, `create[b]`, `read[a]`, `read[b]`. `read[a]` saw
+  what `create[b]` saved and failed, `read[b]` was skipped, and the fixture was set up four times,
+  once per test, instead of once per param. pytest runs such tests param by param (`create[a]`,
+  `read[a]`, `create[b]`, `read[b]`); the plugin's sorting of each scenario into stage order undid
+  that. Each param's stages now form a chain of their own, in stage order, run one chain after the
+  other, so the fixture is set up once per param. Each chain also starts like a new run of the
+  scenario: nothing the previous chain saved, no abort from its failure, and its own HTTP client,
+  where before only the end of the scenario reset them. The scenario's `substitutions`, `auth` and
+  `ssl` still resolve once for all its chains, so a user function there is not called again per
+  param. A `-k`, `--lf` or `--deselect` selection that keeps a later stage of one param's chain
+  but drops an earlier one draws the usual warning, naming the chain (`the chain for
+  tenant='a'`). A fixture with `params` that is function-scoped, or that only some stages
+  request, still varies in place like a stage's `parametrize`, within one chain, whichever of
+  those stages you run, with `-k` or by node id. When two or more stages, but not all, request
+  such a `class`-scoped (or broader) fixture, collection now warns: each of those stages runs for
+  every param before the next one does, so `read[a]` sees what `create[b]` saved, and the fixture
+  is set up again at each change of param. Requesting it from every stage, e.g. in the scenario's
+  `fixtures`, runs the chain once per param instead.
 
 ## [0.15.2] - 2026-09-26
 

@@ -129,10 +129,11 @@ stage that runs and closed when the scenario finishes. Three consequences worth
 knowing:
 
 -   **Cookies persist across stages.** A `Set-Cookie` from one stage is sent by
-    every later stage automatically — no `save` step needed. Because the client
-    is per test *class*, this also holds across the runs of a parametrized
-    scenario, so a scenario that depends on starting cookie-free should not rely
-    on parametrization to isolate it.
+    every later stage automatically — no `save` step needed. This also holds
+    across the runs of a stage's `parametrize`, so a stage that depends on
+    starting cookie-free should not rely on stage parametrization to isolate
+    it. A scenario that runs once per param of a
+    [parametrized fixture](#parametrized-fixtures) gets a fresh client for each.
 -   **Connections are pooled**, so a chain against one host reuses the same
     connection rather than reconnecting per stage.
 -   **HTTP/2 is offered** and used whenever the server negotiates it.
@@ -237,8 +238,48 @@ Scenario-level fixtures are requested by every stage. A few consequences to keep
 
 -   Fixture values take precedence over previously saved variables of the same name, so don't save under a scenario fixture's name (the validator warns with `HTTPCHAIN009`).
 -   pytest scoping still applies: a function-scoped fixture is set up again for each stage. Use `class`- or `session`-scoped fixtures for state that must survive across stages.
--   Fixtures can be referenced in *stage* templates only. Scenario-level `substitutions`, `auth`, and `ssl` resolve once per scenario — when its first stage runs (or already at collection when stage `parametrize` values contain templates, since pytest needs concrete parameter values to collect) — against a context that deliberately excludes fixture values; the validator rejects fixture references there (`HTTPCHAIN016`).
+-   Fixtures can be referenced in *stage* templates only. Scenario-level `substitutions`, `auth`, and `ssl` resolve once per scenario (even one that runs once per param of a [parametrized fixture](#parametrized-fixtures)) — when its first stage runs (or already at collection when stage `parametrize` values contain templates, since pytest needs concrete parameter values to collect) — against a context that deliberately excludes fixture values; the validator rejects fixture references there (`HTTPCHAIN016`).
 -   A fixture whose value is itself **callable** is treated as a factory: it is wrapped so `{{ my_fixture(...) }}` invokes it (with context-manager fixtures entered on use and cleaned up afterwards). The wrapper is a different object than the original callable, so attribute access on it (`{{ my_fixture.some_attr }}`) is not available — call it instead.
+
+#### Parametrized fixtures
+
+A `class`-scoped (or `module`, `package`, `session`) fixture with `params` that every stage requests, such as a scenario-level fixture, runs the whole scenario once per param. The same goes for such a fixture that a requested fixture depends on. Each param's stages run as a chain of their own, in stage order, one chain after the other in the order pytest puts the params. The fixture is set up once per param:
+
+```python
+# conftest.py
+@pytest.fixture(scope="class", params=["acme", "globex"])
+def tenant(request):
+    return request.param
+```
+
+```json
+{
+    "fixtures": ["tenant"],
+    "stages": [
+        {
+            "name": "create",
+            "request": {"url": "https://api.example.com/{{ tenant }}/items", "method": "POST"},
+            "response": [{"save": {"jmespath": {"item_id": "id"}}}]
+        },
+        {
+            "name": "read",
+            "request": {"url": "https://api.example.com/{{ tenant }}/items/{{ item_id }}"}
+        }
+    ]
+}
+```
+
+This runs `create[acme]`, `read[acme]`, `create[globex]`, `read[globex]`. Each chain starts the way the scenario's first run does. Nothing the previous chain saved is visible, and a stage failure there does not skip this one. The chain gets its own [HTTP client](#the-shared-http-client), so no cookies carry over.
+
+The scenario's `substitutions`, `auth` and `ssl` are not resolved again for each chain. They cannot refer to fixtures (see above), so no param can change them. They resolve once, when the first chain starts, and every chain uses the result. A user function there runs once, however many params there are. If resolving them fails, every later stage skips, in every chain.
+
+If you run only some of the tests, with `-k`, `--lf` or `--deselect`, and keep a later stage of a chain without an earlier one, pytest-httpchain warns and names the chain, as in `the chain for tenant='acme'`. The later stage runs without what the earlier one would have saved.
+
+A fixture with `params` does not split the scenario when it is function-scoped, or when only some stages request it (the stages without it belong to no single param). It varies in place instead, like a stage's [`parametrize`](../advanced/parametrization.md): each stage that requests it runs once per param, and all of them share one chain. This depends on which stages request the fixture, not on which of them you run: selecting only those stages, with `-k` or by node id (as an IDE runs a single test), does not split the scenario either.
+
+Varying in place is rarely what you want from a `class`-scoped (or broader) fixture that two or more stages request. The stages still run in stage order, so each of them runs for every param before the next one does. With `tenant` listed in the `fixtures` of `create` and `read` only, that is `create[acme]`, `create[globex]`, `read[acme]`, `read[globex]`: `read[acme]` sees what `create[globex]` saved, and the fixture is set up again each time its param changes, four times instead of twice. pytest-httpchain warns about this at collection (`the class-scoped fixture 'tenant' has params and is requested by stages ['create', 'read'] but not by every stage`). To run the whole chain once per param instead, request the fixture from every stage, most simply in the scenario's `fixtures`.
+
+A scenario's chains always run together, so a `package`- or `session`-scoped fixture with `params` that several scenarios request is set up once per param in each scenario.
 
 ## SSL Configuration
 

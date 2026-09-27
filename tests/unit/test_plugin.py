@@ -1,4 +1,5 @@
 import logging
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -9,11 +10,15 @@ import pytest
 
 from pytest_httpchain.carrier import Carrier
 from pytest_httpchain.constants import ConfigOptions
+from pytest_httpchain.models import Scenario
 from pytest_httpchain.plugin import (
+    _CHAIN_KEY,
     _apply_xdist_group_nodeids,
+    _chain_args,
     _format_section,
     _regroup_carrier_items,
     _sections_will_be_shown,
+    _warn_on_params_varying_across_stages,
     pytest_collect_file,
     pytest_collection_modifyitems,
     pytest_runtest_makereport,
@@ -152,11 +157,134 @@ def test_regroup_pulls_each_scenario_together_and_keeps_other_items():
         def __init__(self, cls: type | None, stage: int = 0):
             self.cls = cls
             self.function = SimpleNamespace(_httpchain_stage_index=stage)
+            self.stash = pytest.Stash()
 
     a0, a1, b0, plain = _Item(_A, 0), _Item(_A, 1), _Item(_B, 0), _Item(None)
     items: list[Any] = [a1, plain, b0, a0]
     _regroup_carrier_items(items, {id(it): i for i, it in enumerate(items)})
     assert items == [a0, a1, plain, b0]
+
+
+class _ParamItem:
+    """A scenario item as the regroup reads its params: ``params`` maps each
+    parametrized arg to ``(param index, scope)``, as ``item.callspec`` holds them."""
+
+    def __init__(self, cls: type[Carrier], stage: int, **params: tuple[int, str]):
+        self.cls = cls
+        self.function = SimpleNamespace(_httpchain_stage_index=stage)
+        self.stash = pytest.Stash()
+        if params:
+            self.callspec = SimpleNamespace(
+                indices={name: index for name, (index, _) in params.items()},
+                _arg2scope={name: SimpleNamespace(value=scope) for name, (_, scope) in params.items()},
+            )
+
+
+@pytest.mark.parametrize("scope", ["class", "module", "package", "session"])
+def test_regroup_runs_each_high_scoped_param_as_its_own_chain(scope):
+    """A fixture parametrized above function scope that every stage requests
+    splits the scenario into one chain per param, each in stage order, the
+    chains in the order they first appear. Sorting by stage alone ran every
+    param's first stage before any second one. A function-scoped param (stage
+    `parametrize`) varies in place inside each chain, in collection order."""
+
+    class _Scenario(Carrier):
+        pass
+
+    def item(stage: int, tenant: int, v: int | None = None) -> _ParamItem:
+        params = {"tenant": (tenant, scope)} | ({"v": (v, "function")} if v is not None else {})
+        return _ParamItem(_Scenario, stage, **params)
+
+    a0v0, a0v1, a1, b0v0, b0v1, b1 = item(0, 0, 0), item(0, 0, 1), item(1, 0), item(0, 1, 0), item(0, 1, 1), item(1, 1)
+    collected = [a0v0, a0v1, b0v0, b0v1, a1, b1]
+    items: list[Any] = [b1, b0v1, b0v0, a1, a0v1, a0v0]  # a sorter put tenant 1 first
+    _regroup_carrier_items(items, {id(it): i for i, it in enumerate(collected)})
+    assert items == [b0v0, b0v1, b1, a0v0, a0v1, a1]
+    assert [it.stash[_CHAIN_KEY] for it in items] == [(("tenant", 1),)] * 3 + [(("tenant", 0),)] * 3
+
+
+def test_regroup_varies_a_param_not_every_stage_requests_in_place():
+    """Stages without the fixture belong to no single param, so it does not
+    split the scenario: its instances stay in stage order, like stage
+    `parametrize`, within the one chain."""
+
+    class _Scenario(Carrier):
+        pass
+
+    create, per_tenant_a, per_tenant_b, after = (
+        _ParamItem(_Scenario, 0),
+        _ParamItem(_Scenario, 1, tenant=(0, "class")),
+        _ParamItem(_Scenario, 1, tenant=(1, "class")),
+        _ParamItem(_Scenario, 2),
+    )
+    collected = [create, per_tenant_a, per_tenant_b, after]
+    items: list[Any] = [per_tenant_b, after, create, per_tenant_a]
+    _regroup_carrier_items(items, {id(it): i for i, it in enumerate(collected)})
+    assert items == collected
+    assert [it.stash[_CHAIN_KEY] for it in items] == [()] * 4
+
+
+def test_regroup_chains_do_not_depend_on_selection():
+    """Selecting only the stages that request the fixture (``-k per_tenant``,
+    or their node id) leaves no stage without it, but the scenario's chains
+    are those of all its stages, as the class collector recorded them: the
+    survivors still vary in place within one chain, rather than each param
+    starting afresh only because of the selection."""
+
+    class _Scenario(Carrier):
+        pass
+
+    create, per_tenant_a, per_tenant_b = (
+        _ParamItem(_Scenario, 0),
+        _ParamItem(_Scenario, 1, tenant=(0, "class")),
+        _ParamItem(_Scenario, 1, tenant=(1, "class")),
+    )
+    collected = [create, per_tenant_a, per_tenant_b]
+    scenario_chain_args = _chain_args(collected)
+    assert scenario_chain_args == {_Scenario: frozenset()}
+    items: list[Any] = [per_tenant_b, per_tenant_a]
+    _regroup_carrier_items(items, {id(it): i for i, it in enumerate(collected)}, scenario_chain_args)
+    assert items == [per_tenant_a, per_tenant_b]
+    assert [it.stash[_CHAIN_KEY] for it in items] == [()] * 2
+
+
+@pytest.mark.parametrize(
+    ("requesting", "params", "warns"),
+    [
+        # create[a], create[b], read[a], read[b]: read[a] sees create[b]'s save,
+        # and a class-scoped fixture is set up four times instead of twice.
+        pytest.param({1, 2}, 2, True, id="several-stages"),
+        # Its instances run back to back, each param set up once: nothing crosses.
+        pytest.param({1}, 2, False, id="one-stage"),
+        # Every stage requests it, so it splits the scenario into chains instead.
+        pytest.param({0, 1, 2}, 2, False, id="every-stage"),
+        # A single param has nothing to cross into.
+        pytest.param({1, 2}, 1, False, id="one-param"),
+    ],
+)
+def test_warns_when_fixture_params_vary_across_stages(requesting, params, warns):
+    """A fixture parametrized above function scope that several stages, but
+    not all, request varies in place across them, so each of those stages runs
+    for every param before the next one does. Collection warns, naming the fix:
+    request it from every stage."""
+    scenario = Scenario.model_validate({"stages": [{"name": name, "request": {"url": "http://x"}} for name in ("login", "create", "read")]})
+    cls = type("_Scenario", (Carrier,), {"scenario": scenario})
+    items: list[Any] = [
+        _ParamItem(cls, stage, tenant=(param, "class")) if stage in requesting else _ParamItem(cls, stage)
+        for stage in range(3)
+        for param in (range(params) if stage in requesting else [0])
+    ]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _warn_on_params_varying_across_stages(cls, items, _chain_args(items)[cls])
+    messages = [str(w.message) for w in caught]
+    if not warns:
+        assert messages == []
+        return
+    assert len(messages) == 1
+    assert "the class-scoped fixture 'tenant' has params and is requested by stages ['create', 'read'] but not by every stage" in messages[0]
+    assert "'read' for the first param sees what 'create' saved for the last" in messages[0]
+    assert "Request 'tenant' from every stage" in messages[0]
 
 
 def test_regroup_tiebreak_survives_xdist_nodeid_rewrite():
@@ -174,6 +302,7 @@ def test_regroup_tiebreak_survives_xdist_nodeid_rewrite():
         def __init__(self, param: int):
             self.cls = _Scenario
             self.function = SimpleNamespace(_httpchain_stage_index=0)
+            self.stash = pytest.Stash()
             self._nodeid = f"f.json::_Scenario::test 0 - s0[{param}]"
 
         def __hash__(self) -> int:

@@ -28,6 +28,7 @@ from pytest_httpchain.carrier import (
     _parallel_int,
     _parallel_number,
     _render_declared,
+    fresh_chain_state,
     fresh_scenario_state,
 )
 from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
@@ -783,8 +784,9 @@ class TestFailedExchangeShownFlag:
 
 class TestScenarioRerunReset:
     """teardown_class must return the class to fresh_scenario_state and the
-    pristine base context, so a rerun plugin's second pass actually
-    re-executes the chain instead of replaying stale saves or skipping."""
+    pristine base context, so a rerun plugin's second pass actually re-executes
+    the chain instead of replaying stale saves or skipping. A scenario's next
+    chain resets the same way, short of its initialization."""
 
     @pytest.fixture
     def executed(self, monkeypatch):
@@ -811,6 +813,44 @@ class TestScenarioRerunReset:
         assert {name: getattr(cls, name) for name in fresh_scenario_state()} == fresh_scenario_state()
         # Saves are gone; the pristine scenario context survives.
         assert dict(cls.global_context) == {"base": 1}
+
+    def test_changing_chain_resets_and_staying_in_it_does_not(self, executed):
+        """A parametrized fixture splits a scenario into chains that share one
+        class, so class teardown alone would hand the next chain the previous
+        one's saves, abort flag and client. Entering a different chain resets
+        them; re-entering the current one keeps its state."""
+        cls, _ = executed
+        client = cls.client
+        cls.aborted = True
+        cls.begin_chain((("tenant", 0),))  # the chain the first pass ran in
+        cls.begin_chain((("tenant", 0),))
+        assert (cls.aborted, cls.global_context["v"], client.is_closed) == (True, 1, False)
+
+        cls.begin_chain((("tenant", 1),))
+        assert client.is_closed
+        assert {name: getattr(cls, name) for name in fresh_chain_state()} == fresh_chain_state()
+        assert dict(cls.global_context) == {"base": 1}
+
+    def test_next_chain_keeps_the_scenario_initialization(self, executed, monkeypatch):
+        """Entering a chain does not repeat the scenario's initialization: it
+        cannot see the param, and its user functions (substitutions, auth) run
+        at most once per scenario. The chain gets a client of its own, built
+        from the arguments the first chain resolved."""
+        cls, stage = executed
+        first_client = cls.client
+        # Only the first chain's resolution holds this; a second one would not.
+        cls.global_context.maps[-1]["resolved_once"] = True
+
+        def re_resolved(*args, **kwargs):
+            raise AssertionError("scenario auth and ssl resolved again")
+
+        monkeypatch.setattr("pytest_httpchain.carrier.build_client_kwargs", re_resolved)
+        cls.begin_chain((("tenant", 0),))
+        cls.begin_chain((("tenant", 1),))
+        cls.execute_stage(stage, {})
+        assert (cls.global_context["resolved_once"], cls.global_context["v"]) == (True, 1)
+        assert cls.client is not first_client
+        assert not cls.client.is_closed
 
     def test_second_pass_reinitializes_and_replays(self, executed):
         cls, stage = executed

@@ -19,7 +19,7 @@ import threading
 import time
 import warnings
 from collections import ChainMap
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Hashable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -305,12 +305,14 @@ def _rendered_to_none(where: str, keys: _Keys, template: str) -> str:
     return f"'{path}' was declared as {template!r} but rendered to None"
 
 
-def fresh_scenario_state() -> dict[str, Any]:
-    """The per-scenario mutable class state, in its pristine form.
+def fresh_chain_state() -> dict[str, Any]:
+    """The mutable class state one chain of a scenario owns, in its pristine form.
 
-    Single source of truth for the state a scenario must own rather than share:
-    ``factory.create_test_class`` seeds every subclass with it and
-    `Carrier.teardown_class` re-applies it. New per-scenario state goes here.
+    A scenario runs as one chain, or as one per param of a parametrized fixture
+    (`Carrier.begin_chain`), and each chain starts from this: no abort, no
+    exchanges, no client yet. The saves live in ``global_context``, reset
+    alongside it. What a scenario resolves once for all its chains is in
+    `fresh_scenario_state`.
     """
     return {
         "client": None,
@@ -321,8 +323,24 @@ def fresh_scenario_state() -> dict[str, Any]:
         "last_iterations_attempted": 0,
         "last_shown_exchange_is_failed": False,
         "active_context_managers": [],
+    }
+
+
+def fresh_scenario_state() -> dict[str, Any]:
+    """The per-scenario mutable class state, in its pristine form.
+
+    Single source of truth for the state a scenario must own rather than share:
+    ``factory.create_test_class`` seeds every subclass with it and
+    `Carrier.teardown_class` re-applies it. It is the chain state plus the
+    scenario's initialization, which its chains share. New per-scenario state
+    goes here, or in `fresh_chain_state` when each chain must start without it.
+    """
+    return {
+        **fresh_chain_state(),
         "_initialized": False,
         "_init_failed": None,
+        "_client_kwargs": None,
+        "_chain_key": None,
     }
 
 
@@ -359,7 +377,25 @@ class Carrier:
     max_parallel_iterations: ClassVar[int] = 10_000
     _initialized: ClassVar[bool] = False
     _init_failed: ClassVar[str | None] = None
+    _client_kwargs: ClassVar[dict[str, Any] | None] = None
+    _chain_key: ClassVar[Hashable | None] = None
     _context_resolved_at_collection: ClassVar[bool] = False
+
+    @classmethod
+    def begin_chain(cls, chain_key: Hashable) -> None:
+        """Enter the chain the next stage belongs to, ending the previous one.
+
+        A scenario runs as several chains when a fixture it requests is
+        parametrized above function scope: one complete pass per param (the
+        plugin keys and orders them). Each must start as the first did — no
+        saves, no abort, a fresh client — but class teardown provides that only
+        once per class, so a change of chain ends the previous one too. The
+        scenario's initialization is not repeated: it cannot see the param, and
+        its user functions must not run again (`_ensure_initialized`).
+        """
+        if cls._chain_key is not None and cls._chain_key != chain_key:
+            cls._end_chain()
+        cls._chain_key = chain_key
 
     @classmethod
     def _ensure_initialized(cls) -> None:
@@ -368,13 +404,17 @@ class Carrier:
         Deferred from collection so ``--collect-only`` and IDE discovery neither
         run user code nor allocate a client per scenario. Runs at most once per
         scenario, success or failure: side-effectful substitutions and auth are
-        never re-invoked, and after a failure every later stage skips.
+        never re-invoked, and after a failure every later stage skips, in every
+        chain. A later chain only gets a client of its own, built from the
+        arguments the first one resolved.
         """
         with _INIT_LOCK:
-            if cls._initialized:
-                return
             if cls._init_failed is not None:
                 raise StageExecutionError(f"Failed to initialize scenario: {cls._init_failed}")
+            if cls._initialized:
+                if cls.client is None and cls._client_kwargs is not None:
+                    cls.client = httpx.Client(**cls._client_kwargs)
+                return
             scenario = cls.scenario
             assert scenario is not None, "create_test_class() seeds cls.scenario"
             try:
@@ -383,7 +423,8 @@ class Carrier:
 
                 resolved_ssl = _render_declared(scenario.ssl, cls.global_context, "ssl")
                 resolved_auth = _render_declared(scenario.auth, cls.global_context, "auth") if scenario.auth else None
-                cls.client = httpx.Client(**build_client_kwargs(resolved_ssl, resolved_auth, cls.scenario_dir))
+                cls._client_kwargs = build_client_kwargs(resolved_ssl, resolved_auth, cls.scenario_dir)
+                cls.client = httpx.Client(**cls._client_kwargs)
             except Exception as e:
                 cls._init_failed = str(e)
                 raise StageExecutionError(f"Failed to initialize scenario: {e}") from e
@@ -843,6 +884,16 @@ class Carrier:
 
     @classmethod
     def teardown_class(cls) -> None:
+        cls._end_chain()
+        # Reset the initialization too, so a re-run of this class (e.g. a rerun
+        # plugin) actually re-executes.
+        for name, value in fresh_scenario_state().items():
+            setattr(cls, name, value)
+
+    @classmethod
+    def _end_chain(cls) -> None:
+        """Clean up after a chain and return the class to `fresh_chain_state`,
+        keeping the scenario's initialization for the next chain."""
         while cls.active_context_managers:
             ctx = cls.active_context_managers.pop()
             try:
@@ -853,11 +904,9 @@ class Carrier:
         if cls.client is not None:
             cls.client.close()
 
-        # Reset all per-run state so a re-run of this class (e.g. a rerun plugin)
-        # actually re-executes. maps[-1] is the pristine scenario context: saves
-        # only ever prepend layers.
-        for name, value in fresh_scenario_state().items():
+        for name, value in fresh_chain_state().items():
             setattr(cls, name, value)
+        # maps[-1] is the pristine scenario context: saves only ever prepend layers.
         cls.global_context = base_global_context(cls.global_context.maps[-1])
 
 

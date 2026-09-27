@@ -114,7 +114,7 @@ class JsonModule(pytest.Module):
         setattr(dummy_module, self.name, CarrierClass)
         # Consumed by _getobj(); pytest.Class resolves the class off it.
         self._generated_module = dummy_module
-        json_class = pytest.Class.from_parent(
+        json_class = JsonClass.from_parent(
             self,
             path=self.path,
             name=self.name,
@@ -151,17 +151,133 @@ def _stage_index(item: pytest.Item) -> int:
     return getattr(getattr(item, "function", None), "_httpchain_stage_index", 0)
 
 
-def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[int, int]) -> None:
+# Which of its scenario's chains an item runs in: the param index of each fixture
+# that splits the scenario into chains (see `_chain_args`), by name. Read at setup
+# by `Carrier.begin_chain`.
+type _ChainKey = tuple[tuple[str, int], ...]
+_CHAIN_KEY: pytest.StashKey[_ChainKey] = pytest.StashKey()
+
+# `_chain_args` over each scenario class's every stage, recorded by `JsonClass`
+# before any selection narrows them: which fixtures every stage requests is a
+# property of the scenario, so dropping the stages without one must not split
+# the rest.
+_SCENARIO_CHAIN_ARGS: pytest.StashKey[dict[type[Carrier], frozenset[str]]] = pytest.StashKey()
+
+
+def _high_scoped_params(item: pytest.Item) -> dict[str, int]:
+    """The param index of each parametrized fixture above function scope in the
+    item's closure, read the way pytest's own param-major reordering reads them
+    (``_arg2scope`` is private, but it is what pytest keys that reordering by).
+    Stage ``parametrize`` is function-scoped, so it never appears here."""
+    callspec = getattr(item, "callspec", None)
+    if callspec is None:
+        return {}
+    return {name: index for name, index in callspec.indices.items() if callspec._arg2scope[name].value != "function"}
+
+
+def _chain_args(items: Iterable[pytest.Item]) -> dict[type[Carrier], frozenset[str]]:
+    """Per scenario class, the fixtures that split it into chains.
+
+    A class-, module-, package- or session-scoped fixture with params that every
+    stage requests (a scenario-level fixture, or one such a fixture depends on)
+    runs the whole scenario once per param, so each param combination is a
+    chain of its own. One only some stages request cannot: the stages without
+    it belong to no single param, so it is left to vary in place, like stage
+    ``parametrize``.
+    """
+    shared: dict[type[Carrier], frozenset[str]] = {}
+    for item in items:
+        if (cls := _carrier_class(item)) is not None:
+            names = frozenset(_high_scoped_params(item))
+            shared[cls] = shared[cls] & names if cls in shared else names
+    return shared
+
+
+def _warn_on_params_varying_across_stages(cls: type[Carrier], items: list[pytest.Item], chain_args: frozenset[str]) -> None:
+    """Warn when a fixture parametrized above function scope that not every
+    stage requests is requested by two or more, and so varies in place across
+    them (`_chain_args`).
+
+    Stage order then runs each of those stages for every param before the next
+    one: with ``tenant`` over [a, b] on ``create`` and ``read`` only,
+    create[a], create[b], read[a], read[b]. read[a] sees what create[b] saved,
+    and the fixture is set up again each time the param changes, once per
+    stage and param rather than once per param. Running those stages param by
+    param instead would need the stages without the fixture to run once per
+    param too, which they have no param for, so this warns rather than
+    reorders: most likely every stage was meant to request the fixture.
+    """
+    stages: dict[str, set[int]] = {}
+    params: dict[str, set[int]] = {}
+    scopes: dict[str, str] = {}
+    for item in items:
+        if (callspec := getattr(item, "callspec", None)) is None:
+            continue
+        for name, index in _high_scoped_params(item).items():
+            if name not in chain_args:
+                stages.setdefault(name, set()).add(_stage_index(item))
+                params.setdefault(name, set()).add(index)
+                scopes[name] = callspec._arg2scope[name].value
+    scenario = cls.scenario
+    for name, indices in stages.items():
+        if scenario is None or len(indices) < 2 or len(params[name]) < 2:
+            continue
+        names = [scenario.stages[j].name for j in sorted(indices) if j < len(scenario.stages)]
+        warnings.warn(
+            ScenarioValidationWarning(
+                f"Scenario '{cls.__name__}': the {scopes[name]}-scoped fixture '{name}' has params and is requested by stages {names} "
+                f"but not by every stage, so the scenario does not run once per param: each of those stages runs for every param "
+                f"before the next one does, '{names[1]}' for the first param sees what '{names[0]}' saved for the last, and '{name}' "
+                f"is set up again each time its param changes. Request '{name}' from every stage (e.g. in the scenario's fixtures) "
+                f"to run the whole chain once per param"
+            ),
+            stacklevel=2,
+        )
+
+
+class JsonClass(pytest.Class):
+    """Collector for a scenario's generated test class.
+
+    It is the one place that sees every stage of the scenario: a selection
+    narrows them only afterwards, ``-k``, ``-m``, ``--deselect`` and ``--lf``
+    at ``pytest_collection_modifyitems``, and a node id on the command line
+    (how an IDE runs one test) when the session matches the class's items to
+    it. So the fixtures that split the scenario into chains are recorded here,
+    for `_regroup_carrier_items`.
+    """
+
+    def collect(self) -> Iterable[pytest.Item | pytest.Collector]:
+        collected = list(super().collect())
+        items = [node for node in collected if isinstance(node, pytest.Item)]
+        chain_args = _chain_args(items)
+        self.config.stash.setdefault(_SCENARIO_CHAIN_ARGS, {}).update(chain_args)
+        for cls, names in chain_args.items():
+            _warn_on_params_varying_across_stages(cls, items, names)
+        return collected
+
+
+def _regroup_carrier_items(
+    items: list[pytest.Item],
+    original_position: dict[int, int],
+    scenario_chain_args: dict[type[Carrier], frozenset[str]] | None = None,
+) -> None:
     """Re-sort collected items so each scenario class's stages run contiguously,
-    in stage order.
+    in stage order — per chain, when a parametrized fixture splits the class
+    into several (`_chain_args`).
 
     Leaving a class finalizes its scope, and ``Carrier.teardown_class`` resets
     the chain — so any sorter that interleaves two scenarios breaks both
     (a user-installed pytest-order acting on user-authored ``order(...)`` marks,
     pytest-randomly's shuffle, core's ``--ff``). Each class is pulled together
-    at its first item (preserving inter-class order), with ``original_position``
-    (keyed by ``id(item)``) breaking ties so parametrized instances of a stage
-    keep collection order.
+    at its first item (preserving inter-class order), and within it each chain
+    at its first item: pytest has already ordered a high-scoped fixture's params
+    so each is set up once, and sorting by stage alone would run every param's
+    first stage before any second one. ``original_position`` (keyed by
+    ``id(item)``) breaks ties so parametrized instances of a stage keep
+    collection order. ``scenario_chain_args`` is `_chain_args` over each
+    class's every stage, as `JsonClass` recorded it, so the chains do not
+    depend on the selection. Each item's chain is stashed for
+    ``Carrier.begin_chain``.
     """
     buckets: dict[type[Carrier], list[pytest.Item]] = {}
     for item in items:
@@ -170,11 +286,20 @@ def _regroup_carrier_items(items: list[pytest.Item], original_position: dict[int
     if not buckets:
         return
 
-    def stage_key(item: pytest.Item) -> tuple[int, int]:
-        return (_stage_index(item), original_position.get(id(item), sys.maxsize))
-
-    for bucket in buckets.values():
-        bucket.sort(key=stage_key)
+    # A class's own record covers all its stages; the selected items stand in
+    # only for a class collected some other way.
+    chain_args = _chain_args(items) | (scenario_chain_args or {})
+    for cls, bucket in buckets.items():
+        names = chain_args[cls]
+        chain_rank: dict[_ChainKey, int] = {}
+        sort_keys: dict[int, tuple[int, int, int]] = {}
+        for item in bucket:
+            params = _high_scoped_params(item)
+            chain_key = tuple((name, params[name]) for name in sorted(names))
+            item.stash[_CHAIN_KEY] = chain_key
+            rank = chain_rank.setdefault(chain_key, len(chain_rank))
+            sort_keys[id(item)] = (rank, _stage_index(item), original_position.get(id(item), sys.maxsize))
+        bucket.sort(key=lambda item: sort_keys[id(item)])
 
     regrouped: list[pytest.Item] = []
     emitted: set[type[Carrier]] = set()
@@ -229,8 +354,17 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     config.stash[_ORIGINAL_POSITIONS] = {id(item): i for i, item in enumerate(items)}
     result = yield
     _apply_xdist_group_nodeids(items)
-    _regroup_carrier_items(items, config.stash[_ORIGINAL_POSITIONS])
+    _regroup_carrier_items(items, config.stash[_ORIGINAL_POSITIONS], config.stash.get(_SCENARIO_CHAIN_ARGS, None))
     return result
+
+
+def _describe_chain(item: pytest.Item, chain_key: _ChainKey) -> str:
+    """`` for tenant='alpha'``: the params of a scenario's chain, told apart
+    only when a fixture splits it into several; ``item`` is one of the chain's."""
+    callspec = getattr(item, "callspec", None)
+    if not chain_key or callspec is None:
+        return ""
+    return " for " + ", ".join(f"{name}={callspec.params[name]!r}" for name, _ in chain_key)
 
 
 def _warn_on_split_chains(items: list[pytest.Item]) -> None:
@@ -241,24 +375,30 @@ def _warn_on_split_chains(items: list[pytest.Item]) -> None:
     selection mechanisms silently orphan a chain's tail: the surviving stages
     run without the deselected stages' saved context and fail with misleading
     undefined-variable errors (or worse, run against un-set-up server state).
+    Checked per chain, not per scenario: with one chain per param, ``--lf`` can
+    keep the head of one param's chain and the tail of another's.
     """
-    selected_indices: dict[type[Carrier], set[int]] = {}
+    selected_indices: dict[tuple[type[Carrier], _ChainKey], set[int]] = {}
+    first_items: dict[tuple[type[Carrier], _ChainKey], pytest.Item] = {}
     for item in items:
         if (cls := _carrier_class(item)) is not None:
-            selected_indices.setdefault(cls, set()).add(_stage_index(item))
+            chain = (cls, item.stash.get(_CHAIN_KEY, ()))
+            selected_indices.setdefault(chain, set()).add(_stage_index(item))
+            first_items.setdefault(chain, item)
 
-    for cls, indices in selected_indices.items():
+    for (cls, chain_key), indices in selected_indices.items():
         scenario = cls.scenario
         if scenario is None or len(scenario.stages) <= 1:
             continue
         missing = set(range(max(indices))) - indices
         if missing:
             names = [scenario.stages[j].name for j in sorted(missing) if j < len(scenario.stages)]
+            chain = _describe_chain(first_items[(cls, chain_key)], chain_key)
             try:
                 warnings.warn(
                     ScenarioValidationWarning(
                         f"Scenario '{cls.__name__}': earlier stage(s) {names} were deselected (e.g. by --lf, -k, or --deselect) "
-                        f"while later stages of the chain remain selected; the surviving stages will run without their saved context"
+                        f"while later stages of the chain{chain} remain selected; the surviving stages will run without their saved context"
                     ),
                     stacklevel=2,
                 )
@@ -278,8 +418,18 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     report the final, regrouped order to the controller.
     """
     positions = session.config.stash.get(_ORIGINAL_POSITIONS, {})
-    _regroup_carrier_items(session.items, positions)
+    _regroup_carrier_items(session.items, positions, session.config.stash.get(_SCENARIO_CHAIN_ARGS, None))
     _warn_on_split_chains(session.items)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Start a scenario's next chain from fresh state, after the previous
+    chain's last report (which may have aborted it). ``tryfirst`` puts this
+    ahead of fixture setup: a setup error in a chain's first stage must abort
+    that chain, not be reset away when its second stage enters it."""
+    if (cls := _carrier_class(item)) is not None:
+        cls.begin_chain(item.stash.get(_CHAIN_KEY, ()))
 
 
 @pytest.hookimpl(optionalhook=True)

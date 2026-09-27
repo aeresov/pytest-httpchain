@@ -118,6 +118,16 @@ Chain multiple parameter definitions:
 
 This creates a cross-product: 3 environments × 2 formats = 6 test runs.
 
+## Parametrizing the Whole Scenario
+
+Stage `parametrize` repeats one stage within the scenario's single chain. Every
+run shares the chain's saved values and HTTP client, and the stages after it see
+what the last run saved. To run the whole chain once per value instead, each
+run starting fresh, list a `class`-scoped fixture with `params` in the
+scenario's `fixtures`. Listed on only some stages, it varies in place like
+stage `parametrize` (and draws a warning when two or more stages request it).
+See [Parametrized fixtures](../usage/scenarios.md#parametrized-fixtures).
+
 ## Template Expressions in Parameters
 
 Parameter values can use template expressions:

@@ -423,6 +423,23 @@ def request_id():
     return _make_id
 
 
+@pytest.fixture(scope="class", params=["alpha", "beta"])
+def tenant(request):
+    """A class-scoped fixture with params: a scenario whose every stage requests
+    it runs its whole chain once per tenant. Each setup is printed, so a test
+    can count them."""
+    print(f"tenant setup: {request.param}")
+    return request.param
+
+
+@pytest.fixture
+def beta_setup_error(tenant):
+    """Fail setup for the ``beta`` tenant only: the first stage of a chain that
+    is not the scenario's first."""
+    if tenant == "beta":
+        raise RuntimeError("fixture setup failed for beta")
+
+
 @pytest.fixture
 def fixture_setup_error():
     """Fail before a generated stage method can enter Carrier.execute_stage."""
