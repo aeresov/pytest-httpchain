@@ -277,7 +277,7 @@ class Request(Authenticated):
         default=HTTPMethod.GET,
         description="HTTP method: a standard verb (autocompleted) or any RFC 9110 token (e.g. PROPFIND, PURGE).",
     )
-    params: dict[str, Any] = Field(default_factory=dict, description="URL query parameters.")
+    params: dict[str, Any] = Field(default_factory=dict, description="URL query parameters, merged into any query already in the URL; a key in both takes the value given here.")
     headers: dict[str, str] = Field(default_factory=dict, description="HTTP request headers.")
     body: RequestBody | None = Field(default=None, description="Request body configuration.")
     timeout: PositiveFloat | NumberOrTemplate = Field(default=30.0, description="Request timeout in seconds.")

@@ -43,6 +43,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that rendered to `null`, went out as an empty request with no `Content-Type`, exactly like a
   request without a body. It is now `null` with `Content-Type: application/json`, unless the
   request sets its own content type.
+- `params` no longer throws away a query string already in `url`. With
+  `"url": "{{ server }}/items?page=2"` and `"params": {"limit": 10}` the request went to
+  `/items?limit=10`: httpx replaces the URL's query with `params` instead of adding to it, and
+  nothing reported the lost `page=2`. The two are now merged: the URL's parameters come first,
+  then the new keys from `params`, and a key present in both takes its value from `params`
+  (`/items?page=2&limit=10`). A list value still repeats the key. Every URL parameter that
+  `params` does not set goes out exactly as it would without `params`, order and encoding
+  included, so an escape that is not UTF-8 (`q=%E9`) or a bare `?flag` reaches the server
+  unchanged. The HTTP report section and the HAR export show the merged URL, as sent.
 
 ## [0.15.2] - 2026-09-26
 

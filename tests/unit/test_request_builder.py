@@ -30,13 +30,47 @@ def test_unreadable_body_file_is_a_request_error(tmp_path, body, message):
         build_request_kwargs(Request(url="https://example.com/api", method="POST", body=body(tmp_path)))
 
 
-def test_empty_params_do_not_override_url_query():
-    """httpx replaces the URL's own query with an explicit params={}."""
-    assert build_request_kwargs(Request(url="https://example.com/api?streamId=123"))["params"] is None
+def _sent(request: Request) -> httpx.Request:
+    """The request httpx puts on the wire for ``request``'s kwargs."""
+    sent = []
+    with httpx.Client(transport=httpx.MockTransport(lambda r: sent.append(r) or httpx.Response(200))) as client:
+        client.request(**build_request_kwargs(request))
+    return sent[0]
 
 
-def test_params_passed_through():
-    assert build_request_kwargs(Request(url="https://example.com/api", params={"key": "value"}))["params"] == {"key": "value"}
+@pytest.mark.parametrize(
+    ("url", "params", "sent_url"),
+    [
+        # httpx's params= replaced the URL's query outright, dropping page=2.
+        pytest.param("http://t/items?page=2", {"limit": 10}, "http://t/items?page=2&limit=10", id="url-query-kept"),
+        # A shared key keeps the URL's position and takes the params value.
+        pytest.param("http://t/items?page=2&sort=name", {"page": 3}, "http://t/items?page=3&sort=name", id="params-win-shared-key"),
+        # ...at its first place, and its other occurrences go.
+        pytest.param("http://t/items?a=1&b=2&a=3", {"a": 9}, "http://t/items?a=9&b=2", id="shared-key-every-occurrence"),
+        pytest.param("http://t/items?so%72t=name", {"sort": "price"}, "http://t/items?sort=price", id="shared-key-matched-decoded"),
+        pytest.param("http://t/items?tag=a", {"tag": ["b", "c"]}, "http://t/items?tag=b&tag=c", id="list-value-repeats-key"),
+        pytest.param("http://t/items?tag=a", {"tag": []}, "http://t/items", id="empty-list-drops-key"),
+        # The rest keep their raw bytes. Merging via httpx's copy_merge_params
+        # decoded the query into a dict and re-encoded it: %E9 became U+FFFD
+        # (%EF%BF%BD), repeats were regrouped (a=1&a=3&b=2), `flag` gained an
+        # `=`, %20 became +, and `,` `;` `=` inside a value were escaped.
+        pytest.param("http://t/items?q=%E9", {"x": 1}, "http://t/items?q=%E9&x=1", id="non-utf8-escape-kept"),
+        pytest.param("http://t/items?a=1&b=2&a=3", {"x": 1}, "http://t/items?a=1&b=2&a=3&x=1", id="url-repeats-keep-order"),
+        pytest.param("http://t/items?flag&q=a%20b&f=a,b;c=d", {"x": 1}, "http://t/items?flag&q=a%20b&f=a,b;c=d&x=1", id="url-segments-verbatim"),
+        # httpx reads an explicit params={} as "replace the query with nothing".
+        pytest.param("http://t/items?page=2", {}, "http://t/items?page=2", id="no-params"),
+    ],
+)
+def test_params_merge_into_url_query(url, params, sent_url):
+    assert str(_sent(Request(url=url, params=params)).url) == sent_url
+
+
+def test_unparseable_url_is_a_request_error():
+    """Merging parses the URL before client.request does, so httpx's
+    InvalidURL must still arrive as a stage failure. A URL still carrying a
+    template marker is the one kind model validation lets through unparsed."""
+    with pytest.raises(RequestError, match="Invalid request URL: Invalid port"):
+        build_request_kwargs(Request(url="http://t:port/{{ x }}", params={"limit": 10}))
 
 
 @pytest.mark.parametrize(("declared", "follow"), [({}, True), ({"allow_redirects": False}, False)], ids=["default", "disabled"])
@@ -55,8 +89,6 @@ def test_json_null_is_sent_as_a_json_document(headers, content_type):
     """httpx reads ``json=None`` as "no body": a declared null (literal, or a
     template that rendered to None) went out as an empty request with no
     content type, exactly like an undeclared body."""
-    sent = []
-    with httpx.Client(transport=httpx.MockTransport(lambda request: sent.append(request) or httpx.Response(200))) as client:
-        client.request(**build_request_kwargs(Request.model_validate({"url": "http://t/", "method": "POST", "headers": headers, "body": {"json": None}})))
-    assert sent[0].content == b"null"
-    assert sent[0].headers.get_list("content-type") == [content_type]
+    sent = _sent(Request.model_validate({"url": "http://t/", "method": "POST", "headers": headers, "body": {"json": None}}))
+    assert sent.content == b"null"
+    assert sent.headers.get_list("content-type") == [content_type]

@@ -975,7 +975,7 @@
                 }
               ],
               "title": "Params",
-              "description": "URL query parameters."
+              "description": "URL query parameters, merged into any query already in the URL; a key in both takes the value given here."
             },
             "headers": {
               "anyOf": [

@@ -9,6 +9,7 @@ import base64
 import ssl
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote_plus
 
 import httpx
 
@@ -77,13 +78,52 @@ def _read_file(path: Path, declared: Any, missing: str, unreadable: str) -> byte
         raise RequestError(f"{unreadable} '{declared}': {e}") from e
 
 
+def _merge_query(query: str, params: dict[str, Any]) -> str:
+    """The URL's raw ``query`` with ``params`` merged in.
+
+    Key order and precedence are httpx's ``URL.copy_merge_params``: the URL's
+    parameters first, then new keys in declared order, and a key in both takes
+    the params value(s) at its first place in the URL, its other occurrences
+    dropped. The merge works on the raw ``&``-separated segments, though: a
+    segment whose key params does not name goes out as written, and only keys
+    are decoded, to match. copy_merge_params decodes the whole query into a
+    dict and encodes it again, which changed parameters params never names:
+    ``q=%E9`` (not UTF-8) went out as ``q=%EF%BF%BD``, ``a=1&b=2&a=3`` as
+    ``a=1&a=3&b=2``, and ``a=1;b=2`` as ``a=1%3Bb%3D2``.
+    """
+    pending = {key: str(httpx.QueryParams({key: value})) for key, value in params.items()}
+    segments = []
+    for segment in query.split("&"):
+        key = unquote_plus(segment.partition("=")[0])
+        if key not in params:
+            segments.append(segment)
+        elif key in pending:
+            segments.append(pending.pop(key))
+    segments.extend(pending.values())
+    # Empty segments (from `&&`, a bare `?`, or an empty list value) carry no parameter.
+    return "&".join(segment for segment in segments if segment)
+
+
 def build_request_kwargs(request_model: Request, scenario_dir: Path | None = None) -> dict[str, Any]:
     """Arguments for one ``client.request(...)`` call from a resolved `Request`."""
+    url = str(request_model.url)
+    if request_model.params:
+        # httpx's params= *replaces* the URL's own query, so `/items?page=2`
+        # with params {"limit": 10} went out as `/items?limit=10`. Merged into
+        # the URL instead, which moves parsing — and its InvalidURL — here
+        # from client.request. httpx.URL has already normalized the query to
+        # what it would send without params, so the kept segments match that.
+        try:
+            parsed = httpx.URL(url)
+            query = _merge_query(parsed.query.decode("ascii"), request_model.params)
+            url = str(parsed.copy_with(query=query.encode("ascii") if query else None))
+        except httpx.InvalidURL as e:
+            raise RequestError(f"Invalid request URL: {e}") from e
+
     request_kwargs: dict[str, Any] = {
         "method": request_model.method,
-        "url": str(request_model.url),
+        "url": url,
         "headers": request_model.headers,
-        "params": request_model.params or None,
         "timeout": request_model.timeout,
         "follow_redirects": request_model.allow_redirects,
     }

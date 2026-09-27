@@ -55,6 +55,25 @@ def test_har_form_repeats_are_separate_scalar_params(run_scenario, har_dir):
     ]
 
 
+def test_har_records_url_query_merged_with_params(run_scenario, har_dir):
+    """The HAR shows the URL that went out: its own query merged with params,
+    where httpx's params= used to replace it and category=books never reached
+    the server."""
+    request = {"params": {"sort": "price", "limit": 10}}
+    result = run_scenario({"stages": [stage("merged_query", "/search?category=books&sort=name", request=request)]}, args=HAR_ARGS)
+
+    result.assert_outcomes(passed=1)
+    [entry] = har_entries(har_dir)
+    assert entry["request"]["url"].endswith("/search?category=books&sort=price&limit=10")
+    assert entry["request"]["queryString"] == [
+        {"name": "category", "value": "books"},
+        {"name": "sort", "value": "price"},
+        {"name": "limit", "value": "10"},
+    ]
+    # /search echoes the two keys it reads.
+    assert json.loads(entry["response"]["content"]["text"]) == {"category": "books", "sort": "price", "results": []}
+
+
 def test_parallel_stage_har_contains_every_iteration(run_scenario, har_dir):
     """A parallel stage's HAR must hold one entry per iteration, not a single
     arbitrary iteration presented as the stage's only exchange."""

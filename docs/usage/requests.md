@@ -21,7 +21,7 @@
 |-------|------|---------|-------------|
 | `url` | string | required | Target URL (supports templates) |
 | `method` | string | `GET` | HTTP method |
-| `params` | object | `{}` | Query parameters |
+| `params` | object | `{}` | Query parameters, merged into any query already in `url` |
 | `headers` | object | `{}` | Request headers |
 | `body` | object | `null` | Request body configuration |
 | `auth` | string/object | `null` | Authentication (overrides scenario-level) |
@@ -42,6 +42,24 @@
     }
 }
 ```
+
+`params` is merged into a query string the URL already has, not substituted for it:
+
+- the URL's own parameters come first, then the new keys from `params`, in their declared order;
+- a key present in both takes its value from `params`, sent where the key first appears in the
+  URL; its other occurrences in the URL are dropped;
+- a list value repeats the key: `{"tag": ["a", "b"]}` sends `tag=a&tag=b`.
+
+So `"url": "{{ base }}/items?page=2&sort=name"` with `"params": {"sort": "price", "limit": 10}`
+sends `/items?page=2&sort=price&limit=10`.
+
+The URL's query is split into parameters at `&` only, and a parameter whose name `params` does not
+set goes out just as it would without `params`, in the same place: a bare `flag`, `%20` or `+`, an
+escape that is not UTF-8 such as `q=%E9`, and a `;` inside a parameter are all left alone. Names
+are compared decoded, so the `params` key `"sort"` also replaces `so%72t=name`. Values from
+`params` are encoded as form data (a space becomes `+`, `&` becomes `%26`), and a key whose value
+is an empty list is removed from the query. The HTTP report section and the HAR export show the
+URL that was sent.
 
 ## Headers
 
