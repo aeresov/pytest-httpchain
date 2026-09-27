@@ -118,6 +118,15 @@ DIAGNOSED = [
     ("invalid_scenario_marker.json", [(C.INVALID_MARKER, "marks", r"'skip\('")]),
     ("invalid_stage_marker.json", [(C.INVALID_MARKER, "stages[0].marks", "'foo.bar'")]),
     ("invalid_marker_unpacking.json", [(C.INVALID_MARKER, "stages[0].marks", r"\*\* unpacking")]),
+    # xdist joins a stage's own group with the scenario's, so --dist loadgroup
+    # ran the stage on another worker than the rest of its chain.
+    ("stage_xdist_group_mark.json", [(C.STAGE_XDIST_GROUP, "stages[0].marks", r"marker \"xdist_group\('db'\)\"")]),
+    # xdist drops a group whose name has a ']' after its last '@', so every
+    # stage became a work unit of its own under --dist loadgroup.
+    ("scenario_xdist_group_bracket.json", [(C.UNREADABLE_XDIST_GROUP, "marks", r"Remove the '\]' from 'db\[main\]'")]),
+    # The name lands in the node id: pytest cannot select the stage by it, and
+    # --dist loadscope cut the chain at its last '::'.
+    ("stage_name_node_id_separator.json", [(C.NODE_ID_SEPARATOR_IN_STAGE_NAME, "stages[0].name", r"'Users::list' contains '::'")]),
     ("contradiction_contains.json", [(C.CONTAINS_CONTRADICTION, "stages[0].response[0].verify.body", r"substring\(s\): \['ERROR'\]")]),
     ("contradiction_matches.json", [(C.MATCHES_CONTRADICTION, "stages[0].response[0].verify.body", r"pattern\(s\): \['\^OK\$'\]")]),
     # The scenario-level context never includes fixture values: a guaranteed
@@ -279,6 +288,17 @@ def test_inline_schema_reaches_the_model_untouched(datadir, fixture, step):
         pytest.param([_stage(response=[{"verify": {"headers": {"x-h": {"matches": ""}}}}])], {}, [], id="empty-matches-is-no-contradiction"),
         # `name` is optional; two stages omitting it are not duplicates.
         pytest.param([_stage(name=""), _stage(name="")], {}, [], id="unnamed-stages-not-duplicates"),
+        # Only '::' is pytest's node-id separator.
+        pytest.param([_stage(name="Users: list")], {}, [], id="single-colon-in-stage-name"),
+        # A scenario-level group is inherited by every stage, so the chain stays together.
+        pytest.param([_stage()], {"marks": ["xdist_group('db')"]}, [], id="scenario-level-xdist-group"),
+        # xdist keeps one copy of each group name, so a stage repeating the
+        # scenario's group is in the same group as its siblings.
+        pytest.param([_stage(marks=["xdist_group(name='db')"])], {"marks": ["xdist_group('db')"]}, [], id="stage-repeats-scenario-xdist-group"),
+        # ... but a second name of its own is a group apart.
+        pytest.param([_stage(marks=["xdist_group('other')"])], {"marks": ["xdist_group('db')"]}, [C.STAGE_XDIST_GROUP], id="stage-adds-xdist-group"),
+        # xdist reads the group back from after the node id's last '@'.
+        pytest.param([_stage()], {"marks": ["xdist_group('db[1]@main')"]}, [], id="bracket-before-at-in-xdist-group"),
         # Only values are substituted: a templated key reaches the wire verbatim.
         pytest.param(
             [_stage(request={"url": "http://server/x", "headers": {"{{ hname }}": "v"}})],

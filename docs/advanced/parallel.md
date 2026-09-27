@@ -251,3 +251,44 @@ run on the same worker, in order. Modes that distribute tests individually —
 at collection time (the error names the supported modes). Different scenarios
 never share state, so scenario-level distribution is safe under the supported
 modes.
+
+The supported modes decide what runs together from each test's node id (plus,
+under `--dist loadgroup`, its `xdist_group` marks), so a few things a scenario
+puts there are rejected at collection too, rather than letting one stage run
+on another worker without the earlier stages' saved values. The coded ones are
+validator errors: `pytest-httpchain validate` reports them, and they fail
+collection in every run, with or without xdist.
+
+- **`xdist_group` belongs in the scenario's `marks`.** Under `--dist loadgroup`
+  the plugin gives each scenario a group of its own. Declare one yourself to
+  put several scenarios in the same group, for example to keep the scenarios
+  that share a test database on one worker, one after the other:
+
+    ```json
+    {
+        "marks": ["xdist_group('db')"],
+        "stages": []
+    }
+    ```
+
+    The plugin then adds no group of its own, and every stage inherits
+    yours. Keep `]` out of the name
+    ([`HTTPCHAIN033`](../diagnostics.md)): xdist ignores a group whose name
+    has a `]` after its last `@`, so no two stages would be kept together.
+    An `xdist_group` in a *stage's* `marks` is an error
+    ([`HTTPCHAIN031`](../diagnostics.md)) unless it repeats a group the
+    scenario declares: xdist joins every group on a test into one name, so a
+    stage with a group of its own would be scheduled alone.
+
+- **A stage name cannot contain `::`**
+  ([`HTTPCHAIN032`](../diagnostics.md)). The name becomes part of the stage's
+  node id, where `::` separates its parts: `--dist loadscope` groups a test
+  by its node id up to the last `::`, and pytest could not run that stage by
+  its node id either. Rename the stage, e.g. `Users: list` or `Users.list`.
+
+- **Under `--dist loadscope`, a test id in brackets cannot contain `::`
+  either.** This covers a parametrize step's explicit `ids` and the ids built
+  from its values, such as `"::1"`, and likewise the ids of a fixture's
+  `params`. pytest handles such an id itself, so only this mode rejects it:
+  give the step or the fixture explicit `ids`, or use `loadfile` or
+  `loadgroup`.

@@ -3,7 +3,7 @@ import pytest
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain.templates import TemplatesError
-from pytest_httpchain.utils import make_marker, process_substitutions
+from pytest_httpchain.utils import make_marker, process_substitutions, xdist_group_names
 
 # The functions these tests import live in a module of their own; see its
 # docstring for why they are not defined here.
@@ -115,3 +115,9 @@ def test_make_marker(mark_str, expected):
 def test_make_marker_rejects_non_literal_expressions(mark_str, error):
     with pytest.raises(error):
         make_marker(mark_str)
+
+
+def test_xdist_group_names_reads_names_as_xdist_does():
+    """First argument, else ``name``, else "default", as a string; other marks ignored."""
+    marks = ["xdist_group('db')", "xdist_group(name='cache')", "xdist_group()", "xdist_group(7)", "slow", "skip(reason='db')"]
+    assert xdist_group_names(make_marker(mark) for mark in marks) == {"db", "cache", "default", "7"}

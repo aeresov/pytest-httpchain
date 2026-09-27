@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `HTTPCHAIN031` (error): an `xdist_group` in a stage's `marks` naming a group the scenario does
+  not declare. xdist joins every group on a test into one name, so under `--dist loadgroup` that
+  stage got a group of its own and ran on another worker, without the earlier stages' saved values.
+  The mark belongs in the scenario's `marks`; a stage repeating the scenario's group is accepted.
+- `HTTPCHAIN032` (error): a stage name containing `::` (`Users::list`). The name is part of the
+  stage's node id, where `::` separates the parts, so pytest could not run the stage by its node
+  id, and `--dist loadscope`, which groups tests by node id up to the last `::`, ran it apart from
+  the rest of the scenario.
+- `HTTPCHAIN033` (error): a scenario `xdist_group` name with a `]` after its last `@`, such as
+  `xdist_group('db[main]')`. xdist ignores such a group, so under `--dist loadgroup` every stage was
+  scheduled on its own, and a later stage could fail on another worker; `validate` reported the
+  scenario as OK.
+
 ### Fixed
 
 - A `combinations` step whose combinations have a single key now hands the stage the bare value.
@@ -90,6 +105,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every param before the next one does, so `read[a]` sees what `create[b]` saved, and the fixture
   is set up again at each change of param. Requesting it from every stage, e.g. in the scenario's
   `fixtures`, runs the chain once per param instead.
+- pytest-xdist `--dist loadgroup` and `--dist loadscope`, the modes documented as keeping a
+  scenario together, could still run one of its stages on another worker, where it failed without
+  the earlier stages' saved values. loadscope groups tests by node id up to the last `::`, and
+  loadgroup by their `xdist_group` names, which xdist appends to the node id after an `@`. Besides
+  the scenarios the new `HTTPCHAIN031` to `HTTPCHAIN033` reject (see Added), two more split a chain.
+  Under loadgroup, a scenario in a directory such as `[smoke]`: the automatic group is named after
+  the scenario's node id, and xdist ignores a group whose name has a `]` with no `@` after it, so
+  every stage was scheduled alone. The plugin now replaces `]` and `@` in that name. Under loadscope, a test id containing `::`, from a parametrize step's `ids` or values (such
+  as `"::1"`) or from a class-scoped fixture's `params`. pytest itself handles such an id, so it
+  fails collection only under loadscope, naming the ids.
+- An `xdist_group` in a scenario's own `marks` now works as it does for any pytest test: scenarios
+  declaring the same group run on one worker under `--dist loadgroup`, one after the other, where
+  they used to run side by side. The plugin added its automatic group on top, and xdist joined the
+  two into a name of each scenario's own (`db_test_orders.http.json`). The plugin now adds its
+  group only to a scenario that declares none; every stage inherits the declared one, so the chain
+  still stays together.
+
+### Changed
+
+- **BREAKING**: three scenario mistakes that let pytest-xdist split a chain now fail collection
+  in every run, with or without xdist, and `validate` reports the scenario as invalid: a stage name
+  containing `::` (`HTTPCHAIN032`), an `xdist_group` in a stage's `marks` that the scenario does
+  not declare (`HTTPCHAIN031`), and a scenario `xdist_group` name with a `]` after its last `@`
+  (`HTTPCHAIN033`). Such a scenario used to collect and, without xdist, pass. Rename the stage
+  (`Users: list`), move the `xdist_group` to the scenario's `marks`, or take the `]` out of the
+  group name.
 
 ## [0.15.2] - 2026-09-26
 

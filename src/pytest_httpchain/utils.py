@@ -9,7 +9,7 @@ rather than introducing a second error type for the same malformed input.
 import ast
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +89,16 @@ def make_marker(mark_str: str) -> pytest.MarkDecorator:
         return getattr(pytest.mark, node.func.id)(*args, **kwargs)
 
     raise ValueError(f"unsupported marker expression: {mark_str}")
+
+
+def xdist_group_names(markers: Iterable[pytest.MarkDecorator]) -> set[str]:
+    """The pytest-xdist group names these marks declare, read as xdist reads them:
+    the first argument, else the ``name`` keyword, else ``"default"``.
+
+    xdist joins every group name on a test, the scenario's and the stage's own,
+    into the one group the test is scheduled by.
+    """
+    return {str(marker.args[0] if marker.args else marker.kwargs.get("name", "default")) for marker in markers if marker.name == "xdist_group"}
 
 
 def _resolve_function_name(name: str, context: Mapping[str, Any]) -> str:

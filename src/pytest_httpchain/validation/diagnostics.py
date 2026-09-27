@@ -46,6 +46,9 @@ class DiagnosticCode(StrEnum):
     SCHEMA_SCENARIO_DIRECTIVE = "HTTPCHAIN028"
     TEMPLATE_IN_KEY = "HTTPCHAIN029"
     TEMPLATE_IN_KWARGS = "HTTPCHAIN030"
+    STAGE_XDIST_GROUP = "HTTPCHAIN031"
+    NODE_ID_SEPARATOR_IN_STAGE_NAME = "HTTPCHAIN032"
+    UNREADABLE_XDIST_GROUP = "HTTPCHAIN033"
 
 
 # A code's severity is a property of the code, not of the site that raises it:
@@ -86,6 +89,9 @@ SEVERITY: dict[DiagnosticCode, Severity] = {
     DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE: "warning",
     DiagnosticCode.TEMPLATE_IN_KEY: "warning",
     DiagnosticCode.TEMPLATE_IN_KWARGS: "warning",
+    DiagnosticCode.STAGE_XDIST_GROUP: "error",
+    DiagnosticCode.NODE_ID_SEPARATOR_IN_STAGE_NAME: "error",
+    DiagnosticCode.UNREADABLE_XDIST_GROUP: "error",
 }
 
 

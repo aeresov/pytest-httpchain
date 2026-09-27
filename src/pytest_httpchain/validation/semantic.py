@@ -6,9 +6,11 @@ Each check family is a generator of `Diagnostic`; `check_scenario` composes them
 import re
 import warnings
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Iterator, Sequence
 from typing import Any
 from urllib.parse import urlparse
+
+import pytest
 
 from pytest_httpchain.models import (
     FunctionsSubstitution,
@@ -35,7 +37,7 @@ from pytest_httpchain.scoping import (
     substitution_step_refs,
 )
 from pytest_httpchain.templates import TEMPLATE_PATTERN, contains_template, is_complete_template
-from pytest_httpchain.utils import make_marker, optional_as_list
+from pytest_httpchain.utils import make_marker, optional_as_list, xdist_group_names
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ScenarioInfo, diag
 
 
@@ -88,16 +90,30 @@ def describe_scenario(scenario: Scenario, test_data: dict[str, Any]) -> Scenario
 
 
 def _stage_name_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
-    """HTTPCHAIN001: duplicate stage names.
+    """HTTPCHAIN001/032: duplicate stage names, and a ``::`` in one.
 
     Unnamed stages are excluded: ``Stage.name`` is optional and defaults to ``""``,
     so counting the default made two stages that simply omit it collide — a hard
     rejection of schema-valid input, naming a field the author never wrote.
+
+    The name becomes the stage's test name, so a ``::`` in it lands in the node
+    id, where it is pytest's separator. Rejected rather than rewritten: the
+    report, ``-k`` and ``validate`` then all show the name as written.
     """
     counts = Counter(stage.name for stage in scenario.stages if stage.name)
     duplicates = {name for name, count in counts.items() if count > 1}
     if duplicates:
         yield diag(DiagnosticCode.DUPLICATE_STAGE, f"Duplicate stage names found: {sorted(duplicates)}", location="stages")
+
+    for i, stage in enumerate(scenario.stages):
+        if "::" in stage.name:
+            yield diag(
+                DiagnosticCode.NODE_ID_SEPARATOR_IN_STAGE_NAME,
+                f"Stage name {stage.name!r} contains '::', which separates the parts of a pytest node id: the stage's test cannot be run "
+                f"by its node id, and pytest-xdist --dist loadscope would run it apart from the rest of the scenario, without the earlier "
+                f"stages' saved values. Rename the stage without '::'.",
+                location=f"stages[{i}].name",
+            )
 
 
 def _fixture_diagnostics(scenario: Scenario, vars_saved: set[str]) -> Iterator[Diagnostic]:
@@ -444,27 +460,63 @@ def _inline_schema_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
 
 
 def _marker_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
-    """HTTPCHAIN019: marker expressions, parsed here with the same parser
-    collection uses, so ``validate`` stays a faithful pre-flight check."""
+    """HTTPCHAIN019/031/033: marker expressions, parsed here with the same
+    parser collection uses, so ``validate`` stays a faithful pre-flight check;
+    and ``xdist_group`` marks that would make ``--dist loadgroup`` split the chain.
 
-    def check(marks: list[str], location: str) -> Iterator[Diagnostic]:
+    pytest-xdist joins every group name on a test into one group. Every stage
+    carries the scenario's group, declared or automatic, so a stage adding a
+    name of its own is in a group apart from its siblings; one repeating a
+    declared name changes nothing. xdist also reads the group back from the
+    text after the node id's last ``@``, and drops it when a ``]`` follows
+    that ``@``: a declared name with a ``]`` after its own last ``@`` leaves
+    every stage in a work unit of its own. With several declared names, testing
+    each on its own can over-report but never miss: the last ``]`` of the joined
+    name falls in a name that fails the test by itself.
+    """
+
+    def parse(marks: list[str], location: str) -> Generator[Diagnostic, None, list[tuple[str, pytest.MarkDecorator]]]:
+        parsed = []
         for mark in marks:
             try:
                 # Constructing an unregistered mark emits PytestUnknownMarkWarning,
                 # which is noise here — only parseability matters.
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    make_marker(mark)
+                    parsed.append((mark, make_marker(mark)))
             except Exception as e:
                 # Broad on purpose: pytest's MarkGenerator raises AttributeError
                 # for reserved names ('_foo'), ast.literal_eval TypeError for
                 # exotic argument nodes — any parse failure must become a
                 # diagnostic, not a validator crash.
                 yield diag(DiagnosticCode.INVALID_MARKER, f"Invalid marker {mark!r}: {e}", location=location)
+        return parsed
 
-    yield from check(scenario.marks, "marks")
+    scenario_marks = yield from parse(scenario.marks, "marks")
+    for mark, marker in scenario_marks:
+        for group in sorted(xdist_group_names([marker])):
+            if group.rfind("]") > group.rfind("@"):
+                yield diag(
+                    DiagnosticCode.UNREADABLE_XDIST_GROUP,
+                    f"Marker {mark!r}: pytest-xdist ignores a group whose name has a ']' after its last '@', so --dist loadgroup "
+                    f"would not keep the scenario's stages on one worker, and a stage could run without the earlier stages' saved "
+                    f"values. Remove the ']' from {group!r}.",
+                    location="marks",
+                )
+    scenario_groups = xdist_group_names(marker for _, marker in scenario_marks)
+
     for i, stage in enumerate(scenario.stages):
-        yield from check(stage.marks, f"stages[{i}].marks")
+        location = f"stages[{i}].marks"
+        stage_marks = yield from parse(stage.marks, location)
+        for mark, marker in stage_marks:
+            if not xdist_group_names([marker]) <= scenario_groups:
+                yield diag(
+                    DiagnosticCode.STAGE_XDIST_GROUP,
+                    f"Stage '{stage.name}': marker {mark!r} adds a pytest-xdist group the scenario does not declare, and xdist joins "
+                    f"every group on a test into one, so --dist loadgroup would run this stage apart from the rest of the scenario, "
+                    f"without the earlier stages' saved values. Put xdist_group in the scenario's marks instead: every stage inherits it.",
+                    location=location,
+                )
 
 
 def _template_key_diagnostics(test_data: dict[str, Any]) -> Iterator[Diagnostic]:

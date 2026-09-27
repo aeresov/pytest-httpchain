@@ -49,6 +49,9 @@ not free their numbers for reuse.
 | `HTTPCHAIN028` | warning | Scenario directive (`$include`/`$merge`, or file-path `$ref`) inside an inline JSON Schema — not resolved there |
 | `HTTPCHAIN029` | warning | Template expression in a dict **key** — only values are substituted, so the key is sent literally |
 | `HTTPCHAIN030` | warning | Template expression in a `functions` substitution's **kwargs** — kwargs are passed to the function unrendered, so it arrives as literal text |
+| `HTTPCHAIN031` | error | `xdist_group` marker in a **stage's** `marks`, naming a group the scenario does not declare — under `--dist loadgroup` it runs that stage apart from the rest of the scenario; put it in the scenario's `marks` (see [pytest-xdist](advanced/parallel.md#running-scenarios-in-parallel-with-pytest-xdist)) |
+| `HTTPCHAIN032` | error | Stage name contains `::`, pytest's node-id separator — the stage cannot be run by its node id, and `--dist loadscope` runs it apart from the rest of the scenario |
+| `HTTPCHAIN033` | error | Scenario's `xdist_group` name has a `]` after its last `@` — pytest-xdist ignores such a group, so `--dist loadgroup` does not keep the scenario's stages together |
 
 ## Deep (opt-in) checks
 

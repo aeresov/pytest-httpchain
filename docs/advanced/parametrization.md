@@ -193,6 +193,12 @@ step explicit `ids`:
 }
 ```
 
+Under `--dist loadscope`, an id containing `::`, such as the one built from the
+value `"::1"`, fails collection: loadscope would run that stage apart from the
+rest of the scenario (see
+[pytest-xdist](parallel.md#running-scenarios-in-parallel-with-pytest-xdist)).
+Give the step explicit `ids` there too.
+
 ## Complete Example
 
 A request body is a structured, typed value (a JSON body, a form body, …), not a plain string — so template expressions go **inside** a body type, such as `{"json": "{{ payload }}"}`, never as the whole `body` value. Because the body type is fixed by structure, a stage that sends a body and one that doesn't are written as separate stages.

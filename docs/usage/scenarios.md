@@ -49,7 +49,7 @@ Each stage represents a single HTTP request:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Stage identifier (used in test names) |
+| `name` | string | Stage identifier (used in test names, so it cannot contain `::`, pytest's node-id separator) |
 | `description` | string | Optional description |
 | `marks` | array | pytest markers for this stage |
 | `fixtures` | array | pytest fixtures for this stage |
@@ -196,6 +196,9 @@ Supported marker formats:
     `usefixtures` only runs the fixture (for its side effects/setup); it does **not**
     make the fixture's value available to `{{ }}` templates. To use a fixture value
     in templates, list it in the stage or scenario [`fixtures`](#fixtures) array.
+
+An `xdist_group` marker goes in the scenario's `marks`, never a stage's: see
+[pytest-xdist](../advanced/parallel.md#running-scenarios-in-parallel-with-pytest-xdist).
 
 ### Fixtures
 

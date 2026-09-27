@@ -1,0 +1,4 @@
+{
+    "marks": ["xdist_group('db[main]')"],
+    "stages": {"s": {"request": {"url": "https://example.com"}, "response": [{"verify": {"status": 200}}]}}
+}

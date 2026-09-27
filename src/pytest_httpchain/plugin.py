@@ -24,7 +24,7 @@ from pytest_httpchain.har_writer import write_har_file
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.report_formatter import format_request, format_response
 from pytest_httpchain.templates import get_max_comprehension_length, set_max_comprehension_length
-from pytest_httpchain.utils import make_marker
+from pytest_httpchain.utils import make_marker, xdist_group_names
 from pytest_httpchain.validation import check_scenario, load_with_diagnostics
 from pytest_httpchain.warnings import ScenarioValidationWarning
 
@@ -54,16 +54,11 @@ class JsonModule(pytest.Module):
         Modes that distribute tests individually would break a multi-stage
         chain silently: no in-worker ordering can reunite a scattered chain.
         Class-preserving modes are fine, and single-stage scenarios have no
-        chain to break. Inside a worker the real mode is only visible via
-        workerinput, seeded by `pytest_configure_node`.
+        chain to break.
         """
         if len(scenario.stages) <= 1:
             return
-        workerinput = getattr(self.config, "workerinput", None)
-        if workerinput is not None:
-            dist_mode = workerinput.get("httpchain_dist", "no")
-        else:
-            dist_mode = self.config.getoption("dist", default="no")
+        dist_mode = _dist_mode(self.config)
         if dist_mode in {"load", "each", "worksteal"}:
             raise pytest.Collector.CollectError(
                 f"pytest-httpchain scenarios cannot run under pytest-xdist --dist={dist_mode}: "
@@ -120,18 +115,40 @@ class JsonModule(pytest.Module):
             name=self.name,
         )
 
-        # Keeps the scenario's stages on one worker under --dist loadgroup.
-        # Guarded: without xdist the marker fails --strict-markers.
-        if self.config.pluginmanager.hasplugin("xdist"):
-            json_class.add_marker(pytest.mark.xdist_group(name=self.nodeid))
-
+        markers = []
         for mark_str in scenario.marks:
             try:
-                json_class.add_marker(make_marker(mark_str))
+                markers.append(make_marker(mark_str))
             except Exception as e:
                 raise pytest.Collector.CollectError(f"Invalid marker '{mark_str}' in {self.path}: {e}") from None
 
+        # Keeps the scenario's stages on one worker under --dist loadgroup. A
+        # group the scenario declares does that too, as every stage inherits it,
+        # and is left alone: xdist joins every group on a test into one name, so
+        # adding this one would give each scenario sharing it a group of its own.
+        # xdist reads a group back as the text after the node id's last '@', and
+        # not at all when a ']' follows that '@', so neither is kept in the name
+        # (the validator rejects a declared name xdist cannot read, HTTPCHAIN033).
+        # Guarded: without xdist the marker fails --strict-markers.
+        if self.config.pluginmanager.hasplugin("xdist") and not xdist_group_names(markers):
+            json_class.add_marker(pytest.mark.xdist_group(name=self.nodeid.replace("@", "_").replace("]", "_")))
+
+        for marker in markers:
+            json_class.add_marker(marker)
+
         yield json_class
+
+
+def _dist_mode(config: pytest.Config) -> str:
+    """The pytest-xdist ``--dist`` mode of this run ("no" without xdist).
+
+    Inside a worker the real mode is only visible via workerinput, seeded by
+    `pytest_configure_node`.
+    """
+    workerinput = getattr(config, "workerinput", None)
+    if workerinput is not None:
+        return workerinput.get("httpchain_dist", "no")
+    return config.getoption("dist", default="no")
 
 
 # Collection order, recorded before any sorter runs: the regroup tiebreaker.
@@ -235,6 +252,31 @@ def _warn_on_params_varying_across_stages(cls: type[Carrier], items: list[pytest
         )
 
 
+def _reject_ids_splitting_loadscope(items: list[pytest.Item]) -> None:
+    """Fail collection when a ``::`` in a stage's test id would make
+    ``--dist loadscope`` run that stage apart from its scenario.
+
+    loadscope schedules a test by its node id up to the last ``::``, which for
+    a stage is meant to be the scenario class. A stage name cannot add one
+    (HTTPCHAIN032), but the id in brackets can: a stage's parametrize id, from
+    ``ids`` or from a value such as ``"::1"``, or a fixture param's, from the
+    fixture's ``ids`` or ``params``. The stage would then run on any worker,
+    without the saves of the stages before it. pytest itself handles such an
+    id, so only this mode rejects it, and, as for the modes `JsonModule`
+    rejects, only in a scenario with a chain to split.
+    """
+    split = [item for item in items if "::" in item.name]
+    cls = _carrier_class(split[0]) if split else None
+    if cls is None or cls.scenario is None or len(cls.scenario.stages) <= 1:
+        return
+    raise pytest.Collector.CollectError(
+        f"pytest-xdist --dist loadscope would run {[item.name for item in split]} apart from the rest of scenario '{cls.__name__}': "
+        f"loadscope groups tests by node id up to the last '::', and these test ids contain '::' "
+        f"(from a stage's parametrize step, or from a fixture's params). "
+        f"Give that parametrize step or fixture explicit ids without '::', or use --dist loadfile or loadgroup."
+    )
+
+
 class JsonClass(pytest.Class):
     """Collector for a scenario's generated test class.
 
@@ -243,12 +285,14 @@ class JsonClass(pytest.Class):
     at ``pytest_collection_modifyitems``, and a node id on the command line
     (how an IDE runs one test) when the session matches the class's items to
     it. So the fixtures that split the scenario into chains are recorded here,
-    for `_regroup_carrier_items`.
+    for `_regroup_carrier_items`, and every stage's test id is checked here.
     """
 
     def collect(self) -> Iterable[pytest.Item | pytest.Collector]:
         collected = list(super().collect())
         items = [node for node in collected if isinstance(node, pytest.Item)]
+        if _dist_mode(self.config) == "loadscope":
+            _reject_ids_splitting_loadscope(items)
         chain_args = _chain_args(items)
         self.config.stash.setdefault(_SCENARIO_CHAIN_ARGS, {}).update(chain_args)
         for cls, names in chain_args.items():
