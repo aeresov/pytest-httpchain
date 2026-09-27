@@ -173,6 +173,7 @@ pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
     You can limit the depth of relative path traversal using the `httpchain_ref_parent_traversal_depth` ini option, default value is **3**.
 -   Template expressions support list/dict comprehensions. You can limit the maximum comprehension length using the `httpchain_max_comprehension_length` ini option, default value is **50000**.
 -   Parallel stage iterations (repeat/foreach) have a safety limit configurable via the `httpchain_max_parallel_iterations` ini option, default value is **10000**.
+-   A failing stage's report prints the values of credential headers and query parameters as `[REDACTED]`, keeping their names (and cookie names). The lists are set by the `httpchain_redact_headers` ini option, default **Authorization Proxy-Authorization Cookie Set-Cookie X-API-Key API-Key X-Auth-Token**, and `httpchain_redact_query_params`, default **access_token refresh_token id_token api_key apikey client_secret password token**; an empty value disables one. Request and response bodies, and DEBUG logs, are not redacted. See [Secrets in reports](https://aeresov.github.io/pytest-httpchain/getting-started/#secrets-in-reports).
 
 ### HAR export
 
@@ -182,7 +183,7 @@ Pass `--httpchain-output-dir DIR` on the pytest command line to write an [HAR](h
 pytest --httpchain-output-dir ./har-output
 ```
 
-HAR files contain full requests/responses **including credential headers and saved tokens** — nothing is redacted, so scrub them before sharing. Bodies are embedded complete and uncapped (binary bodies grow ~33% as base64), so scenarios that transfer large payloads produce large `.har` files. See the [HAR export docs](https://aeresov.github.io/pytest-httpchain/getting-started/#har-export).
+HAR files contain full requests/responses **including credential headers and saved tokens**: a HAR is usually replayed, which needs the real values, so nothing is redacted unless the `httpchain_har_redact` ini option is `true` (it applies the report's rules to URLs, headers and cookies; bodies stay complete). Scrub them before sharing. Bodies are embedded complete and uncapped (binary bodies grow ~33% as base64), so scenarios that transfer large payloads produce large `.har` files. See the [HAR export docs](https://aeresov.github.io/pytest-httpchain/getting-started/#har-export).
 
 ## AI agent support
 

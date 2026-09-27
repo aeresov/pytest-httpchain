@@ -196,7 +196,7 @@ layers = [
     "factory",
     "carrier : dataflow : schema",
     "validation : har_writer : report_formatter : request_builder : response_steps",
-    "utils : scoping",
+    "utils : scoping : redaction",
     "userfunc",
     "models",
     "templates : jsonref",

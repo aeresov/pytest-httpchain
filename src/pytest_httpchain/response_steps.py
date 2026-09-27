@@ -29,6 +29,7 @@ from pytest_httpchain.models import (
     check_json_schema,
     json_schema_validator_class,
 )
+from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, Redaction
 from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.userfunc import UserFunctionError, call_user_function
 from pytest_httpchain.utils import optional_as_list, process_substitutions, read_json_schema_file, resolve_scenario_path
@@ -74,8 +75,14 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
     return step_saved
 
 
-def process_verify(verify_model: Verify, response: httpx.Response, scenario_dir: Path | None = None) -> None:
-    """Run one verify step's assertions, raising `VerificationError` on the first failure."""
+def process_verify(verify_model: Verify, response: httpx.Response, scenario_dir: Path | None = None, redaction: Redaction = DEFAULT_REDACTION) -> None:
+    """Run one verify step's assertions, raising `VerificationError` on the first failure.
+
+    A header check's message shows the header's value through ``redaction``, as
+    the report does, and so does an exact-match expected value: it is a whole
+    value of that header. A matcher operand shows as written unless its failure
+    would echo what the redaction hides (`verify_text_matchers`).
+    """
     # `is not None`, not truthiness: None means undeclared, and only that — the
     # carrier refuses an assertion a template rendered to None before this runs.
     if verify_model.status is not None and response.status_code != verify_model.status:
@@ -86,17 +93,21 @@ def process_verify(verify_model: Verify, response: httpx.Response, scenario_dir:
             case HeaderMatcher():
                 # An absent header behaves as an empty string, as bodies do.
                 actual = response.headers.get(header_name) or ""
+                shown = redaction.header(header_name, actual)
                 verify_text_matchers(
-                    f"Header '{header_name}' (value: {actual!r})",
+                    f"Header '{header_name}' (value: {shown!r})",
                     actual,
                     contains=optional_as_list(expected_value.contains),
                     not_contains=optional_as_list(expected_value.not_contains),
                     matches=optional_as_list(expected_value.matches),
                     not_matches=optional_as_list(expected_value.not_matches),
+                    shown=shown,
                 )
             case _:
-                if response.headers.get(header_name) != expected_value:
-                    raise VerificationError(f"Header '{header_name}' doesn't match: expected {expected_value}, got {response.headers.get(header_name)}")
+                actual = response.headers.get(header_name)
+                if actual != expected_value:
+                    shown = redaction.header(header_name, actual) if actual is not None else None
+                    raise VerificationError(f"Header '{header_name}' doesn't match: expected {redaction.header(header_name, expected_value)}, got {shown}")
 
     for i, expression in enumerate(verify_model.expressions):
         # An expression is a predicate, not a value. Truthiness alone would pass a
@@ -196,16 +207,27 @@ def verify_text_matchers(
     not_contains: Iterable[str],
     matches: Iterable[Any],
     not_matches: Iterable[Any],
+    shown: str | None = None,
 ) -> None:
     """The contains/matches semantics, shared by body and header checks
-    (patterns use ``re.search``)."""
+    (patterns use ``re.search``).
+
+    ``shown`` is ``text`` as ``subject`` shows it when a redaction hides part of
+    it (a Set-Cookie's value). A failed ``not_contains`` or ``not_matches``
+    found its operand in ``text``, so quoting it could echo the hidden part:
+    it is quoted only when ``shown`` already holds its text (a pattern's text,
+    not what it matched), and is ``[REDACTED]`` otherwise. A failed
+    ``contains``/``matches`` operand is not in ``text``, reveals nothing of it,
+    and is quoted as written.
+    """
     for substring in contains:
         if substring not in text:
             raise VerificationError(f"{subject} doesn't contain '{substring}'")
 
     for substring in not_contains:
         if substring in text:
-            raise VerificationError(f"{subject} contains '{substring}' while it shouldn't")
+            quoted = substring if shown is None or substring in shown else REDACTED
+            raise VerificationError(f"{subject} contains '{quoted}' while it shouldn't")
 
     for pattern in matches:
         if not re.search(pattern, text):
@@ -213,4 +235,5 @@ def verify_text_matchers(
 
     for pattern in not_matches:
         if re.search(pattern, text):
-            raise VerificationError(f"{subject} matches '{pattern}' while it shouldn't")
+            quoted = pattern if shown is None or str(pattern) in shown else REDACTED
+            raise VerificationError(f"{subject} matches '{quoted}' while it shouldn't")

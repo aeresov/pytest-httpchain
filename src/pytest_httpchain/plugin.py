@@ -3,9 +3,10 @@
 Registers the ini options and ``--httpchain-output-dir``, collects
 ``test_<name>.<suffix>.json`` files into `JsonModule`, keeps each scenario's
 stages contiguous and ordered, and attaches the HTTP exchange (plus an optional
-HAR file) to test reports.
+HAR file) to test reports, credentials redacted.
 """
 
+import functools
 import logging
 import re
 import sys
@@ -15,6 +16,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, Literal
 
+import httpx
 import pytest
 
 from pytest_httpchain.carrier import Carrier
@@ -22,6 +24,7 @@ from pytest_httpchain.constants import ConfigOptions
 from pytest_httpchain.factory import create_test_class
 from pytest_httpchain.har_writer import write_har_file
 from pytest_httpchain.models import Scenario
+from pytest_httpchain.redaction import DEFAULT_REDACT_HEADERS, DEFAULT_REDACT_QUERY_PARAMS, NO_REDACTION, Redaction
 from pytest_httpchain.report_formatter import format_request, format_response
 from pytest_httpchain.templates import get_max_comprehension_length, set_max_comprehension_length
 from pytest_httpchain.utils import make_marker, xdist_group_names
@@ -102,6 +105,7 @@ class JsonModule(pytest.Module):
                 # Retaining every iteration's exchange costs memory, so it is
                 # done only when the HAR output that consumes them is on.
                 record_all_exchanges=bool(self.config.getoption("httpchain_output_dir")),
+                redaction=self.config.stash[_REDACTION],
             )
         except Exception as e:
             raise pytest.Collector.CollectError(f"Cannot build test class for {self.path}: {e}") from None
@@ -484,15 +488,29 @@ def pytest_configure_node(node) -> None:
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    ini_options: list[tuple[ConfigOptions, str, Literal["string", "int"], Any]] = [
+    ini_options: list[tuple[ConfigOptions, str, Literal["string", "int", "args", "bool"], Any]] = [
         (ConfigOptions.SUFFIX, "File suffix for HTTP test files.", "string", "http"),
         (ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "Maximum number of parent directory traversals allowed in $ref paths.", "int", 3),
         (ConfigOptions.MAX_COMPREHENSION_LENGTH, "Maximum length for list/dict comprehensions in template expressions.", "int", 50000),
         (ConfigOptions.MAX_PARALLEL_ITERATIONS, "Maximum number of parallel iterations allowed per stage.", "int", 10000),
+        (
+            ConfigOptions.REDACT_HEADERS,
+            "Headers (case-insensitive, separated by whitespace or commas) whose values report sections and failure messages show as [REDACTED]; empty disables.",
+            "args",
+            list(DEFAULT_REDACT_HEADERS),
+        ),
+        (
+            ConfigOptions.REDACT_QUERY_PARAMS,
+            "Query parameters (case-insensitive, separated by whitespace or commas) whose values URLs in report sections show as [REDACTED]; empty disables.",
+            "args",
+            list(DEFAULT_REDACT_QUERY_PARAMS),
+        ),
+        (ConfigOptions.HAR_REDACT, "Apply the httpchain_redact_* rules to HAR files too.", "bool", False),
     ]
     for option, help_text, ini_type, default in ini_options:
         # pytest does not render ini defaults in --help, so repeat them there.
-        parser.addini(name=option, help=f"{help_text} Default: {default}.", type=ini_type, default=default)
+        shown = " ".join(default) if isinstance(default, list) else default
+        parser.addini(name=option, help=f"{help_text} Default: {shown}.", type=ini_type, default=default)
     group = parser.getgroup("httpchain", "HTTP chain scenario testing")
     group.addoption(
         # No dest= override: argparse derives httpchain_output_dir, keeping the
@@ -507,6 +525,64 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 # process-wide simpleeval global, which an in-process pytester run (or any nested
 # pytest session) must not leak to the enclosing process.
 _PREVIOUS_MAX_COMPREHENSION_LENGTH: pytest.StashKey[int] = pytest.StashKey()
+
+# The httpchain_redact_* rules, for the report sections and the failure messages
+# (through the carrier), and what the HAR export applies: the same rules under
+# httpchain_har_redact, none otherwise.
+_REDACTION: pytest.StashKey[Redaction] = pytest.StashKey()
+_HAR_REDACTION: pytest.StashKey[Redaction] = pytest.StashKey()
+
+# An HTTP field name is an RFC 9110 token.
+_HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+
+
+def _redaction_names(config: pytest.Config, option: ConfigOptions, *, header_names: bool) -> list[str]:
+    """A redaction list's names.
+
+    Split at commas too: shlex alone reads ``Authorization, Cookie`` as
+    ``Authorization,`` and ``Cookie``, and a name that can never match would
+    leave that credential in the report without a word. For the same reason a
+    header entry that is not a header name is a usage error.
+
+    A native ``[tool.pytest]`` table has pytest check a TOML list's items;
+    ``[tool.pytest.ini_options]`` hands the list over as written, so a
+    non-string item is refused here, in pytest's own words.
+    """
+    try:
+        entries = config.getini(option)
+    except (TypeError, ValueError) as e:
+        raise pytest.UsageError(f"{option}: {e}") from None
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, str):
+            raise pytest.UsageError(f"{option}: expects a list of strings, but item at index {i} is {type(entry).__name__}: {entry!r}")
+    names = [name.strip() for entry in entries for name in entry.split(",") if name.strip()]
+    if header_names:
+        for name in names:
+            if not _HEADER_NAME.fullmatch(name):
+                raise pytest.UsageError(f"{option}: {name!r} is not a header name")
+    return names
+
+
+class _HttpxUrlRedaction(logging.Filter):
+    """Redacts the URL httpx logs for every request at INFO (``HTTP Request:
+    GET <url> ...``), which a run capturing INFO prints with a failure's report.
+
+    Keyed on the argument's type, not on httpx's message text, so a reworded
+    message is still covered. Added to the ``httpx`` logger for the session
+    only: an in-process pytester run must not leave its rules behind.
+    """
+
+    def __init__(self, redaction: Redaction) -> None:
+        super().__init__()
+        self.redaction = redaction
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and any(isinstance(arg, httpx.URL) for arg in record.args):
+            record.args = tuple(self.redaction.url(arg) if isinstance(arg, httpx.URL) else arg for arg in record.args)
+        return True
+
+
+_HTTPX_LOG_FILTER: pytest.StashKey[_HttpxUrlRedaction] = pytest.StashKey()
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -525,6 +601,14 @@ def pytest_configure(config: pytest.Config) -> None:
             raise pytest.UsageError(f"{option} must not exceed {maximum:,}")
         return value
 
+    # The same bare conversion for type="bool" (`maybe`), and in a native TOML
+    # table pytest's TypeError for a value that is not a boolean.
+    def _getbool(option: ConfigOptions) -> bool:
+        try:
+            return config.getini(option)
+        except (TypeError, ValueError) as e:
+            raise pytest.UsageError(f"{option} must be a boolean: {e}") from None
+
     suffix = str(config.getini(ConfigOptions.SUFFIX))
     if not re.fullmatch(r"[a-zA-Z0-9_-]{1,32}", suffix):
         raise pytest.UsageError(f"{ConfigOptions.SUFFIX} must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
@@ -532,6 +616,15 @@ def pytest_configure(config: pytest.Config) -> None:
     _getint(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, minimum=0, minimum_message="must be non-negative")
     max_comprehension_length = _getint(ConfigOptions.MAX_COMPREHENSION_LENGTH, minimum=1, minimum_message="must be a positive integer", maximum=1_000_000)
     _getint(ConfigOptions.MAX_PARALLEL_ITERATIONS, minimum=1, minimum_message="must be a positive integer", maximum=1_000_000)
+
+    redaction = Redaction(
+        _redaction_names(config, ConfigOptions.REDACT_HEADERS, header_names=True),
+        _redaction_names(config, ConfigOptions.REDACT_QUERY_PARAMS, header_names=False),
+    )
+    config.stash[_REDACTION] = redaction
+    config.stash[_HAR_REDACTION] = redaction if _getbool(ConfigOptions.HAR_REDACT) else NO_REDACTION
+    config.stash[_HTTPX_LOG_FILTER] = httpx_log_filter = _HttpxUrlRedaction(redaction)
+    logging.getLogger("httpx").addFilter(httpx_log_filter)
 
     config.stash[_PREVIOUS_MAX_COMPREHENSION_LENGTH] = get_max_comprehension_length()
     set_max_comprehension_length(max_comprehension_length)
@@ -541,6 +634,9 @@ def pytest_unconfigure(config: pytest.Config) -> None:
     previous = config.stash.get(_PREVIOUS_MAX_COMPREHENSION_LENGTH, None)
     if previous is not None:
         set_max_comprehension_length(previous)
+    httpx_log_filter = config.stash.get(_HTTPX_LOG_FILTER, None)
+    if httpx_log_filter is not None:
+        logging.getLogger("httpx").removeFilter(httpx_log_filter)
 
 
 def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> pytest.Collector | None:
@@ -615,10 +711,11 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
             suffix += f" (after {hops} redirect{'s' if hops != 1 else ''})"
 
         if _sections_will_be_shown(item.config, report):
+            redaction = item.config.stash[_REDACTION]
             if (request := carrier_class.last_request) is not None:
-                report.sections.append((f"HTTP Request{suffix}", _format_section("request", format_request, request)))
+                report.sections.append((f"HTTP Request{suffix}", _format_section("request", functools.partial(format_request, redaction=redaction), request)))
             if (response := carrier_class.last_response) is not None:
-                report.sections.append((f"HTTP Response{suffix}", _format_section("response", format_response, response)))
+                report.sections.append((f"HTTP Response{suffix}", _format_section("response", functools.partial(format_response, redaction=redaction), response)))
 
         output_dir = item.config.getoption("httpchain_output_dir")
         if output_dir and carrier_class.last_exchanges:
@@ -627,6 +724,7 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
                     output_dir=Path(output_dir),
                     test_name=item.nodeid,
                     exchanges=carrier_class.last_exchanges,
+                    redaction=item.config.stash[_HAR_REDACTION],
                 )
                 report.sections.append(("HAR File", str(har_path)))
             except Exception as e:

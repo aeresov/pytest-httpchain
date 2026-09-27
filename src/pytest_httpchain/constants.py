@@ -34,11 +34,15 @@ class ConfigOptions(StrEnum):
     """Ini option names, settable in pytest.ini or [tool.pytest.ini_options].
 
     The ``httpchain_`` prefix is required: pytest ini options share one global
-    namespace across plugins. Defaults live in ``plugin.pytest_addoption``; the
-    HAR output directory is a CLI flag, not an ini option.
+    namespace across plugins. Defaults are registered in
+    ``plugin.pytest_addoption`` (the redaction lists come from ``redaction``);
+    the HAR output directory is a CLI flag, not an ini option.
     """
 
     SUFFIX = "httpchain_suffix"
     REF_PARENT_TRAVERSAL_DEPTH = "httpchain_ref_parent_traversal_depth"
     MAX_COMPREHENSION_LENGTH = "httpchain_max_comprehension_length"
     MAX_PARALLEL_ITERATIONS = "httpchain_max_parallel_iterations"
+    REDACT_HEADERS = "httpchain_redact_headers"
+    REDACT_QUERY_PARAMS = "httpchain_redact_query_params"
+    HAR_REDACT = "httpchain_har_redact"

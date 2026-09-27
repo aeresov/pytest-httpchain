@@ -49,6 +49,7 @@ from pytest_httpchain.models import (
     SubstitutionsSave,
     VerifyStep,
 )
+from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.request_builder import build_client_kwargs, build_request_kwargs
 from pytest_httpchain.response_steps import process_save, process_verify
 from pytest_httpchain.scoping import (
@@ -214,6 +215,15 @@ def _error_request(e: Exception) -> httpx.Request | None:
     except (AttributeError, RuntimeError):
         return None
     return request if isinstance(request, httpx.Request) else None
+
+
+def _request_error(what: str, e: Exception, redaction: Redaction) -> RequestError:
+    """``e`` as the stage failure it is, its text shown through ``redaction``:
+    the message prints above the request's report section, whose header values
+    it may quote (h11 refusing ``b'Bearer <token>\\n'``)."""
+    request = _error_request(e)
+    text = str(e) if request is None else redaction.error_text(str(e), request.headers)
+    return RequestError(f"{what}: {text}", request=request)
 
 
 def _parallel_number(field: str, value: Any) -> float:
@@ -574,6 +584,9 @@ class Carrier:
     last_iterations_attempted: ClassVar[int] = 0
     last_shown_exchange_is_failed: ClassVar[bool] = False
     record_all_exchanges: ClassVar[bool] = False
+    # The report's rules (httpchain_redact_*), for failure messages that echo a
+    # header's value: they are printed next to the report sections.
+    redaction: ClassVar[Redaction] = DEFAULT_REDACTION
     global_context: ClassVar[ChainMap[str, Any]] = ChainMap()
     # Entered by the running stage outside its iterations (in `always_run`,
     # `substitutions`, `parallel`): exited at its end. Each iteration exits its own.
@@ -1004,13 +1017,13 @@ class Carrier:
             assert cls.client is not None, "_ensure_initialized() builds cls.client before any request"
             return cls.client.request(**request_kwargs)
         except httpx.TimeoutException as e:
-            raise RequestError(f"HTTP request timed out: {e}", request=_error_request(e)) from e
+            raise _request_error("HTTP request timed out", e, cls.redaction) from e
         except httpx.ConnectError as e:
-            raise RequestError(f"HTTP connection error: {e}", request=_error_request(e)) from e
+            raise _request_error("HTTP connection error", e, cls.redaction) from e
         except httpx.HTTPError as e:
-            raise RequestError(f"HTTP request failed: {e}", request=_error_request(e)) from e
+            raise _request_error("HTTP request failed", e, cls.redaction) from e
         except Exception as e:
-            raise RequestError(f"Unexpected error during HTTP request: {e}", request=_error_request(e)) from e
+            raise _request_error("Unexpected error during HTTP request", e, cls.redaction) from e
 
     @staticmethod
     def _acquire_rate_slot(limiter: Limiter, timeout: float, cancel: threading.Event | None) -> bool:
@@ -1169,7 +1182,7 @@ class Carrier:
                         # the rendered model alone and cannot tell an absent
                         # assertion from one a template rendered away.
                         verify_model = _render_declared(step.verify, step_context, "verify", VerificationError)
-                        process_verify(verify_model, response, cls.scenario_dir)
+                        process_verify(verify_model, response, cls.scenario_dir, cls.redaction)
 
                     case _:
                         raise RuntimeError(f"Unhandled response step: {type(step).__name__}")

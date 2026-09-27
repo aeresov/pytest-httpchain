@@ -49,6 +49,7 @@ from pytest_httpchain.models import (
     VarsSubstitution,
     Verify,
 )
+from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
 from pytest_httpchain.templates import TemplatesError
 from tests.unit.models.helpers import make_stage
 
@@ -542,6 +543,30 @@ def test_transport_errors_become_request_errors(error, message):
             cls._execute_http_request({"method": "GET", "url": "http://t/"})
     finally:
         cls.client.close()
+
+
+@pytest.mark.parametrize(
+    ("redaction", "quoted"),
+    [(DEFAULT_REDACTION, "b'[REDACTED]'"), (NO_REDACTION, "b'Bearer tok\\n'")],
+    ids=["redacted", "disabled"],
+)
+def test_request_error_quoting_a_header_value_is_redacted(redaction, quoted):
+    """h11 refuses a value ending in a newline (a token read from a file) as
+    ``Illegal header value b'...'``, the real message pinned in
+    tests/integration/test_redaction.py. The failure message prints above the
+    request's report section and hides the value as that section does."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.LocalProtocolError(f"Illegal header value {request.headers.raw[-1][1]!r}")
+
+    cls = _make_carrier_subclass(client=httpx.Client(transport=httpx.MockTransport(handler)), redaction=redaction)
+    try:
+        with pytest.raises(RequestError) as excinfo:
+            cls._execute_http_request({"method": "GET", "url": "http://t/", "headers": {"Authorization": "Bearer tok\n"}})
+    finally:
+        cls.client.close()
+    assert str(excinfo.value) == f"HTTP request failed: Illegal header value {quoted}"
+    assert excinfo.value.request is not None
 
 
 def test_cancelled_iteration_sends_nothing():

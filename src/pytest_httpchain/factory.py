@@ -17,6 +17,7 @@ from pytest_httpchain.models import (
     Stage,
     parametrize_values_contain_template,
 )
+from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.scoping import base_global_context
 from pytest_httpchain.templates import walk
 from pytest_httpchain.utils import make_marker, process_substitutions
@@ -58,6 +59,7 @@ def create_test_class(
     max_parallel_iterations: int = 10_000,
     scenario_dir: Path | None = None,
     record_all_exchanges: bool = False,
+    redaction: Redaction = DEFAULT_REDACTION,
 ) -> type[Carrier]:
     """Build a scenario's test class.
 
@@ -78,6 +80,7 @@ def create_test_class(
             "scenario": scenario,
             "scenario_dir": scenario_dir,
             "record_all_exchanges": record_all_exchanges,
+            "redaction": redaction,
             "global_context": base_global_context(scenario_context),
             "_context_resolved_at_collection": needs_collection_context,
             "max_parallel_iterations": max_parallel_iterations,

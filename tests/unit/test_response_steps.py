@@ -15,6 +15,7 @@ import pytest
 from pytest_httpchain.errors import SaveError, VerificationError
 from pytest_httpchain.models import JMESPathSave, Verify
 from pytest_httpchain.models.entities import ResponseBody
+from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
 from pytest_httpchain.response_steps import process_save, process_verify
 
 NOT_JSON = httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
@@ -172,3 +173,75 @@ class TestExpressions:
 def test_body_text_matcher_failure(matcher, message):
     with pytest.raises(VerificationError, match=message):
         process_verify(Verify(body=ResponseBody(**matcher)), httpx.Response(200, content=b"hello world"))
+
+
+_COOKIE_RESPONSE = httpx.Response(200, headers=[("set-cookie", "sid=abc; Path=/"), ("set-cookie", "csrf=def; Path=/"), ("x-id", "7")])
+
+
+@pytest.mark.parametrize(
+    ("headers", "redaction", "message"),
+    [
+        pytest.param(
+            {"Set-Cookie": "sid=guess; Path=/"},
+            DEFAULT_REDACTION,
+            # The expected value is a whole value of the header, so it is redacted too.
+            "Header 'Set-Cookie' doesn't match: expected sid=[REDACTED]; Path=/, got sid=[REDACTED]; Path=/, csrf=[REDACTED]; Path=/",
+            id="exact-match",
+        ),
+        pytest.param({"Authorization": "Bearer abc"}, DEFAULT_REDACTION, "Header 'Authorization' doesn't match: expected [REDACTED], got None", id="exact-match-absent"),
+        pytest.param(
+            {"Set-Cookie": {"contains": "Secure"}},
+            DEFAULT_REDACTION,
+            # A failed contains/matches operand is not in the value, so it
+            # reveals nothing of it: shown as written.
+            "Header 'Set-Cookie' (value: 'sid=[REDACTED]; Path=/, csrf=[REDACTED]; Path=/') doesn't contain 'Secure'",
+            id="matcher",
+        ),
+        pytest.param(
+            {"Set-Cookie": {"not_contains": "abc"}},
+            DEFAULT_REDACTION,
+            # A failed not_contains operand is part of the value: the session a
+            # logout check says must be gone is the secret the value hides.
+            "Header 'Set-Cookie' (value: 'sid=[REDACTED]; Path=/, csrf=[REDACTED]; Path=/') contains '[REDACTED]' while it shouldn't",
+            id="not-contains-hidden-part",
+        ),
+        pytest.param(
+            {"Set-Cookie": {"not_matches": "sid=a.c"}},
+            DEFAULT_REDACTION,
+            "Header 'Set-Cookie' (value: 'sid=[REDACTED]; Path=/, csrf=[REDACTED]; Path=/') matches '[REDACTED]' while it shouldn't",
+            id="not-matches-hidden-part",
+        ),
+        # An operand whose text the shown value already holds reveals nothing more.
+        pytest.param(
+            {"Set-Cookie": {"not_contains": "csrf="}},
+            DEFAULT_REDACTION,
+            "Header 'Set-Cookie' (value: 'sid=[REDACTED]; Path=/, csrf=[REDACTED]; Path=/') contains 'csrf=' while it shouldn't",
+            id="not-contains-shown-part",
+        ),
+        pytest.param(
+            {"Set-Cookie": {"not_matches": "Path=/"}},
+            DEFAULT_REDACTION,
+            "Header 'Set-Cookie' (value: 'sid=[REDACTED]; Path=/, csrf=[REDACTED]; Path=/') matches 'Path=/' while it shouldn't",
+            id="not-matches-shown-part",
+        ),
+        pytest.param({"X-Id": "8"}, DEFAULT_REDACTION, "Header 'X-Id' doesn't match: expected 8, got 7", id="unlisted-header"),
+        pytest.param(
+            {"Set-Cookie": "sid=guess; Path=/"},
+            NO_REDACTION,
+            "Header 'Set-Cookie' doesn't match: expected sid=guess; Path=/, got sid=abc; Path=/, csrf=def; Path=/",
+            id="disabled",
+        ),
+        pytest.param(
+            {"Set-Cookie": {"not_contains": "abc"}},
+            NO_REDACTION,
+            "Header 'Set-Cookie' (value: 'sid=abc; Path=/, csrf=def; Path=/') contains 'abc' while it shouldn't",
+            id="disabled-not-contains",
+        ),
+    ],
+)
+def test_header_failure_message_redacts_the_value(headers, redaction, message):
+    """A header check's message is printed with the report, so a redacted
+    header's value is hidden there as it is in the report sections."""
+    with pytest.raises(VerificationError) as excinfo:
+        process_verify(Verify(headers=headers), _COOKIE_RESPONSE, redaction=redaction)
+    assert str(excinfo.value) == message

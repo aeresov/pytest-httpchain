@@ -92,6 +92,16 @@ An **absent** header behaves as an empty string for matcher forms — `contains`
 and `matches` fail, `not_contains` and `not_matches` pass vacuously. (Exact
 string form fails for an absent header, as before.)
 
+A failed check on a header whose values are redacted (`Set-Cookie`,
+`Authorization`, ... — see [Secrets in reports](../getting-started.md#secrets-in-reports))
+shows its value redacted, and so does the expected value of an exact match:
+`Header 'Set-Cookie' doesn't match: expected session=[REDACTED]; Path=/, got session=[REDACTED]; Path=/admin`.
+A failed `not_contains` or `not_matches` found its operand in the value, so the
+message shows the operand only when the redacted value already shows its text,
+and `[REDACTED]` otherwise: a logout check's `"not_contains": "{{ old_session }}"`
+fails with `... contains '[REDACTED]' while it shouldn't`. A failed `contains` or
+`matches` operand is not in the value and is shown as written.
+
 A matcher field whose template renders to `null` fails the stage, naming the
 field and the template, even when another field of the same matcher still holds
 a check: it is never quietly skipped. The same holds for a matcher written as

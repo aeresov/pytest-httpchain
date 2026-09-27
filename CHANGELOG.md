@@ -21,6 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xdist_group('db[main]')`. xdist ignores such a group, so under `--dist loadgroup` every stage was
   scheduled on its own, and a later stage could fail on another worker; `validate` reported the
   scenario as OK.
+- Credentials are redacted in failure reports. A failing stage printed `authorization: Bearer <token>`,
+  its cookies and any `?access_token=...` verbatim in the HTTP Request/Response sections, so they
+  landed in CI logs. The values of the headers listed in the new `httpchain_redact_headers` ini
+  option (default `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-API-Key`,
+  `API-Key`, `X-Auth-Token`) and of the query parameters in `httpchain_redact_query_params`
+  (default `access_token`, `refresh_token`, `id_token`, `api_key`, `apikey`, `client_secret`,
+  `password`, `token`) now print as `[REDACTED]`, names kept: `cookie: a=[REDACTED]; b=[REDACTED]`,
+  `set-cookie: sid=[REDACTED]; Path=/; HttpOnly`. Names match case-insensitively, a list replaces
+  its default, and an empty value disables it. The rules also cover a redirect's `Location`, a
+  URL's userinfo (the password of `https://user:password@host`, the user name of
+  `https://<token>@host`), the value a failed header check echoes (`Header 'Set-Cookie' doesn't
+  match: expected sid=[REDACTED]; Path=/, got ...`, and a `not_contains` operand found in the
+  hidden part), a request error quoting a header value (`Illegal header value b'[REDACTED]'` for
+  a token with a trailing newline) and the `HTTP Request: GET <url>` line httpx logs at INFO.
+  Bodies and DEBUG logs are not redacted. HAR files stay complete by default, as a HAR is usually
+  replayed; the new `httpchain_har_redact = true` applies the same rules to their URLs, headers,
+  cookies and query strings.
 
 ### Fixed
 
@@ -238,6 +255,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which passed until now with the error only logged, fails after the upgrade. Call the factory in
   each stage that needs the resource, or, to share one across stages, provide it from a
   `class`-scoped fixture.
+- Report sections and header checks' failure messages redact credentials by default (see Added).
+  Heads-up: a tool or test that read a token back from a report, or matched a header check's
+  message on a cookie's value, sees `[REDACTED]` after the upgrade; set `httpchain_redact_headers`
+  and `httpchain_redact_query_params` to an empty value to get the previous output.
 - The `httpx` floor is raised to 0.27.1. httpx 0.27.0 percent-encodes a `\` in a URL path, so
   `{{ server }}/a\b` reached the server as `/a%5Cb` there, not as written (see Fixed).
 

@@ -83,7 +83,9 @@ is an empty list is removed from the query. A value that is not a string is turn
 first (`true`/`false` for a boolean, nothing for `null`); one that cannot be, such as a
 `"{{ 2 ** 100000 }}"` past the 4300 digits Python converts to text or a fixture's object whose
 `__str__` raises, fails the stage with `Cannot convert query parameter 'n' to text: ...`. The
-HTTP report section and the HAR export show the URL that was sent.
+HTTP report section and the HAR export show the URL that was sent; the report shows the values of
+credential parameters such as `access_token` as `[REDACTED]` (see
+[Secrets in reports](../getting-started.md#secrets-in-reports)).
 
 ## Headers
 
@@ -99,6 +101,9 @@ HTTP report section and the HAR export show the URL that was sent.
     }
 }
 ```
+
+A failing stage's report shows the headers it sent, with the values of credential headers such as
+`Authorization` as `[REDACTED]` (see [Secrets in reports](../getting-started.md#secrets-in-reports)).
 
 ## Request Body Types
 

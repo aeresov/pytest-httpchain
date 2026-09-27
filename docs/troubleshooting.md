@@ -126,6 +126,14 @@ Common causes:
 -   JMESPath expression returns `null` instead of expected value
 -   JSON Schema validation failure
 
+### `[REDACTED]` in a Report
+
+The values of credential headers and query parameters are hidden in report sections and in header checks' failure messages (see [Secrets in reports](getting-started.md#secrets-in-reports)). A failed exact match on such a header can then read `expected session=[REDACTED]; Path=/, got session=[REDACTED]; Path=/`: the values differ, both are hidden. Likewise `contains '[REDACTED]' while it shouldn't` is a `not_contains` operand found in the hidden part of the value, and `Illegal header value b'[REDACTED]'` a header value the HTTP library refused, usually for a trailing newline in a token read from a file. To see them while debugging locally, switch redaction off for the run:
+
+```bash
+pytest -o httpchain_redact_headers= -o httpchain_redact_query_params=
+```
+
 ## HTTP Request Errors
 
 ### Connection Errors

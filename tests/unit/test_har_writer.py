@@ -9,6 +9,7 @@ import pytest
 
 from pytest_httpchain import har_writer
 from pytest_httpchain.har_writer import request_response_to_har_entry, write_har_file
+from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
 
 
 def _make_pair(elapsed_ms: float | None = 123.5) -> tuple[httpx.Request, httpx.Response]:
@@ -175,7 +176,7 @@ class TestSerializationFamilies:
     def test_cookie_without_path_or_domain_omits_them(self):
         cookies = httpx.Cookies()
         cookies.set("bare", "1", domain="", path="")  # Cookies.set always marks HttpOnly
-        assert har_writer._format_cookies(cookies) == [{"name": "bare", "value": "1", "secure": False, "httpOnly": True}]
+        assert har_writer._format_cookies(cookies, NO_REDACTION) == [{"name": "bare", "value": "1", "secure": False, "httpOnly": True}]
 
     def test_same_name_response_cookies_keep_distinct_scopes(self):
         req = httpx.Request("GET", "https://x.com/")
@@ -264,6 +265,62 @@ class TestSerializationFamilies:
         req = httpx.Request("GET", "https://x.com")
         entry = request_response_to_har_entry(req, httpx.Response(200, request=req))
         assert "postData" not in entry["request"]
+
+
+def _credentialed_pair() -> tuple[httpx.Request, httpx.Response]:
+    """An exchange carrying a secret in every place a HAR records one."""
+    request = httpx.Request(
+        "POST",
+        "https://x.test/login?page=1&access_token=q-secret",
+        headers={"authorization": "Bearer h-secret", "cookie": "sid=c-secret", "content-type": "application/x-www-form-urlencoded"},
+        content=b"user=u&password=b-secret",
+    )
+    response = httpx.Response(302, headers=[("set-cookie", "sid=s-secret; Path=/"), ("location", "/next?token=l-secret")], request=request)
+    return request, response
+
+
+class TestRedaction:
+    """A HAR is usually replayed, which needs the real values: it is redacted
+    only when the plugin hands the writer the report's rules
+    (httpchain_har_redact). Bodies never are."""
+
+    @pytest.mark.parametrize(
+        ("redaction", "shown"),
+        [
+            pytest.param(None, {"h-secret", "c-secret", "q-secret", "s-secret", "l-secret", "b-secret"}, id="unredacted-by-default"),
+            pytest.param(DEFAULT_REDACTION, {"b-secret"}, id="redacted-but-body"),
+        ],
+    )
+    def test_which_secrets_reach_the_file(self, tmp_path, redaction, shown):
+        exchanges = [(*_credentialed_pair(), None)]
+        path = write_har_file(tmp_path, "t", exchanges) if redaction is None else write_har_file(tmp_path, "t", exchanges, redaction)
+
+        text = path.read_text(encoding="utf-8")
+        assert {secret for secret in ("h-secret", "c-secret", "q-secret", "s-secret", "l-secret", "b-secret") if secret in text} == shown
+
+    def test_redacted_entry_keeps_names_and_sizes(self):
+        request, response = _credentialed_pair()
+        redacted = request_response_to_har_entry(request, response, redaction=DEFAULT_REDACTION)
+        plain = request_response_to_har_entry(request, response, redaction=NO_REDACTION)
+        har_request, har_response = redacted["request"], redacted["response"]
+
+        assert har_request["url"] == "https://x.test/login?page=1&access_token=[REDACTED]"
+        assert har_request["queryString"] == [{"name": "page", "value": "1"}, {"name": "access_token", "value": "[REDACTED]"}]
+        assert {h["name"]: h["value"] for h in har_request["headers"]} == {
+            "host": "x.test",
+            "authorization": "[REDACTED]",
+            "cookie": "sid=[REDACTED]",
+            "content-type": "application/x-www-form-urlencoded",
+            "content-length": "24",
+        }
+        assert har_request["cookies"] == [{"name": "sid", "value": "[REDACTED]"}]
+        assert har_request["postData"]["params"] == [{"name": "user", "value": "u"}, {"name": "password", "value": "b-secret"}]
+        assert [(h["name"], h["value"]) for h in har_response["headers"]] == [("set-cookie", "sid=[REDACTED]; Path=/"), ("location", "/next?token=[REDACTED]")]
+        assert [(c["name"], c["value"]) for c in har_response["cookies"]] == [("sid", "[REDACTED]")]
+        assert har_response["redirectURL"] == "/next?token=[REDACTED]"
+        # A size is what went on the wire, which redaction does not change.
+        assert har_request["headersSize"] == plain["request"]["headersSize"]
+        assert har_response["headersSize"] == plain["response"]["headersSize"]
 
 
 _LONG_PREFIX = "tests/test_mod.http.json::mod::test_stage[" + "x" * 500

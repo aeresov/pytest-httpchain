@@ -86,6 +86,7 @@ src/pytest_httpchain/
 ├── utils.py                   # Marker construction, substitution processing, scenario-relative path resolution
 ├── report_formatter.py        # HTTP request/response formatting for test reports
 ├── har_writer.py              # HAR file export for HTTP request/response logging
+├── redaction.py               # Redaction: the one set of credential-hiding rules (headers, cookies, URL query) shared by reports, HAR, header verify and request-error messages
 ├── constants.py               # ConfigOptions enum for pytest.ini settings + the shared user-function name grammar
 ├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response) + subclasses RequestError, SaveError, VerificationError
 ├── userfunc.py                # Dynamic function import/invocation, incl. the model-aware call_user_function dispatch

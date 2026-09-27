@@ -3,6 +3,7 @@ import json
 import httpx
 import pytest
 
+from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
 from pytest_httpchain.report_formatter import format_request, format_response
 
 _UNDECODABLE = bytes(range(256))
@@ -14,7 +15,8 @@ _BIG_JSON = {"data": ["x" * 50] * 200}
     [
         pytest.param(
             httpx.Request("GET", "https://example.com/api/users", params={"page": "1", "limit": "10"}, headers={"authorization": "Bearer token123", "x-custom": "value"}),
-            "GET https://example.com/api/users?page=1&limit=10\nhost: example.com\nauthorization: Bearer token123\nx-custom: value\n",
+            # Redacted by default: the ini defaults apply without configuration.
+            "GET https://example.com/api/users?page=1&limit=10\nhost: example.com\nauthorization: [REDACTED]\nx-custom: value\n",
             id="no-body",
         ),
         pytest.param(
@@ -29,6 +31,7 @@ _BIG_JSON = {"data": ["x" * 50] * 200}
             "POST https://example.com/api/data\nhost: example.com\ncontent-type: text/plain\ncontent-length: 13\n\nHello, World!",
             id="text",
         ),
+        # Bodies are shown as sent: `password` is redacted in a query, not here.
         pytest.param(
             httpx.Request("POST", "https://example.com/api/login", data={"username": "alice", "password": "secret"}),
             "POST https://example.com/api/login\nhost: example.com\ncontent-length: 30\ncontent-type: application/x-www-form-urlencoded\n\nusername=alice&password=secret",
@@ -132,3 +135,39 @@ def test_long_bodies_are_truncated(formatter, message, expected_body):
     """Bodies are capped at 1000 characters, and the pretty-printed JSON
     branches honor the cap too, not only plain text."""
     assert formatter(message).split("\n\n", 1)[1] == expected_body
+
+
+_CREDENTIALED_REQUEST = httpx.Request(
+    "GET",
+    "https://u:pw@x.test/p?page=1&access_token=q-secret",
+    headers={"authorization": "Bearer h-secret", "cookie": "sid=c-secret; theme=dark", "x-trace": "t1"},
+)
+_CREDENTIALED_RESPONSE = httpx.Response(
+    302,
+    headers=[("set-cookie", "sid=s-secret; Path=/; HttpOnly"), ("set-cookie", "csrf=k-secret; Path=/"), ("location", "/cb?state=s&token=l-secret")],
+)
+
+
+@pytest.mark.parametrize(
+    ("redaction", "expected_request", "expected_response"),
+    [
+        pytest.param(
+            DEFAULT_REDACTION,
+            "GET https://u:[REDACTED]@x.test/p?page=1&access_token=[REDACTED]\nhost: x.test\nauthorization: [REDACTED]\ncookie: sid=[REDACTED]; theme=[REDACTED]\nx-trace: t1\n",
+            "HTTP/1.1 302 Found\nset-cookie: sid=[REDACTED]; Path=/; HttpOnly\nset-cookie: csrf=[REDACTED]; Path=/\nlocation: /cb?state=s&token=[REDACTED]\n",
+            id="default",
+        ),
+        pytest.param(
+            NO_REDACTION,
+            "GET https://u:pw@x.test/p?page=1&access_token=q-secret\nhost: x.test\nauthorization: Bearer h-secret\ncookie: sid=c-secret; theme=dark\nx-trace: t1\n",
+            "HTTP/1.1 302 Found\nset-cookie: sid=s-secret; Path=/; HttpOnly\nset-cookie: csrf=k-secret; Path=/\nlocation: /cb?state=s&token=l-secret\n",
+            id="disabled",
+        ),
+    ],
+)
+def test_redaction_covers_start_line_and_headers(redaction, expected_request, expected_response):
+    """Names stay visible, values go: the request's URL (query and userinfo
+    password) and headers, and the response's headers, a redirect's Location
+    included."""
+    assert format_request(_CREDENTIALED_REQUEST, redaction) == expected_request
+    assert format_response(_CREDENTIALED_RESPONSE, redaction) == expected_response

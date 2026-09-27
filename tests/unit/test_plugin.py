@@ -13,6 +13,9 @@ from pytest_httpchain.constants import ConfigOptions
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.plugin import (
     _CHAIN_KEY,
+    _HAR_REDACTION,
+    _HTTPX_LOG_FILTER,
+    _REDACTION,
     _apply_xdist_group_nodeids,
     _chain_args,
     _format_section,
@@ -23,6 +26,7 @@ from pytest_httpchain.plugin import (
     pytest_collection_modifyitems,
     pytest_runtest_makereport,
 )
+from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
 
 
 class TestPytestConfigure:
@@ -93,12 +97,81 @@ class TestPytestConfigure:
             pytest.param(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "notanumber", "invalid literal for int", id="ref-depth-non-integer"),
             pytest.param(ConfigOptions.MAX_COMPREHENSION_LENGTH, "notanumber", "invalid literal for int", id="max-comp-non-integer"),
             pytest.param(ConfigOptions.MAX_PARALLEL_ITERATIONS, "notanumber", "invalid literal for int", id="max-parallel-non-integer"),
+            # A header entry that can never match would leave that credential in
+            # the report without a word.
+            pytest.param(ConfigOptions.REDACT_HEADERS, "Authorization:", "'Authorization:' is not a header name", id="redact-headers-not-a-name"),
+            pytest.param(ConfigOptions.REDACT_HEADERS, '"Authorization', "No closing quotation", id="redact-headers-unbalanced-quote"),
+            pytest.param(ConfigOptions.REDACT_QUERY_PARAMS, "'token", "No closing quotation", id="redact-query-unbalanced-quote"),
+            pytest.param(ConfigOptions.HAR_REDACT, "maybe", "httpchain_har_redact must be a boolean", id="har-redact-not-a-boolean"),
         ],
     )
     def test_invalid_config(self, pytester, option, value, match):
         pytester.makeini(f"[pytest]\n{option} = {value}\n")
         with pytest.raises(pytest.UsageError, match=match):
             pytester.parseconfigure()
+
+    @pytest.mark.parametrize(
+        ("option", "value", "match"),
+        [
+            pytest.param(ConfigOptions.REDACT_HEADERS, '["Authorization", 1]', "item at index 1 is int: 1", id="redact-headers-non-string-item"),
+            pytest.param(ConfigOptions.REDACT_QUERY_PARAMS, '[["token"]]', r"item at index 0 is list: \['token'\]", id="redact-query-nested-list"),
+        ],
+    )
+    def test_invalid_toml_list_item(self, pytester, option, value, match):
+        """[tool.pytest.ini_options] hands a TOML list over unchecked (the
+        native [tool.pytest] table has pytest check its items): a non-string
+        item is a UsageError, not an INTERNALERROR from splitting it."""
+        pytester.makepyprojecttoml(f"[tool.pytest.ini_options]\n{option} = {value}\n")
+        with pytest.raises(pytest.UsageError, match=f"{option}: expects a list of strings, but {match}"):
+            pytester.parseconfigure()
+
+
+_DEFAULT_HEADERS = DEFAULT_REDACTION.headers
+_DEFAULT_QUERY_PARAMS = DEFAULT_REDACTION.query_params
+
+
+@pytest.mark.parametrize(
+    ("ini", "headers", "query_params", "har_redacts"),
+    [
+        pytest.param("", _DEFAULT_HEADERS, _DEFAULT_QUERY_PARAMS, False, id="defaults"),
+        # A list replaces the default rather than extending it.
+        pytest.param("httpchain_redact_headers = X-Tenant-Secret", {"x-tenant-secret"}, _DEFAULT_QUERY_PARAMS, False, id="replaces-default"),
+        pytest.param("httpchain_redact_headers = Authorization, Cookie", {"authorization", "cookie"}, _DEFAULT_QUERY_PARAMS, False, id="comma-separated"),
+        pytest.param("httpchain_redact_query_params =\n    sig\n    Session_Id", _DEFAULT_HEADERS, {"sig", "session_id"}, False, id="one-per-line"),
+        pytest.param("httpchain_redact_headers =\nhttpchain_redact_query_params =", set(), set(), False, id="empty-disables"),
+        pytest.param("httpchain_har_redact = true", _DEFAULT_HEADERS, _DEFAULT_QUERY_PARAMS, True, id="har-redact"),
+    ],
+)
+def test_redaction_rules_from_ini(pytester, ini, headers, query_params, har_redacts):
+    """Read once at configure time: the report's rules, and the HAR's, which
+    are the same rules under httpchain_har_redact and none otherwise."""
+    pytester.makeini(f"[pytest]\n{ini}\n")
+    config = pytester.parseconfigure()
+
+    redaction = config.stash[_REDACTION]
+    assert (redaction.headers, redaction.query_params) == (headers, query_params)
+    assert config.stash[_HAR_REDACTION] is (redaction if har_redacts else NO_REDACTION)
+
+
+def test_httpx_request_log_is_redacted_for_the_session(pytester):
+    """httpx logs every request's URL at INFO, which a run capturing INFO
+    prints with a failure's report: the session's rules apply to it, and the
+    filter leaves with the session (an in-process run must not leave it behind)."""
+    config = pytester.parseconfigure()
+    httpx_logger = logging.getLogger("httpx")
+    log_filter = config.stash[_HTTPX_LOG_FILTER]
+    assert log_filter in httpx_logger.filters
+
+    request_line = ("GET", httpx.URL("https://x.test/p?page=1&token=t"), "HTTP/1.1", 200, "OK")
+    record = httpx_logger.makeRecord("httpx", logging.INFO, __file__, 1, 'HTTP Request: %s %s "%s %d %s"', request_line, None)
+    unrelated = httpx_logger.makeRecord("httpx", logging.INFO, __file__, 1, "load_ssl_context verify=%r", (True,), None)
+    assert log_filter.filter(record)
+    assert log_filter.filter(unrelated)
+    assert record.getMessage() == 'HTTP Request: GET https://x.test/p?page=1&token=[REDACTED] "HTTP/1.1 200 OK"'
+    assert unrelated.getMessage() == "load_ssl_context verify=True"
+
+    config._ensure_unconfigure()
+    assert log_filter not in httpx_logger.filters
 
 
 def _collect_parent(suffix: str) -> MagicMock:
