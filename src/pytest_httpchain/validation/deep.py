@@ -23,7 +23,7 @@ from pytest_httpchain.models import (
     check_json_schema,
 )
 from pytest_httpchain.userfunc import UserFunctionError, call_target, import_function
-from pytest_httpchain.utils import read_json_schema_file, resolve_scenario_path
+from pytest_httpchain.utils import read_json_schema_file, resolve_scenario_path, schema_error_text
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, diag
 
 
@@ -87,7 +87,7 @@ def _check_schema_path(schema: Any, location: str, base_dir: Path | None = None)
     try:
         check_json_schema(data)
     except Exception as e:
-        yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, f"Schema file is not a valid JSON Schema: {path}: {e}", location)
+        yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, f"Schema file is not a valid JSON Schema: {path}: {schema_error_text(e)}", location)
 
 
 def _file_diagnostics(scenario: Scenario, base_dir: Path | None = None) -> Iterator[Diagnostic]:

@@ -2,7 +2,7 @@ import json
 
 import httpx
 
-from pytest_httpchain.utils import request_content
+from pytest_httpchain.utils import JSON_PARSE_ERRORS, request_content
 
 _MAX_BODY_CHARS = 1000
 
@@ -39,7 +39,7 @@ def format_request(request: httpx.Request) -> str:
             if "application/json" in request.headers.get("content-type", ""):
                 try:
                     decoded = json.dumps(json.loads(decoded), indent=2, ensure_ascii=False)
-                except json.JSONDecodeError:
+                except JSON_PARSE_ERRORS:
                     pass
             body = _format_body_text(decoded)
 
@@ -54,8 +54,8 @@ def format_response(response: httpx.Response) -> str:
         if "application/json" in content_type:
             try:
                 body = _format_body_text(json.dumps(response.json(), indent=2, ensure_ascii=False))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                # .json() raises UnicodeDecodeError too, for undecodable bytes.
+            except JSON_PARSE_ERRORS:
+                # Undecodable or too deeply nested bodies show as text too.
                 body = _format_body_text(response.text)
         elif _is_textual_content_type(content_type):
             body = _format_body_text(response.text)

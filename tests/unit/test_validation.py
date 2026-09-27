@@ -14,6 +14,7 @@ import pytest
 
 import pytest_httpchain.validation.loader as validation_loader
 from pytest_httpchain.validation import SEVERITY, DiagnosticCode, load_scenario, resolve_root_path, validate_scenario
+from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK
 
 C = DiagnosticCode
 # A stable importable directory so `userfuncs:<name>` refs resolve under --syspath.
@@ -224,6 +225,26 @@ def test_valid_scenario_info(datadir):
 def test_deep_disabled_does_not_check_imports(datadir):
     """Without deep=True the validator never imports user code."""
     assert validate_scenario(datadir / "deep_import_missing.json").diagnostics == []
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        # The decoder's RecursionError is not a ValueError.
+        pytest.param(TOO_DEEP_TO_PARSE, "Schema file is not valid JSON: .*while decoding a JSON array", id="too-deep-to-parse"),
+        pytest.param(b'{"items": ' * 1_000 + b"{}" + b"}" * 1_000, "not a valid JSON Schema", id="too-deep-to-check"),
+        # The meta-check fails cleanly, but the error's str() pretty-prints the
+        # deep `type` value, inside the except clause.
+        pytest.param(b'{"type": ' + TOO_DEEP_TO_WALK + b"}", "not a valid JSON Schema: .* is not valid under any of the given schemas", id="too-deep-to-describe"),
+    ],
+)
+def test_deep_schema_file_nested_too_deeply(tmp_path, content, message):
+    """Generated, not a ``test_validation/`` fixture: the payloads are too big to commit."""
+    (tmp_path / "schema.json").write_bytes(content)
+    result = validate_scenario(_write(tmp_path, [_stage(response=[{"verify": {"body": {"schema": "schema.json"}}}])]), deep=True)
+
+    assert [(d.code, d.location) for d in result.diagnostics] == [(C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema")]
+    assert re.search(message, result.diagnostics[0].message)
 
 
 def test_wrong_extension_warns(datadir):

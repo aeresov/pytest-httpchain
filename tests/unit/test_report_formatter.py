@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from pytest_httpchain.report_formatter import format_request, format_response
+from tests.unit.helpers import TOO_DEEP_TO_PARSE
 
 _UNDECODABLE = bytes(range(256))
 _BIG_JSON = {"data": ["x" * 50] * 200}
@@ -40,6 +41,13 @@ _BIG_JSON = {"data": ["x" * 50] * 200}
             httpx.Request("POST", "https://example.com/api/data", headers={"content-type": "application/json"}, content=b"{not valid json"),
             "POST https://example.com/api/data\nhost: example.com\ncontent-type: application/json\ncontent-length: 15\n\n{not valid json",
             id="malformed-json-as-text",
+        ),
+        # So is JSON too deep to parse (RecursionError, not a ValueError), rather
+        # than an error placeholder that drops the start line and headers too.
+        pytest.param(
+            httpx.Request("POST", "https://example.com/api/data", headers={"content-type": "application/json"}, content=TOO_DEEP_TO_PARSE),
+            "POST https://example.com/api/data\nhost: example.com\ncontent-type: application/json\ncontent-length: 200000\n\n" + "[" * 1000 + "... (truncated)",
+            id="too-deep-json-as-text",
         ),
         # Only genuinely undecodable bytes earn the binary label.
         pytest.param(
@@ -90,6 +98,13 @@ def test_format_request(request_, expected):
             httpx.Response(200, headers={"content-type": "application/json"}, content=b"\xff\xfe\x00b\x00a\x00d"),
             "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 8\n\n��\x00b\x00a\x00d",
             id="undecodable-json-as-text",
+        ),
+        # So is JSON too deep to parse (RecursionError, not a ValueError), rather
+        # than an error placeholder that drops the start line and headers too.
+        pytest.param(
+            httpx.Response(200, headers={"content-type": "application/json"}, content=TOO_DEEP_TO_PARSE),
+            "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 200000\n\n" + "[" * 1000 + "... (truncated)",
+            id="too-deep-json-as-text",
         ),
         # A non-textual content type must not dump (possibly mojibake) bytes
         # into the report; it emits a short placeholder instead.

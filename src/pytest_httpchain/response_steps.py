@@ -4,7 +4,6 @@ Pure functions over ``(resolved model, response)`` — no chain state — raisin
 `VerificationError` / `SaveError` on failure. The carrier owns the sequence.
 """
 
-import json
 import re
 from collections import ChainMap
 from collections.abc import Iterable
@@ -17,7 +16,7 @@ import jmespath.exceptions
 import jsonschema
 import referencing.exceptions
 
-from pytest_httpchain.errors import SaveError, SchemaFileError, VerificationError
+from pytest_httpchain.errors import SaveError, SchemaFileError, StageExecutionError, VerificationError
 from pytest_httpchain.models import (
     HeaderMatcher,
     JMESPathSave,
@@ -30,7 +29,7 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.userfunc import UserFunctionError, call_user_function
-from pytest_httpchain.utils import optional_as_list, process_substitutions, read_json_schema_file, resolve_scenario_path
+from pytest_httpchain.utils import JSON_PARSE_ERRORS, optional_as_list, process_substitutions, read_json_schema_file, resolve_scenario_path, schema_error_text
 
 
 def process_save(save_model: Save, response: httpx.Response, context: ChainMap[str, Any]) -> dict[str, Any]:
@@ -39,11 +38,7 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
 
     match save_model:
         case JMESPathSave():
-            try:
-                response_json = response.json()
-            except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                raise SaveError(f"Cannot extract variables, response is not valid JSON: {e}") from e
-
+            response_json = _response_json(response, SaveError, "extract variables")
             for var_name, jmespath_expr in save_model.jmespath.items():
                 try:
                     step_saved[var_name] = jmespath.search(jmespath_expr, response_json)
@@ -165,13 +160,11 @@ def _verify_body_schema(schema: Any, response: httpx.Response, scenario_dir: Pat
             # declares only re.error, so a `pattern` that re.compile rejects any
             # other way escapes as OverflowError ("a{4294967296}") or
             # RecursionError (deeply nested groups), and a deeply nested schema
-            # overflows the meta-validator's own recursion.
-            raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e}") from e
+            # overflows the meta-validator's own recursion. The message must not
+            # recurse too (see `schema_error_text`).
+            raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {schema_error_text(e)}") from e
 
-    try:
-        response_json = response.json()
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise VerificationError(f"Cannot validate schema, response is not valid JSON: {e}") from e
+    response_json = _response_json(response, VerificationError, "validate schema")
 
     try:
         # Already meta-checked (inline at model validation, files just above), so
@@ -179,13 +172,25 @@ def _verify_body_schema(schema: Any, response: httpx.Response, scenario_dir: Pat
         # which would re-run check_schema on every stage.
         json_schema_validator_class(schema)(schema).validate(response_json)
     except jsonschema.ValidationError as e:
-        raise VerificationError(f"Body schema validation failed: {e}") from e
+        raise VerificationError(f"Body schema validation failed: {schema_error_text(e)}") from e
     except jsonschema.SchemaError as e:
-        raise VerificationError(f"Invalid body validation schema: {e}") from e
+        raise VerificationError(f"Invalid body validation schema: {schema_error_text(e)}") from e
     except referencing.exceptions.Unresolvable as e:
         # An unresolvable $ref inside the schema itself must fail the stage
         # cleanly, not escape as a raw traceback past the abort machinery.
         raise VerificationError(f"Cannot resolve $ref in body schema: {e}") from e
+    except RecursionError as e:
+        # Validation recurses in Python, several frames per level of the body
+        # (or schema), so it gives out long before the C decoder does.
+        raise VerificationError(f"Cannot validate schema, response or schema is nested too deeply: {e}") from e
+
+
+def _response_json(response: httpx.Response, error: type[StageExecutionError], purpose: str) -> Any:
+    """The body parsed as JSON, or ``error`` naming what it was needed for."""
+    try:
+        return response.json()
+    except JSON_PARSE_ERRORS as e:
+        raise error(f"Cannot {purpose}, response is not valid JSON: {e}") from e
 
 
 def verify_text_matchers(
