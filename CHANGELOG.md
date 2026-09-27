@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A `jmespath` save or a `verify.body.schema` check now fails the stage cleanly, with its "response
+  is not valid JSON" message and the request/response report, when the response body holds an
+  integer longer than Python's int-to-str digit limit (4300 digits by default). For such a number
+  `json.loads` raises a bare `ValueError` instead of a `JSONDecodeError`. That escaped both
+  handlers, so it was reported as a plugin error with a raw traceback.
+
 ## [0.15.2] - 2026-09-26
 
 ### Fixed

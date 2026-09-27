@@ -16,12 +16,23 @@ from pytest_httpchain.models import JMESPathSave, Verify
 from pytest_httpchain.models.entities import ResponseBody
 from pytest_httpchain.response_steps import check_rendered_assertions, process_save, process_verify
 
-NOT_JSON = httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
+NON_JSON_BODIES = pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"}),
+        # Past the int-to-str digit limit (4300 by default) json.loads raises a
+        # bare ValueError, not a JSONDecodeError, so a narrower except let it
+        # escape the chain-abort machinery.
+        httpx.Response(200, content=b'{"a": ' + b"1" * 5000 + b"}"),
+    ],
+    ids=["not-json", "int-too-long"],
+)
 
 
-def test_jmespath_save_rejects_non_json_response():
+@NON_JSON_BODIES
+def test_jmespath_save_rejects_non_json_response(response):
     with pytest.raises(SaveError, match="response is not valid JSON"):
-        process_save(JMESPathSave(jmespath={"value": "key"}), NOT_JSON, ChainMap())
+        process_save(JMESPathSave(jmespath={"value": "key"}), response, ChainMap())
 
 
 def test_status_zero_is_not_treated_as_absent():
@@ -62,9 +73,10 @@ class TestBodySchema:
         with pytest.raises(VerificationError, match="Invalid JSON Schema in file"):
             process_verify(Verify(body=ResponseBody(schema=str(schema_path))), httpx.Response(200, json={}))
 
-    def test_non_json_response_fails_cleanly(self):
+    @NON_JSON_BODIES
+    def test_non_json_response_fails_cleanly(self, response):
         with pytest.raises(VerificationError, match="response is not valid JSON"):
-            process_verify(Verify(body=ResponseBody(schema={"type": "object"})), NOT_JSON)
+            process_verify(Verify(body=ResponseBody(schema={"type": "object"})), response)
 
 
 class TestRenderedAwayAssertions:

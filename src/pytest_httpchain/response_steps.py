@@ -4,7 +4,6 @@ Pure functions over ``(resolved model, response)`` — no chain state — raisin
 `VerificationError` / `SaveError` on failure. The carrier owns the sequence.
 """
 
-import json
 import re
 from collections import ChainMap
 from collections.abc import Iterable
@@ -41,7 +40,10 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
         case JMESPathSave():
             try:
                 response_json = response.json()
-            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            # ValueError, not just JSONDecodeError/UnicodeDecodeError (both its
+            # subclasses): an integer past the int-to-str digit limit raises a
+            # bare ValueError.
+            except ValueError as e:
                 raise SaveError(f"Cannot extract variables, response is not valid JSON: {e}") from e
 
             for var_name, jmespath_expr in save_model.jmespath.items():
@@ -164,7 +166,7 @@ def _verify_body_schema(schema: Any, response: httpx.Response, scenario_dir: Pat
 
     try:
         response_json = response.json()
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+    except ValueError as e:  # see process_save
         raise VerificationError(f"Cannot validate schema, response is not valid JSON: {e}") from e
 
     try:
