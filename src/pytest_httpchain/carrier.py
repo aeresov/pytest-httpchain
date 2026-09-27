@@ -19,7 +19,7 @@ import threading
 import time
 import warnings
 from collections import ChainMap
-from collections.abc import Callable, Hashable, Iterator, Mapping
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 from contextvars import ContextVar
@@ -84,25 +84,61 @@ _INIT_LOCK = threading.Lock()
 # (`Carrier._wrap_factory_fixture`), with the fixture's name for an exit error.
 _EnteredContextManager = tuple[str, AbstractContextManager]
 
+
+class _IterationContextManagers:
+    """The context managers an iteration entered, until it exits them.
+
+    The iteration closes it to exit them (`Carrier._run_iteration`), and it
+    takes no more then: a thread the iteration started in a copy of its
+    context (``asyncio.to_thread``, or any thread on a free-threaded build,
+    which inherits the context by default) can still reach it afterwards,
+    and what it enters then goes on the stage's list instead, as it does from
+    a thread started with an empty context, rather than on a list no one will
+    exit again.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entered: list[_EnteredContextManager] | None = []
+
+    def add(self, entry: _EnteredContextManager) -> bool:
+        """Register ``entry``, unless the iteration has already exited its own."""
+        with self._lock:
+            if self._entered is None:
+                return False
+            self._entered.append(entry)
+            return True
+
+    def close(self) -> list[_EnteredContextManager]:
+        """What the iteration entered, to exit; it takes no more from now on."""
+        with self._lock:
+            entered, self._entered = self._entered or [], None
+        return entered
+
+
 # The running iteration's entered context managers, set in the thread running
 # it (`Carrier._run_iteration`). Outside an iteration it is unset, and the
 # stage's `Carrier.active_context_managers` collects them.
-_ITERATION_CONTEXT_MANAGERS: ContextVar[list[_EnteredContextManager] | None] = ContextVar("iteration_context_managers", default=None)
+_ITERATION_CONTEXT_MANAGERS: ContextVar[_IterationContextManagers | None] = ContextVar("iteration_context_managers", default=None)
 
-# Raised by an exit, these stop the run: re-raised once every context manager is exited.
+# Raised by an exit, these stop the run: re-raised once every context manager
+# is exited. pytest.exit()'s is an Exception, so an `except Exception` must
+# let these through first.
 _INTERRUPTS = (KeyboardInterrupt, SystemExit, pytest.exit.Exception)
 
 
-def _exit_context_managers(entered: list[_EnteredContextManager]) -> list[str]:
-    """Exit ``entered``, last entered first, and describe each exit that raised.
+def _exit_context_managers(entered: list[_EnteredContextManager], errors: Iterable[str] = ()) -> list[str]:
+    """Exit ``entered``, last entered first, and describe each exit that raised,
+    after ``errors``: those of exits done before, reported with these (a
+    parallel stage's iterations', before the stage's own).
 
     Whatever one raises, the rest are still exited, as pytest does for fixture
     finalizers: an exception, ``pytest.fail()`` included, becomes a message,
     and an interrupt is re-raised once all are exited (the messages logged,
-    since nothing else will report them). Like a yield fixture's teardown, an
-    exit is not told whether the stage failed.
+    ``errors`` included, since nothing else will report them). Like a yield
+    fixture's teardown, an exit is not told whether the stage failed.
     """
-    errors: list[str] = []
+    errors = list(errors)
     interrupt: BaseException | None = None
     while entered:
         name, context_manager = entered.pop()
@@ -433,10 +469,35 @@ class IterationResult:
     started: datetime
 
 
-class _IterationCancelled(RequestError):
-    """An iteration of a parallel stage that stopped before sending: another
-    one had already failed (or the run was interrupted) and cancelled the pool.
-    It is a consequence of that failure, never the failure to report."""
+class _PoolCancel(threading.Event):
+    """A parallel stage's cancellation, set as soon as one of its iterations
+    ends in anything but success (`Carrier._run_iteration`), which `claim`
+    records: the first iteration to end so is the stage's outcome, and every
+    other one's is secondary (`_fold_in_secondary`), whichever order the
+    stage's thread reads them in.
+
+    The stage's thread learns of an iteration's end only once its future
+    completes, after the iteration's exits, and an exit can take a while (a
+    rollback): meanwhile another iteration, which the cancellation stopped or
+    which was still running, can end and be read first. Taking the first
+    outcome read as the stage's reported that one instead, a skip or an xfail
+    included, and dropped the failure that ended the stage.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._claim_lock = threading.Lock()
+        self._claimed_by: int | None = None
+
+    def claim(self, idx: int) -> bool:
+        """Cancel the pool for iteration ``idx``, which did not succeed, and
+        tell whether it is the first to have: the one whose outcome is the stage's."""
+        with self._claim_lock:
+            if self._claimed_by is None:
+                self._claimed_by = idx
+            first = self._claimed_by == idx
+        self.set()
+        return first
 
 
 class _IterationExitError(StageExecutionError):
@@ -466,12 +527,6 @@ class _IterationExitError(StageExecutionError):
         self.result = result
 
 
-def _was_cancelled(e: BaseException) -> bool:
-    """Whether an iteration ended because the pool was cancelled, whatever its
-    context managers then raised on exit."""
-    return isinstance(e, _IterationCancelled) or (isinstance(e, _IterationExitError) and isinstance(e.own_failure, _IterationCancelled))
-
-
 def _parallel_failure(idx: int, exc: Exception) -> str:
     """How a parallel stage reports the iteration ``idx`` that failed it.
 
@@ -485,8 +540,8 @@ def _parallel_failure(idx: int, exc: Exception) -> str:
 
 def _fold_in_secondary(idx: int, e: BaseException, results: list[IterationResult | None], exit_errors: list[str]) -> None:
     """Take in how iteration ``idx`` of a parallel stage ended when that is
-    secondary to the stage's outcome: it was cancelled by another iteration's
-    failure, or still running when another one ended the stage.
+    secondary to the stage's outcome: another iteration ended the stage first
+    (`_PoolCancel`), and this one was cancelled by it or still running then.
 
     Its own failure, a skip, an xfail or a user function's pytest.fail()
     included, is dropped: re-raised, it would turn a failed stage into a
@@ -684,13 +739,15 @@ class Carrier:
         except BaseException:
             # An interrupt or a plugin bug is what gets reported; the context
             # managers are still exited.
-            _log_exit_errors([*iteration_exit_errors, *_exit_context_managers(cls.active_context_managers)])
+            _log_exit_errors(_exit_context_managers(cls.active_context_managers, iteration_exit_errors))
             raise
 
         # At the stage's end, not the class's: a factory fixture's context
         # manager is typically built on other fixtures (a transaction on a
         # connection), which pytest tears down as soon as this stage returns.
-        exit_errors = [*iteration_exit_errors, *_exit_context_managers(cls.active_context_managers)]
+        # The iterations' exit errors go in, so that an interrupt raised by one
+        # of these exits logs them rather than dropping them.
+        exit_errors = _exit_context_managers(cls.active_context_managers, iteration_exit_errors)
 
         # Deliberately outside the handler: raising there would set
         # `Failed.__context__` to the original exception, and pytest's
@@ -820,7 +877,9 @@ class Carrier:
 
         One iteration runs inline; many run in a pool capped at
         ``max_concurrency`` with an optional global rate limiter. The first
-        expected failure read, never an iteration it cancelled, is the stage's.
+        iteration to end in anything but success cancels the pool, and its
+        outcome is the stage's whenever it is read (`_PoolCancel`), unless
+        another iteration raises an interrupt (or, read first, a plugin bug).
         What the context managers of the iterations it cancelled or that were
         still running then raise on exit goes on ``exit_errors``, however this
         returns or raises (see `_fold_in_secondary`).
@@ -853,13 +912,13 @@ class Carrier:
                 limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec is not None else None
 
                 workers = min(max_concurrency, total)
-                cancel = threading.Event()
+                cancel = _PoolCancel()
                 futures: dict[Future[IterationResult], int] = {}
                 read: set[int] = set()
                 try:
                     with ThreadPoolExecutor(max_workers=workers) as executor:
                         for idx, iter_vars in enumerate(iteration_substitutions):
-                            future = executor.submit(cls._run_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel)
+                            future = executor.submit(cls._run_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel, idx)
                             futures[future] = idx
 
                         try:
@@ -868,15 +927,19 @@ class Carrier:
                                 read.add(idx)
                                 try:
                                     results[idx] = future.result()
-                                except _STAGE_FAILURE_EXCEPTIONS as e:
-                                    if _was_cancelled(e):
-                                        # Cancelled by a failing iteration's worker
-                                        # before it exited its context managers:
-                                        # that failure is the one to report, still to come.
+                                except _STAGE_OUTCOMES as e:
+                                    # Its worker claimed the pool already; this
+                                    # only asks whether it was the first to.
+                                    if not cancel.claim(idx):
+                                        # Another iteration ended the stage first:
+                                        # its outcome, still to be read, is the one
+                                        # to report.
                                         _fold_in_secondary(idx, e, results, exit_errors)
                                         continue
+                                    if not isinstance(e, _STAGE_FAILURE_EXCEPTIONS):
+                                        # A user function's skip, xfail or pytest.fail().
+                                        raise
                                     first_error = (idx, e)
-                                    cancel.set()
                                     executor.shutdown(wait=False, cancel_futures=True)
                                     break
                         except BaseException:
@@ -910,14 +973,24 @@ class Carrier:
 
         Their requests hit the wire, so each success is folded into
         ``results`` for the HAR; each failure is secondary (`_fold_in_secondary`).
+        An interrupt one of them raised on exit still stops the run, once
+        every other one is taken in: pytest.exit()'s, an Exception, was taken
+        for a failure and dropped, and a KeyboardInterrupt left the rest's
+        exit errors unreported.
         """
+        interrupt: BaseException | None = None
         for future, idx in futures.items():
             if idx in read or not future.done() or future.cancelled():
                 continue
             try:
                 results[idx] = future.result()
+            except _INTERRUPTS as e:
+                if interrupt is None:
+                    interrupt = e
             except (Exception, pytest.skip.Exception, pytest.fail.Exception) as e:
                 _fold_in_secondary(idx, e, results, exit_errors)
+        if interrupt is not None:
+            raise interrupt
 
     @classmethod
     def _execute_http_request(cls, request_kwargs: dict[str, Any]) -> httpx.Response:
@@ -970,7 +1043,8 @@ class Carrier:
         iter_vars: Mapping[str, Any],
         limiter: Limiter | None = None,
         max_rate_limit_delay: float = 60,
-        cancel: threading.Event | None = None,
+        cancel: _PoolCancel | None = None,
+        idx: int = 0,
     ) -> IterationResult:
         """Execute one iteration, then exit the context managers it entered,
         in the thread that ran it.
@@ -982,32 +1056,32 @@ class Carrier:
         exit error fails the iteration like any failure (an `_IterationExitError`,
         which keeps its exchange).
 
-        An iteration that does not succeed cancels the rest of a parallel
-        stage's pool itself, and before its exits: the stage's thread only
-        learns of the failure once they are done, and an exit can take a while
-        (a rollback), during which the queued iterations would go on sending.
+        Iteration ``idx`` of a parallel stage that does not succeed cancels the
+        rest of the pool itself (`_PoolCancel.claim`), and before its exits
+        when it failed on its own: the stage's thread only learns of the
+        failure once they are done, and an exit can take a while (a rollback),
+        during which the queued iterations would go on sending.
         """
-        entered: list[_EnteredContextManager] = []
+        entered = _IterationContextManagers()
         token = _ITERATION_CONTEXT_MANAGERS.set(entered)
         try:
             try:
                 result = cls._execute_single_iteration(stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel)
-            except _STAGE_OUTCOMES as e:
+            except BaseException as e:
                 if cancel is not None:
-                    cancel.set()
-                exit_errors = _exit_context_managers(entered)
+                    cancel.claim(idx)
+                if not isinstance(e, _STAGE_OUTCOMES):
+                    # An interrupt or a plugin bug is what gets reported.
+                    _log_exit_errors(_exit_context_managers(entered.close()))
+                    raise
+                exit_errors = _exit_context_managers(entered.close())
                 if not exit_errors:
                     raise
                 raise _IterationExitError(exit_errors, own_failure=e) from e
-            except BaseException:
-                if cancel is not None:
-                    cancel.set()
-                _log_exit_errors(_exit_context_managers(entered))
-                raise
-            exit_errors = _exit_context_managers(entered)
+            exit_errors = _exit_context_managers(entered.close())
             if exit_errors:
                 if cancel is not None:
-                    cancel.set()
+                    cancel.claim(idx)
                 raise _IterationExitError(exit_errors, result=result)
             return result
         finally:
@@ -1031,7 +1105,7 @@ class Carrier:
         sending rather than adding side-effecting traffic to a failed stage.
         """
         if cancel is not None and cancel.is_set():
-            raise _IterationCancelled("Iteration cancelled: the stage already failed")
+            raise RequestError("Iteration cancelled: the stage already failed")
 
         iter_context = iteration_context(local_context, iter_vars)
 
@@ -1042,11 +1116,11 @@ class Carrier:
 
         if limiter is not None and not cls._acquire_rate_slot(limiter, max_rate_limit_delay, cancel):
             if cancel is not None and cancel.is_set():
-                raise _IterationCancelled("Iteration cancelled while waiting for a rate-limit slot: the stage already failed")
+                raise RequestError("Iteration cancelled while waiting for a rate-limit slot: the stage already failed")
             raise RequestError(f"Rate limit exceeded: could not acquire a request slot within {max_rate_limit_delay}s")
 
         if cancel is not None and cancel.is_set():
-            raise _IterationCancelled("Iteration cancelled: the stage already failed")
+            raise RequestError("Iteration cancelled: the stage already failed")
 
         # Stamped after the acquire, so it reflects when the request went on the
         # wire; this feeds the HAR entry's startedDateTime.
@@ -1124,6 +1198,11 @@ class Carrier:
         instance needed. The registry is looked up at call time, not at
         wrapping: a wrapper saved into the context and called in a later stage
         registers with that stage.
+
+        One entered by a thread the iteration started, with an empty context
+        or after the iteration's exits (`_IterationContextManagers`), goes on
+        the stage's list. If the stage has ended by then, the next stage's end
+        exits it, or the chain's (`_end_chain`).
         """
 
         def wrapped(*args, **kwargs):
@@ -1131,10 +1210,11 @@ class Carrier:
 
             if isinstance(result, AbstractContextManager):
                 value = result.__enter__()
+                entry = (name, result)
                 entered = _ITERATION_CONTEXT_MANAGERS.get()
-                # A thread the iteration started itself falls back to the
-                # stage's list: list.append is atomic, so it needs no lock.
-                (entered if entered is not None else cls.active_context_managers).append((name, result))
+                if entered is None or not entered.add(entry):
+                    # list.append is atomic, so it needs no lock.
+                    cls.active_context_managers.append(entry)
                 return value
 
             return result
@@ -1152,14 +1232,24 @@ class Carrier:
     @classmethod
     def _end_chain(cls) -> None:
         """Clean up after a chain and return the class to `fresh_chain_state`,
-        keeping the scenario's initialization for the next chain."""
-        if cls.client is not None:
-            cls.client.close()
+        keeping the scenario's initialization for the next chain.
 
-        for name, value in fresh_chain_state().items():
-            setattr(cls, name, value)
-        # maps[-1] is the pristine scenario context: saves only ever prepend layers.
-        cls.global_context = base_global_context(cls.global_context.maps[-1])
+        Each stage exits the context managers it entered, so the stage's list
+        is empty by now, unless a thread a stage started entered one after the
+        stage had ended (`_wrap_factory_fixture`) and no later stage did: it is
+        exited here, and what its exit raises logged, as no stage is left to
+        fail for it.
+        """
+        try:
+            _log_exit_errors(_exit_context_managers(cls.active_context_managers))
+        finally:
+            if cls.client is not None:
+                cls.client.close()
+
+            for name, value in fresh_chain_state().items():
+                setattr(cls, name, value)
+            # maps[-1] is the pristine scenario context: saves only ever prepend layers.
+            cls.global_context = base_global_context(cls.global_context.maps[-1])
 
 
 def _context_dump(data: Mapping[str, Any]) -> str:

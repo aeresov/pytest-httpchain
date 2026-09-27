@@ -5,12 +5,14 @@ response_steps (test_request_builder.py, test_response_steps.py); the HTTP
 round trip itself is the integration suite's.
 """
 
+import contextvars
 import re
 import ssl
 import threading
 import time
 from collections import ChainMap
 from collections.abc import Callable
+from concurrent.futures import Future
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -601,6 +603,11 @@ _ITERATION_1_EXIT_ERROR = "Iteration 1: Exiting the context manager from fixture
 # How the parallel stages of `TestContextManagerFixtureCleanup` fail when iteration 0 gets a 500.
 _ITERATION_0_FAILED = "Parallel execution failed at iteration 0: Status code doesn't match: expected 200, got 500"
 
+# Both orders the stage's thread can read a straggler's outcome in: after that
+# of the iteration that ended the stage, or before it, while that one's exits
+# still run (`TestContextManagerFixtureCleanup._run_with_a_straggler`).
+_EITHER_READ_ORDER = pytest.mark.parametrize("straggler_read_first", [False, True], ids=["straggler-read-last", "straggler-read-first"])
+
 
 class _UnprintableError(Exception):
     """An exception whose ``__str__`` raises in turn."""
@@ -773,26 +780,54 @@ class TestContextManagerFixtureCleanup:
         assert len(threads) == 4
         assert all(owner == exited != threading.get_ident() for owner, exited in threads)
 
-    def _run_with_a_straggler(self, cls: type[Carrier], events: list[str], status: int = 200, end=None, straggler_end=None, straggler_commit_fails: bool = True) -> None:
+    def _run_with_a_straggler(
+        self,
+        cls: type[Carrier],
+        events: list[str],
+        status: int = 200,
+        end=None,
+        straggler_status: int = 200,
+        straggler_end=None,
+        straggler_commit_fails: bool = True,
+        straggler_read_first: bool = False,
+        stage_exit_error: BaseException | None = None,
+    ) -> None:
         """Run a parallel stage of two iterations, both in flight at once.
         Iteration 0 gets ``status``, then ends with ``end`` in its response
         steps while iteration 1, the straggler, still waits for its response.
-        The straggler then ends with ``straggler_end``, and its ``a`` raises on
-        exit if ``straggler_commit_fails``."""
+        The straggler then gets ``straggler_status`` and ends with
+        ``straggler_end``, and its ``a`` raises on exit if
+        ``straggler_commit_fails``. Given ``stage_exit_error``, the stage's
+        substitutions enter a context manager raising it on exit.
+
+        The straggler is answered once iteration 0 has ended and begun its
+        exits. The stage's thread then reads iteration 0's outcome first, or,
+        with ``straggler_read_first``, the straggler's: iteration 0's exits
+        wait for it to end, as a slow one (a rollback) would."""
         both_sent = threading.Barrier(2)
 
         def answer(request):
             both_sent.wait(timeout=5)
             if request.url.path == "/0":
                 return httpx.Response(status)
-            # Held until iteration 0 has ended, and then long enough for the
-            # stage's thread to take its outcome first.
             _wait_until(lambda: "exit 0" in events)
-            time.sleep(0.2)
-            return httpx.Response(200)
+            if not straggler_read_first:
+                # Long enough for the stage's thread to take iteration 0's outcome first.
+                time.sleep(0.2)
+            return httpx.Response(straggler_status)
 
+        @contextmanager
         def a(i):
-            return self._resource(events, str(i), RuntimeError(f"commit of {i} rejected") if i == 1 and straggler_commit_fails else None)()
+            events.append(f"enter {i}")
+            yield i
+            events.append(f"exit {i}")
+            if i == 0 and straggler_read_first:
+                # Until the straggler has ended, and then long enough for the
+                # stage's thread to take its outcome first.
+                _wait_until(lambda: "exit 1" in events)
+                time.sleep(0.1)
+            if i == 1 and straggler_commit_fails:
+                raise RuntimeError(f"commit of {i} rejected")
 
         def b(i):
             ending = end if i == 0 else straggler_end
@@ -800,6 +835,11 @@ class TestContextManagerFixtureCleanup:
                 ending("given up")
             return True
 
+        fixtures = {"a": a, "b": b}
+        stage_fields: dict = {}
+        if stage_exit_error is not None:
+            fixtures["s"] = self._resource(events, "s", stage_exit_error)
+            stage_fields["substitutions"] = [{"vars": {"t": "{{ s() }}"}}]
         cls.client = httpx.Client(transport=httpx.MockTransport(answer))
         stage = Stage.model_validate(
             {
@@ -807,10 +847,11 @@ class TestContextManagerFixtureCleanup:
                 "parallel": {"foreach": [{"individual": {"i": [0, 1]}}], "max_concurrency": 2},
                 "request": {"url": "http://mock/{{ i }}?t={{ a(i) }}"},
                 "response": [{"verify": {"status": 200}}, {"verify": {"expressions": ["{{ b(i) }}"]}}],
+                **stage_fields,
             }
         )
         try:
-            cls.execute_stage(stage, {"a": a, "b": b})
+            cls.execute_stage(stage, fixtures)
         finally:
             cls.client.close()
 
@@ -848,32 +889,58 @@ class TestContextManagerFixtureCleanup:
             pytest.param(200, pytest.skip, None, _ITERATION_1_EXIT_ERROR, [], id="stage-skipped"),
         ],
     )
-    def test_error_on_exit_of_a_straggler_is_reported(self, status, end, straggler_end, message, exchanges):
+    @_EITHER_READ_ORDER
+    def test_error_on_exit_of_a_straggler_is_reported(self, status, end, straggler_end, message, exchanges, straggler_read_first):
         """An iteration still running when another one ends the stage exits its
         own when it ends, and what its exit raises is listed after the stage's
         own failure, labelled with the iteration: a commit that failed is a
-        side effect to hear of. Both iterations are exited, the straggler last."""
+        side effect to hear of. Both iterations are exited, the straggler last.
+
+        Read before the stage's failure, while that iteration's exits still
+        ran, the straggler failed on exit was taken for the stage's failure,
+        and the failure that ended the stage was dropped."""
         events: list[str] = []
         cls = _make_carrier_subclass(record_all_exchanges=True)
         # Both caught, so a wrong outcome fails this test rather than skipping it.
         with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
-            self._run_with_a_straggler(cls, events, status=status, end=end, straggler_end=straggler_end)
+            self._run_with_a_straggler(cls, events, status=status, end=end, straggler_end=straggler_end, straggler_read_first=straggler_read_first)
         assert excinfo.type is pytest.fail.Exception
         assert str(excinfo.value) == message
         assert sorted(events[:2]) == ["enter 0", "enter 1"]
         assert events[2:] == ["exit 0", "exit 1"]
         assert [str(request.url).removeprefix("http://mock") for request, _, _ in cls.last_exchanges] == exchanges
 
-    @pytest.mark.parametrize("straggler_end", [pytest.skip, pytest.xfail, pytest.fail], ids=["skipped", "xfailed", "failed"])
-    def test_a_stragglers_own_outcome_is_secondary(self, straggler_end):
-        """A straggler exiting cleanly, then skipping, xfailing or failing from
-        a user function, leaves the stage's failure as it is, like any failure
-        of its own. Reading it re-raised that outcome, which turned the failed
-        stage into a skipped or xfailed one, or replaced its failure message."""
+    @pytest.mark.parametrize(
+        ("straggler_status", "straggler_end"),
+        [
+            pytest.param(200, pytest.skip, id="skipped"),
+            pytest.param(200, pytest.xfail, id="xfailed"),
+            pytest.param(200, pytest.fail, id="failed"),
+            pytest.param(404, None, id="failed-verification"),
+        ],
+    )
+    @_EITHER_READ_ORDER
+    def test_a_stragglers_own_outcome_is_secondary(self, straggler_status, straggler_end, straggler_read_first):
+        """A straggler exiting cleanly, then failing its verification, or
+        skipping, xfailing or failing from a user function, leaves the stage's
+        failure as it is. Reading it re-raised a skip, an xfail or a
+        pytest.fail(), which turned the failed stage into a skipped or xfailed
+        one, or replaced its failure message. And read before the stage's
+        failure, while the exits of the iteration that failed it still ran
+        (a rollback), any such outcome was taken for the stage's, the
+        straggler's failed verification included."""
         events: list[str] = []
         # Both caught, so a wrong outcome fails this test rather than skipping it.
         with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
-            self._run_with_a_straggler(_make_carrier_subclass(), events, status=500, straggler_end=straggler_end, straggler_commit_fails=False)
+            self._run_with_a_straggler(
+                _make_carrier_subclass(),
+                events,
+                status=500,
+                straggler_status=straggler_status,
+                straggler_end=straggler_end,
+                straggler_commit_fails=False,
+                straggler_read_first=straggler_read_first,
+            )
         assert excinfo.type is pytest.fail.Exception
         assert str(excinfo.value) == _ITERATION_0_FAILED
         assert events[2:] == ["exit 0", "exit 1"]
@@ -892,8 +959,9 @@ class TestContextManagerFixtureCleanup:
     def test_an_iteration_that_does_not_succeed_cancels_the_pool_itself(self, status, exit_error, end, raised, cancelled_on_exit):
         """Before it ends, and so before the stage's thread learns of it, and,
         when it failed on its own, before its exits: the rest of the pool must
-        not go on sending while they run."""
-        cancel = threading.Event()
+        not go on sending while they run. It claims the pool with its index,
+        which makes its outcome the stage's however late it is read."""
+        cancel = carrier_module._PoolCancel()
         cancel_on_exit: list[bool] = []
 
         @contextmanager
@@ -918,14 +986,16 @@ class TestContextManagerFixtureCleanup:
         local_context = ChainMap(cls._build_stage_fixtures({"a": transaction, "b": b}))
         try:
             if raised is None:
-                cls._run_iteration(stage, local_context, {}, None, 60, cancel)
+                cls._run_iteration(stage, local_context, {}, None, 60, cancel, 3)
             else:
                 with pytest.raises(raised):
-                    cls._run_iteration(stage, local_context, {}, None, 60, cancel)
+                    cls._run_iteration(stage, local_context, {}, None, 60, cancel, 3)
         finally:
             client.close()
         assert cancel_on_exit == [cancelled_on_exit]
         assert cancel.is_set() is (raised is not None)
+        # Another iteration ending now is not the first to have.
+        assert cancel.claim(4) is (raised is None)
 
     def test_a_failing_iteration_cancels_the_others_before_its_exits(self):
         """Its worker cancels the pool as soon as it fails, and the iterations
@@ -1087,17 +1157,57 @@ class TestContextManagerFixtureCleanup:
         ]
         assert events == ["enter s", "enter a0", "enter b0", "exit b0", "exit a0", "exit s"]
 
-    def test_error_on_exit_of_a_straggler_is_logged_on_an_interrupt(self, caplog):
+    @pytest.mark.parametrize(
+        "by_the_stages_exit",
+        [
+            pytest.param(False, id="interrupted-by-an-iteration"),
+            # What the stage entered outside its iterations calls pytest.exit()
+            # on exit. That exit logged its own errors alone, and the
+            # straggler's, collected before, were dropped.
+            pytest.param(True, id="interrupted-by-the-stages-exit"),
+        ],
+    )
+    @_EITHER_READ_ORDER
+    def test_error_on_exit_of_a_straggler_is_logged_on_an_interrupt(self, caplog, by_the_stages_exit, straggler_read_first):
         """No stage failure will carry it then."""
         events: list[str] = []
 
         def interrupt(reason):
             raise KeyboardInterrupt(reason)
 
-        with pytest.raises(KeyboardInterrupt):
-            self._run_with_a_straggler(_make_carrier_subclass(), events, end=interrupt)
-        assert events[2:] == ["exit 0", "exit 1"]
+        with pytest.raises(pytest.exit.Exception if by_the_stages_exit else KeyboardInterrupt):
+            self._run_with_a_straggler(
+                _make_carrier_subclass(),
+                events,
+                status=500 if by_the_stages_exit else 200,
+                end=None if by_the_stages_exit else interrupt,
+                straggler_read_first=straggler_read_first,
+                stage_exit_error=pytest.exit.Exception("rollback of s failed") if by_the_stages_exit else None,
+            )
+        assert [event for event in events if event.startswith("exit")] == ["exit 0", "exit 1", *(["exit s"] if by_the_stages_exit else [])]
         assert _ITERATION_1_EXIT_ERROR in caplog.text
+
+    @pytest.mark.parametrize("interrupt", [pytest.exit.Exception, KeyboardInterrupt], ids=["pytest-exit", "keyboard-interrupt"])
+    def test_an_interrupt_on_exit_of_a_straggler_stops_the_run(self, interrupt):
+        """It is raised once the other stragglers are taken in, a success for
+        the HAR, an exit error for the report. pytest.exit()'s is an Exception,
+        which was taken for a failure of the straggler's own and dropped: the
+        run went on. A KeyboardInterrupt left the stragglers after it untaken."""
+        result = IterationResult(saved_context={}, request=httpx.Request("GET", "http://mock/0"), response=httpx.Response(200), started=datetime.now(UTC))
+        interrupted: Future[IterationResult] = Future()
+        interrupted.set_exception(interrupt("rollback of 1 failed"))
+        passed: Future[IterationResult] = Future()
+        passed.set_result(result)
+        failed_on_exit: Future[IterationResult] = Future()
+        failed_on_exit.set_exception(carrier_module._IterationExitError(["Exiting the context manager from fixture 'a' failed: RuntimeError: commit of 2 rejected"]))
+        interrupted_too: Future[IterationResult] = Future()
+        interrupted_too.set_exception(interrupt("rollback of 3 failed"))
+        results: list[IterationResult | None] = [None, None, None, None]
+        exit_errors: list[str] = []
+        with pytest.raises(interrupt, match="^rollback of 1 failed$"):
+            Carrier._fold_in_unread({interrupted: 1, passed: 0, failed_on_exit: 2, interrupted_too: 3}, set(), results, exit_errors)
+        assert results == [result, None, None, None]
+        assert exit_errors == ["Iteration 2: Exiting the context manager from fixture 'a' failed: RuntimeError: commit of 2 rejected"]
 
     @pytest.mark.parametrize(
         ("exit_error", "outcome", "message"),
@@ -1193,6 +1303,38 @@ class TestContextManagerFixtureCleanup:
             self._run({"a": self._resource(events, "a", RuntimeError("rollback failed")), "b": self._resource(events, "b", KeyboardInterrupt())})
         assert events == ["enter a", "enter b", "exit b", "exit a"]
         assert "Exiting the context manager from fixture 'a' failed: RuntimeError: rollback failed" in caplog.text
+
+    @pytest.mark.parametrize("in_the_iterations_context", [False, True], ids=["empty-context", "iteration-context"])
+    def test_one_entered_after_its_stage_ended_is_exited_with_the_chain(self, caplog, in_the_iterations_context):
+        """By a thread a user function started, which outlived the stage. It
+        goes on the stage's list, whose leftovers the chain's end exits, and
+        what that exit raises is logged, as no stage is left to fail for it.
+        The chain's end only reset the list, and the context manager was never
+        exited. From a thread running in a copy of the iteration's context
+        (``asyncio.to_thread``, or any thread on a free-threaded build), it
+        went on the iteration's list instead, already exited, and was lost."""
+        events: list[str] = []
+        release = threading.Event()
+        threads: list[threading.Thread] = []
+
+        def later(factory):
+            def enter():
+                release.wait(timeout=5)
+                factory()
+
+            thread = threading.Thread(target=contextvars.copy_context().run, args=(enter,)) if in_the_iterations_context else threading.Thread(target=enter)
+            thread.start()
+            threads.append(thread)
+            return "later"
+
+        cls = self._run({"later": later, "t": self._resource(events, "t", RuntimeError("rollback failed"))}, request={"url": "http://mock/{{ later(t) }}"})
+        release.set()
+        for thread in threads:
+            thread.join(timeout=5)
+        assert events == ["enter t"]
+        cls.teardown_class()
+        assert events == ["enter t", "exit t"]
+        assert "Exiting the context manager from fixture 't' failed: RuntimeError: rollback failed" in caplog.text
 
 
 class _Poison:
