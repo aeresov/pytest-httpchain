@@ -14,6 +14,13 @@ def test_missing_reference_file(datadir):
         load_json(datadir / "case_missing_ref.json")
 
 
+def test_nul_in_reference_path(create_json_file):
+    """Path operations raise a bare ValueError on a NUL byte."""
+    file = create_json_file("main.json", {"data": {"$ref": "a\0b.json"}})
+    with pytest.raises(ReferenceResolverError, match=r"Reference path contains a NUL character: 'a\\x00b.json'"):
+        load_json(file)
+
+
 @pytest.mark.parametrize(
     ("content", "cause", "reason"),
     [
