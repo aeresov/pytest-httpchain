@@ -41,15 +41,26 @@ def resolve_scenario_path(scenario_dir: Path | None, value: str | Path) -> Path:
 
 
 def request_content(request: httpx.Request) -> bytes | None:
-    """The request body bytes, or None when httpx never buffered them.
+    """The request body bytes, or None for a body this does not capture.
 
-    A streaming body — multipart ``files`` on the real transport — is consumed
-    on send without being read into ``.content``, which then raises
-    ``RequestNotRead``; reporting paths must degrade, not error.
+    ``.content`` raises ``RequestNotRead`` for any request httpx did not buffer.
+    A redirect follow-up that keeps its method is one: httpx builds it with the
+    original's ``stream=`` and never reads it. A ``ByteStream`` is plain bytes,
+    replayable, so reading it consumes nothing — the same rule httpx applies
+    when it buffers a ``content=`` body.
+
+    Any other stream is deliberately not iterated a second time: an iterator
+    body would be found exhausted, a file-backed multipart body would re-read
+    its files. The plugin's own multipart ``files`` body is built from bytes
+    already in memory and could be re-rendered, but telling it apart takes
+    httpx's private multipart internals, so it is reported as not captured
+    rather than read back. Reporting paths must degrade, not error.
     """
     try:
         return request.content
     except httpx.RequestNotRead:
+        if isinstance(request.stream, httpx.ByteStream):
+            return request.read()
         return None
 
 

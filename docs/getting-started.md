@@ -48,6 +48,10 @@ pytest --httpchain-output-dir ./har-output
 
 Each test that performs a request writes a `.har` file under `DIR` (named from the test node id) and a "HAR File" section is added to that test's report.
 
+A followed redirect adds an entry per hop, each with the body that request carried: a `302` or `303`, and a `301` answering a `POST`, follows up with a bodiless `GET` (a `HEAD` stays a `HEAD`); any other redirect repeats the method and re-sends the original body. When a later hop fails — its target refuses the connection or times out, or the chain exceeds httpx's limit of 20 redirects — httpx reports none of the hops before it, so the chain is recorded as a single entry: the failed request.
+
+A multipart (`files`) upload's body is not captured: its entry has `bodySize: -1` and no `postData`, and the report's request section says the body was not captured.
+
 !!! warning
     HAR files (and INFO logs and report sections) contain full requests and responses, **including credential headers and saved tokens** — nothing is redacted. Scrub or avoid uploading them as CI artifacts. See [Secrets and sensitive output](advanced/context-layering.md#secrets-and-sensitive-output).
 

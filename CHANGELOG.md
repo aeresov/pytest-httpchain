@@ -178,6 +178,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A UTF-8 file that starts with a byte-order mark, as some editors on Windows save one, is no
   longer rejected as invalid JSON (`Unexpected UTF-8 BOM`). Scenarios, the files they `$include`,
   `$merge` or `$ref`, and `verify.body.schema` files all accept the mark.
+- The HTTP report section and the HAR export show the body of a redirect follow-up that keeps the
+  original method. Such a follow-up was presented as a consumed upload: a plain `GET` after a `302`
+  was reported as `<Streaming body (e.g. multipart file upload): consumed on send, not captured>`
+  with HAR `bodySize: -1`, and a body re-sent by a `307` or `308`, or by a `301` answering a `PUT`,
+  `PATCH` or `DELETE`, was missing from the follow-up's `postData`, though the server did receive
+  it. httpx builds such a follow-up from the original request's body and never reads it; that
+  body is plain bytes, so it is now read back from the request, with nothing sent again. A
+  redirect that turns the request into a `GET` (a `302` or `303`, or a `301` answering a `POST`)
+  was never affected. A multipart (`files`) upload's body is still reported as not captured, on
+  the first request and on a `307`/`308` follow-up alike: only a plain-bytes body is read back.
 
 ### Changed
 

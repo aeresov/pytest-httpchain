@@ -1,9 +1,10 @@
+import httpx
 import pytest
 
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain.templates import TemplatesError
-from pytest_httpchain.utils import make_marker, process_substitutions, xdist_group_names
+from pytest_httpchain.utils import make_marker, process_substitutions, request_content, xdist_group_names
 
 # The functions these tests import live in a module of their own; see its
 # docstring for why they are not defined here.
@@ -121,3 +122,23 @@ def test_xdist_group_names_reads_names_as_xdist_does():
     """First argument, else ``name``, else "default", as a string; other marks ignored."""
     marks = ["xdist_group('db')", "xdist_group(name='cache')", "xdist_group()", "xdist_group(7)", "slow", "skip(reason='db')"]
     assert xdist_group_names(make_marker(mark) for mark in marks) == {"db", "cache", "default", "7"}
+
+
+@pytest.mark.parametrize(
+    ("request_", "expected"),
+    [
+        pytest.param(httpx.Request("POST", "http://t/", content=b"body"), b"body", id="buffered"),
+        # httpx builds a follow-up that keeps the method with stream= and never
+        # reads it: a 307/308 re-sends the original's ByteStream, a redirected
+        # GET its own empty one. Plain bytes, so they are recovered.
+        pytest.param(httpx.Request("POST", "http://t/", stream=httpx.ByteStream(b"body")), b"body", id="redirect-replayed-body"),
+        pytest.param(httpx.Request("GET", "http://t/", stream=httpx.ByteStream(b"")), b"", id="redirect-empty-body"),
+        # No other stream is iterated again: an iterator may be spent, and a
+        # multipart body is not told apart from a file-backed one, even when it
+        # is built from bytes, as the plugin builds it.
+        pytest.param(httpx.Request("POST", "http://t/", content=iter([b"chunk"])), None, id="iterator-stream"),
+        pytest.param(httpx.Request("POST", "http://t/", files={"f": ("f.txt", b"x")}), None, id="multipart-stream"),
+    ],
+)
+def test_request_content(request_, expected):
+    assert request_content(request_) == expected

@@ -171,8 +171,8 @@ def request_response_to_har_entry(
             "bodySize": -1,
         }
 
-    # -1 is HAR's "unknown": a streaming (multipart) body was consumed on send
-    # and its bytes are no longer available.
+    # -1 is HAR's "unknown": request_content does not capture a streaming
+    # (multipart) body.
     content = request_content(request)
     body_size = -1 if content is None else len(content)
 

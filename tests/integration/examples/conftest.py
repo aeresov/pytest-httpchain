@@ -185,6 +185,15 @@ def redirect_bad():
     return redirect("/bad")
 
 
+@app.post("/redirect-post/<int:code>")
+def redirect_post(code: int):
+    """POST redirected with `code` to the ?to= path, for redirect body tests:
+    a 307/308 re-sends the body, a 302 turns the request into a bodiless GET"""
+    from flask import redirect
+
+    return redirect(request.args["to"], code=code)
+
+
 @app.get("/template-literal")
 def template_literal_body():
     """Server data that LOOKS like a template expression: the engine must save
