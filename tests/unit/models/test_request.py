@@ -2,8 +2,9 @@
 
 from http import HTTPMethod
 
+import pydantic_core
 import pytest
-from pydantic import ValidationError
+from pydantic import AnyHttpUrl, AnyUrl, HttpUrl, ValidationError
 
 from pytest_httpchain.models.entities import Request, UserFunctionKwargs, UserFunctionName
 from tests.unit.models.helpers import assert_error_types, make_request
@@ -44,24 +45,102 @@ def test_field_round_trip(field, value):
 
 class TestUrl:
     @pytest.mark.parametrize(
-        ("url", "expected"),
+        "url",
         [
-            ("http://example.com", "http://example.com/"),
-            ("https://api.example.com/v1/users", "https://api.example.com/v1/users"),
-            ("https://example.com/search?q=test&page=1", "https://example.com/search?q=test&page=1"),
+            pytest.param("https://example.com/search?q=test&page=1", id="plain"),
+            # pydantic's HttpUrl handed the URL back WHATWG-normalized, and
+            # that was sent: an encoded path-traversal probe reached /ok.
+            pytest.param("http://example.com/static/%2e%2e/ok", id="encoded-dot-segment"),
+            pytest.param("http://example.com/a\\b", id="backslash-in-path"),
+            pytest.param("http://example.com", id="no-slash-appended"),
+            pytest.param("HTTP://Example.COM/Path", id="case"),
+            # HttpUrl refused anything over 2083 characters; httpx has no cap.
+            pytest.param("http://example.com/" + "a" * 3000, id="over-2083-chars"),
+            # Only C0 controls and space are what WHATWG strips from the ends;
+            # other Unicode whitespace is part of the URL to both parsers.
+            pytest.param("http://example.com/ok?q=東京\u3000", id="trailing-ideographic-space"),
+            pytest.param("http://example.com/ok?name=José\u00a0", id="trailing-nbsp"),
+            pytest.param("http://example.com/x\u2028", id="trailing-line-separator"),
+            # httpx sends the host as written too, and the resolver reads these
+            # as the address WHATWG does.
+            pytest.param("http://127.1/", id="ipv4-shorthand"),
+            pytest.param("http://[0:0::1]:8080/", id="ipv6-uncompressed"),
+            # Only a percent-encoded host is refused: userinfo escapes are sent
+            # as they are by both parsers.
+            pytest.param("http://u%40x:p%5C@example.com/", id="percent-encoded-userinfo"),
+            # Not a template (nothing inside), so the engine sends it as is.
+            pytest.param("http://example.com/a{{}}b", id="empty-braces"),
         ],
     )
-    def test_concrete_url_normalized(self, url, expected):
-        assert str(Request(url=url).url) == expected
+    def test_concrete_url_kept_as_written(self, url):
+        assert Request(url=url).url == url
+
+    @pytest.mark.parametrize("url_type", [HttpUrl, AnyHttpUrl, AnyUrl, pydantic_core.Url])
+    def test_pydantic_url_object_taken_as_its_string(self, url_type):
+        """A single-expression template keeps its value's type, so
+        ``"{{ api_url }}"`` can render to a pydantic URL (a pydantic-settings
+        field). The ``HttpUrl`` field took it; the str field must too."""
+        assert Request(url=url_type("http://example.com/ok")).url == "http://example.com/ok"
+
+    def test_pydantic_url_object_with_other_scheme_rejected(self):
+        with pytest.raises(ValidationError) as exc_info:
+            Request(url=AnyUrl("ftp://example.com/ok"))
+        assert_error_types(exc_info, "url_scheme", at="url")
 
     @pytest.mark.parametrize("url", ["{{ base_url }}/api/users", "https://example.com/users/{{ user_id }}"])
     def test_template_url_kept_as_str(self, url):
         assert Request(url=url).url == url
 
-    def test_invalid_url_rejected(self):
+    @pytest.mark.parametrize("url", ["http://example.com/a{{ }}b", "{{ base_url }}/a{{ }}b"])
+    def test_empty_template_rejected(self, url):
+        """The engine renders any URL with a ``{{ }}`` in it, and an empty one
+        fails that render. A literal URL around it passed the URL check and
+        failed only at runtime; it is a template, and refused as one."""
+        with pytest.raises(ValidationError, match="Template expression cannot be empty"):
+            Request(url=url)
+
+    @pytest.mark.parametrize(
+        ("url", "error_type"),
+        [
+            ("not-a-url", "url_parsing"),
+            ("/relative/path", "url_parsing"),
+            ("ftp://example.com/", "url_scheme"),
+            ("http://", "url_parsing"),
+            # The WHATWG parser still judges host and port.
+            ("http://exa mple.com/", "url_parsing"),
+            ("http://example.com:99999/", "url_parsing"),
+        ],
+    )
+    def test_invalid_url_rejected(self, url, error_type):
         with pytest.raises(ValidationError) as exc_info:
-            Request(url="not-a-url")
-        assert_error_types(exc_info, "url_parsing", at="url")
+            Request(url=url)
+        assert_error_types(exc_info, error_type, at="url")
+
+    @pytest.mark.parametrize(
+        ("url", "message"),
+        [
+            # WHATWG repaired these, and the repaired URL was sent. Sent as
+            # written they are not what they look like, so they are refused.
+            pytest.param("http:/example.com/x", "URL must start with 'http://' or 'https://' and a host", id="missing-slash"),
+            pytest.param("http:///example.com/x", "URL must start with 'http://' or 'https://' and a host", id="extra-slash"),
+            pytest.param(" http://example.com/x", "URL must not start or end with a space or control character", id="leading-space"),
+            pytest.param("http://example.com/x ", "URL must not start or end with a space or control character", id="trailing-space"),
+            pytest.param("http://example.com/x\x01", "URL must not start or end with a space or control character", id="trailing-control"),
+            pytest.param("http://example.com/a\nb", "Invalid URL: Invalid non-printable ASCII character", id="newline"),
+            pytest.param("http://example.com/a\tb", "Invalid URL: Invalid non-printable ASCII character", id="tab"),
+            # WHATWG's IDNA mapping folds this to example.com; httpx's refuses it.
+            pytest.param("http://ＥＸＡＭＰＬＥ.com/", "Invalid URL: Invalid IDNA hostname", id="fullwidth-host"),
+            # WHATWG ends the authority at a backslash, httpx does not: the
+            # host and port checked were not the ones connected to.
+            pytest.param("http://a\\b/x", "URL must not contain '\\\\' before its path", id="backslash-in-host"),
+            pytest.param("http://127.0.0.1:1\\@localhost:9/x", "URL must not contain '\\\\' before its path", id="backslash-before-at"),
+            # WHATWG decodes the host, httpx sends it undecoded.
+            pytest.param("http://ex%61mple.com/", "URL host must not be percent-encoded", id="percent-encoded-host"),
+        ],
+    )
+    def test_url_whatwg_would_repair_rejected(self, url, message):
+        with pytest.raises(ValidationError, match=message):
+            Request(url=url)
 
 
 class TestMethod:

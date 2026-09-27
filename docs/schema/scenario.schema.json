@@ -933,7 +933,6 @@
                   "anyOf": [
                     {
                       "format": "uri",
-                      "maxLength": 2083,
                       "minLength": 1,
                       "type": "string"
                     },
@@ -944,7 +943,7 @@
                 }
               ],
               "title": "Url",
-              "description": "Request URL (may be a template expression)."
+              "description": "Absolute http(s) URL (may be a template expression), passed to httpx as written."
             },
             "method": {
               "anyOf": [

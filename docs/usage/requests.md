@@ -19,7 +19,7 @@
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `url` | string | required | Target URL (supports templates) |
+| `url` | string | required | Absolute `http`/`https` URL, sent as written (supports templates) |
 | `method` | string | `GET` | HTTP method |
 | `params` | object | `{}` | Query parameters, merged into any query already in `url` |
 | `headers` | object | `{}` | Request headers |
@@ -42,6 +42,27 @@
     }
 }
 ```
+
+The URL goes to httpx exactly as written, or as its templates rendered: nothing normalizes it on
+the way. An encoded dot segment such as `/static/%2e%2e/ok` or a `\` in the path reaches the server
+as it appears in the scenario, and a URL may be up to 65,536 characters long, httpx's own limit.
+What httpx does itself still applies: it percent-encodes characters a URL cannot carry (a space
+becomes `%20`) and, like curl, resolves literal `.` and `..` segments, so a path-traversal probe
+writes them encoded.
+
+The URL must be absolute, with an `http` or `https` scheme and a host. A literal URL is checked at
+collection, a templated one once it has rendered (a template may render to a pydantic URL object,
+such as a pydantic-settings field, which stands for its string), and the host and port must be well
+formed. Any `{{ ... }}` in the URL makes it a templated one, so an empty `{{ }}` is refused at
+collection, as in every template. The check reads the URL as a browser does. These, which a browser
+accepts only by repairing them, are refused rather than repaired, since httpx would send them
+unrepaired or to another host: `http:/example.com`, a leading or trailing space, a control
+character anywhere (a tab or a line break, say), a `\` before the path (a browser ends the host
+there, httpx does not), a percent-encoded host (a browser decodes it, httpx does not), a host only
+a browser's IDNA mapping accepts, such as one in fullwidth letters or with a soft hyphen (a browser
+maps it to plain ASCII, httpx does not). The host itself goes out as written, for the
+resolver to read: `127.1` reaches `127.0.0.1` as in a browser, while a spelling only a browser
+tidies up, such as `127.0.0.1.`, fails when the request is sent.
 
 `params` is merged into a query string the URL already has, not substituted for it:
 

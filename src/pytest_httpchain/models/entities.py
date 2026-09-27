@@ -14,13 +14,13 @@ from http import HTTPMethod, HTTPStatus
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, JsonValue, PositiveFloat, PositiveInt, RootModel, Tag, model_validator
-from pydantic.networks import HttpUrl
 
 from pytest_httpchain.models.types import (
     Base64String,
     FunctionImportName,
     GraphQLQuery,
     HttpMethodToken,
+    HttpUrlStr,
     JMESPathExpression,
     JSONSchemaInline,
     NamespaceFromDict,
@@ -272,7 +272,7 @@ RequestBody = Annotated[
 
 
 class Request(Authenticated):
-    url: HttpUrl | PartialTemplateStr = Field(description="Request URL (may be a template expression).")
+    url: HttpUrlStr | PartialTemplateStr = Field(description="Absolute http(s) URL (may be a template expression), passed to httpx as written.")
     method: HTTPMethod | HttpMethodToken | TemplateExpressionOnly = Field(
         default=HTTPMethod.GET,
         description="HTTP method: a standard verb (autocompleted) or any RFC 9110 token (e.g. PROPFIND, PURGE).",

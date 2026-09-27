@@ -74,6 +74,18 @@ def test_har_records_url_query_merged_with_params(run_scenario, har_dir):
     assert json.loads(entry["response"]["content"]["text"]) == {"category": "books", "sort": "price", "results": []}
 
 
+def test_url_reaches_the_server_as_written(run_scenario, har_dir):
+    """The rendered URL used to be re-validated into pydantic's HttpUrl and sent
+    WHATWG-normalized: this encoded path-traversal probe went out as ``/ok``,
+    got a 200, and the stage expecting the server to refuse it failed."""
+    not_found = [{"verify": {"status": 404}}]
+    result = run_scenario({"stages": [stage("encoded_dot_segment", "/static/%2e%2e/ok", response=not_found)]}, args=HAR_ARGS)
+
+    result.assert_outcomes(passed=1)
+    [entry] = har_entries(har_dir)
+    assert entry["request"]["url"].endswith("/static/%2e%2e/ok")
+
+
 def test_parallel_stage_har_contains_every_iteration(run_scenario, har_dir):
     """A parallel stage's HAR must hold one entry per iteration, not a single
     arbitrary iteration presented as the stage's only exchange."""

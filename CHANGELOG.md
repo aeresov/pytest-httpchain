@@ -52,6 +52,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `params` does not set goes out exactly as it would without `params`, order and encoding
   included, so an escape that is not UTF-8 (`q=%E9`) or a bare `?flag` reaches the server
   unchanged. The HTTP report section and the HAR export show the merged URL, as sent.
+- A request URL reaches httpx as written. It was validated as pydantic's `HttpUrl`, and the
+  WHATWG-normalized form that type hands back was what got sent: `{{ server }}/static/%2e%2e/ok`
+  went out as `/ok`, so a path-traversal probe hit a different endpoint and passed or failed for
+  the wrong reason; a `\` in the path went out as `/`; and a URL longer than 2083 characters was
+  refused, a limit httpx does not have. The URL is still checked, at collection for a literal
+  one and after rendering for a templated one, to be an absolute `http`/`https` URL with a
+  well-formed host and port, with the same messages as before, but the string itself is what
+  httpx now gets. These, which WHATWG accepted only by repairing them, are refused instead,
+  since they would now be sent unrepaired or to another host and port than the ones checked:
+  `http:/example.com`, a leading or trailing space, a control character anywhere (a tab or a
+  line break was dropped, `\x01` percent-encoded), a `\` before the path (`http://a\b/` went to
+  host `a`), a percent-encoded host (`http://ex%61mple.com/`), a host only a browser's IDNA
+  mapping accepts (fullwidth letters or a soft hyphen, folded to plain ASCII). Other Unicode
+  whitespace at either end, such as U+3000 or U+00A0, is part of the URL to both and is sent.
+  A literal URL with an empty `{{ }}` in it, which was sent with the braces percent-encoded, is
+  refused at collection like any other empty template. httpx itself still resolves a literal
+  `..` segment, as curl does; write it as `%2e%2e` to send it. A URL may now be up to 65,536
+  characters, httpx's own limit, and the editor schema drops the 2083-character `maxLength`.
 
 ## [0.15.2] - 2026-09-26
 

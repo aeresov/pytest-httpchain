@@ -116,7 +116,7 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
                 index=i,
                 name=stage.name,
                 method=str(stage.request.method),
-                url=str(stage.request.url),
+                url=stage.request.url,
                 fixtures=sorted(stage.fixtures),
                 marks=list(stage.marks),
                 saves=sorted(scope.saves),

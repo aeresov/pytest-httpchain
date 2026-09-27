@@ -106,7 +106,7 @@ def _merge_query(query: str, params: dict[str, Any]) -> str:
 
 def build_request_kwargs(request_model: Request, scenario_dir: Path | None = None) -> dict[str, Any]:
     """Arguments for one ``client.request(...)`` call from a resolved `Request`."""
-    url = str(request_model.url)
+    url = request_model.url
     if request_model.params:
         # httpx's params= *replaces* the URL's own query, so `/items?page=2`
         # with params {"limit": 10} went out as `/items?limit=10`. Merged into

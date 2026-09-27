@@ -1,6 +1,6 @@
 """Validated type aliases for the scenario models: content validators (JMESPath,
 regex, XML, GraphQL, base64, templates, import names, identifiers, schemas,
-paths) and the ``SimpleNamespace``<->``dict`` round-trip that makes ``vars``
+paths, URLs) and the ``SimpleNamespace``<->``dict`` round-trip that makes ``vars``
 attribute-accessible in templates and JSON-serializable in bodies."""
 
 import base64
@@ -13,9 +13,23 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import graphql
+import httpx
 import jmespath
 import jsonschema
-from pydantic import AfterValidator, BeforeValidator, Field, JsonValue, PlainSerializer, WithJsonSchema
+import pydantic_core
+from pydantic import (
+    AfterValidator,
+    AnyHttpUrl,
+    AnyUrl,
+    BeforeValidator,
+    Field,
+    JsonValue,
+    PlainSerializer,
+    TypeAdapter,
+    ValidatorFunctionWrapHandler,
+    WithJsonSchema,
+    WrapValidator,
+)
 
 from pytest_httpchain.constants import parse_user_function_name
 from pytest_httpchain.templates import TEMPLATE_PATTERN, TEMPLATE_PATTERN_ECMA, is_complete_template
@@ -189,6 +203,76 @@ HttpMethodToken = Annotated[
     str,
     AfterValidator(validate_http_method_token),
     WithJsonSchema({"type": "string", "pattern": _HTTP_METHOD_TOKEN_PATTERN}),
+]
+
+# The WHATWG parser behind pydantic's URL types, as a check only.
+_WHATWG_HTTP_URL = TypeAdapter(AnyHttpUrl)
+
+# What WHATWG strips from both ends of a URL. Not ``str.strip()``'s set, which
+# also takes U+00A0, U+3000, U+2028, ...: WHATWG keeps those, and httpx
+# percent-encodes them just as WHATWG does.
+_C0_CONTROL_OR_SPACE = "".join(map(chr, range(0x21)))
+
+
+def validate_http_url(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
+    """Validate an absolute http(s) URL with a host, keeping it as written.
+
+    pydantic's ``HttpUrl`` handed back the URL WHATWG-normalized, and that is
+    what was sent: ``/static/%2e%2e/ok`` went out as ``/ok``, a ``\\`` in the
+    path as ``/``, and a URL over 2083 characters was refused. Its parser
+    still judges the URL here — scheme, host and port, with its own errors —
+    but its result is dropped. Where it would read the URL differently from
+    httpx, which sends it, the URL is refused instead of repaired:
+
+    - surrounding C0 controls or spaces (stripped by WHATWG; httpx sends a
+      space as ``%20`` and refuses a control, so one message covers both);
+    - anything httpx does not read as an http(s) URL with a host
+      (``http:/x``, a control character anywhere, a host only a browser's
+      IDNA mapping accepts);
+    - a ``\\`` in the authority, where WHATWG ends it and httpx does not, so
+      ``http://a:1\\@b:2/`` is ``a:1`` to the check and ``b:2`` on the wire;
+    - a percent-encoded host, which WHATWG decodes and httpx sends undecoded.
+
+    The last two keep the host and port judged here the ones httpx connects
+    to. Other host spellings go to the resolver as written: ``127.1`` and
+    ``[0:0::1]`` reach the address WHATWG read; ``127.0.0.1.``, which WHATWG
+    trims, fails when sent.
+
+    A string with a template in it is the engine's to render, so it is not a
+    literal URL here: it is left to ``PartialTemplateStr``, which refuses an
+    empty ``{{ }}`` that would otherwise pass here and fail only when rendered.
+
+    A pydantic URL object, which a single-expression template can render to
+    (a pydantic-settings field, say), stands for its string, as it did when
+    the field was ``HttpUrl``.
+    """
+    v: str = handler(str(value) if isinstance(value, AnyUrl | pydantic_core.Url) else value)
+    if template := re.search(TEMPLATE_PATTERN, v):
+        raise ValueError(f"Not a literal URL: it contains a template expression at position {template.start()}")
+    _WHATWG_HTTP_URL.validate_python(v)
+    if v != v.strip(_C0_CONTROL_OR_SPACE):
+        raise ValueError(f"URL must not start or end with a space or control character, got: {v!r}")
+    try:
+        url = httpx.URL(v)
+    except httpx.InvalidURL as e:
+        raise ValueError(f"Invalid URL: {e}") from e
+    if url.scheme not in ("http", "https") or not url.host:
+        raise ValueError(f"URL must start with 'http://' or 'https://' and a host, got: {v!r}")
+    # httpx found a host, so `v` is `scheme://authority...`; httpx's authority
+    # runs to the first `/`, `?` or `#`.
+    authority = re.split(r"[/?#]", v.split("://", 1)[1], maxsplit=1)[0]
+    if "\\" in authority:
+        raise ValueError(f"URL must not contain '\\' before its path (a browser reads it as '/', httpx as part of the host), got: {v!r}")
+    if "%" in url.host:
+        raise ValueError(f"URL host must not be percent-encoded (httpx sends it undecoded), got: {v!r}")
+    return v
+
+
+# Passed to httpx as written; the schema keeps HttpUrl's `format: uri` hint.
+HttpUrlStr = Annotated[
+    str,
+    WrapValidator(validate_http_url),
+    WithJsonSchema({"type": "string", "format": "uri", "minLength": 1}),
 ]
 
 # Nonstandard codes (nginx 499) must be assertable. Sits after ``HTTPStatus``.

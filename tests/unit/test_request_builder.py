@@ -65,6 +65,21 @@ def test_params_merge_into_url_query(url, params, sent_url):
     assert str(_sent(Request(url=url, params=params)).url) == sent_url
 
 
+@pytest.mark.parametrize(
+    ("url", "raw_path"),
+    [
+        # Sent WHATWG-normalized, this probe reached /ok instead.
+        pytest.param("http://t/static/%2e%2e/ok", b"/static/%2e%2e/ok", id="encoded-dot-segment"),
+        pytest.param("http://t/a\\b", b"/a\\b", id="backslash"),
+        pytest.param("http://t/" + "a" * 3000, b"/" + b"a" * 3000, id="over-2083-chars"),
+    ],
+)
+@pytest.mark.parametrize("params", [{}, {"x": 1}], ids=["no-params", "params-merged"])
+def test_url_is_sent_as_written(url, raw_path, params):
+    query = b"?x=1" if params else b""
+    assert _sent(Request(url=url, params=params)).url.raw_path == raw_path + query
+
+
 def test_unparseable_url_is_a_request_error():
     """Merging parses the URL before client.request does, so httpx's
     InvalidURL must still arrive as a stage failure. A URL still carrying a
