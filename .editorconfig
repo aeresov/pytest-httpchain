@@ -15,6 +15,10 @@ indent_size = 4
 [*.json]
 indent_size = 4
 
+# Latin-1 on purpose: the validator must report a non-UTF-8 scenario file.
+[tests/unit/test_validation/not_utf8.json]
+charset = latin1
+
 [*.{yml,yaml}]
 indent_size = 4
 

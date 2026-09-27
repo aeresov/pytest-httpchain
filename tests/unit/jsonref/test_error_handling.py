@@ -6,6 +6,7 @@ import pytest
 
 from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, ReferenceResolverError
 from pytest_httpchain.jsonref.loader import load_json
+from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK
 
 
 def test_missing_reference_file(datadir):
@@ -14,19 +15,32 @@ def test_missing_reference_file(datadir):
 
 
 @pytest.mark.parametrize(
+    ("content", "cause", "reason"),
+    [
+        pytest.param(b'{"invalid": json}', json.JSONDecodeError, "Expecting value", id="malformed"),
+        # Not a JSONDecodeError: read_text fails before the decoder runs.
+        pytest.param(b'{"x": "\xff"}', UnicodeDecodeError, "'utf-8' codec can't decode byte 0xff", id="not-utf-8"),
+        # Not a ValueError at all.
+        pytest.param(TOO_DEEP_TO_PARSE, RecursionError, r"nested too deeply \(.*while decoding a JSON array", id="too-deep-to-parse"),
+        # Parses, but the resolver's own walk spends a frame per level.
+        pytest.param(TOO_DEEP_TO_WALK, RecursionError, r"nested too deeply \(maximum recursion depth exceeded\)$", id="too-deep-to-walk"),
+    ],
+)
+@pytest.mark.parametrize(
     ("entry", "match"),
     [
         pytest.param("bad.json", "Failed to load JSON from", id="main-file"),
         pytest.param("main.json", "Failed to load external reference bad.json", id="referenced-file"),
     ],
 )
-def test_malformed_json_chains_the_decode_error(tmp_path, entry, match):
-    """The validator reports INVALID_JSON by finding a JSONDecodeError as the cause."""
-    (tmp_path / "bad.json").write_text('{"invalid": json}')
+def test_unloadable_json_chains_the_cause(tmp_path, entry, match, content, cause, reason):
+    """One exception type for every consumer; the validator classifies on the
+    chained cause (INVALID_JSON for syntax and encoding, PARSE_ERROR for depth)."""
+    (tmp_path / "bad.json").write_bytes(content)
     (tmp_path / "main.json").write_text('{"data": {"$ref": "bad.json"}}')
-    with pytest.raises(ReferenceResolverError, match=match) as excinfo:
+    with pytest.raises(ReferenceResolverError, match=f"^{match}.*: {reason}") as excinfo:
         load_json(tmp_path / entry)
-    assert isinstance(excinfo.value.__cause__, json.JSONDecodeError)
+    assert isinstance(excinfo.value.__cause__, cause)
 
 
 @pytest.mark.parametrize("entry", ["dup.json", "main.json"], ids=["main-file", "referenced-file"])

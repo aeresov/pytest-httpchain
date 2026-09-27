@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `resolve`, `show` and `graph` now print one `error:` line and exit 1 on a scenario file that
+  is not UTF-8 or is nested too deeply, instead of crashing with a traceback. The reference
+  resolver reported only `OSError` and `JSONDecodeError` as load failures. A non-UTF-8 file raises
+  `UnicodeDecodeError` instead. Deep nesting raises `RecursionError`, which is not even a
+  `ValueError`: CPython's decoder raises it at thousands of levels, and the resolver's own walk
+  at under a thousand. The same applies to a file pulled in through `$include`, `$merge` or `$ref`.
+- `validate` and pytest collection report a non-UTF-8 scenario file as `HTTPCHAIN014` (invalid
+  JSON), like a syntax error, instead of `HTTPCHAIN015`: RFC 8259 requires JSON to be UTF-8. A
+  file nested too deeply stays `HTTPCHAIN015`, now worded "nested too deeply". The JSON is valid,
+  but deeper than the parser or the resolver can go.
+
 ## [0.15.2] - 2026-09-26
 
 ### Fixed
