@@ -16,13 +16,19 @@ from pytest_httpchain.errors import SaveError, VerificationError
 from pytest_httpchain.models import JMESPathSave, Verify
 from pytest_httpchain.models.entities import ResponseBody
 from pytest_httpchain.response_steps import check_rendered_assertions, process_save, process_verify
+from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK
 
 NOT_JSON = httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
+# The decoder raises RecursionError, which is not a ValueError: a narrower except
+# let it escape the chain-abort machinery, with no report section and no HAR entry.
+TOO_DEEP_JSON = httpx.Response(200, content=TOO_DEEP_TO_PARSE, headers={"content-type": "application/json"})
+UNPARSEABLE = pytest.mark.parametrize("response", [NOT_JSON, TOO_DEEP_JSON], ids=["not-json", "too-deep"])
 
 
-def test_jmespath_save_rejects_non_json_response():
+@UNPARSEABLE
+def test_jmespath_save_rejects_non_json_response(response):
     with pytest.raises(SaveError, match="response is not valid JSON"):
-        process_save(JMESPathSave(jmespath={"value": "key"}), NOT_JSON, ChainMap())
+        process_save(JMESPathSave(jmespath={"value": "key"}), response, ChainMap())
 
 
 def test_status_zero_is_not_treated_as_absent():
@@ -45,8 +51,9 @@ class TestBodySchema:
             # UnicodeDecodeError is a ValueError, not a JSONDecodeError, so a
             # narrower except let it escape the chain-abort machinery.
             b'{"type": "\xff\xfe object"}',
+            TOO_DEEP_TO_PARSE,
         ],
-        ids=["missing", "non-utf8"],
+        ids=["missing", "non-utf8", "too-deep"],
     )
     def test_unreadable_schema_file_fails_cleanly(self, tmp_path, content):
         schema_path = tmp_path / "schema.json"
@@ -73,8 +80,11 @@ class TestBodySchema:
             # No regex involved: the meta-validator itself recurses too deep, so
             # a tolerant regex format checker alone would not cover it.
             functools.reduce(lambda inner, _: {"not": inner}, range(500), {"type": "string"}),
+            # The meta-check fails cleanly, but the error's str() pretty-prints
+            # the deep `type` value, inside the except clause.
+            {"type": functools.reduce(lambda inner, _: [inner], range(1_000), [])},
         ],
-        ids=["pattern-overflow", "pattern-nesting", "schema-nesting"],
+        ids=["pattern-overflow", "pattern-nesting", "schema-nesting", "error-text-nesting"],
     )
     def test_schema_file_whose_meta_check_crashes_fails_cleanly(self, tmp_path, schema):
         """A meta-check that raises something other than SchemaError must still
@@ -85,9 +95,26 @@ class TestBodySchema:
         with pytest.raises(VerificationError, match=r"Invalid JSON Schema in file '.*schema\.json': "):
             process_verify(Verify(body=ResponseBody(schema=str(schema_path))), httpx.Response(200, json="x"))
 
-    def test_non_json_response_fails_cleanly(self):
+    @UNPARSEABLE
+    def test_non_json_response_fails_cleanly(self, response):
         with pytest.raises(VerificationError, match="response is not valid JSON"):
-            process_verify(Verify(body=ResponseBody(schema={"type": "object"})), NOT_JSON)
+            process_verify(Verify(body=ResponseBody(schema={"type": "object"})), response)
+
+    @pytest.mark.parametrize(
+        ("schema", "match"),
+        [
+            # Fails at the root, but the error's str() pretty-prints the whole
+            # body, inside the except clause.
+            pytest.param({"type": "object"}, "Body schema validation failed: .* is not of type 'object'", id="too-deep-to-describe"),
+            # A self-referencing schema follows the body all the way down.
+            pytest.param({"type": "array", "items": {"$ref": "#"}}, "response or schema is nested too deeply", id="too-deep-to-validate"),
+        ],
+    )
+    def test_body_too_deep_to_validate_fails_cleanly(self, schema, match):
+        """Parsing survives this depth; the Python code walking the result does not."""
+        response = httpx.Response(200, content=TOO_DEEP_TO_WALK, headers={"content-type": "application/json"})
+        with pytest.raises(VerificationError, match=match):
+            process_verify(Verify(body=ResponseBody(schema=schema)), response)
 
 
 class TestRenderedAwayAssertions:
