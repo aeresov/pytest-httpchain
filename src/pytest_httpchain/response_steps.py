@@ -159,7 +159,13 @@ def _verify_body_schema(schema: Any, response: httpx.Response, scenario_dir: Pat
             raise VerificationError(f"Error reading body schema file '{schema_path}': {e}") from e
         try:
             check_json_schema(schema)
-        except jsonschema.SchemaError as e:
+        except Exception as e:
+            # Broad on purpose, as at the inline and `validate --deep` meta-checks:
+            # check_schema raises more than SchemaError. Its `format: regex` check
+            # declares only re.error, so a `pattern` that re.compile rejects any
+            # other way escapes as OverflowError ("a{4294967296}") or
+            # RecursionError (deeply nested groups), and a deeply nested schema
+            # overflows the meta-validator's own recursion.
             raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e}") from e
 
     try:

@@ -5,6 +5,7 @@ tests/integration/test_verify.py and test_save.py; this pins the failure
 messages and the edge cases a mock server cannot produce cheaply.
 """
 
+import functools
 import json
 from collections import ChainMap
 
@@ -61,6 +62,28 @@ class TestBodySchema:
         schema_path.write_text(json.dumps({"type": 12}))
         with pytest.raises(VerificationError, match="Invalid JSON Schema in file"):
             process_verify(Verify(body=ResponseBody(schema=str(schema_path))), httpx.Response(200, json={}))
+
+    @pytest.mark.parametrize(
+        "schema",
+        [
+            # The meta-schema's `format: regex` check declares only re.error, so
+            # a pattern that re.compile rejects any other way escaped the stage raw.
+            {"type": "string", "pattern": "a{4294967296}"},
+            {"type": "string", "pattern": "(" * 1000 + ")" * 1000},
+            # No regex involved: the meta-validator itself recurses too deep, so
+            # a tolerant regex format checker alone would not cover it.
+            functools.reduce(lambda inner, _: {"not": inner}, range(500), {"type": "string"}),
+        ],
+        ids=["pattern-overflow", "pattern-nesting", "schema-nesting"],
+    )
+    def test_schema_file_whose_meta_check_crashes_fails_cleanly(self, tmp_path, schema):
+        """A meta-check that raises something other than SchemaError must still
+        fail the stage as a verification error naming the file, not a bare
+        traceback with no request/response report."""
+        schema_path = tmp_path / "schema.json"
+        schema_path.write_text(json.dumps(schema))
+        with pytest.raises(VerificationError, match=r"Invalid JSON Schema in file '.*schema\.json': "):
+            process_verify(Verify(body=ResponseBody(schema=str(schema_path))), httpx.Response(200, json="x"))
 
     def test_non_json_response_fails_cleanly(self):
         with pytest.raises(VerificationError, match="response is not valid JSON"):
