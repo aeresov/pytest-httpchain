@@ -288,6 +288,50 @@ def test_inline_schema_reaches_the_model_untouched(datadir, fixture, step):
     assert schema["properties"]["item"] == {"$ref": "#/$defs/item"}
 
 
+class TestStatusListMerge:
+    """A verify.status list holds alternatives, so a sibling list merged onto a
+    fragment's is not concatenated, which would widen the check (a negative
+    test's [404] beside a shared ["2xx"] passed on a 200): it merges as a
+    scalar does, equal keeps and different is a merge conflict, in every shape
+    a step can take."""
+
+    OK = {"verify": {"status": ["2xx"]}}
+
+    @pytest.fixture
+    def write(self, tmp_path):
+        (tmp_path / "common.json").write_text(json.dumps({"ok": self.OK, "stage": _stage(response={"checks": self.OK})}))
+        return lambda stages: _write(tmp_path, stages)
+
+    @pytest.mark.parametrize(
+        ("stages", "where"),
+        [
+            pytest.param([_stage(response=[{"$merge": "common.json#/ok", "verify": {"status": [404]}}])], "verify.status", id="list-form-response"),
+            pytest.param([_stage(response={"checks": {"$merge": "common.json#/ok", "verify": {"status": [404]}}})], "verify.status", id="mapping-form-response"),
+            pytest.param([_stage(response={"checks": [{"$merge": "common.json#/ok", "verify": {"status": [404]}}]})], "verify.status", id="mapping-form-response-list"),
+            pytest.param([_stage(response=[{"verify": {"$merge": "common.json#/ok/verify", "status": [404]}}])], "status", id="merge-into-verify"),
+            pytest.param([{"$merge": "common.json#/stage", "response": {"checks": {"verify": {"status": [404]}}}}], "response.checks.verify.status", id="merge-into-stage"),
+            pytest.param({"s": _stage(response=[{"$merge": "common.json#/ok", "verify": {"status": [404]}}])}, "verify.status", id="mapping-form-stages"),
+            pytest.param([_stage(response=[{"$merge": "common.json#/ok", "verify": {"status": 404}}])], "verify.status", id="scalar-sibling"),
+        ],
+    )
+    def test_different_status_is_a_merge_conflict(self, write, stages, where):
+        result = validate_scenario(write(stages))
+        assert [(d.code, d.message) for d in result.diagnostics] == [(C.REF_ERROR, f"JSON reference resolution error: Merge conflict at {where}")]
+
+    @pytest.mark.parametrize(
+        ("step", "expected"),
+        [
+            pytest.param({"$merge": "common.json#/ok", "verify": {"status": ["2xx"]}}, {"status": ["2xx"]}, id="equal-list-keeps"),
+            pytest.param({"$merge": "common.json#/ok", "verify": {"expressions": ["{{ true }}"]}}, {"status": ["2xx"], "expressions": ["{{ true }}"]}, id="other-keys-still-merge"),
+            pytest.param({"verify": {"status": {"$include": "common.json#/ok/verify/status"}}}, {"status": ["2xx"]}, id="include-inside-status-resolves"),
+        ],
+    )
+    def test_merges_that_do_not_widen(self, write, step, expected):
+        scenario, raw = load_scenario(write([_stage(response=[step])]))
+        assert raw["stages"][0]["response"][0]["verify"] == expected
+        assert scenario.stages[0].response[0].verify.status == ["2xx"]
+
+
 @pytest.mark.parametrize(
     ("stages", "top", "expected"),
     [

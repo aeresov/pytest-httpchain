@@ -33,6 +33,7 @@ from pytest_httpchain.models.types import (
     ProxyUrlStr,
     RegexPattern,
     SerializablePath,
+    StatusClass,
     StatusCode,
     TemplateExpression,
     TemplateExpressionOnly,
@@ -595,10 +596,23 @@ class HeaderMatcher(StrictModel):
         return self
 
 
+# One expected status: a code, `HTTPStatus` first for the schema's
+# autocompletion, or a class such as "2xx"; a template renders to either.
+ExpectedStatus = HTTPStatus | StatusCode | StatusClass | NumberOrTemplate
+
+
 class Verify(Descripted):
-    status: HTTPStatus | StatusCode | None | NumberOrTemplate = Field(
+    # A list's entries are values, as the `headers` map's exact strings are:
+    # one a template rendered to None fails re-validation, not the None guard.
+    status: ExpectedStatus | Annotated[list[ExpectedStatus], Field(min_length=1)] | None = Field(
         default=None,
-        description="Expected HTTP status code: a standard code (autocompleted) or any integer 100-599 (e.g. 499).",
+        description=(
+            "Expected HTTP status: a code (a standard one autocompleted, or any integer 100-599, e.g. 499), "
+            "a class '1xx'-'5xx' (case-insensitive) matching any code in it, "
+            "or a non-empty list of codes and classes, any one of which passes. "
+            "A template may render to any of these forms."
+        ),
+        examples=[200, "2xx", [200, 201], ["2xx", 304], "{{ expected_status }}"],
     )
     # A matcher written as one template over `vars` ("{{ ct }}") renders as a
     # SimpleNamespace, which stands for the matcher object it was declared as.

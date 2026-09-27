@@ -15,7 +15,7 @@ from pytest_httpchain.jsonref.plumbing.path import parse_json_pointer, validate_
 
 # Predicate over a document position: the tuple of keys and indices from the
 # root to a value, composed across file boundaries.
-type OpaquePredicate = Callable[[tuple[str | int, ...]], bool]
+type PositionPredicate = Callable[[tuple[str | int, ...]], bool]
 
 REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 
@@ -44,21 +44,21 @@ _SIBLING_MERGER = Merger(
 )
 
 
-def _build_opaque_aware_merger(opaque: OpaquePredicate, base_path: tuple[str | int, ...]) -> Merger:
-    """Sibling merger treating opaque positions as atomic: two opaque subtrees
-    must be equal or conflict, never blend.
+def _build_atomic_aware_merger(atomic: PositionPredicate, base_path: tuple[str | int, ...]) -> Merger:
+    """Sibling merger treating the ``atomic`` positions like scalars: two lists
+    or dicts there must be equal or conflict, never concatenate or blend.
 
     ``base_path`` is the reference site's position, since deepmerge's ``path`` is
     relative to the merge root.
     """
 
-    def atomic_at_opaque(config: Any, path: list[Any], base: Any, nxt: Any) -> Any:
-        if opaque(base_path + tuple(path)):
+    def keep_whole_at_atomic(config: Any, path: list[Any], base: Any, nxt: Any) -> Any:
+        if atomic(base_path + tuple(path)):
             return _raise_on_conflict(config, path, base, nxt)
         return STRATEGY_END
 
     return Merger(
-        [(list, [atomic_at_opaque, "append"]), (dict, [atomic_at_opaque, "merge"])],
+        [(list, [keep_whole_at_atomic, "append"]), (dict, [keep_whole_at_atomic, "merge"])],
         [_raise_on_conflict],
         [_raise_on_conflict],
     )
@@ -102,14 +102,23 @@ class ReferenceResolver:
     """Resolves reference directives in a document.
 
     ``opaque`` marks positions that are not the resolver's to process: those
-    subtrees pass through verbatim, directives and all.
+    subtrees pass through verbatim, directives and all. ``atomic`` marks
+    positions whose value is resolved as usual but merges with a sibling as a
+    whole, like a scalar. An opaque position merges atomically too.
     """
 
-    def __init__(self, max_parent_traversal_depth: int = 3, root_path: Path | None = None, opaque: OpaquePredicate | None = None):
+    def __init__(
+        self,
+        max_parent_traversal_depth: int = 3,
+        root_path: Path | None = None,
+        opaque: PositionPredicate | None = None,
+        atomic: PositionPredicate | None = None,
+    ):
         self.max_parent_traversal_depth = max_parent_traversal_depth
         self.tracker = CircularDependencyTracker()
         self.root_path = root_path
         self.opaque = opaque
+        self.atomic = atomic
 
     def resolve_document(self, data: dict[str, Any], base_path: Path, root_path: Path) -> dict[str, Any]:
         """Resolve every reference in a document, relative to ``base_path`` and
@@ -275,11 +284,17 @@ class ReferenceResolver:
 
         resolved_siblings = self._resolve_refs(siblings, current_path, root_data, root_path, doc_path)
 
-        merger = _SIBLING_MERGER if self.opaque is None else _build_opaque_aware_merger(self.opaque, doc_path)
+        if self.opaque is None and self.atomic is None:
+            merger = _SIBLING_MERGER
+        else:
+            merger = _build_atomic_aware_merger(self._merges_atomically, doc_path)
         return merger.merge(referenced_data, resolved_siblings)
+
+    def _merges_atomically(self, path: tuple[str | int, ...]) -> bool:
+        return (self.opaque is not None and self.opaque(path)) or (self.atomic is not None and self.atomic(path))
 
     def _create_child_resolver(self, root_path: Path) -> Self:
         """A resolver for another document, inheriting the cycle tracker."""
-        child_resolver = type(self)(self.max_parent_traversal_depth, root_path, opaque=self.opaque)
+        child_resolver = type(self)(self.max_parent_traversal_depth, root_path, opaque=self.opaque, atomic=self.atomic)
         child_resolver.tracker = self.tracker.create_child_tracker()
         return child_resolver

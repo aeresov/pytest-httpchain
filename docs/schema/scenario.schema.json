@@ -2292,15 +2292,56 @@
                   "type": "integer"
                 },
                 {
+                  "pattern": "^[1-5][xX]{2}$",
+                  "type": "string"
+                },
+                {
                   "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
                   "type": "string"
+                },
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/HTTPStatus"
+                      },
+                      {
+                        "maximum": 599,
+                        "minimum": 100,
+                        "type": "integer"
+                      },
+                      {
+                        "pattern": "^[1-5][xX]{2}$",
+                        "type": "string"
+                      },
+                      {
+                        "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "description": "Expected HTTP status code: a standard code (autocompleted) or any integer 100-599 (e.g. 499).",
+              "description": "Expected HTTP status: a code (a standard one autocompleted, or any integer 100-599, e.g. 499), a class '1xx'-'5xx' (case-insensitive) matching any code in it, or a non-empty list of codes and classes, any one of which passes. A template may render to any of these forms.",
+              "examples": [
+                200,
+                "2xx",
+                [
+                  200,
+                  201
+                ],
+                [
+                  "2xx",
+                  304
+                ],
+                "{{ expected_status }}"
+              ],
               "title": "Status"
             },
             "headers": {

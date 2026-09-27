@@ -8,6 +8,7 @@ messages and the edge cases a mock server cannot produce cheaply.
 import json
 import re
 from collections import ChainMap
+from http import HTTPStatus
 
 import httpx
 import pytest
@@ -26,11 +27,71 @@ def test_jmespath_save_rejects_non_json_response():
         process_save(JMESPathSave(jmespath={"value": "key"}), NOT_JSON, ChainMap())
 
 
-def test_status_zero_is_not_treated_as_absent():
-    """The status gate is `is not None`, not truthiness."""
-    verify = Verify.model_construct(status=0, headers={}, expressions=[], user_functions=[], body=ResponseBody())
-    with pytest.raises(VerificationError, match="Status code doesn't match"):
-        process_verify(verify, httpx.Response(200, json={}))
+class TestStatus:
+    """``verify.status``: a code, a class, or a list of them any one of which passes."""
+
+    @pytest.mark.parametrize(
+        ("status", "actual"),
+        [
+            pytest.param(200, 200, id="code"),
+            pytest.param(HTTPStatus.CREATED, 201, id="standard-code"),
+            pytest.param(499, 499, id="nonstandard-code"),
+            pytest.param("2xx", 204, id="class"),
+            pytest.param("2XX", 299, id="class-uppercase"),
+            pytest.param("1xx", 101, id="class-lowest"),
+            pytest.param("5xx", 599, id="class-highest"),
+            pytest.param([200, 201], 201, id="list-of-codes"),
+            pytest.param(["2xx", 304], 304, id="list-code-matches"),
+            pytest.param(["2xx", 304], 200, id="list-class-matches"),
+            pytest.param([404], 404, id="list-of-one"),
+        ],
+    )
+    def test_passes(self, status, actual):
+        process_verify(Verify(status=status), httpx.Response(actual))
+
+    @pytest.mark.parametrize(
+        ("status", "actual", "message"),
+        [
+            pytest.param(200, 500, "expected 200, got 500", id="code"),
+            # Shown as the number, never as `HTTPStatus.OK`.
+            pytest.param(HTTPStatus.OK, 500, "expected 200, got 500", id="standard-code"),
+            pytest.param("200", 500, "expected 200, got 500", id="stringified-code"),
+            pytest.param([200, 201], 500, "expected one of [200, 201], got 500", id="list-of-codes"),
+            pytest.param("2xx", 500, "expected 2xx, got 500", id="class"),
+            # Shown in the one spelling the model keeps.
+            pytest.param("2XX", 300, "expected 2xx, got 300", id="class-uppercase"),
+            # The class is the hundreds digit, not a range around it.
+            pytest.param("2xx", 199, "expected 2xx, got 199", id="class-just-below"),
+            pytest.param(["2xx", 304], 500, "expected one of [2xx, 304], got 500", id="list-mixed"),
+            pytest.param([404], 200, "expected one of [404], got 200", id="list-of-one"),
+        ],
+    )
+    def test_mismatch_message(self, status, actual, message):
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(Verify(status=status), httpx.Response(actual))
+        assert str(excinfo.value) == f"Status code doesn't match: {message}"
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            pytest.param("{{ y }}", id="whole"),
+            # Refused even though 200 would have passed on the other entry.
+            pytest.param([200, "{{ y }}"], id="list-entry"),
+        ],
+    )
+    def test_template_text_is_refused(self, status):
+        """A template can render to another template's text (``x`` saved as
+        ``"{{ y }}"``), which re-validates as the field's template branch. It
+        failed as a mismatch against `{{ y }}` before; it is no status at all."""
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(Verify(status=status), httpx.Response(200))
+        assert str(excinfo.value) == "verify.status must resolve to a status code or a class such as 2xx, got '{{ y }}'"
+
+    def test_status_zero_is_not_treated_as_absent(self):
+        """The status gate is `is not None`, not truthiness."""
+        verify = Verify.model_construct(status=0, headers={}, expressions=[], user_functions=[], body=ResponseBody())
+        with pytest.raises(VerificationError, match="Status code doesn't match"):
+            process_verify(verify, httpx.Response(200, json={}))
 
 
 class TestBodySchema:

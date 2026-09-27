@@ -67,7 +67,7 @@ from pytest_httpchain.models.entities import (
     parametrize_values_contain_template,
     validate_rendered_scenario_auth,
 )
-from pytest_httpchain.models.types import check_json_schema, is_relative_url, json_schema_validator_class
+from pytest_httpchain.models.types import check_json_schema, is_relative_url, is_status_class, json_schema_validator_class
 
 __all__ = [
     "Scenario",
@@ -120,6 +120,7 @@ __all__ = [
     "ClientConfig",
     "check_json_schema",
     "is_relative_url",
+    "is_status_class",
     "json_schema_validator_class",
     "parametrize_values_contain_template",
     "normalize_list_input",

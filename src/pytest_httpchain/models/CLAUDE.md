@@ -24,6 +24,12 @@ request-URL type (`HttpUrlReferenceStr`, which checks an absolute and a relative
 URL differently), the request builder (fails a stage whose rendered URL is
 relative without a base_url) and the validator (`HTTPCHAIN034`).
 
+`is_status_class(value)` — True for a status class (`"2xx"`), the pattern the
+`StatusClass` type validates. `verify.status` holds codes, classes (kept
+lowercase), a list of them, or template text a template rendered to, which the
+field's template branch accepts; `response_steps` tells them apart with it and
+refuses the last.
+
 ## URL types
 
 URLs are validated but passed to httpx as written, never normalized:

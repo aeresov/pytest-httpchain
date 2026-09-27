@@ -93,6 +93,15 @@ def test_undefined_names_are_reported_per_phase():
     assert "nope_resp" in undefined["stages[0].response"]
 
 
+@pytest.mark.parametrize("status", ["{{ nope }}", ["{{ nope }}", 304], "{{ [nope, 304] }}"], ids=["whole", "list-entry", "list-rendered"])
+def test_status_templates_are_checked_in_every_form(status):
+    """A status list entry is read as the whole field is: the runtime renders
+    both against the response step's scope."""
+    diags = _check([{**_STAGE, "response": [{"verify": {"status": status}}]}])
+    undefined = [(d.location, d.message) for d in diags if d.code == DiagnosticCode.UNDEFINED_VAR]
+    assert undefined == [("stages[0].response", "Stage 's': response references potentially undefined variable(s): ['nope']")]
+
+
 def test_dataflow_locations_are_indexed_json_paths():
     """`Diagnostic.location` is documented as a machine-routable address, so an
     unnamed stage must still produce a usable one (it used to be "")."""

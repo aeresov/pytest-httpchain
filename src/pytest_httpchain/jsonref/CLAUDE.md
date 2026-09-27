@@ -22,7 +22,7 @@ Features:
 from pytest_httpchain.jsonref import load_json, ReferenceResolverError, InvalidJSONError
 
 # Load JSON with $ref resolution
-data = load_json(path, max_parent_traversal_depth=3, root_path=None, opaque=None)
+data = load_json(path, max_parent_traversal_depth=3, root_path=None, opaque=None, atomic=None)
 ```
 
 ### Opaque subtrees
@@ -42,6 +42,16 @@ Opacity extends to sibling merging: an opaque position merges **atomically**
 (equal values keep, differing values raise `Merge conflict`) instead of the
 recursive dict merge — two foreign-vocabulary subtrees are never blended.
 
+### Atomic positions
+
+`atomic` is a second position predicate, for merging only: a value at a
+matching position merges atomically, as an opaque one does, but its content
+is resolved as usual (a `$include` inside it still works). It is for lists
+whose entries are alternatives, where concatenation would widen what they
+accept: pytest-httpchain passes `validation.is_alternatives_position`, which
+matches `verify.status`. Both predicates compose across file boundaries the
+same way.
+
 ## Key Behaviors
 
 ### Reference Resolution
@@ -54,7 +64,7 @@ All three directives (`$include`, `$merge`, `$ref`) work identically:
 A relative reference path is tried against the referencing file's directory first, then against `root_path`; the first existing file wins. When BOTH exist, the file-relative one is used and `AmbiguousReferenceWarning` (from `pytest_httpchain.warnings`) is emitted — the validator surfaces it as `HTTPCHAIN026`.
 
 ### Deep Merging
-When `$include` (or `$ref`) has sibling properties, they are merged **additively** with the referenced content: sibling keys are added, lists are **concatenated**, and nested dicts are merged recursively. There is **no** last-wins override — a sibling that would override an existing scalar (or conflicts by type) raises `ReferenceResolverError` (`Merge conflict at <path>`) rather than silently winning. `null` is a value like any other (not an override or a hole): a `null` paired with a different value at the same path is a conflict, while equal values — including two `null`s — merge fine. The whole policy lives in ONE place: `_SIBLING_MERGER` (a custom `deepmerge.Merger` in `plumbing/reference.py`) whose fallback and type-conflict strategies raise.
+When `$include` (or `$ref`) has sibling properties, they are merged **additively** with the referenced content: sibling keys are added, lists are **concatenated** (except at opaque and atomic positions), and nested dicts are merged recursively. There is **no** last-wins override — a sibling that would override an existing scalar (or conflicts by type) raises `ReferenceResolverError` (`Merge conflict at <path>`) rather than silently winning. `null` is a value like any other (not an override or a hole): a `null` paired with a different value at the same path is a conflict, while equal values — including two `null`s — merge fine. The whole policy lives in ONE place, `plumbing/reference.py`: `_SIBLING_MERGER` (a custom `deepmerge.Merger`) whose fallback and type-conflict strategies raise through `_raise_on_conflict`, and `_build_atomic_aware_merger`, the same merger with the opaque and atomic positions kept whole by that same function.
 ```json
 {
   "$include": "base.json",

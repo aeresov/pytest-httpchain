@@ -122,6 +122,10 @@ def test_schema_patterns_are_ecma262_compatible():
         pytest.param(_verify(status="{{ s }}"), id="status-template"),
         pytest.param(_verify(status=200), id="status-concrete"),
         pytest.param(_verify(status="200"), id="status-stringified"),
+        pytest.param(_verify(status="2xx"), id="status-class"),
+        pytest.param(_verify(status="2XX"), id="status-class-uppercase"),
+        pytest.param(_verify(status=[200, 201]), id="status-list"),
+        pytest.param(_verify(status=["2xx", 304, "{{ s }}"]), id="status-list-mixed"),
     ],
 )
 def test_schema_accepts_documented_shapes(validator, document):
@@ -146,6 +150,9 @@ def test_schema_accepts_documented_shapes(validator, document):
         pytest.param(_request(timeout="abc"), id="timeout-type"),
         pytest.param(_request(method="FOO BAR"), id="method-not-a-token"),
         pytest.param(_verify(status="not-a-status"), id="status-type"),
+        pytest.param(_verify(status="6xx"), id="status-class-unknown"),
+        pytest.param(_verify(status=[]), id="status-list-empty"),
+        pytest.param(_verify(status=[200, "abc"]), id="status-list-entry-type"),
     ],
 )
 def test_schema_rejects_typos(validator, document):

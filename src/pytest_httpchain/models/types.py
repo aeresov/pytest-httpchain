@@ -430,6 +430,19 @@ ProxyUrlStr = Annotated[
 # Nonstandard codes (nginx 499) must be assertable. Sits after ``HTTPStatus``.
 StatusCode = Annotated[int, Field(ge=100, le=599)]
 
+# A status class, "2xx" for any code 200-299. The x's take either case and are
+# kept lowercase: one spelling for the consumer, and for its failure message.
+_STATUS_CLASS_PATTERN = r"^[1-5][xX]{2}$"
+StatusClass = Annotated[str, Field(pattern=_STATUS_CLASS_PATTERN), AfterValidator(str.lower)]
+
+
+def is_status_class(value: object) -> bool:
+    """True for a status class (``"2xx"``), which a validated ``verify.status``
+    holds beside codes and, where a template rendered to template text, text
+    that is neither."""
+    return isinstance(value, str) and re.fullmatch(_STATUS_CLASS_PATTERN, value) is not None
+
+
 Base64String = Annotated[str, AfterValidator(validate_base64)]
 NamespaceFromDict = Annotated[Any, AfterValidator(convert_dict_to_namespace)]
 # Accepts a SimpleNamespace or a dict; always yields a dict.

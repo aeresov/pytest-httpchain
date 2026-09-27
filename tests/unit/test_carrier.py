@@ -715,6 +715,67 @@ class TestVerifyObjectsFromVars:
         assert str(excinfo.value) == "'verify.headers.Location.contains' was declared as '{{ matcher }}' but rendered to None, which would silently disable it"
 
 
+class TestVerifyStatusRendered:
+    """``verify.status`` written as one template renders to any of its forms (a
+    code, a class, a list of them), and a list entry written as one to a code
+    or a class: the rendered value is checked as if it had been written so. The
+    whole field rendering to None is the rendered-away guard's
+    (`TestRenderedAwayFields`)."""
+
+    @staticmethod
+    def _run(status, context, *codes: int) -> None:
+        """Run a stage verifying ``status`` once per answer in ``codes``."""
+        stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"verify": {"status": status}}]})
+        responses = iter(httpx.Response(code) for code in codes)
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: next(responses)))
+        cls = _make_carrier_subclass(client=client)
+        try:
+            for _ in codes:
+                cls._execute_single_iteration(stage, context, {})
+        finally:
+            client.close()
+
+    @pytest.mark.parametrize(
+        ("status", "value", "passes", "message"),
+        [
+            pytest.param("{{ s }}", 201, 201, "expected 201, got 500", id="code"),
+            # Text, as a value saved from a header is.
+            pytest.param("{{ s }}", "201", 201, "expected 201, got 500", id="stringified-code"),
+            pytest.param("{{ s }}", "2XX", 204, "expected 2xx, got 500", id="class"),
+            pytest.param("{{ s }}", [200, 201], 201, "expected one of [200, 201], got 500", id="list"),
+            pytest.param("{{ s }}", ["2xx", 304], 304, "expected one of [2xx, 304], got 500", id="list-mixed"),
+            pytest.param(["{{ s }}", 304], 201, 201, "expected one of [201, 304], got 500", id="entry-code"),
+            pytest.param(["{{ s }}", 304], "2xx", 299, "expected one of [2xx, 304], got 500", id="entry-class"),
+        ],
+    )
+    @pytest.mark.parametrize("source", ["saved", "vars"])
+    def test_rendered_form_is_checked(self, status, value, passes, message, source):
+        context = ChainMap(VarsSubstitution(vars={"s": value}).vars) if source == "vars" else ChainMap({"s": value})
+        with pytest.raises(VerificationError) as excinfo:
+            self._run(status, context, passes, 500)
+        assert str(excinfo.value) == f"Status code doesn't match: {message}"
+
+    @pytest.mark.parametrize(
+        ("status", "value"),
+        [
+            # A list entry is a value in the list, as an exact header string is
+            # one in the `headers` map: its None fails re-validation, which is
+            # pydantic's to report. Dropping it would have passed the 304.
+            pytest.param(["{{ s }}", 304], None, id="entry-none"),
+            pytest.param("{{ s }}", [None, 304], id="list-with-none"),
+            # Would match nothing, or anything.
+            pytest.param("{{ s }}", [], id="empty-list"),
+            pytest.param("{{ s }}", "6xx", id="not-a-class"),
+        ],
+    )
+    def test_invalid_rendered_value_fails_the_stage(self, status, value):
+        with pytest.raises(StageExecutionError) as excinfo:
+            self._run(status, ChainMap({"s": value}), 304)
+        assert isinstance(excinfo.value.__cause__, ValidationError)
+        assert re.match(r"\d+ validation errors? for Verify\nstatus", str(excinfo.value))
+        assert excinfo.value.response is not None
+
+
 @pytest.mark.parametrize(
     ("error", "message"),
     [

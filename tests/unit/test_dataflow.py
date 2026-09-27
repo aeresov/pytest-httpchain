@@ -54,6 +54,8 @@ def _edges(flow) -> list[dict]:
         # once the stage re-saves a name, later steps read its own fresh value.
         pytest.param({"response": [{"save": {"jmespath": {"x": "b"}}}, {"verify": {"expressions": ["{{ x != '' }}"]}}]}, [], id="own-resave-shadows-later-steps"),
         pytest.param({"response": [{"verify": {"expressions": ["{{ x != '' }}"]}}, {"save": {"jmespath": {"x": "b"}}}]}, ["x"], id="reference-before-own-resave"),
+        # An entry of a status list takes a template of its own.
+        pytest.param({"response": [{"verify": {"status": ["{{ x }}", 304]}}]}, ["x"], id="verify-status-list-entry"),
     ],
 )
 def test_consumer_of_earlier_saves(consumer, expected):

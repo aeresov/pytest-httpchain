@@ -185,13 +185,41 @@ The sibling `request` adds `method` and a new header. The nested `headers` objec
 A `$ref` (or `$include`/`$merge`) and its sibling properties are combined by **additive deep merge**: siblings extend the referenced value, they do not override it.
 
 1. **Objects**: Recursively merged — sibling keys are added, and keys present in both are merged by these same rules.
-2. **Arrays**: Concatenated — referenced elements first, then sibling elements. Arrays are *not* replaced and *not* merged element-by-element.
+2. **Arrays**: Concatenated — referenced elements first, then sibling elements. Arrays are *not* replaced and *not* merged element-by-element. A `verify.status` list is an exception, [below](#status-lists-merge-whole).
 3. **Scalars**: A sibling must match the referenced value. Any **differing** scalar raises a merge conflict at load time (`Merge conflict at <path>`).
 4. **Type mismatch**: Combining different JSON types at the same path (object vs array, scalar vs object, …) raises a merge conflict.
 
 `null` is not an exception: it is a value like any other, not an override or a hole. A `null` paired with a different value at the same path is a merge conflict; two `null`s merge fine.
 
 > **References add, they don't override.** To change a value a fragment already sets, don't merge over it — keep that key out of the shared fragment (so the local scenario is its only writer), or point the `$ref` at a sub-node that omits it. Trying to replace a referenced scalar with a different one is a load-time error by design, so a shared fragment can never be silently contradicted.
+
+### Status lists merge whole
+
+Elsewhere, concatenating arrays only adds — more steps, more `expressions` that must hold, more
+`contains` strings — so a sibling can extend a fragment but never weaken it. A [`verify.status`](../usage/responses.md#status-code)
+list is different: its entries are **alternatives**, any one of which passes, so a longer list
+accepts more. Concatenating would let a sibling quietly loosen the fragment's check — a negative
+test's `[404]` merged onto a shared `["2xx"]` would become `["2xx", 404]` and pass on a 200. A
+`verify.status` list therefore merges like a scalar: an equal list is kept, and a different one is a
+merge conflict:
+
+**common.json:**
+```json
+{
+    "ok": {"verify": {"status": ["2xx"]}}
+}
+```
+
+```json
+{"$merge": "common.json#/ok", "verify": {"status": [404]}}
+```
+
+```
+Merge conflict at verify.status
+```
+
+To accept more codes, list them all in one place. A reference *inside* `status`
+(`"status": {"$include": "codes.json#/accepted"}`) still resolves as usual.
 
 ## Composing Scenarios
 

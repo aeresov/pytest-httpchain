@@ -94,6 +94,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   User functions (`"module:function"` or `{"name": ..., "kwargs": ...}`) work as before, for any
   other scheme; an object mixing `name` with a built-in's key, or two built-ins, fails validation
   naming the extra key, and `validate --deep` imports only user functions.
+- `verify.status` takes a status class and a list besides one code. `"2xx"` passes any 200-299
+  response (the classes are `"1xx"` to `"5xx"`, in either case), and a non-empty list such as
+  `[200, 201]` or `["2xx", 304]` passes when the response matches any of its entries, each a code
+  (100-599, as before) or a class. A mismatch names what was expected the way it was written:
+  `expected 2xx, got 500`, `expected one of [200, 201], got 500`, and `expected 200, got 500` as
+  before for one code. A `status` template may render to any of these forms, and a list entry may
+  be a template of its own (`["{{ created_status }}", 409]`), which `validate` checks and
+  `show`/`graph` count as consuming the names it reads, like any other. A whole `status` that
+  renders to `null` still fails its stage naming the template; a list entry that does, an empty
+  list or a value that is neither a code nor a class fails it too, with the validation report on
+  the rendered value. A template that rendered to text which is itself a template, which failed
+  as `expected {{ y }}, got 200`, now fails as `verify.status must resolve to a status code or a
+  class such as 2xx, got '{{ y }}'`, even beside an entry that matched. A `$merge`/`$include`
+  sibling's `status` list is not concatenated onto a fragment's, as other lists are: a longer list
+  of alternatives accepts more, so a negative test's `[404]` beside a shared `["2xx"]` would have
+  passed on a 200. An equal list is kept and a different one is a merge conflict, as a differing
+  single code always was.
 
 ### Fixed
 

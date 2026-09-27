@@ -27,6 +27,7 @@ from pytest_httpchain.models import (
     UserFunctionsSave,
     Verify,
     check_json_schema,
+    is_status_class,
     json_schema_validator_class,
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, Redaction
@@ -85,8 +86,8 @@ def process_verify(verify_model: Verify, response: httpx.Response, scenario_dir:
     """
     # `is not None`, not truthiness: None means undeclared, and only that — the
     # carrier refuses an assertion a template rendered to None before this runs.
-    if verify_model.status is not None and response.status_code != verify_model.status:
-        raise VerificationError(f"Status code doesn't match: expected {verify_model.status}, got {response.status_code}")
+    if verify_model.status is not None:
+        _verify_status(verify_model.status, response.status_code)
 
     for header_name, expected_value in verify_model.headers.items():
         match expected_value:
@@ -143,6 +144,25 @@ def process_verify(verify_model: Verify, response: httpx.Response, scenario_dir:
         matches=verify_model.body.matches,
         not_matches=verify_model.body.not_matches,
     )
+
+
+def _verify_status(expected: Any, actual: int) -> None:
+    """``verify.status``: a code or a class (``"2xx"``), or a list of them, any
+    one of which passes.
+
+    Every entry is checked before any is matched: a list must not pass on one
+    entry while another could never have matched. Text other than a class is a
+    template that rendered to template text, which the model's template branch
+    takes as it is (a client setting's does too, `request_builder`).
+    """
+    accepted = expected if isinstance(expected, list) else [expected]
+    for entry in accepted:
+        if isinstance(entry, str) and not is_status_class(entry):
+            raise VerificationError(f"verify.status must resolve to a status code or a class such as 2xx, got {entry!r}")
+    if any(actual // 100 == int(entry[0]) if isinstance(entry, str) else actual == entry for entry in accepted):
+        return
+    shown = f"one of [{', '.join(map(str, accepted))}]" if isinstance(expected, list) else str(expected)
+    raise VerificationError(f"Status code doesn't match: expected {shown}, got {actual}")
 
 
 def _verify_body_schema(schema: Any, response: httpx.Response, scenario_dir: Path | None) -> None:

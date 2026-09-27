@@ -38,6 +38,46 @@ Or using dictionary format for organization:
 }
 ```
 
+Any integer from 100 to 599 is accepted, including nonstandard codes such as
+nginx's `499`.
+
+A **status class** matches every code with the same first digit: `"2xx"` passes
+any 200-299 response. The classes are `"1xx"` to `"5xx"`, written in either
+case (`"2XX"`).
+
+```json
+{
+    "verify": {
+        "status": "2xx"
+    }
+}
+```
+
+A **list** of codes and classes passes when the response matches any one of
+them. It must not be empty.
+
+```json
+{
+    "verify": {
+        "status": ["2xx", 304]
+    }
+}
+```
+
+Because a longer list accepts more, a `$merge`/`$include` sibling never
+concatenates its `status` list onto a fragment's, as it does other lists: an
+equal list is kept and a different one is a merge conflict, so a shared
+fragment's status check cannot be silently widened (see
+[Status lists merge whole](../advanced/ref-merging.md#status-lists-merge-whole)).
+
+On a mismatch, the failure names what was expected in the form it was written:
+
+```
+Status code doesn't match: expected 200, got 500
+Status code doesn't match: expected 2xx, got 500
+Status code doesn't match: expected one of [200, 201], got 500
+```
+
 Use template expressions:
 
 ```json
@@ -48,8 +88,23 @@ Use template expressions:
 }
 ```
 
+A template may render to any of these forms: a code (`201`, or the text
+`"201"`), a class (`"2xx"`) or a list (`[200, 201]`). A list entry can be a
+template of its own, rendering to a code or a class:
+
+```json
+{
+    "verify": {
+        "status": ["{{ created_status }}", 409]
+    }
+}
+```
+
 A `status` template that renders to `null` fails the stage rather than skipping
-the check (see [Templates that render to `null`](substitutions.md#templates-that-render-to-null)).
+the check (see [Templates that render to `null`](substitutions.md#templates-that-render-to-null)),
+and so does a list entry that renders to `null`, an empty list, or anything
+else that is not a code or a class, such as text that is itself a template
+(`"{{ ... }}"`).
 
 ### Headers
 

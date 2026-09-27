@@ -204,6 +204,17 @@ def test_resolve_missing_ref_exits_one(include_scenario, tmp_path):
     assert result.stderr.startswith("error: Reference path 'common.json' not found.")
 
 
+def test_resolve_merges_status_lists_as_collection_does(tmp_path):
+    """A sibling status list is not concatenated onto a fragment's (which would
+    widen the check), in the printed document as at collection."""
+    _write(tmp_path / "common.json", {"ok": {"verify": {"status": ["2xx"]}}})
+    step = {"$merge": "common.json#/ok", "verify": {"status": [404]}}
+    scenario = _write(tmp_path / "test_x.http.json", {"stages": [{**_stage("s", "https://x.test/a"), "response": [step]}]})
+    result = runner.invoke(app, ["resolve", str(scenario)])
+    assert result.exit_code == 1
+    assert result.stderr == "error: Merge conflict at verify.status\n"
+
+
 @pytest.mark.parametrize("command", ["resolve", "show", "graph"])
 @pytest.mark.parametrize(
     ("content", "message"),

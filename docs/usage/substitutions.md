@@ -274,7 +274,8 @@ message, naming the field and the template; it just ends at "rendered to None".
 A bearer token that rendered to `null` does not send the request without
 credentials, nor with the scenario's.
 An exact-match header string is a value in the `headers` map rather than a
-field, and fails validation when its template renders to `null`.
+field, and fails validation when its template renders to `null`; so does an
+entry of a `verify.status` list (`["{{ created_status }}", 409]`).
 
 If something else in the same request, verify step or setting is invalid too,
 pydantic's report on it follows the message, so the `null` is never blamed for

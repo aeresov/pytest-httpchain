@@ -74,22 +74,59 @@ def resolve_root_path(path: Path) -> Path:
     return path.parent
 
 
+def _verify_subpath(path: tuple[str | int, ...]) -> tuple[str | int, ...] | None:
+    """The part of a raw-JSON position below a step's ``verify``, or None when
+    the position is not inside one.
+
+    The grammar is ``stages[K].response[K].verify``, where stages and response
+    steps accept both the list form (``K`` is an index) and the name-keyed
+    mapping form, and a response mapping value may itself be a list.
+    """
+    match path:
+        case ("stages", _, "response", _, "verify", *rest):
+            return tuple(rest)
+        case ("stages", _, "response", _, int(), "verify", *rest):
+            return tuple(rest)
+        case _:
+            return None
+
+
 def is_inline_schema_position(path: tuple[str | int, ...]) -> bool:
     """True for raw-JSON positions holding an inline verify schema, whose
     ``$ref``/``$defs`` address the schema validator rather than the scenario's
-    reference resolver (passed to the loader as its ``opaque`` predicate).
+    reference resolver (passed to the loader as its ``opaque`` predicate)."""
+    return _verify_subpath(path) == ("body", "schema")
 
-    The grammar is ``stages[K].response[K].verify.body.schema``, where stages and
-    response steps accept both the list form (``K`` is an index) and the
-    name-keyed mapping form, and a response mapping value may itself be a list.
+
+def is_alternatives_position(path: tuple[str | int, ...]) -> bool:
+    """True for raw-JSON positions whose list holds alternatives, any one of
+    which passes: ``verify.status`` (passed to the loader as its ``atomic``
+    predicate).
+
+    Everywhere else a longer list checks more, so a sibling list merged onto a
+    fragment's is concatenated. Here concatenation would widen the check: a
+    sibling ``[404]`` on a fragment's ``["2xx"]`` would pass a 200. The value
+    merges as a whole instead, as a scalar does: equal keeps, different is a
+    merge conflict.
     """
-    match path:
-        case ("stages", _, "response", _, "verify", "body", "schema"):
-            return True
-        case ("stages", _, "response", _, int(), "verify", "body", "schema"):
-            return True
-        case _:
-            return False
+    return _verify_subpath(path) == ("status",)
+
+
+def load_scenario_json(path: Path, *, root_path: Path | None = None, ref_parent_traversal_depth: int = 3) -> dict[str, Any]:
+    """Load a scenario file and ``$ref``-resolve it, unvalidated: the document
+    collection, ``validate`` and ``resolve`` all see.
+
+    Raises ``ReferenceResolverError`` / ``json.JSONDecodeError`` / ``OSError``.
+    """
+    if root_path is None:
+        root_path = resolve_root_path(path)
+    return load_json(
+        path,
+        max_parent_traversal_depth=ref_parent_traversal_depth,
+        root_path=root_path,
+        opaque=is_inline_schema_position,
+        atomic=is_alternatives_position,
+    )
 
 
 def load_scenario(path: Path, *, root_path: Path | None = None, ref_parent_traversal_depth: int = 3) -> tuple[Scenario, dict[str, Any]]:
@@ -98,9 +135,7 @@ def load_scenario(path: Path, *, root_path: Path | None = None, ref_parent_trave
     Raises ``ReferenceResolverError`` / ``json.JSONDecodeError`` /
     ``pydantic.ValidationError``; callers map these to user-facing errors.
     """
-    if root_path is None:
-        root_path = resolve_root_path(path)
-    test_data = load_json(path, max_parent_traversal_depth=ref_parent_traversal_depth, root_path=root_path, opaque=is_inline_schema_position)
+    test_data = load_scenario_json(path, root_path=root_path, ref_parent_traversal_depth=ref_parent_traversal_depth)
     return Scenario.model_validate(test_data), test_data
 
 

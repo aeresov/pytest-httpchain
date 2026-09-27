@@ -85,6 +85,54 @@ class TestVerifyStatus:
             Verify(status=status)
         assert_error_types(exc_info, error_type, at="status")
 
+    @pytest.mark.parametrize(
+        ("status", "expected"),
+        [
+            pytest.param("2xx", "2xx", id="class"),
+            *(pytest.param(f"{digit}xx", f"{digit}xx", id=f"class-{digit}xx") for digit in (1, 3, 4, 5)),
+            # Either case, kept lowercase: one spelling for the check and its message.
+            pytest.param("2XX", "2xx", id="class-uppercase"),
+            pytest.param("4xX", "4xx", id="class-mixed-case"),
+            pytest.param([200, 201], [200, 201], id="list-of-codes"),
+            pytest.param(["2xx", 304], ["2xx", 304], id="list-mixed"),
+            pytest.param(["3XX"], ["3xx"], id="list-of-one-class"),
+            # An entry takes a template of its own, rendered to a code or a class.
+            pytest.param(["{{ expected }}", 304], ["{{ expected }}", 304], id="list-with-template"),
+            # A rendered tuple is the list it stands for.
+            pytest.param((200, 201), [200, 201], id="tuple"),
+        ],
+    )
+    def test_class_and_list_forms(self, status, expected):
+        assert Verify(status=status).status == expected
+
+    def test_list_entries_are_codes_as_a_single_status_is(self):
+        """Each entry is validated as a single status is: a standard code, a
+        stringified one, a nonstandard one."""
+        assert Verify(status=[HTTPStatus.OK, "201", 499]).status == [200, 201, 499]
+
+    @pytest.mark.parametrize(
+        ("status", "error_type"),
+        [
+            # Only the five classes HTTP defines.
+            pytest.param("6xx", "string_pattern_mismatch", id="class-6xx"),
+            pytest.param("0xx", "string_pattern_mismatch", id="class-0xx"),
+            pytest.param("2x", "string_pattern_mismatch", id="class-short"),
+            pytest.param("2xxx", "string_pattern_mismatch", id="class-long"),
+            pytest.param("20x", "string_pattern_mismatch", id="class-partial"),
+            pytest.param(" 2xx", "string_pattern_mismatch", id="class-padded"),
+            # An empty list would match nothing, or everything.
+            pytest.param([], "too_short", id="empty-list"),
+            pytest.param([200, 600], "less_than_equal", id="list-entry-out-of-range"),
+            pytest.param([200, "6xx"], "string_pattern_mismatch", id="list-entry-bad-class"),
+            pytest.param([[200, 201]], "int_type", id="nested-list"),
+            pytest.param([None], "int_type", id="list-entry-null"),
+        ],
+    )
+    def test_invalid_class_or_list_rejected(self, status, error_type):
+        with pytest.raises(ValidationError) as exc_info:
+            Verify(status=status)
+        assert_error_types(exc_info, error_type, at="status")
+
 
 class TestVerifyHeaders:
     """A header value is an exact string or a matcher object."""

@@ -11,10 +11,10 @@ import typer
 from pydantic import ValidationError
 
 from pytest_httpchain.dataflow import DataFlow, analyze_dataflow
-from pytest_httpchain.jsonref import ReferenceResolverError, load_json
+from pytest_httpchain.jsonref import ReferenceResolverError
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.schema import build_schema
-from pytest_httpchain.validation import ValidateResult, is_inline_schema_position, load_scenario, resolve_root_path, validate_scenario
+from pytest_httpchain.validation import ValidateResult, load_scenario, load_scenario_json, validate_scenario
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -122,14 +122,9 @@ def resolve(
 ) -> None:
     """Resolve $ref/$include/$merge and print the merged scenario JSON to stdout."""
     try:
-        # Same opacity as load_scenario, so the printed document is what
+        # The loader load_scenario uses, so the printed document is what
         # collection sees.
-        data = load_json(
-            scenario,
-            max_parent_traversal_depth=ref_parent_traversal_depth,
-            root_path=root_path or resolve_root_path(scenario),
-            opaque=is_inline_schema_position,
-        )
+        data = load_scenario_json(scenario, root_path=root_path, ref_parent_traversal_depth=ref_parent_traversal_depth)
     except (ReferenceResolverError, json.JSONDecodeError, OSError) as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(1) from e
