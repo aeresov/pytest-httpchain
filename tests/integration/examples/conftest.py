@@ -423,6 +423,33 @@ def request_id():
     return _make_id
 
 
+@pytest.fixture(scope="class")
+def connection():
+    """A class-scoped resource, closed once the scenario's last stage is done."""
+    conn = {"closed": False}
+    yield conn
+    conn["closed"] = True
+
+
+@pytest.fixture
+def transaction(connection):
+    """Factory fixture whose value is a context manager built on ``connection``:
+    ``{{ transaction('t1') }}`` begins one, and its exit commits it, printing
+    so, or raises — on a closed connection, as a real commit would, or when
+    asked to with ``fail=True``."""
+
+    @contextmanager
+    def _transaction(name, fail=False):
+        yield name
+        if connection["closed"]:
+            raise RuntimeError(f"cannot commit {name}: connection closed")
+        if fail:
+            raise RuntimeError(f"commit of {name} rejected")
+        print(f"transaction {name} committed")
+
+    return _transaction
+
+
 @pytest.fixture(scope="class", params=["alpha", "beta"])
 def tenant(request):
     """A class-scoped fixture with params: a scenario whose every stage requests

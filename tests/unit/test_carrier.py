@@ -10,6 +10,7 @@ import ssl
 import threading
 import time
 from collections import ChainMap
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -253,7 +254,7 @@ class TestResolvedParallelSettings:
     def test_run_iterations_rejects_unusable_setting(self, field, value):
         settings = {"repeat": 2, "max_concurrency": 2, "calls_per_sec": None, "max_rate_limit_delay": 60, field: value}
         with pytest.raises(StageExecutionError, match=field):
-            _make_carrier_subclass()._run_iterations(make_stage(), ChainMap(), [{}, {}], ParallelRepeatConfig.model_construct(**settings))
+            _make_carrier_subclass()._run_iterations(make_stage(), ChainMap(), [{}, {}], ParallelRepeatConfig.model_construct(**settings), [])
 
 
 def _header_matcher(field: str) -> Verify:
@@ -593,88 +594,605 @@ class TestParallelIterationCap:
         assert "exceeds maximum" not in str(excinfo.value)
 
 
+# What iteration 1's context manager raises on exit in the parallel stages of
+# `TestContextManagerFixtureCleanup` (a straggler's, or a cancelled one's), as the stage reports it.
+_ITERATION_1_EXIT_ERROR = "Iteration 1: Exiting the context manager from fixture 'a' failed: RuntimeError: commit of 1 rejected"
+
+# How the parallel stages of `TestContextManagerFixtureCleanup` fail when iteration 0 gets a 500.
+_ITERATION_0_FAILED = "Parallel execution failed at iteration 0: Status code doesn't match: expected 200, got 500"
+
+
+class _UnprintableError(Exception):
+    """An exception whose ``__str__`` raises in turn."""
+
+    def __str__(self):
+        raise RuntimeError("cannot describe this error")
+
+
+def _wait_until(condition: Callable[[], bool], timeout: float = 5) -> None:
+    """Poll ``condition`` until it holds, giving up after ``timeout`` seconds
+    so that a broken ordering fails its test's assertions instead of hanging."""
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
 class TestContextManagerFixtureCleanup:
-    """Context-manager / @contextmanager-generator fixtures are entered on use and
-    their finalizers run during teardown_class."""
+    """A factory fixture's context manager is entered on use and exited when
+    the iteration that entered it ends, in the thread that ran it (one entered
+    outside an iteration, when the stage ends), however it ends, and before the
+    stage commits its saves: pytest tears the stage's fixtures down right after
+    the stage, and such a context manager is typically built on them. They were
+    exited only at class teardown, after pytest had already torn those fixtures
+    down, and an error on exit was only logged (the stage and the run stayed
+    green)."""
 
-    def test_context_manager_fixture_exit_runs(self):
-        carrier = _make_carrier_subclass()
-        events: list[str] = []
-
-        class Resource:
-            def __enter__(self):
-                events.append("enter")
-                return "resource-value"
-
-            def __exit__(self, *exc):
-                events.append("exit")
-                return False
-
-        # A factory fixture returning a context manager: wrapping enters it,
-        # records it for cleanup, and yields the entered value.
-        wrapped = carrier._build_stage_fixtures({"res": lambda: Resource()})
-        value = wrapped["res"]()
-
-        assert value == "resource-value"
-        assert events == ["enter"]
-        assert len(carrier.active_context_managers) == 1
-
-        carrier.teardown_class()
-
-        assert events == ["enter", "exit"]
-        assert carrier.active_context_managers == []
-
-    def test_generator_contextmanager_fixture_cleanup_runs(self):
-        carrier = _make_carrier_subclass()
-        events: list[str] = []
+    @staticmethod
+    def _resource(events: list[str], tag: str, exit_error: BaseException | None = None):
+        """A factory fixture returning a context manager that records its
+        enter and exit, raising ``exit_error`` on exit."""
 
         @contextmanager
         def resource():
-            events.append("setup")
+            events.append(f"enter {tag}")
+            yield tag
+            events.append(f"exit {tag}")
+            if exit_error is not None:
+                raise exit_error
+
+        return resource
+
+    @staticmethod
+    def _run(fixtures: dict, status: int = 200, carrier: type[Carrier] | None = None, **stage_fields) -> type[Carrier]:
+        """Run one stage requesting ``/{{ a() }}/{{ b() }}`` from a mock server
+        answering ``status``, on ``carrier`` (a fresh one by default); the stage verifies a 200."""
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(status)))
+        cls = carrier if carrier is not None else _make_carrier_subclass()
+        cls.client = client
+        fields = {"name": "s", "request": {"url": "http://mock/{{ a() }}/{{ b() }}"}, "response": [{"verify": {"status": 200}}], **stage_fields}
+        try:
+            cls.execute_stage(Stage.model_validate(fields), fixtures)
+        finally:
+            client.close()
+        return cls
+
+    def test_exited_last_first_when_the_stage_passes(self):
+        events: list[str] = []
+        cls = self._run({"a": self._resource(events, "a"), "b": self._resource(events, "b")})
+        assert events == ["enter a", "enter b", "exit b", "exit a"]
+        assert cls.active_context_managers == []
+
+    def test_exited_when_the_stage_fails(self):
+        events: list[str] = []
+        with pytest.raises(pytest.fail.Exception, match=r"^Status code doesn't match: expected 200, got 500$"):
+            self._run({"a": self._resource(events, "a"), "b": self._resource(events, "b")}, status=500)
+        assert events == ["enter a", "enter b", "exit b", "exit a"]
+
+    @pytest.mark.parametrize(
+        ("status", "exit_error", "message"),
+        [
+            pytest.param(200, RuntimeError("rollback failed"), "Exiting the context manager from fixture 'b' failed: RuntimeError: rollback failed", id="stage-passed"),
+            # The stage's own failure stays the primary error.
+            pytest.param(
+                500,
+                RuntimeError("rollback failed"),
+                "Status code doesn't match: expected 200, got 500\nExiting the context manager from fixture 'b' failed: RuntimeError: rollback failed",
+                id="stage-failed",
+            ),
+            # An exit's pytest.fail() is a BaseException, which the class
+            # teardown's cleanup did not catch: it escaped as a teardown error
+            # of its own, and ``a``, entered first, was never exited.
+            pytest.param(
+                500,
+                pytest.fail.Exception("b exit says no"),
+                "Status code doesn't match: expected 200, got 500\nExiting the context manager from fixture 'b' failed: Failed: b exit says no",
+                id="pytest-fail-on-exit",
+            ),
+            # Formatting the error raised too, and escaped the loop of exits:
+            # ``a`` was never exited, and the stage ended in that raw error.
+            pytest.param(
+                200,
+                _UnprintableError(),
+                "Exiting the context manager from fixture 'b' failed: _UnprintableError: <exception str() failed>",
+                id="unprintable-error-on-exit",
+            ),
+        ],
+    )
+    def test_error_on_exit_fails_the_stage(self, status, exit_error, message):
+        """``b`` raises on exit, and ``a``, entered first, is exited after it
+        all the same. The request went on the wire whatever the exit did, so
+        the stage's failure still shows its exchange, in the report and the HAR."""
+        events: list[str] = []
+        cls = _make_carrier_subclass(record_all_exchanges=True)
+        with pytest.raises(pytest.fail.Exception) as excinfo:
+            self._run({"a": self._resource(events, "a"), "b": self._resource(events, "b", exit_error)}, status=status, carrier=cls)
+        assert str(excinfo.value) == message
+        assert events == ["enter a", "enter b", "exit b", "exit a"]
+        assert [(str(request.url), response.status_code) for request, response, _ in cls.last_exchanges] == [("http://mock/a/b", status)]
+        assert cls.last_shown_exchange_is_failed
+
+    @pytest.mark.parametrize(
+        "stage_fields",
+        [
+            pytest.param({"request": {"url": "http://mock/{{ a() }}"}}, id="entered-by-the-iteration"),
+            pytest.param({"substitutions": [{"vars": {"t": "{{ a() }}"}}], "request": {"url": "http://mock/{{ t }}"}}, id="entered-by-the-stage"),
+        ],
+    )
+    def test_a_stage_failed_on_exit_commits_no_saves(self, stage_fields):
+        """Like any failed stage: a cleanup stage guarded by ``exists()`` must
+        not find an id whose transaction was never committed. The exit came at
+        class teardown, once every stage, the cleanup included, had run with
+        the save committed, and its error failed nothing."""
+        events: list[str] = []
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+        cls = _make_carrier_subclass(client=client)
+        stage = Stage.model_validate({"name": "s", "response": [{"save": {"substitutions": [{"vars": {"resource_id": 42}}]}}], **stage_fields})
+        try:
+            with pytest.raises(pytest.fail.Exception, match=r"^Exiting the context manager from fixture 'a' failed: RuntimeError: commit rejected$"):
+                cls.execute_stage(stage, {"a": self._resource(events, "a", RuntimeError("commit rejected"))})
+        finally:
+            client.close()
+        assert events == ["enter a", "exit a"]
+        assert "resource_id" not in cls.global_context
+
+    def test_an_iteration_exits_before_the_stage(self):
+        """What the request entered is exited with its iteration, before what
+        the stage's substitutions entered."""
+        events: list[str] = []
+        self._run(
+            {"a": self._resource(events, "a"), "b": self._resource(events, "b")}, substitutions=[{"vars": {"t": "{{ a() }}"}}], request={"url": "http://mock/{{ t }}/{{ b() }}"}
+        )
+        assert events == ["enter a", "enter b", "exit b", "exit a"]
+
+    def test_each_parallel_iteration_exits_its_own_when_it_ends(self):
+        """Not once the whole pool is done, let alone at class teardown, where
+        they were exited: holding a transaction or a pooled connection open
+        that long blocks the iterations still running."""
+        events: list[str] = []
+        self._run({"a": self._resource(events, "a"), "b": lambda: "b"}, parallel={"repeat": 3, "max_concurrency": 1})
+        assert events == ["enter a", "exit a"] * 3
+
+    def test_a_parallel_iteration_exits_in_its_own_thread(self):
+        """A thread-bound context manager (``sqlite3``'s connection) cannot be
+        exited from another thread. The pool's iterations were exited at class
+        teardown, on pytest's thread, where such an exit raises: the error was
+        only logged."""
+        threads: list[tuple[int, int]] = []
+
+        class ThreadBound:
+            def __enter__(self):
+                self.owner = threading.get_ident()
+                return "t"
+
+            def __exit__(self, *exc_info):
+                threads.append((self.owner, threading.get_ident()))
+                if threading.get_ident() != self.owner:
+                    raise RuntimeError("exited from another thread")
+
+        self._run({"a": lambda: ThreadBound(), "b": lambda: "b"}, parallel={"repeat": 4, "max_concurrency": 4})
+        assert len(threads) == 4
+        assert all(owner == exited != threading.get_ident() for owner, exited in threads)
+
+    def _run_with_a_straggler(self, cls: type[Carrier], events: list[str], status: int = 200, end=None, straggler_end=None, straggler_commit_fails: bool = True) -> None:
+        """Run a parallel stage of two iterations, both in flight at once.
+        Iteration 0 gets ``status``, then ends with ``end`` in its response
+        steps while iteration 1, the straggler, still waits for its response.
+        The straggler then ends with ``straggler_end``, and its ``a`` raises on
+        exit if ``straggler_commit_fails``."""
+        both_sent = threading.Barrier(2)
+
+        def answer(request):
+            both_sent.wait(timeout=5)
+            if request.url.path == "/0":
+                return httpx.Response(status)
+            # Held until iteration 0 has ended, and then long enough for the
+            # stage's thread to take its outcome first.
+            _wait_until(lambda: "exit 0" in events)
+            time.sleep(0.2)
+            return httpx.Response(200)
+
+        def a(i):
+            return self._resource(events, str(i), RuntimeError(f"commit of {i} rejected") if i == 1 and straggler_commit_fails else None)()
+
+        def b(i):
+            ending = end if i == 0 else straggler_end
+            if ending is not None:
+                ending("given up")
+            return True
+
+        cls.client = httpx.Client(transport=httpx.MockTransport(answer))
+        stage = Stage.model_validate(
+            {
+                "name": "s",
+                "parallel": {"foreach": [{"individual": {"i": [0, 1]}}], "max_concurrency": 2},
+                "request": {"url": "http://mock/{{ i }}?t={{ a(i) }}"},
+                "response": [{"verify": {"status": 200}}, {"verify": {"expressions": ["{{ b(i) }}"]}}],
+            }
+        )
+        try:
+            cls.execute_stage(stage, {"a": a, "b": b})
+        finally:
+            cls.client.close()
+
+    @pytest.mark.parametrize(
+        ("status", "end", "straggler_end", "message", "exchanges"),
+        [
+            # The straggler's request went on the wire, so its exchange is in
+            # the HAR, before the stage's failing one, which is recorded last
+            # for the report to show.
+            pytest.param(
+                500,
+                None,
+                None,
+                f"Parallel execution failed at iteration 0: Status code doesn't match: expected 200, got 500\n{_ITERATION_1_EXIT_ERROR}",
+                ["/1?t=1", "/0?t=0"],
+                id="stage-failed",
+            ),
+            # The straggler's own skip, xfail or pytest.fail() is secondary to
+            # the stage's failure, like any failure of its own. Re-raised, it
+            # turned the failed stage into a skipped or xfailed one, or
+            # replaced its failure.
+            *(
+                pytest.param(
+                    500,
+                    None,
+                    straggler_end,
+                    f"Parallel execution failed at iteration 0: Status code doesn't match: expected 200, got 500\n{_ITERATION_1_EXIT_ERROR}",
+                    ["/0?t=0"],
+                    id=f"stage-failed-straggler-{name}",
+                )
+                for straggler_end, name in ((pytest.skip, "skipped"), (pytest.xfail, "xfailed"), (pytest.fail, "failed"))
+            ),
+            # A skip is no failure, so the straggler's error on exit fails the
+            # stage, as it does a skipped stage's own.
+            pytest.param(200, pytest.skip, None, _ITERATION_1_EXIT_ERROR, [], id="stage-skipped"),
+        ],
+    )
+    def test_error_on_exit_of_a_straggler_is_reported(self, status, end, straggler_end, message, exchanges):
+        """An iteration still running when another one ends the stage exits its
+        own when it ends, and what its exit raises is listed after the stage's
+        own failure, labelled with the iteration: a commit that failed is a
+        side effect to hear of. Both iterations are exited, the straggler last."""
+        events: list[str] = []
+        cls = _make_carrier_subclass(record_all_exchanges=True)
+        # Both caught, so a wrong outcome fails this test rather than skipping it.
+        with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
+            self._run_with_a_straggler(cls, events, status=status, end=end, straggler_end=straggler_end)
+        assert excinfo.type is pytest.fail.Exception
+        assert str(excinfo.value) == message
+        assert sorted(events[:2]) == ["enter 0", "enter 1"]
+        assert events[2:] == ["exit 0", "exit 1"]
+        assert [str(request.url).removeprefix("http://mock") for request, _, _ in cls.last_exchanges] == exchanges
+
+    @pytest.mark.parametrize("straggler_end", [pytest.skip, pytest.xfail, pytest.fail], ids=["skipped", "xfailed", "failed"])
+    def test_a_stragglers_own_outcome_is_secondary(self, straggler_end):
+        """A straggler exiting cleanly, then skipping, xfailing or failing from
+        a user function, leaves the stage's failure as it is, like any failure
+        of its own. Reading it re-raised that outcome, which turned the failed
+        stage into a skipped or xfailed one, or replaced its failure message."""
+        events: list[str] = []
+        # Both caught, so a wrong outcome fails this test rather than skipping it.
+        with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
+            self._run_with_a_straggler(_make_carrier_subclass(), events, status=500, straggler_end=straggler_end, straggler_commit_fails=False)
+        assert excinfo.type is pytest.fail.Exception
+        assert str(excinfo.value) == _ITERATION_0_FAILED
+        assert events[2:] == ["exit 0", "exit 1"]
+
+    @pytest.mark.parametrize(
+        ("status", "exit_error", "end", "raised", "cancelled_on_exit"),
+        [
+            pytest.param(200, None, None, None, False, id="passed"),
+            pytest.param(500, None, None, VerificationError, True, id="failed"),
+            pytest.param(200, None, pytest.skip, pytest.skip.Exception, True, id="skipped"),
+            pytest.param(200, None, KeyboardInterrupt, KeyboardInterrupt, True, id="interrupted"),
+            # Failed by its exit, which is only known once the exits are done.
+            pytest.param(200, RuntimeError("commit rejected"), None, StageExecutionError, False, id="error-on-exit"),
+        ],
+    )
+    def test_an_iteration_that_does_not_succeed_cancels_the_pool_itself(self, status, exit_error, end, raised, cancelled_on_exit):
+        """Before it ends, and so before the stage's thread learns of it, and,
+        when it failed on its own, before its exits: the rest of the pool must
+        not go on sending while they run."""
+        cancel = threading.Event()
+        cancel_on_exit: list[bool] = []
+
+        @contextmanager
+        def transaction():
+            yield "t"
+            cancel_on_exit.append(cancel.is_set())
+            if exit_error is not None:
+                raise exit_error
+
+        def b():
+            if end is KeyboardInterrupt:
+                raise KeyboardInterrupt
+            if end is not None:
+                end("given up")
+            return True
+
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(status)))
+        cls = _make_carrier_subclass(client=client)
+        stage = Stage.model_validate(
+            {"name": "s", "request": {"url": "http://mock/{{ a() }}"}, "response": [{"verify": {"status": 200}}, {"verify": {"expressions": ["{{ b() }}"]}}]}
+        )
+        local_context = ChainMap(cls._build_stage_fixtures({"a": transaction, "b": b}))
+        try:
+            if raised is None:
+                cls._run_iteration(stage, local_context, {}, None, 60, cancel)
+            else:
+                with pytest.raises(raised):
+                    cls._run_iteration(stage, local_context, {}, None, 60, cancel)
+        finally:
+            client.close()
+        assert cancel_on_exit == [cancelled_on_exit]
+        assert cancel.is_set() is (raised is not None)
+
+    def test_a_failing_iteration_cancels_the_others_before_its_exits(self):
+        """Its worker cancels the pool as soon as it fails, and the iterations
+        cancelled are not the failure reported, though read first. The stage's
+        thread cancelled it only once the failure was read, which is when the
+        exits are done: while a slow one ran (a rollback), the queued
+        iterations went on sending."""
+        events: list[str] = []
+        sent: list[str] = []
+        ended: list[int] = []
+        both_sent = threading.Barrier(2)
+
+        def answer(request):
+            sent.append(request.url.path)
+            both_sent.wait(timeout=5)
+            if request.url.path == "/0":
+                return httpx.Response(500)
+            # Held until iteration 0 has failed and begun its exits: only then
+            # does this worker take the queued iterations.
+            _wait_until(lambda: "exit 0" in events)
+            return httpx.Response(200)
+
+        @contextmanager
+        def rollback(i):
+            yield i
+            events.append(f"exit {i}")
+            if i == 0:
+                # Slow: until every other iteration has ended, and then long
+                # enough for the stage's thread to read their ends first.
+                _wait_until(lambda: len(ended) == 9)
+                time.sleep(0.1)
+
+        def run_iteration(klass, stage, local_context, iter_vars, *args):
             try:
-                yield "gen-value"
+                return Carrier._run_iteration.__func__(klass, stage, local_context, iter_vars, *args)
             finally:
-                events.append("teardown")
+                if iter_vars["i"] != 0:
+                    ended.append(iter_vars["i"])
 
-        wrapped = carrier._build_stage_fixtures({"res": resource})
-        value = wrapped["res"]()
+        cls = _make_carrier_subclass(client=httpx.Client(transport=httpx.MockTransport(answer)), _run_iteration=classmethod(run_iteration))
+        stage = Stage.model_validate(
+            {
+                "name": "s",
+                "parallel": {"foreach": [{"individual": {"i": list(range(10))}}], "max_concurrency": 2},
+                "request": {"url": "http://mock/{{ i }}?t={{ rollback(i) }}"},
+                "response": [{"verify": {"status": 200}}],
+            }
+        )
+        try:
+            with pytest.raises(pytest.fail.Exception) as excinfo:
+                cls.execute_stage(stage, {"rollback": rollback})
+        finally:
+            cls.client.close()
+        assert str(excinfo.value) == _ITERATION_0_FAILED
+        assert sorted(sent) == ["/0", "/1"]
 
-        assert value == "gen-value"
-        assert events == ["setup"]
+    def test_error_on_exit_of_a_cancelled_iteration_is_reported(self):
+        """One cancelled once its request was rendered has entered what the
+        render called, and exits it: what that exit raises is listed like a
+        straggler's. The cancellation itself is no failure to report, even
+        with an exit error, though read before the failure that caused it."""
+        events: list[str] = []
+        sent: list[str] = []
 
-        carrier.teardown_class()
+        def answer(request):
+            sent.append(request.url.path)
+            # Iteration 1 is rendering: it got past the cancellation check
+            # before its request is rendered.
+            _wait_until(lambda: "render 1" in events)
+            return httpx.Response(500)
 
-        assert events == ["setup", "teardown"]
+        @contextmanager
+        def transaction(i):
+            events.append(f"enter {i}")
+            yield i
+            events.append(f"exit {i}")
+            if i == 0:
+                # Long enough for the stage's thread to read iteration 1 first.
+                _wait_until(lambda: "exit 1" in events)
+                time.sleep(0.1)
+            else:
+                raise RuntimeError(f"commit of {i} rejected")
 
-    def test_teardown_continues_when_a_finalizer_raises(self):
-        carrier = _make_carrier_subclass()
-        exited: list[str] = []
+        def a(i):
+            if i == 1:
+                events.append("render 1")
+                # Until iteration 0 has failed, cancelling the pool, and begun its exits.
+                _wait_until(lambda: "exit 0" in events)
+            return transaction(i)
 
-        class Bad:
-            def __enter__(self):
-                return self
+        cls = _make_carrier_subclass(client=httpx.Client(transport=httpx.MockTransport(answer)))
+        stage = Stage.model_validate(
+            {
+                "name": "s",
+                "parallel": {"foreach": [{"individual": {"i": [0, 1]}}], "max_concurrency": 2},
+                "request": {"url": "http://mock/{{ i }}?t={{ a(i) }}"},
+                "response": [{"verify": {"status": 200}}],
+            }
+        )
+        try:
+            with pytest.raises(pytest.fail.Exception) as excinfo:
+                cls.execute_stage(stage, {"a": a})
+        finally:
+            cls.client.close()
+        assert str(excinfo.value) == f"{_ITERATION_0_FAILED}\n{_ITERATION_1_EXIT_ERROR}"
+        assert sent == ["/0"]
+        assert events[-2:] == ["enter 1", "exit 1"]
 
-            def __exit__(self, *exc):
-                raise RuntimeError("cleanup boom")
+    @pytest.mark.parametrize(
+        ("status", "message"),
+        [
+            pytest.param(
+                500,
+                [_ITERATION_0_FAILED, "Iteration 0: Exiting the context manager from fixture 'b' failed: RuntimeError: commit of b0 rejected"],
+                id="iteration-failed",
+            ),
+            # Its exits are all it has to report, and the first one opens the message.
+            pytest.param(
+                200,
+                [
+                    "Parallel execution failed at iteration 0: Exiting the context manager from fixture 'b' failed: RuntimeError: commit of b0 rejected",
+                ],
+                id="iteration-passed",
+            ),
+        ],
+    )
+    def test_the_failing_iterations_exit_errors_are_labelled(self, status, message):
+        """Like a straggler's, with the iteration, so they read apart from the
+        stage's own, from what its substitutions entered, which are not."""
+        events: list[str] = []
 
-        class Good:
-            def __enter__(self):
-                return self
+        def answer(request):
+            return httpx.Response(status if request.url.path.startswith("/0/") else 200)
 
-            def __exit__(self, *exc):
-                exited.append("good")
-                return False
+        def per_iteration(tag):
+            return lambda i: self._resource(events, f"{tag}{i}", RuntimeError(f"commit of {tag}{i} rejected"))()
 
-        wrapped = carrier._build_stage_fixtures({"bad": lambda: Bad(), "good": lambda: Good()})
-        wrapped["bad"]()
-        wrapped["good"]()
+        cls = _make_carrier_subclass(client=httpx.Client(transport=httpx.MockTransport(answer)))
+        stage = Stage.model_validate(
+            {
+                "name": "s",
+                "substitutions": [{"vars": {"t": "{{ s() }}"}}],
+                # One at a time: iteration 0 fails the stage, and 1 is cancelled before it starts.
+                "parallel": {"foreach": [{"individual": {"i": [0, 1]}}], "max_concurrency": 1},
+                "request": {"url": "http://mock/{{ i }}/{{ t }}/{{ a(i) }}/{{ b(i) }}"},
+                "response": [{"verify": {"status": 200}}],
+            }
+        )
+        fixtures = {"s": self._resource(events, "s", RuntimeError("commit of s rejected")), "a": per_iteration("a"), "b": per_iteration("b")}
+        try:
+            with pytest.raises(pytest.fail.Exception) as excinfo:
+                cls.execute_stage(stage, fixtures)
+        finally:
+            cls.client.close()
+        assert str(excinfo.value).split("\n") == [
+            *message,
+            "Iteration 0: Exiting the context manager from fixture 'a' failed: RuntimeError: commit of a0 rejected",
+            "Exiting the context manager from fixture 's' failed: RuntimeError: commit of s rejected",
+        ]
+        assert events == ["enter s", "enter a0", "enter b0", "exit b0", "exit a0", "exit s"]
 
-        # teardown_class swallows finalizer errors (logged) so a failing context
-        # manager does not prevent the others from being cleaned up.
-        carrier.teardown_class()
+    def test_error_on_exit_of_a_straggler_is_logged_on_an_interrupt(self, caplog):
+        """No stage failure will carry it then."""
+        events: list[str] = []
 
-        assert exited == ["good"]
-        assert carrier.active_context_managers == []
+        def interrupt(reason):
+            raise KeyboardInterrupt(reason)
+
+        with pytest.raises(KeyboardInterrupt):
+            self._run_with_a_straggler(_make_carrier_subclass(), events, end=interrupt)
+        assert events[2:] == ["exit 0", "exit 1"]
+        assert _ITERATION_1_EXIT_ERROR in caplog.text
+
+    @pytest.mark.parametrize(
+        ("exit_error", "outcome", "message"),
+        [
+            pytest.param(None, pytest.skip.Exception, "Flow aborted", id="skipped"),
+            # A skipped stage has not failed, so the error on exit fails it.
+            pytest.param(
+                RuntimeError("rollback failed"),
+                pytest.fail.Exception,
+                "Exiting the context manager from fixture 'a' failed: RuntimeError: rollback failed",
+                id="error-on-exit",
+            ),
+        ],
+    )
+    def test_exited_when_the_stage_skips(self, exit_error, outcome, message):
+        """An ``always_run`` template can call a factory fixture and still skip the stage."""
+        events: list[str] = []
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+        cls = _make_carrier_subclass(client=client, aborted=True)
+        stage = Stage.model_validate({"name": "s", "always_run": "{{ a() == 'never' }}", "request": {"url": "http://mock/"}})
+        try:
+            # Both caught, so a wrong outcome fails this test rather than skipping it.
+            with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
+                cls.execute_stage(stage, {"a": self._resource(events, "a", exit_error)})
+        finally:
+            client.close()
+        assert excinfo.type is outcome
+        assert str(excinfo.value) == message
+        assert events == ["enter a", "exit a"]
+
+    @pytest.mark.parametrize(
+        "stage_fields",
+        [
+            pytest.param({}, id="in-the-request"),
+            pytest.param({"substitutions": [{"vars": {"t": "{{ a() }}/{{ b() }}"}}], "request": {"url": "http://mock/{{ t }}"}}, id="in-substitutions"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("end", "exit_error", "outcome", "message"),
+        [
+            pytest.param(pytest.skip, None, pytest.skip.Exception, "given up", id="skip"),
+            pytest.param(pytest.xfail, None, pytest.xfail.Exception, "given up", id="xfail"),
+            # An xfail is no failure either, so the error on exit fails the
+            # stage. It was only logged, which pytest does not show for an xfail.
+            pytest.param(
+                pytest.xfail,
+                RuntimeError("rollback failed"),
+                pytest.fail.Exception,
+                "Exiting the context manager from fixture 'a' failed: RuntimeError: rollback failed",
+                id="xfail-error-on-exit",
+            ),
+            pytest.param(
+                pytest.fail,
+                RuntimeError("rollback failed"),
+                pytest.fail.Exception,
+                "given up\nExiting the context manager from fixture 'a' failed: RuntimeError: rollback failed",
+                id="fail-error-on-exit",
+            ),
+        ],
+    )
+    def test_a_user_function_ending_the_stage(self, stage_fields, end, exit_error, outcome, message):
+        """``b`` ends the stage with ``pytest.skip/xfail/fail()``, which passes
+        through unchanged unless ``a`` raises on exit."""
+        events: list[str] = []
+
+        def b():
+            end("given up")
+
+        with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
+            self._run({"a": self._resource(events, "a", exit_error), "b": b}, **stage_fields)
+        assert excinfo.type is outcome
+        assert str(excinfo.value) == message
+        assert events == ["enter a", "exit a"]
+
+    def test_exited_when_the_stage_is_interrupted(self, caplog):
+        """An interrupt or a plugin bug propagates as it is; an error on exit
+        can then only be logged."""
+        events: list[str] = []
+
+        def b():
+            raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            self._run({"a": self._resource(events, "a", RuntimeError("rollback failed")), "b": b})
+        assert events == ["enter a", "exit a"]
+        assert "Exiting the context manager from fixture 'a' failed: RuntimeError: rollback failed" in caplog.text
+
+    def test_an_interrupt_on_exit_is_raised_once_all_are_exited(self, caplog):
+        """``a``, entered first, is still exited; its error, which no stage
+        failure will carry now, is logged."""
+        events: list[str] = []
+        with pytest.raises(KeyboardInterrupt):
+            self._run({"a": self._resource(events, "a", RuntimeError("rollback failed")), "b": self._resource(events, "b", KeyboardInterrupt())})
+        assert events == ["enter a", "enter b", "exit b", "exit a"]
+        assert "Exiting the context manager from fixture 'a' failed: RuntimeError: rollback failed" in caplog.text
 
 
 class _Poison:
@@ -791,7 +1309,7 @@ class TestParallelCancellation:
         config = ParallelRepeatConfig.model_validate({"repeat": 40, "max_concurrency": 1})
 
         with pytest.raises(RuntimeError, match="plugin bug"):
-            cls._run_iterations(None, ChainMap(), [{} for _ in range(40)], config)
+            cls._run_iterations(None, ChainMap(), [{} for _ in range(40)], config, [])
 
         # The queued iterations were cancelled, not drained. A worker may have
         # started one or two before the cancel landed; 40 means no cancellation.

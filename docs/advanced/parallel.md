@@ -232,6 +232,9 @@ runs.
   iteration finished first
 - Saves are **all or nothing**: if any iteration fails, the stage commits no
   saves at all, so the context never carries a timing-dependent subset
+- The first failing iteration cancels the rest: iterations not sent yet are
+  never sent (those already in flight run to their end), and the stage fails
+  with `Parallel execution failed at iteration N: ...`
 - Iterations do not see one another's saves; each resolves against the stage
   context plus its own parameters
 - Use rate limiting to avoid overwhelming servers or hitting rate limits

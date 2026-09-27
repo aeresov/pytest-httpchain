@@ -139,6 +139,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the text passed re-validation: an `individual` step then ran one test per character, and a
   `combinations` step failed collection with a pydantic error for each character. 0.15.2 closed
   the same gap for `parallel.foreach`.
+- A context manager returned by a factory fixture (`{{ transaction() }}`) is exited when the stage
+  that entered it ends, while the fixtures it is built on are still there. It was exited only
+  once the whole scenario was done, after pytest had torn down the stage's fixtures and even the
+  `class`-scoped ones: a transaction on a `class`-scoped `connection` fixture was committed on a
+  connection already closed. An exception raised on exit was only logged, and the stage and the
+  run stayed green. The exit now happens at the end of the stage, whether it passed, failed or was
+  skipped, last entered first. One entered by the request or a response step is exited as soon as
+  the response steps are done, in the thread that ran them: in a `parallel` stage, each iteration
+  exits its own in its worker thread, so a context manager tied to its thread (a `sqlite3`
+  connection) works, and an iteration's transaction does not stay open while the others run. An
+  exception raised on exit fails the stage (in a `parallel` stage, the iteration, which cancels
+  the others), even one a user function skipped or xfailed, with a message naming the fixture:
+  `Exiting the context manager from fixture 'transaction' failed: RuntimeError: ...`. If the stage
+  had already failed, its own failure message comes first. A failing iteration of a `parallel`
+  stage cancels the others before its own exits, so a slow one (a rollback) does not let the
+  queued iterations send their requests meanwhile. An iteration still running when another one
+  fails or skips a `parallel` stage exits its own when it ends all the same. In a `parallel`
+  stage, what an iteration's exits raise is labelled with the iteration
+  (`Iteration 1: Exiting the context manager ...`), apart from the stage's own. Like any failure,
+  it discards the stage's saves and aborts the chain. A value the context manager yielded is
+  therefore no longer usable in a later stage.
+- A `parallel` stage whose iteration failed was reported skipped or xfailed when another
+  iteration, still running, then called `pytest.skip()` or `pytest.xfail()` from a user function,
+  and failed with that iteration's message instead of its own on a `pytest.fail()`. Those are now
+  secondary to the stage's failure, as any failure of the other iteration's own already was.
 
 ### Changed
 
@@ -161,6 +186,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `duration` and the other formats that need jsonschema's optional dependencies are checked only
   once `jsonschema[format-nongpl]` (or `jsonschema[format]`) is installed, and pass any value
   until then.
+- **BREAKING**: a factory fixture's context manager is exited at the end of the stage that
+  entered it, not when the scenario is done, and an exception raised on exit fails the stage
+  (see Fixed). Heads-up: a scenario that saved a value the context manager yielded and used it in
+  a later stage now gets it after the exit (a closed connection, say), and one whose exit raised,
+  which passed until now with the error only logged, fails after the upgrade. Call the factory in
+  each stage that needs the resource, or, to share one across stages, provide it from a
+  `class`-scoped fixture.
 
 ## [0.15.2] - 2026-09-26
 
