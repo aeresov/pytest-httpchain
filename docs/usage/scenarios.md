@@ -28,6 +28,8 @@ A scenario is a JSON file that defines a complete test case. The basic structure
 
 Field names are validated strictly at every level: an unknown or misspelled key (`"headerz"`, `"alwaysrun"`) fails validation at collection time, naming the key and its location. The only exceptions are the `$schema` editor key (discarded during validation) and the `$ref`/`$include`/`$merge` reference directives (resolved before validation).
 
+Scenario files, and every file they pull in (`$include`/`$merge`/`$ref` targets, `verify.body.schema` files), are read as UTF-8. A leading byte-order mark, which some editors on Windows write, is accepted. A scenario, or a file it `$include`s, `$merge`s or `$ref`s, in another encoding such as Latin-1 fails to load with `HTTPCHAIN014`, naming the file that is not UTF-8. A `verify.body.schema` file in another encoding is read only when its stage runs, and fails that stage; `validate --deep` reports it ahead of time as `HTTPCHAIN021`.
+
 ## Stage Structure
 
 Each stage represents a single HTTP request:

@@ -130,7 +130,15 @@ def test_ambiguous_ref_keeps_its_diagnostic_under_filterwarnings_error(pytester)
     result.stdout.no_fnmatch_line("*Failed to parse JSON file*")
 
 
-def test_load_failures_are_coded_the_same_way_as_the_cli(pytester):
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        pytest.param(b'{"stages": {"s": {"request": {"url": "http://x"}},}}', "Illegal trailing comma", id="syntax"),
+        # Not UTF-8: fell through to HTTPCHAIN015's catch-all, not naming the problem.
+        pytest.param('{"stages": {"café": {"request": {"url": "http://x"}}}}'.encode("latin-1"), "is not valid UTF-8", id="not-utf8"),
+    ],
+)
+def test_load_failures_are_coded_the_same_way_as_the_cli(pytester, content, message):
     """Collection and `validate` share one load-failure taxonomy.
 
     They used to have two: the same malformed file produced
@@ -141,17 +149,17 @@ def test_load_failures_are_coded_the_same_way_as_the_cli(pytester):
     from pytest_httpchain.validation import validate_scenario
 
     path = pytester.path / "test_broken.http.json"
-    path.write_text('{"stages": {"s": {"request": {"url": "http://x"}},}}')
+    path.write_bytes(content)
 
     cli = validate_scenario(path)
     assert [d.code for d in cli.diagnostics] == ["HTTPCHAIN014"], cli.diagnostics
-    assert "Illegal trailing comma" in cli.diagnostics[0].message
+    assert message in cli.diagnostics[0].message
 
     result = pytester.runpytest("--collect-only")
 
     assert result.ret != 0
     # The same code AND the same wording, not merely "some error either way".
-    result.stdout.fnmatch_lines(["*[[]HTTPCHAIN014[]]*Illegal trailing comma*"])
+    result.stdout.fnmatch_lines([f"*[[]HTTPCHAIN014[]]*{message}*"])
 
 
 def test_unknown_key_fails_collection_with_code(pytester):

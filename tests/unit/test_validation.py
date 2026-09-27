@@ -8,6 +8,7 @@ one code: a check that starts firing on a neighbour's fixture fails here too.
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -357,6 +358,50 @@ class TestAmbiguousRef:
     def test_survives_a_later_load_failure(self, suite):
         result = validate_scenario(_write(suite, [_stage(request={"$ref": "fragment.json"}, response=[{"verify": {"$ref": "missing.json"}}])]))
         assert sorted(_codes(result)) == [C.REF_ERROR, C.AMBIGUOUS_REF]
+
+
+class TestFileContent:
+    """Scenario files and the files they pull in are UTF-8, with or without the
+    byte-order mark editors on Windows write. Content the reader cannot parse
+    is invalid JSON naming the file, not HTTPCHAIN015's catch-all "Failed to
+    parse"."""
+
+    @pytest.mark.parametrize("include", [False, True], ids=["scenario", "included-file"])
+    @pytest.mark.parametrize(
+        ("content", "message"),
+        [
+            pytest.param('{"name": "café"}'.encode("latin-1"), "is not valid UTF-8", id="not-utf8"),
+            # Well-formed JSON past CPython's default int-string conversion limit (4300 digits).
+            pytest.param(b'{"timeout": ' + b"1" * 5000 + b"}", "cannot be parsed: Exceeds the limit", id="int-too-long"),
+        ],
+    )
+    def test_unreadable_file_is_invalid_json(self, tmp_path, include, content, message):
+        # Reading fails before model validation, so the content need not be a scenario.
+        bad = tmp_path / ("stage.json" if include else "test_x.http.json")
+        bad.write_bytes(content)
+        scenario = _write(tmp_path, [{"$include": "stage.json"}]) if include else bad
+
+        result = validate_scenario(scenario)
+
+        assert _codes(result) == [C.INVALID_JSON]
+        assert f"{bad.name} {message}" in result.errors[0]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows' non-strict realpath passes such a path through, so it is reported as not found")
+    def test_reference_path_the_os_rejects_is_a_ref_error(self, tmp_path):
+        """A NUL in a reference path fell through to HTTPCHAIN015, not naming the reference."""
+        result = validate_scenario(_write(tmp_path, [{"$include": "a\x00.json"}]))
+        assert _codes(result) == [C.REF_ERROR]
+        assert r"Reference path 'a\x00.json' is not a valid file path" in result.errors[0]
+
+    def test_byte_order_mark_is_accepted(self, tmp_path):
+        scenario = _write(tmp_path, [_stage()])
+        scenario.write_text("\ufeff" + scenario.read_text(), encoding="utf-8")
+        assert validate_scenario(scenario).diagnostics == []
+
+    def test_schema_file_with_byte_order_mark_passes_deep_checks(self, tmp_path):
+        (tmp_path / "schema.json").write_text("\ufeff" + json.dumps({"type": "object"}), encoding="utf-8")
+        scenario = _write(tmp_path, [_stage(response=[{"verify": {"body": {"schema": "schema.json"}}}])])
+        assert validate_scenario(scenario, deep=True).diagnostics == []
 
 
 class TestRootPathDefault:

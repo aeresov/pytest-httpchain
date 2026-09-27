@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from pytest_httpchain.jsonref import DuplicateKeyError, ReferenceResolverError, load_json
+from pytest_httpchain.jsonref import InvalidJSONError, ReferenceResolverError, load_json
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, diag
 from pytest_httpchain.warnings import AmbiguousReferenceWarning
@@ -131,9 +131,10 @@ def load_with_diagnostics(
         try:
             loaded = load_scenario(path, root_path=root_path, ref_parent_traversal_depth=ref_parent_traversal_depth)
         except ReferenceResolverError as e:
-            # A duplicate key, and a plain syntax error the resolver wrapped, are
-            # JSON content problems — no reference is involved in either.
-            if isinstance(e, DuplicateKeyError):
+            # Content the reader rejected (not UTF-8, a duplicate key, ...) and
+            # a plain syntax error the resolver wrapped are JSON content
+            # problems — no reference is involved in either.
+            if isinstance(e, InvalidJSONError):
                 diagnostics.append(diag(DiagnosticCode.INVALID_JSON, f"Invalid JSON: {e}"))
             elif isinstance(e.__cause__, json.JSONDecodeError):
                 diagnostics.append(diag(DiagnosticCode.INVALID_JSON, f"Invalid JSON syntax: {e.__cause__}"))

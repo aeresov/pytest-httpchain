@@ -59,12 +59,12 @@ def read_json_schema_file(path: Path) -> Any:
     The catch is the load-bearing part and must not be re-derived per caller:
     ``ValueError`` subsumes both ``json.JSONDecodeError`` and
     ``UnicodeDecodeError``, so a non-UTF-8 schema file fails cleanly instead of
-    escaping the abort machinery as a raw traceback. The meta-check stays with
-    the callers, which report an unparseable file and an invalid schema
-    differently.
+    escaping the abort machinery as a raw traceback. ``utf-8-sig`` accepts a
+    byte-order mark, as the scenario loader does. The meta-check stays with the
+    callers, which report an unparseable file and an invalid schema differently.
     """
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as e:
         raise SchemaFileError(str(e)) from e
 

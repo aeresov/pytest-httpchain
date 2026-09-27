@@ -100,6 +100,15 @@ def test_same_file_referenced_repeatedly_is_not_a_cycle(create_json_files):
     assert load_json(files["main.json"]) == {"first": "value", "second": "value", "third": {"common": "value"}}
 
 
+@pytest.mark.parametrize("bom_file", ["main.json", "part.json"], ids=["main-file", "referenced-file"])
+def test_utf8_byte_order_mark_is_accepted(tmp_path, bom_file):
+    """Editors on Windows write a BOM, which json.loads rejects as invalid JSON."""
+    texts = {"main.json": '{"data": {"$include": "part.json"}}', "part.json": '{"name": "café"}'}
+    for name, text in texts.items():
+        (tmp_path / name).write_text("\ufeff" + text if name == bom_file else text, encoding="utf-8")
+    assert load_json(tmp_path / "main.json") == {"data": {"name": "café"}}
+
+
 @pytest.mark.parametrize("directive", ["$ref", "$include", "$merge"])
 class TestDirectiveAliases:
     """All three spellings ($ref/$include/$merge) must behave identically.

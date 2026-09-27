@@ -3,6 +3,7 @@
 import importlib.metadata
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -201,6 +202,36 @@ def test_resolve_missing_ref_exits_one(include_scenario, tmp_path):
     assert result.exit_code == 1
     assert result.stdout == ""
     assert result.stderr.startswith("error: Reference path 'common.json' not found.")
+
+
+@pytest.mark.parametrize("command", ["resolve", "show", "graph"])
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        pytest.param('{"url": "https://x.test/café"}'.encode("latin-1"), "common.json is not valid UTF-8", id="not-utf8"),
+        pytest.param(b'{"timeout": ' + b"1" * 5000 + b"}", "common.json cannot be parsed", id="int-too-long"),
+    ],
+)
+def test_unreadable_include_exits_one_naming_the_file(include_scenario, tmp_path, command, content, message):
+    """Undecodable bytes and an int past the conversion limit raise plain
+    ValueErrors, outside the load errors these catch, so the fragment printed a
+    raw traceback."""
+    (tmp_path / "common.json").write_bytes(content)
+    result = runner.invoke(app, [command, str(include_scenario)])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert message in result.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows' non-strict realpath passes such a path through, so it is reported as not found")
+@pytest.mark.parametrize("command", ["resolve", "show", "graph"])
+def test_include_path_the_os_rejects_exits_one(tmp_path, command):
+    """The OS path call's ValueError on a NUL escaped as a raw traceback."""
+    scenario = _write(tmp_path / "test_x.http.json", {"stages": [{"name": "s", "$include": "a\x00.json"}]})
+    result = runner.invoke(app, [command, str(scenario)])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert r"Reference path 'a\x00.json' is not a valid file path" in result.stderr
 
 
 # --- show / graph ---

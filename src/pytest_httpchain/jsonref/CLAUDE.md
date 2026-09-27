@@ -19,7 +19,7 @@ Features:
 ## Public API
 
 ```python
-from pytest_httpchain.jsonref import load_json, ReferenceResolverError
+from pytest_httpchain.jsonref import load_json, ReferenceResolverError, InvalidJSONError
 
 # Load JSON with $ref resolution
 data = load_json(path, max_parent_traversal_depth=3, root_path=None, opaque=None)
@@ -61,6 +61,9 @@ When `$include` (or `$ref`) has sibling properties, they are merged **additively
   "extra": "value"  // merged with referenced content
 }
 ```
+
+### File Content
+Every file is read as UTF-8, with an optional byte-order mark (`utf-8-sig`). Content the one reader (`_parse_json_rejecting_duplicates`) cannot parse, short of a syntax error, raises `InvalidJSONError` (a `ReferenceResolverError`) naming that file — the referenced one when that is where it failed: bytes that are not UTF-8, a duplicate key (`DuplicateKeyError`, a subclass), an integer past Python's int-string conversion limit. The validator dispatches on `InvalidJSONError` to report `HTTPCHAIN014`, like a syntax error, rather than `HTTPCHAIN012`. A syntax error still propagates as `json.JSONDecodeError`, which the callers wrap. A reference path the OS path call rejects with `ValueError` (a NUL, or on POSIX a lone surrogate) is a plain `ReferenceResolverError` from `validate_ref_path`.
 
 ### Security Features
 - `max_parent_traversal_depth`: Limits `..` in paths (default: 3)

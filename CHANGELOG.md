@@ -164,6 +164,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   iteration, still running, then called `pytest.skip()` or `pytest.xfail()` from a user function,
   and failed with that iteration's message instead of its own on a `pytest.fail()`. Those are now
   secondary to the stage's failure, as any failure of the other iteration's own already was.
+- A scenario that is not UTF-8, or that `$include`s a file that is not, fails to load with a
+  message naming that file. On a Latin-1 file, `pytest-httpchain resolve`, `show` and `graph`
+  printed a raw `UnicodeDecodeError` traceback, and `validate` and collection reported the
+  catch-all `HTTPCHAIN015` "Failed to parse JSON file" with only the codec's complaint, so a bad
+  included file could not be told from a bad scenario. It is now `HTTPCHAIN014`, like any other
+  invalid JSON (`Invalid JSON: .../common.json is not valid UTF-8: ...`), and the three commands
+  print that message and exit 1. An integer longer than Python converts (4300 digits by default)
+  failed the same way and is now `HTTPCHAIN014` too (`.../common.json cannot be parsed: Exceeds
+  the limit ...`). A reference path the operating system rejects, such as
+  `"$include": "a\u0000.json"`, also printed a traceback; it is now `HTTPCHAIN012`
+  (`Reference path 'a\x00.json' is not a valid file path: ...`).
+- A UTF-8 file that starts with a byte-order mark, as some editors on Windows save one, is no
+  longer rejected as invalid JSON (`Unexpected UTF-8 BOM`). Scenarios, the files they `$include`,
+  `$merge` or `$ref`, and `verify.body.schema` files all accept the mark.
 
 ### Changed
 

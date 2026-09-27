@@ -33,9 +33,11 @@ def test_status_zero_is_not_treated_as_absent():
 
 
 class TestBodySchema:
-    def test_schema_file_is_loaded(self, tmp_path):
+    # A byte-order mark, which editors on Windows write, failed the stage as invalid JSON.
+    @pytest.mark.parametrize("prefix", ["", "\ufeff"], ids=["plain", "byte-order-mark"])
+    def test_schema_file_is_loaded(self, tmp_path, prefix):
         schema_path = tmp_path / "schema.json"
-        schema_path.write_text(json.dumps({"type": "object", "required": ["id"]}))
+        schema_path.write_text(prefix + json.dumps({"type": "object", "required": ["id"]}), encoding="utf-8")
         process_verify(Verify(body=ResponseBody(schema=str(schema_path))), httpx.Response(200, json={"id": 123}))
 
     @pytest.mark.parametrize(

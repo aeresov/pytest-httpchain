@@ -8,11 +8,12 @@ pointer within the document, or both — under a parent-traversal sandbox.
     >>> data = load_json(Path("test_scenario.http.json"))
 """
 
-from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, ReferenceResolverError
+from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, InvalidJSONError, ReferenceResolverError
 from pytest_httpchain.jsonref.loader import load_json
 
 __all__ = [
     "load_json",
     "ReferenceResolverError",
+    "InvalidJSONError",
     "DuplicateKeyError",
 ]

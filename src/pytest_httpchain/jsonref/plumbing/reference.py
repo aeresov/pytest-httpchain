@@ -9,7 +9,7 @@ from typing import Any, Self
 
 from deepmerge import STRATEGY_END, Merger
 
-from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, ReferenceResolverError
+from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, InvalidJSONError, ReferenceResolverError
 from pytest_httpchain.jsonref.plumbing.circular import CircularDependencyTracker
 from pytest_httpchain.jsonref.plumbing.path import parse_json_pointer, validate_ref_path
 
@@ -68,8 +68,14 @@ def _parse_json_rejecting_duplicates(path: Path) -> Any:
     """Parse a JSON file, rejecting duplicate object keys.
 
     ``json.loads`` keeps the last one, which in a scenario silently drops a step
-    and weakens the test. `DuplicateKeyError` propagates unwrapped through the
-    callers' narrower except blocks.
+    and weakens the test.
+
+    ``utf-8-sig`` accepts the byte-order mark Windows editors write. Any other
+    content failure short of a syntax error is an `InvalidJSONError` naming
+    this file: undecodable bytes and the int-string conversion limit raise plain
+    ``ValueError``, which the callers' ``except (OSError, JSONDecodeError)``
+    let escape raw. Raised here as a type of its own, it propagates unwrapped
+    through those blocks, and the validator can tell it from a reference problem.
     """
 
     def pairs_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -80,7 +86,16 @@ def _parse_json_rejecting_duplicates(path: Path) -> Any:
             result[key] = value
         return result
 
-    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs_hook)
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise InvalidJSONError(f"{path} is not valid UTF-8: {e}") from e
+    try:
+        return json.loads(text, object_pairs_hook=pairs_hook)
+    except json.JSONDecodeError:
+        raise
+    except ValueError as e:
+        raise InvalidJSONError(f"{path} cannot be parsed: {e}") from e
 
 
 class ReferenceResolver:
