@@ -21,7 +21,7 @@ not free their numbers for reuse.
 | `HTTPCHAIN000` | error | Schema validation failed (Pydantic `Scenario` model) |
 | `HTTPCHAIN001` | error | Duplicate stage names |
 | `HTTPCHAIN002` | error | Fixture and variable share the same name |
-| `HTTPCHAIN003` | warning | Variable referenced but never defined/saved/fixture (typo) |
+| `HTTPCHAIN003` | warning | Variable referenced but never defined/saved/fixture (typo), or saved only by earlier stages with a [`skip_if`](usage/scenarios.md#skipping-a-stage-at-runtime), which leave it undefined when they skip (read it with `get()`) |
 | `HTTPCHAIN004` | warning | Variable referenced before it is saved or defined — saved by a later stage or by a later step of the same stage's response, or defined by a later substitution step (ordering / data-flow) |
 | `HTTPCHAIN005` | warning | Stage has no verify step (no response validation) |
 | `HTTPCHAIN006` | warning | Verify step asserts nothing (no-op) |

@@ -278,6 +278,33 @@ def test_show_text_reports_marks(tmp_path):
     assert result.output == 'test_marks.http.json\n1 stage(s)\n\n1 · only    GET https://x.test/a\n    marks:    skip, xfail(reason="flaky")\n'
 
 
+@pytest.fixture
+def skipping_scenario(tmp_path) -> Path:
+    """The chain scenario with a skip_if on its producer, and a stage skipped outright."""
+    create = {
+        "name": "create",
+        "skip_if": " {{ exists('user_id') }} ",
+        "request": {"url": "https://x.test/u", "method": "POST"},
+        "response": [{"save": {"jmespath": {"user_id": "id"}}}, {"verify": {"status": 201}}],
+    }
+    return _write(tmp_path / "test_skip.http.json", {"stages": [create, _stage("get", "https://x.test/u/{{ get('user_id') }}", skip_if=True)]})
+
+
+def test_show_text_reports_skip_if(skipping_scenario):
+    result = runner.invoke(app, ["show", str(skipping_scenario)])
+    assert result.exit_code == 0, result.output
+    assert result.output == (
+        "test_skip.http.json\n"
+        "2 stage(s)\n"
+        "\n"
+        "1 · create    POST https://x.test/u\n"
+        "    skip_if:  {{ exists('user_id') }}\n"
+        "    saves:    user_id\n"
+        "2 · get    GET https://x.test/u/{{ get('user_id') }}\n"
+        "    skip_if:  true\n"
+    )
+
+
 def test_show_text_reports_scenario_fixtures_and_vars(meta_scenario):
     """The rendered form, not just the names: `show` exists to be read, so the
     summary joins these rather than printing the Python list repr."""
@@ -342,6 +369,44 @@ def test_graph_emits_mermaid(chain_scenario, args, direction):
     result = runner.invoke(app, ["graph", *args, str(chain_scenario)])
     assert result.exit_code == 0, result.output
     assert result.output == f'flowchart {direction}\n    S0["1 · create"]\n    S1["2 · get"]\n    S0 -->|user_id| S1\n'
+
+
+def test_graph_dots_the_edges_out_of_a_stage_that_may_skip(tmp_path):
+    """Its saves may never be made: the edge is drawn dotted."""
+    maybe = {**_stage("maybe", "https://x.test/a", skip_if="{{ flag }}"), "response": [{"save": {"jmespath": {"x": "x"}}}]}
+    sure = {**_stage("sure", "https://x.test/b"), "response": [{"save": {"jmespath": {"y": "y"}}}]}
+    scenario = _write(tmp_path / "test_x.http.json", {"stages": [maybe, sure, _stage("reader", "https://x.test/{{ x }}/{{ y }}")]})
+    result = runner.invoke(app, ["graph", str(scenario)])
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[-2:] == ["    S0 -.->|x| S2", "    S1 -->|y| S2"]
+
+
+@pytest.fixture
+def refresh_scenario(tmp_path) -> Path:
+    """A token saved by `login`, re-saved by a `refresh` that may skip, read by `use`."""
+    saves_token = [{"save": {"jmespath": {"token": "t"}}}]
+    stages = [
+        {**_stage("login", "https://x.test/login"), "response": saves_token},
+        {**_stage("refresh", "https://x.test/refresh", skip_if="{{ not stale }}"), "response": saves_token},
+        _stage("use", "https://x.test/{{ token }}"),
+    ]
+    return _write(tmp_path / "test_refresh.http.json", {"substitutions": [{"vars": {"stale": False}}], "stages": stages})
+
+
+def test_show_text_lists_every_stage_a_name_may_come_from(refresh_scenario):
+    """When `refresh` skips, `use` runs on the login's token: `show` names
+    both, nearest first."""
+    result = runner.invoke(app, ["show", str(refresh_scenario)])
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[-1] == "    consumes: token (from #2 refresh, else #1 login)"
+
+
+def test_graph_draws_an_edge_from_the_producer_a_skipped_stage_falls_back_to(refresh_scenario):
+    """The login's edge is solid, the refresh's dotted: dropping the login's
+    drew `use` as depending on a stage that did not run."""
+    result = runner.invoke(app, ["graph", str(refresh_scenario)])
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[-2:] == ["    S0 -->|token| S2", "    S1 -.->|token| S2"]
 
 
 def test_graph_of_a_stageless_scenario_is_still_valid_mermaid(tmp_path):

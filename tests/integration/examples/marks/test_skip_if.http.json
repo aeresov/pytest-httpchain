@@ -1,0 +1,48 @@
+{
+    "fixtures": ["server"],
+    "substitutions": [{ "vars": { "feature": false } }],
+    "stages": [
+        {
+            "name": "feature_only",
+            "description": "Skipped, the feature being off: it saves nothing, and the chain goes on",
+            "skip_if": "{{ not feature }}",
+            "request": { "url": "{{ server }}/users" },
+            "response": [
+                { "save": { "jmespath": { "first_user": "users[0].name" } } },
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "sees_no_save",
+            "description": "Runs after the skip, which left no first_user",
+            "request": { "url": "{{ server }}/ok" },
+            "response": [ { "verify": { "status": 200, "expressions": ["{{ not exists('first_user') }}"] } } ]
+        },
+        {
+            "name": "saves_once",
+            "description": "Runs: nothing has saved first_user yet, and the stage's own substitution is in scope",
+            "substitutions": [{ "vars": { "wanted": "Alice" } }],
+            "skip_if": "{{ exists('first_user') or not wanted }}",
+            "request": { "url": "{{ server }}/users" },
+            "response": [
+                { "save": { "jmespath": { "first_user": "users[0].name" } } },
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "already_saved",
+            "description": "Skipped on the save an earlier stage made, before its request (to /bad) is sent",
+            "skip_if": "{{ get('first_user') == 'Alice' }}",
+            "request": { "url": "{{ server }}/bad" },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "per_env",
+            "description": "Each parametrized run decides on its own parameter: dev runs, prod skips",
+            "parametrize": [{ "individual": { "env": ["dev", "prod"] } }],
+            "skip_if": "{{ env == 'prod' }}",
+            "request": { "url": "{{ server }}/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

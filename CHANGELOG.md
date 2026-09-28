@@ -271,6 +271,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   naming an empty boundary fails the stage, as does one naming a boundary the parts cannot be
   delimited by as written (holding a `;`, ending in whitespace, or starting or ending with a quote,
   none of which RFC 2046 allows), where `boundary="a;b"` had the parts delimited by `a`.
+- A stage-level `skip_if` skips a stage when a condition holds, decided when the stage is about to
+  run, where marks are fixed at collection and `always_run` only counts after a failure:
+  `"skip_if": "{{ target == 'prod' }}"`, or `"skip_if": true`. A template sees what the stage's
+  request sees but the `parallel.foreach` parameters: fixtures, parametrize parameters, scenario
+  substitutions, earlier stages' saves and the stage's own `substitutions`, which run first. It
+  must evaluate to a boolean, as a verify expression must: a saved string `"false"`, a number or
+  a `null` fails the stage (`skip_if must evaluate to bool, got str from '{{ flag }}'`, the type
+  and never the value, which may be a token) rather than skip it or run it by truthiness. The
+  stage is reported skipped as `skip_if: <the template>`, sends nothing and saves nothing, and the
+  chain goes on: a skip is no failure. In a chain a failure aborted, a stage skips as before unless
+  `always_run` lets it through, and then its `skip_if` still counts. A literal `true` skips without
+  running the stage's substitutions. The validator checks a `skip_if`'s references like every
+  other template's (`HTTPCHAIN003`/`HTTPCHAIN004`, `HTTPCHAIN035`). Since the stages after a
+  skipped one run, it also reports a later stage reading a name that only stages with a `skip_if`
+  save, other than through `get()`, as potentially undefined (`HTTPCHAIN003`): `request references
+  'token', which only stage 'login' saves, and it has skip_if: when it skips, 'token' is undefined
+  here`. The saves of a stage that may fail still count as there, since the stages after a failure
+  do not run unless they are `always_run`. `show` lists a stage's `skip_if`, and `graph` draws the
+  edges out of such a stage dotted. A name re-saved by a stage with a `skip_if` comes from the
+  stage before that saved it when it skips, so both list every stage such a name may come from,
+  back to one without a `skip_if`: `token (from #2 refresh, else #1 login)`.
 
 ### Fixed
 

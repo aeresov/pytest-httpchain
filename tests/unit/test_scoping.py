@@ -86,6 +86,34 @@ class TestStageScopes:
     def test_empty_scenario(self):
         assert stage_scopes(Scenario.model_validate({"stages": []})) == []
 
+    def test_names_only_stages_that_may_skip_save_are_skippable(self):
+        """A skipped stage saves nothing and the chain goes on, so a name only
+        such stages save is in scope only when one of them ran. One a stage
+        without skip_if (or with skip_if: false) saves too is always there."""
+
+        def saving(name: str, *saved: str, **fields) -> dict:
+            return {"name": name, "request": {"url": "http://server/"}, "response": [{"save": {"jmespath": dict.fromkeys(saved, "a")}}], **fields}
+
+        scopes = stage_scopes(
+            Scenario.model_validate(
+                {
+                    "stages": [
+                        saving("maybe", "token", "both", skip_if="{{ flag }}"),
+                        saving("never", "kept", skip_if=False),
+                        saving("sure", "both"),
+                        saving("skipped", "gone", skip_if=True),
+                        saving("last"),
+                    ]
+                }
+            )
+        )
+        assert [scope.skippable_saves for scope in scopes] == [set(), {"token", "both"}, {"token", "both"}, {"token"}, {"token", "gone"}]
+        last = scopes[-1]
+        assert last.earlier_saves == {"token", "both", "kept", "gone"}
+        assert last.when_skipped.earlier_saves == {"both", "kept"}
+        assert last.request - last.when_skipped.request == {"token", "gone"}
+        assert last.when_skipped.skippable_saves == set()
+
 
 class TestContextBuilders:
     def test_layering_order(self):

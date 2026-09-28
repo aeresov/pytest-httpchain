@@ -145,10 +145,12 @@ def _load_for_inspection(path: Path, depth: int, root_path: Path | None = None) 
 
 
 def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[str]:
-    producer_of: dict[tuple[int, str], int] = {}
+    # Listed nearest first: a name has several producers when the nearer ones
+    # have a skip_if (analyze_dataflow), each read only when the nearer skipped.
+    producers_of: dict[tuple[int, str], list[int]] = {}
     for edge in flow.edges:
         for var_name in edge.vars:
-            producer_of[(edge.consumer, var_name)] = edge.producer
+            producers_of.setdefault((edge.consumer, var_name), []).append(edge.producer)
 
     all_fixtures = sorted({*flow.scenario_fixtures, *(f for s in flow.stages for f in s.fixtures)})
     lines: list[str] = [scenario.description or path.name]
@@ -163,6 +165,8 @@ def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[st
     for s in flow.stages:
         name = s.name or f"(stage {s.index + 1})"
         lines.append(f"{s.index + 1} · {name}    {s.method} {s.url}")
+        if s.skip_if is not False:
+            lines.append(f"    skip_if:  {s.skip_if.strip() if isinstance(s.skip_if, str) else 'true'}")
         if s.saves:
             lines.append(f"    saves:    {', '.join(s.saves)}")
         if s.consumes:
@@ -170,9 +174,8 @@ def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[st
             for var_name in s.consumes:
                 # analyze_dataflow lists a consume only when an earlier stage
                 # saved the name, so every one has a producing edge.
-                producer = producer_of[(s.index, var_name)]
-                producer_name = flow.stages[producer].name or f"stage {producer + 1}"
-                parts.append(f"{var_name} (from #{producer + 1} {producer_name})")
+                sources = [f"#{p + 1} {flow.stages[p].name or f'stage {p + 1}'}" for p in sorted(producers_of[(s.index, var_name)], reverse=True)]
+                parts.append(f"{var_name} (from {', else '.join(sources)})")
             lines.append(f"    consumes: {', '.join(parts)}")
         if s.marks:
             lines.append(f"    marks:    {', '.join(s.marks)}")
@@ -212,7 +215,10 @@ def _to_mermaid(flow: DataFlow, direction: str = "TD") -> str:
         label = f"{s.index + 1} · {s.name}" if s.name else f"{s.index + 1}"
         lines.append(f'    S{s.index}["{_mermaid_label(label)}"]')
     for edge in flow.edges:
-        lines.append(f"    S{edge.producer} -->|{', '.join(edge.vars)}| S{edge.consumer}")
+        # Dotted from a stage that may skip (skip_if): the values may come from
+        # an earlier producer instead (its own edge), or never.
+        arrow = "-->" if flow.stages[edge.producer].skip_if is False else "-.->"
+        lines.append(f"    S{edge.producer} {arrow}|{', '.join(edge.vars)}| S{edge.consumer}")
     return "\n".join(lines)
 
 

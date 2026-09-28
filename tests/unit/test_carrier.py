@@ -1343,6 +1343,119 @@ def test_initialization_failure_is_sticky(monkeypatch):
     assert len(calls) == 1
 
 
+class TestSkipIf:
+    """``skip_if`` decides once, when the stage is about to run: after the abort
+    gate and the stage's own substitutions, before the parallel config and any
+    request. A skip sends nothing and commits no saves; that it leaves the
+    chain healthy is the report hook's, pinned by the integration suite."""
+
+    @staticmethod
+    def _run(stage_fields: dict, fixtures: dict | None = None, carrier: type[Carrier] | None = None) -> tuple[type[Carrier], list[httpx.Request]]:
+        """Run one stage saving ``v`` from a mock server answering 200, on
+        ``carrier`` (a fresh one by default); what it sent comes back too."""
+        sent: list[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return httpx.Response(200, json={"v": 1})
+
+        cls = carrier if carrier is not None else _make_carrier_subclass()
+        cls.client = httpx.Client(transport=httpx.MockTransport(respond))
+        stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/"}, "response": [{"save": {"jmespath": {"v": "v"}}}], **stage_fields})
+        try:
+            cls.execute_stage(stage, fixtures or {})
+        finally:
+            cls.client.close()
+        return cls, sent
+
+    @pytest.mark.parametrize(
+        ("stage_fields", "fixtures", "global_context"),
+        [
+            # pytest hands a stage its fixtures and parametrize parameters alike.
+            pytest.param({}, {"flag": True}, {}, id="fixture-or-parameter"),
+            pytest.param({}, {}, {"flag": True}, id="scenario-substitution-or-earlier-save"),
+            # Evaluated after the stage's substitutions, which shadow a save.
+            pytest.param({"substitutions": [{"vars": {"flag": True}}]}, {}, {"flag": False}, id="stage-substitution"),
+        ],
+    )
+    def test_skips_when_it_holds(self, stage_fields, fixtures, global_context):
+        cls = _make_carrier_subclass(global_context=ChainMap(global_context))
+        with pytest.raises(pytest.skip.Exception, match=r"^skip_if: \{\{ flag \}\}$"):
+            self._run({"skip_if": " {{ flag }} ", **stage_fields}, fixtures, carrier=cls)
+        assert "v" not in cls.global_context
+        assert (cls.aborted, cls.last_request, cls.last_exchanges) == (False, None, [])
+
+    def test_runs_when_it_does_not_hold(self):
+        cls, sent = self._run({"skip_if": "{{ flag }}"}, {"flag": False})
+        assert len(sent) == 1
+        assert cls.global_context["v"] == 1
+
+    def test_literal_true_skips_before_anything_runs(self, monkeypatch):
+        """A literal reads no context, so neither the scenario's initialization
+        nor the stage's substitutions run for a stage that skips anyway."""
+
+        def not_called(*args, **kwargs):
+            raise AssertionError("resolved for a stage that skips")
+
+        monkeypatch.setattr(carrier_module, "process_substitutions", not_called)
+        cls = _make_carrier_subclass(scenario=Scenario(), _initialized=False)
+        with pytest.raises(pytest.skip.Exception, match=r"^skip_if: true$"):
+            self._run({"skip_if": True, "substitutions": [{"vars": {"x": 1}}]}, carrier=cls)
+        assert not cls._initialized
+
+    @pytest.mark.parametrize(
+        ("value", "got"),
+        [
+            # Truthy as a string: by truthiness, the stage would skip.
+            pytest.param("false", "str", id="string"),
+            # A credential, as `{{ token }}` for "skip when there is a token"
+            # renders: the message names its type, never the value.
+            pytest.param("s3cret-token", "str", id="credential"),
+            pytest.param(1, "int", id="number"),
+            # A JMESPath save of a missing key: read as false, the stage would run.
+            pytest.param(None, "None", id="none"),
+        ],
+    )
+    def test_value_that_is_no_bool_fails_the_stage(self, value, got):
+        cls = _make_carrier_subclass()
+        with pytest.raises(pytest.fail.Exception) as excinfo:
+            self._run({"skip_if": "{{ answer }}"}, {"answer": value}, carrier=cls)
+        assert str(excinfo.value) == f"skip_if must evaluate to bool, got {got} from '{{{{ answer }}}}'"
+        assert "v" not in cls.global_context
+
+    @pytest.mark.parametrize(
+        ("stage_fields", "name"),
+        [
+            # One decision per stage, before any iteration exists.
+            pytest.param({"skip_if": "{{ item == 1 }}", "parallel": {"foreach": [{"individual": {"item": [1, 2]}}]}}, "item", id="foreach-parameter"),
+            pytest.param({"skip_if": "{{ response.status == 500 }}"}, "response", id="response"),
+        ],
+    )
+    def test_out_of_scope_name_fails_the_stage(self, stage_fields, name):
+        with pytest.raises(pytest.fail.Exception, match=rf"^Failed to evaluate skip_if template: Undefined variable in expression .*'{name}' is not defined"):
+            self._run(stage_fields)
+
+    @pytest.mark.parametrize(
+        ("always_run", "skip_if", "outcome", "reason"),
+        [
+            # The abort gate comes first: this skip_if is never evaluated.
+            pytest.param(False, "{{ undefined_name }}", pytest.skip.Exception, "Flow aborted", id="aborted"),
+            # always_run lets the stage past the gate, and skip_if still counts.
+            pytest.param(True, "{{ true }}", pytest.skip.Exception, "skip_if: {{ true }}", id="always-run-skips"),
+            pytest.param(True, "{{ false }}", None, None, id="always-run-runs"),
+        ],
+    )
+    def test_after_an_abort(self, always_run, skip_if, outcome, reason):
+        cls = _make_carrier_subclass(aborted=True)
+        if outcome is None:
+            _, sent = self._run({"always_run": always_run, "skip_if": skip_if}, carrier=cls)
+            assert len(sent) == 1
+        else:
+            with pytest.raises(outcome) as excinfo:
+                self._run({"always_run": always_run, "skip_if": skip_if}, carrier=cls)
+            assert str(excinfo.value) == reason
+
+
 class TestParallelIterationCap:
     """Exceeding max_parallel_iterations is rejected before any request runs."""
 
@@ -1983,9 +2096,17 @@ class TestContextManagerFixtureCleanup:
         assert exit_errors == ["Iteration 2: Exiting the context manager from fixture 'a' failed: RuntimeError: commit of 2 rejected"]
 
     @pytest.mark.parametrize(
+        ("aborted", "stage_fields", "reason"),
+        [
+            pytest.param(True, {"always_run": "{{ a() == 'never' }}"}, "Flow aborted", id="always-run"),
+            # Evaluated after the stage's substitutions, which enter one too.
+            pytest.param(False, {"substitutions": [{"vars": {"t": "{{ b() }}"}}], "skip_if": "{{ a() == 'a' }}"}, "skip_if: {{ a() == 'a' }}", id="skip-if"),
+        ],
+    )
+    @pytest.mark.parametrize(
         ("exit_error", "outcome", "message"),
         [
-            pytest.param(None, pytest.skip.Exception, "Flow aborted", id="skipped"),
+            pytest.param(None, pytest.skip.Exception, None, id="skipped"),
             # A skipped stage has not failed, so the error on exit fails it.
             pytest.param(
                 RuntimeError("rollback failed"),
@@ -1995,21 +2116,24 @@ class TestContextManagerFixtureCleanup:
             ),
         ],
     )
-    def test_exited_when_the_stage_skips(self, exit_error, outcome, message):
-        """An ``always_run`` template can call a factory fixture and still skip the stage."""
+    def test_exited_when_the_stage_skips(self, aborted, stage_fields, reason, exit_error, outcome, message):
+        """An ``always_run`` or ``skip_if`` template can call a factory fixture
+        and still skip the stage, which commits no saves either way."""
         events: list[str] = []
         client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
-        cls = _make_carrier_subclass(client=client, aborted=True)
-        stage = Stage.model_validate({"name": "s", "always_run": "{{ a() == 'never' }}", "request": {"url": "http://mock/"}})
+        cls = _make_carrier_subclass(client=client, aborted=aborted)
+        stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/"}, **stage_fields})
         try:
             # Both caught, so a wrong outcome fails this test rather than skipping it.
             with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
-                cls.execute_stage(stage, {"a": self._resource(events, "a", exit_error)})
+                cls.execute_stage(stage, {"a": self._resource(events, "a", exit_error), "b": self._resource(events, "b")})
         finally:
             client.close()
         assert excinfo.type is outcome
-        assert str(excinfo.value) == message
-        assert events == ["enter a", "exit a"]
+        assert str(excinfo.value) == (message or reason)
+        entered = ["enter b", "enter a", "exit a", "exit b"] if "skip_if" in stage_fields else ["enter a", "exit a"]
+        assert events == entered
+        assert cls.active_context_managers == []
 
     @pytest.mark.parametrize(
         "stage_fields",

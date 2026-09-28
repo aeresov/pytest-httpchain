@@ -479,7 +479,11 @@ credentials, nor with the scenario's.
 An exact-match header string is a value in the `headers` map rather than a
 field, and fails validation when its template renders to `null`; so does an
 entry of a `verify.status` list (`["{{ created_status }}", 409]`), and a
-`save.regex` pattern written as a string.
+`save.regex` pattern written as a string. A stage's
+[`skip_if`](scenarios.md#skipping-a-stage-at-runtime) and a verify expression
+must evaluate to a boolean, so one that renders to `null` fails the stage
+(`skip_if must evaluate to bool, got None from ...`) instead of
+being read as false.
 
 If something else in the same request or setting, or the same verify check
 (a header matcher, a `jmespath` entry), is invalid too, pydantic's report on it

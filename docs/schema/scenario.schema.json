@@ -2539,12 +2539,42 @@
                   "examples": [
                     true,
                     "{{ should_run }}",
-                    "{{ env == 'production' }}"
+                    "{{ target == 'production' }}"
                   ]
                 }
               ],
               "title": "Always Run",
               "description": "Execute even if a previous stage failed. A template expression is evaluated (truthiness) when the chain is aborted, against fixtures, parametrize parameters, scenario substitutions, and previously saved variables."
+            },
+            "skip_if": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        true,
+                        false
+                      ],
+                      "type": "boolean"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    }
+                  ],
+                  "default": false,
+                  "examples": [
+                    true,
+                    "{{ env('TARGET_ENV', 'dev') == 'production' }}",
+                    "{{ not get('feature_enabled', false) }}"
+                  ]
+                }
+              ],
+              "title": "Skip If",
+              "description": "Skip the stage when true. A template expression is evaluated when the stage is about to run and must evaluate to a boolean, against fixtures, parametrize parameters, scenario substitutions, previously saved variables, and the stage's own substitutions. A skipped stage saves nothing and does not abort the chain."
             },
             "parametrize": {
               "anyOf": [

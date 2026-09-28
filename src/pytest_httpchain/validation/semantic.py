@@ -40,6 +40,7 @@ from pytest_httpchain.scoping import (
     extract_uncalled_builtins,
     raw_stages,
     response_step_templates,
+    saved_in_stage,
     stage_scopes,
     substitution_names,
     substitution_step_templates,
@@ -297,6 +298,23 @@ def _parametrize_rendered_values(raw_parametrize: Any) -> Any:
     return raw_parametrize
 
 
+def _skippable_save_diagnostic(scenario: Scenario, i: int, where: str, name: str, location: str) -> Diagnostic:
+    """HTTPCHAIN003 for a reference to ``name`` that only earlier stages with a
+    ``skip_if`` save (`scoping.StageScopes.skippable_saves`): a skip leaves the
+    chain healthy, so stage ``i`` runs, and finds the name undefined, whenever
+    those stages skipped. ``where`` is the phase that reads it."""
+    savers = [f"'{stage.name}'" for stage in scenario.stages[:i] if name in saved_in_stage(stage)]
+    if len(savers) == 1:
+        saved = f"which only stage {savers[0]} saves, and it has skip_if: when it skips"
+    else:
+        saved = f"which only stages {', '.join(savers)} save, and each has skip_if: when they all skip"
+    return diag(
+        DiagnosticCode.UNDEFINED_VAR,
+        f"Stage '{scenario.stages[i].name}': {where} references '{name}', {saved}, '{name}' is undefined here — read it with get('{name}', <default>){_builtin_fallback({name})}",
+        location=location,
+    )
+
+
 def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined: DefinedNames) -> Iterator[Diagnostic]:
     """HTTPCHAIN003/004/036: order-aware data-flow analysis.
 
@@ -304,9 +322,11 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
     ``scoping.stage_scopes``. An unavailable reference is a FORWARD_REF when the
     name is saved later (by a later stage, or by a later step of this stage's
     own response) or defined by a later substitution step, else an UNDEFINED_VAR.
-    A built-in's name the scenario defines too, called or passed as a function
-    where that definition is not in scope, gets the built-in instead: a
-    BUILTIN_STANDS_IN.
+    An available one is an UNDEFINED_VAR too where only earlier stages with a
+    ``skip_if`` save it, and nothing else of that name is in scope: a skipped
+    stage, unlike a failed one, does not stop the stages after it. A built-in's
+    name the scenario defines too, called or passed as a function where that
+    definition is not in scope, gets the built-in instead: a BUILTIN_STANDS_IN.
     """
     scopes = stage_scopes(scenario)
     all_saved = extract_saved_variables(scenario)
@@ -321,6 +341,8 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
 
     for i, stage in enumerate(scenario.stages):
         scope = scopes[i]
+        # The same phases, as they are when every earlier stage with a skip_if skipped.
+        skipped = scope.when_skipped
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
         parametrize_refs, parametrize_stand_ins = _template_refs(_parametrize_rendered_values(raw.get("parametrize")), defined)
@@ -344,6 +366,8 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
         always_run_refs, always_run_stand_ins = _template_refs(raw.get("always_run"), defined)
         for name in sorted(always_run_refs):
             if name in scope.always_run:
+                if name not in skipped.always_run:
+                    yield _skippable_save_diagnostic(scenario, i, "always_run", name, f"stages[{i}].always_run")
                 continue
             if name in all_saved:
                 j = first_save_stage[name]
@@ -362,29 +386,40 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
         if always_run_stand_ins := always_run_stand_ins - scope.always_run:
             yield _stand_in_diagnostic(f"Stage '{stage.name}': always_run", always_run_stand_ins, f"stages[{i}].always_run")
 
-        # (phase, template text, names available to it). Each substitution and
-        # response step is checked against its own scope, not the whole stage's:
-        # checking cumulatively is what catches intra-list forward references. A name
-        # referenced by several steps is reported once. The phase is carried
-        # rather than a bare "is this pre-response?" flag because it is also what
-        # the author needs told: "undefined in this stage" sends them hunting,
-        # "undefined in this stage's request" does not.
-        phase_checks: list[tuple[str, Any, frozenset[str]]] = [
-            ("substitutions", templates, scope.always_run | prior_sub_names) for templates, prior_sub_names in substitution_step_templates(raw.get("substitutions"))
+        # (phase, template text, names available to it, and those of them
+        # still available when every earlier stage with a skip_if skipped).
+        # Each substitution and response step is checked against its own
+        # scope, not the whole stage's: checking cumulatively is what catches
+        # intra-list forward references. A name referenced by several steps is
+        # reported once. The phase is carried rather than a bare "is this
+        # pre-response?" flag because it is also what the author needs told:
+        # "undefined in this stage" sends them hunting, "undefined in this
+        # stage's request" does not.
+        phase_checks: list[tuple[str, Any, frozenset[str], frozenset[str]]] = [
+            ("substitutions", templates, scope.always_run | prior_sub_names, skipped.always_run | prior_sub_names)
+            for templates, prior_sub_names in substitution_step_templates(raw.get("substitutions"))
         ]
-        phase_checks += [("parallel", raw.get("parallel"), scope.pre_iteration), ("request", raw.get("request"), scope.request)]
-        phase_checks += [("response", templates, scope.response | prior_saves) for templates, prior_saves in response_step_templates(stage, raw.get("response"))]
+        phase_checks += [
+            ("skip_if", raw.get("skip_if"), scope.pre_iteration, skipped.pre_iteration),
+            ("parallel", raw.get("parallel"), scope.pre_iteration, skipped.pre_iteration),
+            ("request", raw.get("request"), scope.request, skipped.request),
+        ]
+        phase_checks += [
+            ("response", templates, scope.response | prior_saves, skipped.response | prior_saves) for templates, prior_saves in response_step_templates(stage, raw.get("response"))
+        ]
 
         # Insertion order, so output stays deterministic across runs.
         undefined_by_phase: dict[str, set[str]] = {}
         stand_ins_by_phase: dict[str, set[str]] = {}
         seen_refs: dict[str, set[str]] = {}
-        for phase, templates, available in phase_checks:
+        for phase, templates, available, available_when_skipped in phase_checks:
             refs, stand_ins = _template_refs(templates, defined)
             refs -= seen_refs.setdefault(phase, set())
             seen_refs[phase] |= refs
             for name in sorted(refs):
                 if name in available:
+                    if name not in available_when_skipped:
+                        yield _skippable_save_diagnostic(scenario, i, phase, name, f"stages[{i}].{phase}")
                     continue
                 if name in scope.stage_substitutions:
                     yield diag(
@@ -417,7 +452,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
 
 
 # The raw stage fields a template renders in, in resolution order.
-_STAGE_TEMPLATE_FIELDS = ("parametrize", "always_run", "substitutions", "parallel", "request", "response")
+_STAGE_TEMPLATE_FIELDS = ("parametrize", "always_run", "substitutions", "skip_if", "parallel", "request", "response")
 
 
 def _rendered_stage_field(stage: Stage, field: str, raw_value: Any) -> Any:

@@ -69,6 +69,11 @@ def _hide_ancestor_project_markers(monkeypatch):
         "scenario_fixtures_available.json",
         "comprehension_vars.json",  # a comprehension target is a local binding
         "always_run_refs_ok.json",  # fixtures, scenario substitutions, earlier saves
+        # skip_if sees the stage's own substitutions and parametrize
+        # parameters too. A name a stage that may skip saves is always there
+        # where a stage without skip_if (or with skip_if: false) saves it as
+        # well, and get() and exists() read one that may not be.
+        "skip_if_refs_ok.json",
         # foreach values resolve at execution against the full local context,
         # unlike parametrize values, so a stage substitution is in scope.
         "foreach_value_stage_scope.json",
@@ -347,6 +352,23 @@ DIAGNOSED = [
         [
             (C.FORWARD_REF, "stages[0].always_run", r"'created' before it is saved \(saved in stage 'create'\)"),
             (C.FORWARD_REF, "stages[1].always_run", "'self_saved', which is only saved in this stage's response"),
+        ],
+    ),
+    # skip_if decides once per stage, before any foreach iteration and before
+    # the stage's own response.
+    ("skip_if_out_of_scope.json", [(C.UNDEFINED_VAR, "stages[0].skip_if", r"^Stage 'fan_out': skip_if references potentially undefined variable\(s\): \['item'\]$")]),
+    ("skip_if_forward_ref.json", [(C.FORWARD_REF, "stages[0].skip_if", r"^Stage 'create': skip_if references 'sid', which is only saved in this stage's response$")]),
+    # A skipped stage saves nothing and the chain goes on: a later stage then
+    # reads a name only it saves, and fails.
+    (
+        "skip_if_skippable_save.json",
+        [
+            (
+                C.UNDEFINED_VAR,
+                "stages[1].request",
+                r"^Stage 'profile': request references 'token', which only stage 'login' saves, and it has skip_if: when it skips, 'token' is undefined "
+                r"here — read it with get\('token', <default>\)$",
+            )
         ],
     ),
     # Template parametrize VALUES resolve at collection against scenario

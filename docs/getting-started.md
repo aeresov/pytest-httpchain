@@ -180,6 +180,7 @@ Use Jinja-style `{{ expression }}` syntax to reference context values in any req
 2. Stages execute in order
 3. Each stage:
     - Processes stage-level substitutions
+    - Skips the stage if its `skip_if` holds, leaving the chain running
     - Renders template expressions
     - Executes the HTTP request
     - Processes response steps (verify/save)

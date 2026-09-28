@@ -43,6 +43,7 @@ Each stage represents a single HTTP request:
     "marks": [],
     "fixtures": [],
     "always_run": false,
+    "skip_if": false,
     "substitutions": [],
     "parametrize": null,
     "parallel": null,
@@ -58,6 +59,7 @@ Each stage represents a single HTTP request:
 | `marks` | array | pytest markers for this stage |
 | `fixtures` | array | pytest fixtures for this stage |
 | `always_run` | boolean or template | Execute even if prior stages failed |
+| `skip_if` | boolean or template | Skip the stage when true, deciding when it is about to run (see [Skipping a stage at runtime](#skipping-a-stage-at-runtime)) |
 | `substitutions` | array/object | Stage-specific variables |
 | `parametrize` | array/object | Parametrization steps that expand the stage into multiple test cases (see [Parametrization](../advanced/parametrization.md)) |
 | `parallel` | object | Parallel execution config (`repeat`/`foreach`) for running the request concurrently (see [Parallel Execution](../advanced/parallel.md)) |
@@ -150,6 +152,42 @@ The `cleanup` stage runs even if `setup` or `test` fails.
 ```
 
 After a failure, `cleanup` runs only if `create` got far enough to save `resource_id` — there is nothing to delete otherwise. A stage that fails discards its saves, which is why the example guards with `exists()` instead of referencing `resource_id` directly. The result is plain Python truthiness, so beware that a saved *string* `"false"` is truthy. The validator checks `always_run` references against this scope (`HTTPCHAIN003`/`HTTPCHAIN004`).
+
+### Skipping a stage at runtime
+
+A `skip` mark decides at collection, and `always_run` only counts once a stage has failed. `skip_if` skips a stage on a condition known only when the stage is about to run: a setting, a fixture, or what an earlier stage saved.
+
+```json
+{
+    "substitutions": [{"vars": {"target": "{{ env('TARGET_ENV', 'dev') }}"}}],
+    "stages": [
+        {
+            "name": "login",
+            "request": {"url": "https://api.example.com/login", "method": "POST"},
+            "response": [{"save": {"jmespath": {"token": "token", "mfa_required": "mfa"}}}]
+        },
+        {
+            "name": "confirm_mfa",
+            "skip_if": "{{ not mfa_required }}",
+            "request": {"url": "https://api.example.com/mfa", "method": "POST", "headers": {"Authorization": "Bearer {{ token }}"}}
+        },
+        {
+            "name": "reset_data",
+            "skip_if": "{{ target == 'prod' }}",
+            "request": {"url": "https://api.example.com/reset", "method": "POST", "headers": {"Authorization": "Bearer {{ token }}"}}
+        }
+    ]
+}
+```
+
+`confirm_mfa` runs only when the login asked for it, and `reset_data` never against production.
+
+-   **When**: `skip_if` is evaluated when the stage is about to run, after the stage's own `substitutions` and before its `parallel` config and any request. In a chain a failure aborted, a stage without `always_run` skips as ever ("Flow aborted") and its `skip_if` is not evaluated; one that `always_run` lets through still skips when its `skip_if` holds.
+-   **Scope**: what the stage's request sees but the iteration parameters: fixtures, parametrize parameters, scenario-level substitutions, variables saved by earlier stages, and the stage's own substitutions. Not the `parallel.foreach` parameters, since the stage decides once for all its iterations, and not `response`, since nothing has been sent yet. A parametrized stage decides for each of its parameters.
+-   **The result must be a boolean**, as a verify expression's must: a template that evaluates to anything else fails the stage, `skip_if must evaluate to bool, got str from '{{ flag }}'`, rather than skip it, or run it, by truthiness, which would silently read a saved string `"false"` as true or a `null` from a missing key as false. The message names the value's type, not the value, which may be a credential (`{{ token }}`). Compare explicitly (`{{ flag == 'yes' }}`) or convert (`{{ bool(count) }}`). `true` and `false` can be written as they are: `"skip_if": true` skips the stage without even running its substitutions.
+-   **A skip is no failure**: the stage is reported skipped with the reason `skip_if: <the template>`, sends nothing, saves nothing, and the stages after it run. A context manager a factory fixture returned for its `substitutions` or `skip_if` is exited as the stage ends, as for any stage.
+
+Because the chain goes on, a later stage finds nothing that a skipped stage would have saved, or, when an earlier stage saved the same name, that stage's value: a `refresh` stage with a `skip_if` that re-saves the `token` a `login` saved leaves the login's token in place when it skips. Read a name that may be missing with `get()` and a default (`{{ get('token', 'anonymous') }}`). The validator reports a name that only stages with a `skip_if` save, read directly by a later stage, as potentially undefined (`HTTPCHAIN003`), in whichever of the later stage's fields reads it. A stage that never skips (no `skip_if`, or `skip_if: false`) saving the same name too, or a fixture or substitution of that name where it is read, settles it. The validator does not evaluate conditions, so a stage that itself skips unless the name is there (`"skip_if": "{{ not exists('token') }}"`) is reported all the same: read the name with `get()` there too. The saves of a stage that may *fail* count as there: a failure aborts the chain, and a stage after it runs only with `always_run`, which is why the `always_run` example above guards with `exists()`. `skip_if` references themselves are checked against the scope above (`HTTPCHAIN003`/`HTTPCHAIN004`).
 
 ### The shared HTTP client
 
@@ -387,7 +425,7 @@ Scenario-level fixtures are requested by every stage. A few consequences to keep
 -   pytest scoping still applies: a function-scoped fixture is set up again for each stage. Use `class`- or `session`-scoped fixtures for state that must survive across stages.
 -   Fixtures can be referenced in *stage* templates only. Scenario-level `substitutions`, `auth`, `ssl` and `client` resolve once per scenario (even one that runs once per param of a [parametrized fixture](#parametrized-fixtures)) — when its first stage runs (or already at collection when stage `parametrize` values contain templates, since pytest needs concrete parameter values to collect) — against a context that deliberately excludes fixture values; the validator rejects fixture references there (`HTTPCHAIN016`).
 -   A fixture whose value is itself **callable** is treated as a factory: it is wrapped so `{{ my_fixture(...) }}` invokes it. The wrapper is a different object than the original callable, so attribute access on it (`{{ my_fixture.some_attr }}`) is not available — call it instead.
--   When such a call returns a **context manager**, it is entered and the template gets the value it yields. It is exited when the stage ends, whether the stage passed, failed or was skipped, and before pytest tears down the stage's fixtures, so on exit the context manager can still use the fixtures it is built on (a transaction on a `class`-scoped connection fixture, say). One entered by the request or a response step is exited as soon as the response steps are done, in the thread that ran them, and one entered by the stage's `always_run`, `substitutions` or `parallel` after that. In a `parallel` stage, each iteration exits its own when it ends, in its worker thread: a context manager tied to its thread (a `sqlite3` connection) works, and one iteration's transaction does not stay open while the others run. Several are exited in reverse order of entry, and, as with a yield fixture's teardown, an exit is not told whether the stage failed. The yielded value is only good within that stage: don't save it for a later one.
+-   When such a call returns a **context manager**, it is entered and the template gets the value it yields. It is exited when the stage ends, whether the stage passed, failed or was skipped, and before pytest tears down the stage's fixtures, so on exit the context manager can still use the fixtures it is built on (a transaction on a `class`-scoped connection fixture, say). One entered by the request or a response step is exited as soon as the response steps are done, in the thread that ran them, and one entered by the stage's `always_run`, `substitutions`, `skip_if` or `parallel` after that. In a `parallel` stage, each iteration exits its own when it ends, in its worker thread: a context manager tied to its thread (a `sqlite3` connection) works, and one iteration's transaction does not stay open while the others run. Several are exited in reverse order of entry, and, as with a yield fixture's teardown, an exit is not told whether the stage failed. The yielded value is only good within that stage: don't save it for a later one.
 -   An exception raised when exiting such a context manager fails the stage, even a skipped one or one a user function xfailed, with a message naming the fixture (`Exiting the context manager from fixture 'transaction' failed: ...`). If the stage had already failed, its own failure message comes first. In a `parallel` stage it fails the iteration, which cancels the others, as any failing iteration does; a failing iteration cancels them before its own exits, so no queued iteration sends its request while a slow exit (a rollback, say) runs. An iteration still running when another one fails or skips the stage exits its own when it ends all the same. In a `parallel` stage, what an iteration's exits raise is labelled with the iteration (`Iteration 1: Exiting the context manager from fixture 'transaction' failed: ...`), bar the first line of the stage's failure, which names the iteration already (`Parallel execution failed at iteration 1: ...`); the lines left unlabelled come from the context managers the stage entered outside its iterations (in `substitutions`, say). Like any failure, it discards the stage's saves and aborts the chain.
 
 #### Parametrized fixtures

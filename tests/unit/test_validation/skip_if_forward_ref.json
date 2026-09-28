@@ -1,0 +1,14 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "create",
+            "skip_if": "{{ sid != '' }}",
+            "request": { "url": "{{ server }}/session", "method": "POST" },
+            "response": [
+                { "save": { "jmespath": { "sid": "id" } } },
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

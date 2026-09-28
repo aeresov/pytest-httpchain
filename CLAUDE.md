@@ -107,7 +107,7 @@ Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix config
 1. **Collection**: `plugin.py:JsonModule.collect()` loads JSON, resolves `$ref`, validates against `Scenario` model, then runs `validation.check_scenario()` which returns coded `Diagnostic` objects — error-severity → `CollectError`, warning-severity → `ScenarioValidationWarning`
 2. **Class generation**: `factory.py:create_test_class()` creates dynamic test class with stage methods
 3. **Execution**: Each stage method calls `Carrier.execute_stage()` which:
-   - Processes substitutions into context
+   - Processes substitutions into context, then evaluates `skip_if` against it (a skip saves nothing and leaves the chain healthy)
    - Walks request model through template engine, then `request_builder.build_request_kwargs()`
    - Executes HTTP request via httpx
    - Processes response steps via `response_steps.process_verify()` / `process_save()`; a verify step gets the declared model and the carrier's renderer (`_verify_renderer`), which renders the step's values one at a time with one evaluator (`templates.walker`), all before the first check runs, so a value that does not render is one failure, listed in its check's place among the step's

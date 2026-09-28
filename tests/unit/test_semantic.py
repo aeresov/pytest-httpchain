@@ -344,6 +344,91 @@ def test_undefined_names_are_reported_per_phase():
     assert "nope_resp" in undefined["stages[0].response"]
 
 
+def _saving(name: str, *saved: str, **fields) -> dict:
+    return {**_STAGE, "name": name, "response": [{"save": {"jmespath": dict.fromkeys(saved, "a")}}, {"verify": {"status": 200}}], **fields}
+
+
+READ_TOKEN = "https://x.test/{{ token }}"
+
+
+@pytest.mark.parametrize(
+    ("reader", "location"),
+    [
+        pytest.param({"request": {"url": READ_TOKEN}}, "stages[1].request", id="request"),
+        pytest.param({"always_run": "{{ token != '' }}"}, "stages[1].always_run", id="always-run"),
+        pytest.param({"substitutions": [{"vars": {"t": "{{ token }}"}}]}, "stages[1].substitutions", id="substitutions"),
+        pytest.param({"skip_if": "{{ token == '' }}"}, "stages[1].skip_if", id="skip-if"),
+        pytest.param({"parallel": {"repeat": 2, "max_concurrency": "{{ token }}"}}, "stages[1].parallel", id="parallel"),
+        pytest.param({"response": [{"verify": {"expressions": ["{{ token != '' }}"]}}]}, "stages[1].response", id="response"),
+    ],
+)
+def test_name_only_a_stage_that_may_skip_saves_is_potentially_undefined(reader, location):
+    """In every phase of every later stage: a skipped stage, unlike a failed
+    one, does not stop the stages after it."""
+    diags = _check([_saving("login", "token", skip_if="{{ flag }}"), {**_STAGE, "name": "use", **reader}], substitutions=[{"vars": {"flag": True}}])
+    phase = location.rsplit(".", 1)[1]
+    assert [(d.code, d.location, d.message) for d in diags if d.code != C.NO_VERIFY] == [
+        (
+            C.UNDEFINED_VAR,
+            location,
+            f"Stage 'use': {phase} references 'token', which only stage 'login' saves, and it has skip_if: when it skips, 'token' is undefined here "
+            f"— read it with get('token', <default>)",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stages", "flagged"),
+    [
+        # Absent only when both skipped.
+        pytest.param(
+            [_saving("a", "token", skip_if="{{ flag }}"), _saving("b", "token", skip_if=True), {**_STAGE, "request": {"url": READ_TOKEN}}],
+            "which only stages 'a', 'b' save, and each has skip_if: when they all skip, 'token' is undefined here",
+            id="several-stages-that-may-skip",
+        ),
+        # A stage that never skips saves it too, before or after the one that may.
+        pytest.param([_saving("a", "token"), _saving("b", "token", skip_if="{{ flag }}"), {**_STAGE, "request": {"url": READ_TOKEN}}], None, id="saved-for-sure-before"),
+        pytest.param([_saving("a", "token", skip_if="{{ flag }}"), _saving("b", "token"), {**_STAGE, "request": {"url": READ_TOKEN}}], None, id="saved-for-sure-after"),
+        pytest.param([_saving("a", "token", skip_if=False), {**_STAGE, "request": {"url": READ_TOKEN}}], None, id="skip-if-false"),
+        # Where something else of the name is in scope, it is read instead.
+        pytest.param(
+            [_saving("a", "token", skip_if="{{ flag }}"), {**_STAGE, "substitutions": [{"vars": {"token": "anon"}}], "request": {"url": READ_TOKEN}}],
+            None,
+            id="shadowed-by-a-stage-substitution",
+        ),
+        pytest.param([_saving("a", "token", skip_if="{{ flag }}"), {**_STAGE, "fixtures": ["token"], "request": {"url": READ_TOKEN}}], None, id="shadowed-by-a-fixture"),
+        pytest.param(
+            [_saving("a", "token", skip_if="{{ flag }}"), {**_STAGE, "response": [{"save": {"jmespath": {"token": "t"}}}, {"verify": {"expressions": ["{{ token }}"]}}]}],
+            None,
+            id="saved-by-an-earlier-step",
+        ),
+        # get() and exists() name it in a string: no reference.
+        pytest.param([_saving("a", "token", skip_if="{{ flag }}"), {**_STAGE, "request": {"url": "https://x.test/{{ get('token', 'anon') }}"}}], None, id="read-with-get"),
+    ],
+)
+def test_potentially_undefined_only_where_every_saver_may_skip(stages, flagged):
+    found = [d.message for d in _check(stages, substitutions=[{"vars": {"flag": True}}]) if d.code == C.UNDEFINED_VAR]
+    if flagged is None:
+        assert found == []
+    else:
+        assert len(found) == 1, found
+        assert flagged in found[0]
+
+
+def test_builtin_named_save_of_a_stage_that_may_skip_says_what_is_read_instead():
+    diags = _check([_saving("clock", "timestamp", skip_if=True), {**_STAGE, "request": {"url": "https://x.test/?since={{ timestamp }}"}}])
+    assert [d.message for d in diags if d.code == C.UNDEFINED_VAR] == [
+        "Stage 's': request references 'timestamp', which only stage 'clock' saves, and it has skip_if: when it skips, 'timestamp' is undefined here "
+        "— read it with get('timestamp', <default>); where no definition of 'timestamp' is in scope, the name is the template built-in function, "
+        "not a value, and a template that renders to it fails the stage"
+    ]
+
+
+def test_uncalled_builtin_in_skip_if_is_reported_there():
+    diags = [d for d in _check([{**_STAGE, "skip_if": "{{ str(now) == '' }}"}]) if d.code == C.UNCALLED_BUILTIN]
+    assert [d.location for d in diags] == ["stages[0].skip_if"]
+
+
 @pytest.mark.parametrize("status", ["{{ nope }}", ["{{ nope }}", 304], "{{ [nope, 304] }}"], ids=["whole", "list-entry", "list-rendered"])
 def test_status_templates_are_checked_in_every_form(status):
     """A status list entry is read as the whole field is: the runtime renders

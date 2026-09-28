@@ -1,0 +1,35 @@
+{
+    "fixtures": ["server"],
+    "substitutions": [{ "vars": { "env": "dev" } }],
+    "stages": [
+        {
+            "name": "create",
+            "skip_if": "{{ env == 'prod' }}",
+            "request": { "url": "{{ server }}/resource", "method": "POST" },
+            "response": [
+                { "save": { "jmespath": { "resource_id": "id", "etag": "etag" } } },
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "list",
+            "skip_if": false,
+            "request": { "url": "{{ server }}/resource" },
+            "response": [
+                { "save": { "jmespath": { "etag": "etag", "count": "length(@)" } } },
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "inspect",
+            "parametrize": [{ "individual": { "verbose": [true, false] } }],
+            "substitutions": [{ "vars": { "limit": 10 } }],
+            "skip_if": "{{ not verbose or count > limit or not server or exists('resource_id') }}",
+            "request": {
+                "url": "{{ server }}/resource/{{ get('resource_id', 'none') }}",
+                "headers": { "If-Match": "{{ etag }}" }
+            },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

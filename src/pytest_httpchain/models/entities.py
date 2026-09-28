@@ -1203,7 +1203,14 @@ class Stage(Marked, Fixtured, Descripted):
         default=False,
         description="Execute even if a previous stage failed. A template expression is evaluated (truthiness) when the chain is aborted, "
         "against fixtures, parametrize parameters, scenario substitutions, and previously saved variables.",
-        examples=[True, "{{ should_run }}", "{{ env == 'production' }}"],
+        examples=[True, "{{ should_run }}", "{{ target == 'production' }}"],
+    )
+    skip_if: Literal[True, False] | TemplateExpressionOnly = Field(
+        default=False,
+        description="Skip the stage when true. A template expression is evaluated when the stage is about to run and must evaluate to a boolean, "
+        "against fixtures, parametrize parameters, scenario substitutions, previously saved variables, and the stage's own substitutions. "
+        "A skipped stage saves nothing and does not abort the chain.",
+        examples=[True, "{{ env('TARGET_ENV', 'dev') == 'production' }}", "{{ not get('feature_enabled', false) }}"],
     )
     parametrize: Parameters | None = Field(default=None, description="Stage parametrization steps")
     parallel: ParallelConfig | None = Field(default=None, description="Parallel execution configuration for load/stress testing.")

@@ -1,0 +1,37 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "create",
+            "description": "Fails before saving resource_id, and aborts the chain",
+            "request": { "url": "{{ server }}/bad" },
+            "response": [
+                { "verify": { "status": 200 } },
+                { "save": { "jmespath": { "resource_id": "id" } } }
+            ]
+        },
+        {
+            "name": "plain",
+            "description": "Skipped as 'Flow aborted': skip_if is not evaluated in an aborted chain",
+            "skip_if": "{{ false }}",
+            "request": { "url": "{{ server }}/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "delete",
+            "description": "Past the abort gate by always_run, then skipped by skip_if: nothing to delete",
+            "always_run": true,
+            "skip_if": "{{ not exists('resource_id') }}",
+            "request": { "url": "{{ server }}/bad" },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "report",
+            "description": "Past the abort gate by always_run, and its skip_if does not hold",
+            "always_run": true,
+            "skip_if": "{{ exists('resource_id') }}",
+            "request": { "url": "{{ server }}/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

@@ -36,7 +36,7 @@ Reuse arbitrary parts of your scenarios with JSONRef. Properties merge with type
 
 ### Multi-stage execution
 
-Each scenario contains 1+ stages executed in order. One stage failure stops the chain. Use `always_run` for cleanup stages that should execute regardless.
+Each scenario contains 1+ stages executed in order. One stage failure stops the chain. Use `always_run` for cleanup stages that should execute regardless, and `skip_if` to skip a stage on a condition known only once the chain is running, such as a value an earlier stage saved.
 
 ### Common data context
 

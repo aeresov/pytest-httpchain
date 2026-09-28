@@ -15,7 +15,8 @@ Phase                     In scope
                           substitutions, earlier stages' saves
 stage ``substitutions``   same as ``always_run``, plus PRIOR steps' names
                           (steps resolve strictly in order)
-``parallel`` config       the above plus this stage's substitutions
+``skip_if``               the above plus this stage's substitutions
+``parallel`` config       same as ``skip_if``
 request (per iteration)   the above plus ``foreach`` parameters
 response (per iteration)  the above plus the ``response`` metadata namespace,
                           plus PRIOR steps' saves (steps resolve in order)
@@ -24,6 +25,12 @@ response (per iteration)  the above plus the ``response`` metadata namespace,
 Stage ``parametrize`` *values* are the exception: they resolve at collection
 time against scenario substitutions only, which is why `StageScopes` exposes
 ``scenario_substitutions`` separately.
+
+An earlier stage's saves are in scope because it passed: one that failed
+aborted the chain, so only an ``always_run`` stage runs without them. One
+that skipped (``skip_if``) leaves the chain healthy, so every later stage runs
+without them; `StageScopes.skippable_saves` holds the names only such stages
+save, and `StageScopes.when_skipped` the scope without them.
 
 The template built-ins (``now()``, ``len()``, ``true``, ...) are in scope in
 every phase, beneath the user's names: a user name shadows a built-in of the
@@ -35,7 +42,7 @@ import ast
 import re
 from collections import ChainMap
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, NamedTuple
 
 from pytest_httpchain.models import (
@@ -474,6 +481,17 @@ class StageScopes:
     foreach_params: frozenset[str]
     saves: frozenset[str]
     earlier_saves: frozenset[str]
+    skippable_saves: frozenset[str]
+    """The ``earlier_saves`` that only stages with a ``skip_if`` save: none
+    is there when those stages skipped."""
+
+    @property
+    def when_skipped(self) -> "StageScopes":
+        """This scope as it is when every earlier stage with a ``skip_if``
+        skipped: without `skippable_saves`. A name in a phase's scope here but
+        not in the same phase of ``when_skipped`` is defined only when such a
+        stage ran."""
+        return replace(self, earlier_saves=self.earlier_saves - self.skippable_saves, skippable_saves=frozenset())
 
     @property
     def always_run(self) -> frozenset[str]:
@@ -483,7 +501,7 @@ class StageScopes:
 
     @property
     def pre_iteration(self) -> frozenset[str]:
-        """The ``parallel`` config. Twin: `with_stage_substitutions`."""
+        """``skip_if`` and the ``parallel`` config. Twin: `with_stage_substitutions`."""
         return self.always_run | self.stage_substitutions
 
     @property
@@ -520,12 +538,15 @@ class StageScopes:
 
 def stage_scopes(scenario: Scenario) -> list[StageScopes]:
     """Per-stage scopes in execution order. ``earlier_saves`` accumulates stage
-    by stage, mirroring the runtime commit of saves after a stage passes."""
+    by stage, mirroring the runtime commit of saves after a stage passes, and
+    ``skippable_saves`` holds those of them no stage without a ``skip_if``
+    saves (``skip_if: false`` never skips)."""
     scenario_substitutions = frozenset(substitution_names(scenario.substitutions))
     scenario_fixtures = frozenset(scenario.fixtures)
 
     scopes: list[StageScopes] = []
     earlier_saves: frozenset[str] = frozenset()
+    unskippable_saves: frozenset[str] = frozenset()
     for stage in scenario.stages:
         saves = frozenset(saved_in_stage(stage))
         scopes.append(
@@ -538,9 +559,12 @@ def stage_scopes(scenario: Scenario) -> list[StageScopes]:
                 foreach_params=frozenset(foreach_parameter_names(stage.parallel)),
                 saves=saves,
                 earlier_saves=earlier_saves,
+                skippable_saves=earlier_saves - unskippable_saves,
             )
         )
         earlier_saves |= saves
+        if stage.skip_if is False:
+            unskippable_saves |= saves
     return scopes
 
 
@@ -561,7 +585,8 @@ def stage_start_context(global_context: ChainMap[str, Any], stage_fixtures: Mapp
 
 
 def with_stage_substitutions(stage_start: ChainMap[str, Any], stage_substitutions: Mapping[str, Any]) -> ChainMap[str, Any]:
-    """The stage-local context: the base for every iteration."""
+    """The stage-local context: what ``skip_if`` and the ``parallel`` config
+    see, and the base for every iteration."""
     return stage_start.new_child(dict(stage_substitutions))
 
 

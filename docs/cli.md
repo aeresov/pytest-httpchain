@@ -84,15 +84,25 @@ test_save_jmespath.http.json
 ```
 
 The first line is the scenario's `description`, or the file name when it has
-none. A stage also lists its `marks:` when it declares any.
+none. A stage also lists its `marks:` when it declares any, and its `skip_if:`
+when it may [skip](usage/scenarios.md#skipping-a-stage-at-runtime). The chain
+goes on past a skipped stage, and a later stage then reads what an earlier
+stage saved under the same name, or finds nothing. So a name whose nearest
+producer has a `skip_if` lists every stage it may come from, nearest first,
+back to one without a `skip_if`: `token (from #2 refresh, else #1 login)`.
 
 `--format json` emits the same data-flow model (stages, edges, scenario
-fixtures and vars) for tooling.
+fixtures and vars) for tooling. Each stage carries its `skip_if` as declared,
+`false` when it has none.
 
 ## `graph`
 
 Render the stage data-flow as a [Mermaid](https://mermaid.js.org) flowchart.
-Edges are labelled with the variables that create the dependency.
+Edges are labelled with the variables that create the dependency. An edge out
+of a stage with a `skip_if` is dotted (`-.->`). When that stage skips, the
+consumer reads those names from an earlier stage that saved them, so every such
+stage has its own edge too, back to the nearest one without a `skip_if`, whose
+edge is solid; when none saved them, the consumer finds nothing.
 
 ```console
 $ pytest-httpchain graph tests/integration/examples/save/test_save_jmespath.http.json

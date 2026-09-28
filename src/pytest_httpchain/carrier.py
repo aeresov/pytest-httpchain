@@ -846,7 +846,8 @@ class Carrier:
     redaction: ClassVar[Redaction] = DEFAULT_REDACTION
     global_context: ClassVar[ChainMap[str, Any]] = ChainMap()
     # Entered by the running stage outside its iterations (in `always_run`,
-    # `substitutions`, `parallel`): exited at its end. Each iteration exits its own.
+    # `substitutions`, `skip_if`, `parallel`): exited at its end. Each
+    # iteration exits its own.
     active_context_managers: ClassVar[list[_EnteredContextManager]] = []
     max_parallel_iterations: ClassVar[int] = 10_000
     _initialized: ClassVar[bool] = False
@@ -931,18 +932,44 @@ class Carrier:
         except TemplatesError as e:
             raise StageExecutionError(f"Failed to evaluate always_run template: {e}") from e
 
+    @staticmethod
+    def _skip_if_holds(template: str, local_context: Mapping[str, Any]) -> bool:
+        """Evaluate a template ``skip_if`` against the stage-local context:
+        what the request sees but the ``parallel.foreach`` parameters, since
+        the stage decides once, before any iteration exists, and before
+        ``response``.
+
+        Unlike ``always_run``, the result must be a bool, as a verify
+        expression's must: a skip is silent, so a value that only looks like
+        a condition — a saved string ``"false"``, which is truthy, or the None
+        a JMESPath save of a missing key leaves — fails the stage rather than
+        skip it, or run it, by truthiness.
+        """
+        try:
+            value = walk(template, local_context)
+        except TemplatesError as e:
+            raise StageExecutionError(f"Failed to evaluate skip_if template: {e}") from e
+        if not isinstance(value, bool):
+            # The type alone, never the value: `{{ token }}`, written for "skip
+            # when there is a token", renders a credential, which the report
+            # redacts in the request but a failure line would print as it is.
+            got = "None" if value is None else type(value).__name__
+            raise StageExecutionError(f"skip_if must evaluate to bool, got {got} from {template.strip()!r}")
+        return value
+
     @classmethod
     def execute_stage(cls, stage: Stage, fixture_kwargs: dict[str, Any]) -> None:
         """Execute one stage end to end.
 
-        Gates on the abort/``always_run`` flow, layers the stage context, runs
-        the iteration matrix, and on full success commits the collected saves as
-        a new global-context layer. A failure is reported via ``pytest.fail``
-        and commits no saves, so the context never carries a timing-dependent
-        subset. The report hook owns chain-abort classification because only
-        pytest's final report knows whether xfail/strict and setup/teardown made
-        the item a genuine failure. However the stage ends, the context managers
-        its factory fixtures returned are exited before this returns (each
+        Gates on the abort/``always_run`` flow, layers the stage context, skips
+        the stage when its ``skip_if`` holds, runs the iteration matrix, and on
+        full success commits the collected saves as a new global-context layer.
+        A failure is reported via ``pytest.fail`` and commits no saves, so the
+        context never carries a timing-dependent subset; nor does a skip. The
+        report hook owns chain-abort classification because only pytest's final
+        report knows whether xfail/strict and setup/teardown made the item a
+        genuine failure. However the stage ends, the context managers its
+        factory fixtures returned are exited before this returns (each
         iteration's by `_run_iteration`), and before the saves are committed:
         one that raises on exit fails the stage, which then commits none.
         """
@@ -970,6 +997,12 @@ class Carrier:
             if cls.aborted and not cls._resolve_always_run(stage, stage_fixtures):
                 pytest.skip(reason="Flow aborted")
 
+            # A literal reads no context, so the stage skips before the
+            # scenario initializes or its own substitutions call anything, as
+            # a literal always_run is read without initializing.
+            if stage.skip_if is True:
+                pytest.skip(reason="skip_if: true")
+
             cls._ensure_initialized()
 
             stage_context = stage_start_context(cls.global_context, stage_fixtures)
@@ -981,6 +1014,13 @@ class Carrier:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("global context on start: %s", _context_dump(cls.global_context))
                 logger.debug("local context on start: %s", _context_dump(local_context))
+
+            # A skip is no failure: the report hook leaves the chain healthy.
+            # Like any outcome it is held back (`outcome`), so what the
+            # substitutions or the template entered is exited before it is
+            # raised, and the stage commits no saves.
+            if isinstance(stage.skip_if, str) and cls._skip_if_holds(stage.skip_if, local_context):
+                pytest.skip(reason=f"skip_if: {stage.skip_if.strip()}")
 
             parallel_config: ParallelConfig | None = _render_declared(stage.parallel, local_context, "parallel") if stage.parallel else None
             iteration_substitutions = cls._build_iteration_substitutions(parallel_config, cls.max_parallel_iterations)

@@ -37,6 +37,8 @@ def _edges(flow) -> list[dict]:
         # always_run resolves before stage substitutions exist, so it reads the
         # earlier save even when a stage substitution reuses the name.
         pytest.param({"substitutions": [{"vars": {"x": "local"}}], "always_run": "{{ x }}"}, ["x"], id="always-run"),
+        # skip_if resolves after them: a stage substitution shadows the save there.
+        pytest.param({"substitutions": [{"vars": {"x": "local"}}], "skip_if": "{{ x == y }}"}, ["y"], id="skip-if"),
         # parametrize values resolve against scenario scope, never saves.
         pytest.param({"parametrize": [{"individual": {"n": ["{{ x }}"]}}], "request": {"url": "https://x.test/{{ n }}"}}, [], id="parametrize-values"),
         # Stage substitutions and the parallel config resolve before any
@@ -125,6 +127,55 @@ def test_call_under_a_saved_name_consumes_nothing_where_a_fixture_shares_it():
     flow = analyze_dataflow(*_scenario([_producer(timestamp="meta.ts"), consumer, _stage("clock", fixtures=["timestamp"])]))
     assert flow.stages[1].consumes == []
     assert _edges(flow) == []
+
+
+def test_stage_that_may_skip_is_marked():
+    """``show`` and ``graph`` mark a stage whose skip_if may skip it, and so
+    leave its saves unmade: its skip_if as declared, ``false`` when it has none."""
+    stages = [{**_producer("maybe", x="v"), "skip_if": "{{ flag }}"}, _stage("never", skip_if=True), _stage("reader", request={"url": "https://x.test/{{ x }}"})]
+    flow = analyze_dataflow(*_scenario(stages))
+    assert [stage.skip_if for stage in flow.stages] == ["{{ flag }}", True, False]
+    assert _edges(flow) == [{"producer": 0, "consumer": 2, "vars": ["x"]}]
+
+
+def _maybe(name: str, **saves: str) -> dict:
+    """A producer with a skip_if: it may skip, the chain going on without its saves."""
+    return {**_producer(name, **saves), "skip_if": "{{ flag }}"}
+
+
+@pytest.mark.parametrize(
+    ("writers", "producers"),
+    [
+        # The case skip_if is for: a conditional refresh re-saves the login's
+        # token. When it skips, the reader runs on the login's: both are edges.
+        pytest.param([_producer("login", x="v"), _maybe("refresh", x="v")], [0, 1], id="unconditional-then-skippable"),
+        # The walk goes on through every skippable writer, to the nearest that
+        # never skips, and no further: the one before it is always shadowed.
+        pytest.param([_producer("a", x="v"), _producer("b", x="v"), _maybe("c", x="v"), _maybe("d", x="v")], [1, 2, 3], id="stops-at-nearest-unconditional"),
+        # Only skippable writers: every one may be the source (or none, HTTPCHAIN003).
+        pytest.param([_maybe("a", x="v"), _maybe("b", x="v")], [0, 1], id="all-skippable"),
+        # A skippable writer before the last unconditional one is shadowed by it.
+        pytest.param([_maybe("a", x="v"), _producer("b", x="v")], [1], id="skippable-then-unconditional"),
+        # `skip_if: false` never skips.
+        pytest.param([_producer("a", x="v"), {**_producer("b", x="v"), "skip_if": False}], [1], id="skip-if-false"),
+    ],
+)
+def test_a_name_whose_last_writer_may_skip_comes_from_the_writers_before(writers, producers):
+    """A re-saved name is attributed to its last writer, but a skipped stage
+    leaves the chain running on the earlier value: while the writer has a
+    skip_if, the one before it is a producer too, back to one that never skips."""
+    reader = _stage("reader", request={"url": "https://x.test/{{ x }}"})
+    flow = analyze_dataflow(*_scenario([*writers, reader]))
+    assert flow.stages[-1].consumes == ["x"]
+    assert _edges(flow) == [{"producer": p, "consumer": len(writers), "vars": ["x"]} for p in producers]
+
+
+def test_walk_back_is_per_name():
+    """Each name walks its own writers: one edge per producer, carrying the
+    names it may be the source of."""
+    stages = [_producer("login", x="v", y="v"), _maybe("refresh", x="v"), _stage("reader", request={"url": "https://x.test/{{ x }}/{{ y }}"})]
+    flow = analyze_dataflow(*_scenario(stages))
+    assert _edges(flow) == [{"producer": 0, "consumer": 2, "vars": ["x", "y"]}, {"producer": 1, "consumer": 2, "vars": ["x"]}]
 
 
 def test_latest_producer_selected():
