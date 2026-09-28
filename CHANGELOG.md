@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A `vars` substitution step now builds the template evaluator once, not once per variable.
+  Building it is a full pass over the context, so a step cost its number of variables times the
+  size of the context, even for variables that hold no template. Values without a template are now
+  kept as they are, without a walk. 300 variables against a 5,000-name context took about 0.3 s
+  and now take about 5 ms, or well under 1 ms when no value is a template.
+
 ### Fixed
 
 - A body schema file (`verify.body.schema: "./schemas/x.json"`) whose meta-check crashes now

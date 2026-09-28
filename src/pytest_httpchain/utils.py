@@ -9,7 +9,7 @@ rather than introducing a second error type for the same malformed input.
 import ast
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,7 @@ import pytest
 
 from pytest_httpchain.errors import SchemaFileError, StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, Substitution, VarsSubstitution
-from pytest_httpchain.templates import walk
+from pytest_httpchain.templates import contains_template, walk, walker
 from pytest_httpchain.userfunc import call_target, wrap_function
 
 logger = logging.getLogger(__name__)
@@ -139,11 +139,13 @@ def process_substitutions(
     """
     result: dict[str, Any] = {}
     for step in substitutions:
-        # Flattened per step, deliberately: `walk()` rebuilds its evaluator from
-        # a full pass over whatever mapping it is handed, so layering a ChainMap
-        # here would be re-walked once per rendered VALUE — measurably worse than
-        # the single copy it would replace. Rebuilding per step is also what keeps
-        # a step's own names out of its own scope.
+        # Flattened per step, deliberately: a snapshot taken before the step
+        # seeds anything, which keeps a step's own names out of its own scope.
+        # A vars step renders through one `walker()` over it, built at the first
+        # value that holds a template (so `result` may already hold the step's
+        # earlier names by then), and pays the evaluator's pass over the context
+        # once per step rather than once per value. Template-free values skip
+        # the walk entirely.
         current_context = {**(context or {}), **result}
         match step:
             case FunctionsSubstitution():
@@ -153,9 +155,12 @@ def process_substitutions(
                     logger.debug("Seeded %s", alias)
 
             case VarsSubstitution():
+                render: Callable[[Any], Any] | None = None
                 for key, value in step.vars.items():
-                    resolved_value = walk(value, current_context)
-                    result[key] = resolved_value
+                    if contains_template(value):
+                        render = render or walker(current_context)
+                        value = render(value)
+                    result[key] = value
                     # Names only, at DEBUG: a substituted value can be an auth
                     # token, and pytest attaches captured logs to failure
                     # reports. Same boundary as the carrier's context dumps.

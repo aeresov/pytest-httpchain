@@ -6,7 +6,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from pytest_httpchain.templates import TEMPLATE_BUILTINS, TemplatesError, contains_template, walk
+import pytest_httpchain.templates.substitution as substitution_module
+from pytest_httpchain.templates import TEMPLATE_BUILTINS, TemplatesError, contains_template, walk, walker
 from tests.unit.helpers import BEYOND_RECURSION_LIMIT, LOADABLE_BUT_DEEP, nested
 
 
@@ -89,6 +90,30 @@ class TestWalk:
         RecursionError traceback."""
         with pytest.raises(TemplatesError, match=r"^Value nested too deeply to substitute \(maximum recursion depth exceeded"):
             walk(nested("{{ x }}", BEYOND_RECURSION_LIMIT), {"x": 1})
+
+
+class TestWalker:
+    def test_one_evaluator_serves_every_call(self, monkeypatch):
+        """The evaluator is built when the walker is bound, not per call: that
+        per-call pass over the context is what the walker exists to save."""
+        builds: list[dict[str, Any]] = []
+        build = substitution_module._build_evaluator
+
+        def counting_build(context):
+            builds.append(dict(context))
+            return build(context)
+
+        monkeypatch.setattr(substitution_module, "_build_evaluator", counting_build)
+        render = walker({"x": 1})
+
+        assert [render("{{ x }}"), render({"k": ["{{ x + 1 }}"]}), render("x={{ x }}")] == [1, {"k": [2]}, "x=1"]
+        assert builds == [{"x": 1}]
+
+    def test_context_is_read_when_bound(self):
+        context = {"x": 1}
+        render = walker(context)
+        context["x"] = 2
+        assert render("{{ x }}") == 1
 
 
 @pytest.mark.parametrize(
