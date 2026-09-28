@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import pytest_httpchain.validation.loader as validation_loader
+from pytest_httpchain.body_schema import BodySchema
 from pytest_httpchain.models import JMESPathMatcher
 from pytest_httpchain.validation import SEVERITY, DiagnosticCode, load_scenario, resolve_root_path, validate_scenario
 from tests.unit.helpers import LOADABLE_BUT_DEEP, TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, nested, on_bounded_stack
@@ -101,6 +102,9 @@ def _hide_ancestor_project_markers(monkeypatch):
         "inline_schema_fragment_stage.json",
         # An '$include' PROPERTY maps to a schema object, never a string.
         "inline_schema_property_named_include.json",
+        # A $ref to a file is JSON Schema's own, resolved at runtime (HTTPCHAIN028
+        # flagged it when it could not be).
+        "inline_schema_file_ref.json",
         "deep_import_ok.json",
         # The built-in schemes import nothing, and their templates are in
         # scope: scenario substitutions at scenario level, an earlier save in
@@ -114,6 +118,28 @@ def _hide_ancestor_project_markers(monkeypatch):
         "deep_substitution_function_required_arg.json",
         # Some C callables have no retrievable signature; that is not a bad call.
         "deep_non_introspectable_func.json",
+        # A pointer into an OpenAPI document, whose schema references another
+        # schema of the document and one in a file beside it; an inline
+        # schema's reference to that file, relative to the scenario.
+        "deep_schema_pointer_ok.json",
+        "deep_inline_schema_ref_ok.json",
+        # A reference a template completes is known only once rendered.
+        "deep_inline_schema_ref_template.json",
+        # A pointer into a Draft 7 document, from a 2020-12 schema: the target
+        # is checked in its document's dialect, as the runtime validates it.
+        "deep_inline_schema_ref_other_dialect.json",
+        # An `$id` is the base of the references inside it, so a root-relative
+        # `$ref` under an `https:` one names an embedded resource, not a file:
+        # at an inline schema's root, and in an OpenAPI component, where JSON
+        # Schema itself does not look for one.
+        "deep_inline_schema_bundled_id.json",
+        "deep_schema_component_id.json",
+        # A pointer past a component into it: the component's `$id` is on its
+        # way, so it is the base there too.
+        "deep_schema_component_id_pointer_into.json",
+        # Draft 3 to 7 ignore a `$ref`'s siblings, at runtime, so a missing
+        # file referenced beside one is never looked for.
+        "deep_inline_schema_ref_siblings_draft7.json",
     ],
 )
 def test_clean_fixture_has_no_diagnostics(datadir, fixture):
@@ -329,10 +355,8 @@ DIAGNOSED = [
         "parametrize_value_stage_scope.json",
         [(C.UNDEFINED_VAR, "stages[0].parametrize", "'stage_var'"), (C.PARAMETRIZE_COLLECTION_RESOLUTION, "stages[0].parametrize", "resolve at collection time")],
     ),
-    # $include/$merge are never JSON Schema keywords, and a non-'#' $ref can
-    # never resolve at runtime: both are migration leftovers.
+    # $include/$merge are never JSON Schema keywords: a migration leftover.
     ("inline_schema_scenario_directive.json", [(C.SCHEMA_SCENARIO_DIRECTIVE, "stages[0].response[0].verify.body.schema", r"\['\$include'\]")]),
-    ("inline_schema_legacy_file_ref.json", [(C.SCHEMA_SCENARIO_DIRECTIVE, "stages[0].response[0].verify.body.schema", r"\['\$ref'\]")]),
     # functions-substitution kwargs reach wrap_function raw: a template there
     # is dead text (and, not being rendered, not a data-flow reference).
     ("substitution_function_kwargs_template_ok.json", [(C.TEMPLATE_IN_KWARGS, "stages[0].substitutions", "'helper' kwarg 'arg'")]),
@@ -360,6 +384,125 @@ DIAGNOSED = [
     ("deep_schema_file_missing.json", [(C.REFERENCED_FILE_NOT_FOUND, "stages[0].response[0].verify.body.schema", "Schema file not found")]),
     ("deep_schema_invalid.json", [(C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema", "is not valid JSON")]),
     ("deep_schema_not_a_schema.json", [(C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema", "not a valid JSON Schema")]),
+    # A JSON pointer into the file: it leads nowhere, or to what is not a schema.
+    (
+        "deep_schema_pointer_nowhere.json",
+        [
+            (
+                C.SCHEMA_FILE_INVALID,
+                "stages[0].response[0].verify.body.schema",
+                r"Schema pointer '#/components/schemas/Nobody' leads nowhere in .*openapi\.json: '#/components/schemas' has no key 'Nobody'$",
+            )
+        ],
+    ),
+    (
+        "deep_schema_pointer_not_a_schema.json",
+        [
+            (
+                C.SCHEMA_FILE_INVALID,
+                "stages[0].response[0].verify.body.schema",
+                r"^Schema file is not a valid JSON Schema: .*openapi\.json#/components/schemas/Invalid: 12 is not valid",
+            )
+        ],
+    ),
+    # The references the schema reaches, followed as the runtime follows them:
+    # a file that is not there is a missing file, anything else an invalid schema.
+    (
+        "deep_schema_ref_file_missing.json",
+        [
+            (
+                C.REFERENCED_FILE_NOT_FOUND,
+                "stages[0].response[0].verify.body.schema",
+                r"RefsMissingFile': \$ref 'missing\.json' names .*schema_refs[/\\]missing\.json, which does not exist$",
+            )
+        ],
+    ),
+    (
+        "deep_schema_ref_remote.json",
+        [(C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema", r"\$ref 'https://schemas\.example\.com/user\.json' .* remote references are not fetched")],
+    ),
+    # Only deep checks a reference's target against its meta-schema: the
+    # runtime meta-checks the schema the pointer selects.
+    (
+        "deep_schema_ref_invalid_target.json",
+        [(C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema", r"\$ref '#/components/schemas/Invalid' points to an invalid JSON Schema: 12 is not valid")],
+    ),
+    # An inline schema's references resolve against the scenario's directory.
+    (
+        "deep_inline_schema_ref_file_missing.json",
+        [
+            (
+                C.REFERENCED_FILE_NOT_FOUND,
+                "stages[0].response[0].verify.body.schema",
+                r"^Inline body schema: \$ref 'shared_schema_that_does_not_exist\.json' names .*test_validation[/\\]shared_schema",
+            )
+        ],
+    ),
+    (
+        "deep_inline_schema_ref_pointer_nowhere.json",
+        [
+            (
+                C.SCHEMA_FILE_INVALID,
+                "stages[0].response[0].verify.body.schema",
+                r"\$ref 'schema_refs/common\.json#/\$defs/Phone' points to nothing: '#/\$defs/Phone' is not in .*common\.json$",
+            )
+        ],
+    ),
+    # Only an inline schema is rendered before it is used: a file's template
+    # is resolved as the text it is, at runtime and here.
+    (
+        "deep_schema_file_ref_template.json",
+        [
+            (
+                C.REFERENCED_FILE_NOT_FOUND,
+                "stages[0].response[0].verify.body.schema",
+                r"templated_ref\.json': \$ref '\{\{ which \}\}\.json#/\$defs/Email' names .*schema_refs[/\\]\{\{ which \}\}\.json, which does not exist$",
+            )
+        ],
+    ),
+    # The runtime resolves a $dynamicRef through the same registry as a $ref.
+    (
+        "deep_inline_schema_dynamic_ref_missing.json",
+        [
+            (
+                C.REFERENCED_FILE_NOT_FOUND,
+                "stages[0].response[0].verify.body.schema",
+                r"^Inline body schema: \$dynamicRef 'shared_schema_that_does_not_exist\.json#/\$defs/Email' names ",
+            )
+        ],
+    ),
+    # An $id JSON Schema reads on the pointer's way that is not a string: it
+    # crashed the whole `validate --deep` run with a TypeError.
+    (
+        "deep_schema_pointer_id_not_a_string.json",
+        [
+            (
+                C.SCHEMA_FILE_INVALID,
+                "stages[0].response[0].verify.body.schema",
+                r"^Body schema file '.*id_not_a_string\.json#/\$defs/a': \$id 5 is not a string: an \$id is a URI reference$",
+            )
+        ],
+    ),
+    # urljoin refuses the $id, where it crashed the whole `validate` run.
+    (
+        "deep_inline_schema_bad_id.json",
+        [(C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema", r"^Inline body schema: \$id 'http://\[x' cannot be resolved: Invalid IPv6 URL$")],
+    ),
+    # A reference to a file keeps the rules a scenario's $include path keeps.
+    (
+        "deep_inline_schema_ref_absolute.json",
+        [(C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema", r"\$ref '/schemas/common\.json#/\$defs/Email' is an absolute path, which is not allowed")],
+    ),
+    (
+        "deep_inline_schema_ref_too_deep.json",
+        [
+            (
+                C.SCHEMA_FILE_INVALID,
+                "stages[0].response[0].verify.body.schema",
+                r"\$ref '\.\./\.\./\.\./\.\./schemas/common\.json#/\$defs/Email' exceeds the maximum parent traversal depth of 3 \(httpchain_ref_parent_traversal_depth\)",
+            )
+        ],
+    ),
 ]
 
 
@@ -385,6 +528,20 @@ def test_valid_scenario_info(datadir):
     assert "user_name" in info.vars_saved
 
 
+def test_deep_schema_check_that_crashes_is_one_finding(datadir, monkeypatch):
+    """Whatever a body schema's walk raises is that schema's finding, not a
+    traceback that ends the run, and every other file's findings with it."""
+
+    def crash(self):
+        raise TypeError("Cannot mix str and non-str arguments")
+        yield
+
+    monkeypatch.setattr(BodySchema, "unresolvable", crash)
+    [diagnostic] = _validate(datadir, "deep_schema_pointer_ok.json").diagnostics
+    assert (diagnostic.code, diagnostic.location) == (C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema")
+    assert re.search(r"^Body schema file '.*openapi\.json#/components/schemas/User': its references cannot be checked: Cannot mix str and non-str arguments$", diagnostic.message)
+
+
 def test_deep_disabled_does_not_check_imports(datadir):
     """Without deep=True the validator never imports user code."""
     assert validate_scenario(datadir / "deep_import_missing.json").diagnostics == []
@@ -408,6 +565,45 @@ def test_deep_schema_file_nested_too_deeply(tmp_path, content, message):
 
     assert [(d.code, d.location) for d in result.diagnostics] == [(C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema")]
     assert re.search(message, result.diagnostics[0].message)
+
+
+@pytest.mark.parametrize(
+    ("root", "found"),
+    [
+        # The root the load held the scenario's own references to: the nearest
+        # pytest config, as the runtime's is pytest's rootdir.
+        pytest.param(None, True, id="resolved-root"),
+        pytest.param("explicit", True, id="explicit-root"),
+        pytest.param("wider", False, id="root-that-holds-it"),
+    ],
+)
+def test_deep_schema_reference_outside_the_root(tmp_path, root, found):
+    """Generated, not a ``test_validation/`` fixture: the file must sit outside
+    the root, which a fixture directory copied as the root cannot hold."""
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pytest.ini").write_text("[pytest]\n")
+    (tmp_path / "shared.json").write_text(json.dumps({"$defs": {"Id": {"type": "integer"}}}))
+    scenario = _write(project, [_stage(response=[{"verify": {"body": {"schema": {"$ref": "../shared.json#/$defs/Id"}}}}])])
+    root_path = {None: None, "explicit": project, "wider": tmp_path}[root]
+    result = validate_scenario(scenario, root_path=root_path, deep=True)
+
+    if not found:
+        assert result.diagnostics == []
+        return
+    assert [(d.code, d.location) for d in result.diagnostics] == [(C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema")]
+    assert result.diagnostics[0].message == (
+        f"Inline body schema: $ref '../shared.json#/$defs/Id' names {tmp_path / 'shared.json'}, outside the reference root {project.resolve()}: "
+        f"a schema's references must stay within it, as a scenario's $include must"
+    )
+
+
+def test_deep_schema_reference_depth_is_the_load_s(datadir):
+    """``validate --ref-parent-traversal-depth`` bounds a body schema's
+    references as it bounds the scenario's own."""
+    fixture = datadir / "deep_inline_schema_ref_too_deep.json"
+    assert "exceeds the maximum parent traversal depth" in validate_scenario(fixture, deep=True).diagnostics[0].message
+    assert not any("exceeds" in d.message for d in validate_scenario(fixture, deep=True, ref_parent_traversal_depth=4).diagnostics)
 
 
 def test_wrong_extension_warns(datadir):

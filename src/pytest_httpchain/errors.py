@@ -13,6 +13,13 @@ class SchemaFileError(HttpChainError):
     the failure their own way without re-deriving what counts as one."""
 
 
+class SchemaPointerError(HttpChainError):
+    """A ``body.schema`` file reference's JSON pointer (``openapi.json#/...``)
+    leads nowhere in the file it names. Raised by ``body_schema``, and worded
+    by the runtime and ``validate --deep`` each their own way, as
+    `SchemaFileError` is."""
+
+
 class StageExecutionError(HttpChainError):
     """A stage failed. Carries the HTTP request/response when one was made, for
     the failure report and the HAR file; ``started`` is when the request went on

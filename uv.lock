@@ -1071,11 +1071,13 @@ name = "pytest-httpchain"
 version = "0.15.2"
 source = { editable = "." }
 dependencies = [
+    { name = "attrs" },
     { name = "deepmerge" },
     { name = "graphql-core" },
     { name = "httpx", extra = ["http2"] },
     { name = "jmespath" },
     { name = "jsonschema" },
+    { name = "jsonschema-specifications" },
     { name = "pydantic" },
     { name = "pyrate-limiter" },
     { name = "pytest" },
@@ -1105,11 +1107,13 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "attrs", specifier = ">=22.2.0" },
     { name = "deepmerge", specifier = ">=2.0" },
     { name = "graphql-core", specifier = ">=3.0.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.0" },
     { name = "jmespath", specifier = ">=1.0.0" },
     { name = "jsonschema", specifier = ">=4.18.0" },
+    { name = "jsonschema-specifications", specifier = ">=2023.3.6" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pyrate-limiter", specifier = ">=4.2.0" },
     { name = "pytest", specifier = ">=9.0" },

@@ -72,7 +72,16 @@ from pytest_httpchain.models.entities import (
     validate_rendered_scenario_auth,
     validate_rendered_verify,
 )
-from pytest_httpchain.models.types import JSON_TYPE_NAMES, check_json_schema, is_relative_url, is_status_class, json_schema_validator_class, regex_group
+from pytest_httpchain.models.types import (
+    JSON_TYPE_NAMES,
+    SchemaFileRef,
+    check_json_schema,
+    is_relative_url,
+    is_status_class,
+    json_schema_validator_class,
+    parse_schema_file_ref,
+    regex_group,
+)
 
 __all__ = [
     "Scenario",
@@ -128,10 +137,12 @@ __all__ = [
     "SSLConfig",
     "ClientConfig",
     "JSON_TYPE_NAMES",
+    "SchemaFileRef",
     "check_json_schema",
     "is_relative_url",
     "is_status_class",
     "json_schema_validator_class",
+    "parse_schema_file_ref",
     "regex_group",
     "parametrize_values_contain_template",
     "normalize_list_input",

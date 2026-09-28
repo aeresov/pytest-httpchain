@@ -58,6 +58,7 @@ from pytest_httpchain.models.types import (
     RegexGroupName,
     RegexGroupNumber,
     RegexPattern,
+    SchemaFileRefStr,
     SerializablePath,
     StatusClass,
     StatusCode,
@@ -665,8 +666,16 @@ with _suppress_field_shadow_warning("schema"):
         # stands for the dict it was declared as: converted all the way down, as
         # a schema is plain JSON. Ahead of the union, keeping its member tags in
         # pydantic's error locations.
-        schema: Annotated[JSONSchemaInline | SerializablePath | PartialTemplateStr | None, BeforeValidator(convert_namespace_to_dict)] = Field(
-            default=None, description="JSON schema for validation."
+        schema: Annotated[JSONSchemaInline | SchemaFileRefStr | PartialTemplateStr | None, BeforeValidator(convert_namespace_to_dict)] = Field(
+            default=None,
+            description="JSON Schema the body must validate against: inline, or a local file, optionally with a JSON pointer into it "
+            "(openapi.json#/components/schemas/User). Its $refs resolve across the document and into other local files.",
+            examples=[
+                "./schemas/user.json",
+                "./openapi.json#/components/schemas/User",
+                {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}}},
+                "{{ user_schema }}",
+            ],
         )
         contains: list[str] = Field(default_factory=list, description="Substrings the response body must contain.")
         not_contains: list[str] = Field(default_factory=list, description="Substrings the response body must NOT contain.")

@@ -345,7 +345,7 @@ checks `{"eq": {"page": 1, "size": 2}}`.
 }
 ```
 
-A fragment file may carry its own top-level `$schema` key for editor support — wherever the fragment lands in the referencing scenario, validation discards the key. Inline `verify.body.schema` values are the exception to resolution itself: that position holds a standard JSON Schema, so the resolver leaves the whole subtree untouched — its `$ref`/`$defs`/`$schema` belong to the schema validator, and scenario directives (`$include`/`$merge`, or a file-path `$ref`) are not processed there (the validator warns with `HTTPCHAIN028`). The opacity extends to sibling merging: two differing schema values arriving at the same position via `$merge` are a **merge conflict**, never blended — an opaque subtree merges atomically, like a scalar. To share a schema between scenarios, use the file-path form (`"schema": "./schemas/user.json"`) rather than a reference directive.
+A fragment file may carry its own top-level `$schema` key for editor support — wherever the fragment lands in the referencing scenario, validation discards the key. Inline `verify.body.schema` values are the exception to resolution itself: that position holds a standard JSON Schema, so the resolver leaves the whole subtree untouched — its `$ref`/`$defs`/`$schema` belong to the schema validator, which resolves a `$ref` to a local file itself (relative to the scenario file's directory, unless an `$id` sets another base), and scenario directives (`$include`/`$merge`) are not processed there (the validator warns with `HTTPCHAIN028`). The opacity extends to sibling merging: two differing schema values arriving at the same position via `$merge` are a **merge conflict**, never blended — an opaque subtree merges atomically, like a scalar. To share a schema between scenarios, use the file-path form (`"schema": "./schemas/user.json"`, or `"./openapi.json#/components/schemas/User"` for one inside a document) or a JSON Schema `$ref`, rather than a reference directive.
 
 ### Shared Configuration
 
@@ -423,6 +423,10 @@ pytest-httpchain validate --root-path . tests/test_login.http.json
 
 A reference rejected this way says so specifically — `resolves outside the
 reference root <dir>` — rather than reporting the file as missing.
+
+The same three rules — relative paths only, the traversal depth, the root —
+hold for a JSON Schema `$ref` to a file inside a `verify.body.schema` (see
+[references between documents](../usage/responses.md#references-between-documents)).
 
 ## Circular Reference Detection
 

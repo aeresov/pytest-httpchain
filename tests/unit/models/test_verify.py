@@ -340,12 +340,29 @@ class TestResponseBody:
         ("schema", "expected"),
         [
             pytest.param({"type": "object", "required": ["id"]}, {"type": "object", "required": ["id"]}, id="inline"),
-            pytest.param("schemas/user.json", Path("schemas/user.json"), id="path"),
+            pytest.param("schemas/user.json", "schemas/user.json", id="path"),
+            # Kept as written: a Path would fold the pointer's "//" (an empty
+            # key) and drop its trailing "/" (one more).
+            pytest.param("./openapi.json#/components//x/", "./openapi.json#/components//x/", id="path-with-pointer"),
+            pytest.param(Path("schemas/user.json"), str(Path("schemas/user.json")), id="path-object"),
             pytest.param("{{ schema_path }}", "{{ schema_path }}", id="template"),
+            pytest.param("{{ name }}.json#/$defs/User", "{{ name }}.json#/$defs/User", id="template-with-pointer"),
         ],
     )
     def test_schema_forms(self, schema, expected):
         assert ResponseBody(schema=schema).schema == expected
+
+    @pytest.mark.parametrize(
+        ("schema", "message"),
+        [
+            pytest.param("https://api.example.com/openapi.json#/components/schemas/User", "remote schemas are not fetched", id="remote"),
+            pytest.param("openapi.json#User", "must be a JSON pointer starting with '/'", id="not-a-pointer"),
+        ],
+    )
+    def test_schema_file_reference_refused_at_load(self, schema, message):
+        """Wiring only: the exhaustive cases live in test_type_validators.py."""
+        with pytest.raises(ValidationError, match=re.escape(message)):
+            ResponseBody(schema=schema)
 
     def test_schema_from_namespace(self):
         """A schema in ``vars`` renders as namespaces all the way down, which

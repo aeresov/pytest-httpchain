@@ -516,13 +516,14 @@ Inline schema:
 An inline schema is **standard JSON Schema, verbatim**: the scenario's
 reference resolver treats the whole `schema` value as opaque, so `$ref`,
 `$defs`, `$schema` and every other keyword inside it are addressed to the
-schema validator, exactly as in a standalone schema document. Scenario
+schema validator, exactly as in a standalone schema document. A `$ref` is
+resolved as JSON Schema resolves one: `#/$defs/item` within the schema, and a
+local file (`common.json#/$defs/Email`) relative to the **scenario file's
+directory**, as described [below](#references-between-documents). Scenario
 reference directives are **not** processed inside an inline schema — the
-validator flags `$include`/`$merge` (and a file-path `$ref`, which the
-runtime schema validator can never resolve) with the `HTTPCHAIN028` warning,
-and an unresolvable schema-internal `$ref` fails the stage with a clean
-verification error. To share a schema between scenarios, reference it by
-file path instead:
+validator flags `$include`/`$merge` there with the `HTTPCHAIN028` warning — and
+a `$ref` that does not resolve fails the stage with a clean verification error.
+To share a schema between scenarios, keep it in a file:
 
 External schema file:
 
@@ -543,14 +544,227 @@ launched from. The same rule applies to every file path in the dialect:
 `body.binary`, `body.files` values, and `ssl.cert`/`ssl.verify`. Absolute paths
 pass through unchanged.
 
+#### A schema inside a document: OpenAPI and shared schema files
+
+A schema file path may end in a **JSON pointer**, which selects one schema
+inside the document, so a response can be checked against the contract you
+already have — an OpenAPI 3.1 document's components, or a file of shared
+definitions:
+
+```json
+{
+    "verify": {
+        "status": 200,
+        "body": {
+            "schema": "./openapi.json#/components/schemas/User"
+        }
+    }
+}
+```
+
+with `openapi.json` next to the scenario, and `common.json` next to it:
+
+```json
+{
+    "openapi": "3.1.0",
+    "info": {"title": "Users", "version": "1.0.0"},
+    "paths": {},
+    "components": {
+        "schemas": {
+            "User": {
+                "type": "object",
+                "required": ["id", "email", "role"],
+                "properties": {
+                    "id": {"type": "integer"},
+                    "email": {"$ref": "common.json#/$defs/Email"},
+                    "role": {"$ref": "#/components/schemas/Role"}
+                }
+            },
+            "Role": {"enum": ["admin", "user"]}
+        }
+    }
+}
+```
+
+```json
+{
+    "$defs": {
+        "Email": {"type": "string", "format": "email"}
+    }
+}
+```
+
+The part after the first `#` is an [RFC 6901](https://www.rfc-editor.org/rfc/rfc6901)
+JSON pointer, written as a URI fragment, as a `$ref`'s is: `/` separates the
+keys, `~1` stands for a `/` inside a key and `~0` for a `~`, and
+percent-encoding is decoded first (`%20` for a space). An array item is its
+index, `0`, `1`, and so on. So a path's response schema is
+`openapi.json#/paths/~1users~1{id}/get/responses/200/content/application~1json/schema`.
+Without a pointer, or with an empty one (`schema.json#`), the whole file is the
+schema. What follows the `#` must be a pointer: a plain name (`#User`), which
+JSON Schema reads as an anchor, fails `validate` and collection, and so does an
+`http://` or `https://` URL in place of the file, or any URI (`file:`, or a
+scheme followed by `//`). The first `#` ends the path, so a file whose path
+holds one cannot be named here; a path that merely starts like a URI stays one
+with `./` in front (`./http:v1/user.json`), and a colon anywhere else is the
+path's own (`schemas:v1/user.json`).
+
+##### References between documents
+
+The selected schema's `$ref`s are resolved against the **whole document** it
+is in, so `#/components/schemas/Role` inside `User` finds `Role`. A reference
+to another local file — `./address.json`, `common.json#/$defs/Email` — is
+resolved relative to **the file the reference is written in**, not to the
+scenario: `common.json` above is looked for next to `openapi.json`, wherever
+the scenario is, and a reference inside `common.json` is relative to
+`common.json` in turn. An inline schema's references to files are relative to
+the scenario file's directory, the one inline schemas have. An `$id` sets
+another base, as below. A `$dynamicRef` is resolved the same way.
+
+An **`$id`** is the base of the references inside it, as JSON Schema
+specifies: in the schema `body.schema` names, at its root, on the pointer's way
+to it, and further in. So a bundled document, whose `$ref`s name the resources
+embedded in it by their `$id`s, resolves as written:
+
+```json
+{
+    "$id": "https://example.com/schemas/customer",
+    "type": "object",
+    "properties": {
+        "address": {"$ref": "/schemas/address"}
+    },
+    "$defs": {
+        "address": {"$id": "/schemas/address", "type": "object", "required": ["street"]}
+    }
+}
+```
+
+`/schemas/address` is `https://example.com/schemas/address` there, the
+embedded resource, not a file. The same holds in an OpenAPI component, although
+JSON Schema itself does not look into a `components/schemas` map: a component
+that declares an `$id` is the base of its own `#/$defs/...`, and the `$id`s
+inside it name their resources, whether the pointer selects the component or a
+schema inside it (`#/components/schemas/User/properties/address`). A path's
+response schema is a component in this sense too, where the pointer goes into
+it (`.../application~1json/schema/items`). Inside such a component, `#/...` is
+relative to the component, not to the OpenAPI document, so
+`#/components/schemas/Role` there points to nothing: reach another component
+by an `$id` of its own, or drop the `$id`.
+
+An `$id` that cannot be read fails the stage whatever the response, as an
+unresolvable reference naming it: one on the pointer's way that is not a
+string (`"$id": 5`) or not a URI (`"http://[x"`), and one in the selected
+schema that is not a URI (its meta-check refuses one that is not a string).
+JSON Schema reads them before any value is checked.
+
+A document a `$ref` reaches is resolved as jsonschema resolves one, against
+**where it is**, whatever `$id` its root declares, so **references between
+files are relative paths**. A reference by an `$id`'s full URI finds a schema
+that declares it in the same document, not in another file.
+
+The flip side, in the schema `body.schema` names: under a root `$id` that is a
+URL, a relative reference names a document at that URL, not a file beside the
+schema. `address.json` under `"$id": "https://example.com/schemas/user.json"`
+is `https://example.com/schemas/address.json`, which is not fetched (see
+below). Drop the `$id`, or make it relative (`"$id": "user.json"`), to reach
+the file.
+
+A reference that names a **local file**, one that resolves to a path rather
+than to a resource an `$id` names, keeps the rules a scenario's own `$include`
+path keeps (see
+[path traversal limits](../advanced/ref-merging.md#security-path-traversal-limits)),
+and one that breaks them fails the stage:
+
+- it is a **relative path**: an absolute path (`/schemas/user.json`,
+  `//host/share/user.json`, `C:/schemas/user.json`) or a `file:` URI is refused;
+- it climbs at most `httpchain_ref_parent_traversal_depth` directories (`../`,
+  3 by default), counted as written;
+- the file it names lies **inside pytest's rootdir**, symlinks resolved.
+
+The schema file named in `schema` is not held to these rules, as no scenario
+file path is; its references are.
+
+Nothing is read over the network: a reference to an `http://` or `https://`
+document fails the stage (`remote references are not fetched`), and so does one
+to a file on another host (a base an `$id` such as `file://host/share/` sets),
+refused before the path is looked up, and one to anything else that is not a
+local file (`urn:...`). Keep a local copy of a hosted schema instead.
+
+##### Dialect
+
+The selected schema is validated under its own `$schema` if it declares one,
+else the document root's, else **Draft 2020-12**, which is also what a
+`$schema` jsonschema does not know means (OpenAPI 3.1's
+`https://spec.openapis.org/oas/3.1/dialect/base`, for instance). A schema a
+`$ref` reaches follows the same rule: its own `$schema`, else the root
+`$schema` of the document the reference points into, else the dialect of the
+schema the `$ref` is in. So `common.json#/definitions/Pair` in a Draft 7 file
+is validated as Draft 7 however it is reached, as `schema` or through a
+`$ref`, and so is what its own references reach.
+
+!!! warning "OpenAPI 3.0 schemas are not JSON Schema"
+    OpenAPI 3.1 schema objects are JSON Schema 2020-12. OpenAPI **3.0**'s are
+    a dialect of their own, close to Draft 4 but not the same: `nullable: true`
+    is ignored (so `null` fails a `"type": "string"`), `exclusiveMinimum` and
+    `exclusiveMaximum` are booleans (which Draft 2020-12 refuses, and
+    `validate --deep` reports), and `example`, `discriminator` and `xml` are
+    annotations. Convert a 3.0 document to 3.1 first — `nullable: true` beside
+    `"type": "string"` becomes `"type": ["string", "null"]` — or declare
+    `"$schema": "http://json-schema.org/draft-04/schema#"` at its root and
+    avoid `nullable`.
+
+##### Reading and failures
+
+Each schema file is read and parsed once for as long as it is unchanged,
+however many stages, iterations (a `parallel` stage's included, whose
+iterations wait for the one that reads it) and references use it; a file a
+stage rewrites is read again. The schema the pointer selects is checked against
+its dialect's meta-schema, once too, and the `$id`s and anchors of its document
+are indexed once. Each problem fails the stage as a verification error that
+names the file, as the path it resolved to, and the pointer, listed with the
+step's other failures:
+
+- `Error reading body schema file '.../api/openapi.json#/components/schemas/User': ...`
+  — the file is missing, or not JSON.
+- `Body schema pointer '#/components/schemas/Usr' leads nowhere in file
+  '.../api/openapi.json': '#/components/schemas' has no key 'Usr'`.
+- `Invalid JSON Schema in file '.../api/openapi.json#/components/schemas/User': ...`
+  — the selected schema fails its meta-schema.
+- `Cannot resolve a reference in body schema file '.../api/openapi.json#/components/schemas/User':
+  $ref 'common.json#/$defs/Email' names .../api/common.json, which does not exist`
+  — and likewise for a remote reference, a file on another host, an absolute
+  path, one that climbs too far or leads outside the rootdir, a file that is
+  not JSON, a pointer to nothing in a document the reference reaches, or an
+  `$id` that cannot be read (`$id 5 is not a string: an $id is a URI reference`).
+- `Cannot validate against body schema file '...': $ref '#/components/schemas/Role'
+  points to an invalid JSON Schema: ...` — only the selected schema is checked
+  against its meta-schema before the response is validated. A schema a
+  reference reaches is checked when validating against it breaks down on a
+  value its meta-schema refuses (`"type": "strin"`, a `$ref` that is not a
+  string, a document that is a list), and named by the nearest reference to
+  it, in the words `validate --deep` uses. An invalid keyword that no response
+  reaches goes unnoticed at runtime; `validate --deep` finds it.
+
+[`validate --deep`](../cli.md#validate) checks all of this without a response:
+that the file exists and is JSON, that the pointer resolves, that the selected
+schema is valid, and that every `$ref` and `$dynamicRef` it reaches, through
+every file, resolves under the same rules to a schema valid in its dialect —
+`HTTPCHAIN020` for a file that is not there, `HTTPCHAIN021` for the rest. It
+follows what the runtime follows: under Draft 3 to 7, whose `$ref` ignores
+the keywords beside it, a reference beside a `$ref` is not reached. An
+inline schema's templates are rendered before it is used, so a reference that
+holds one there is left to the runtime; a file is read as it is, so a `{{ }}`
+in a reference there is checked as the text it is, as the runtime resolves it.
+
 The `schema` can also be one template, rendering a path or the schema itself:
 `"schema": "{{ user_schema }}"`, with `user_schema` a schema object in scenario
 `vars` or saved from an earlier response. Only an inline `schema` is opaque to
 the scenario's reference resolver, though: a `$ref` in `vars` is the resolver's
 to follow, so a schema with `$ref`s of its own belongs inline or in a file.
 
-Either way, `format` is **checked**, not just recorded: a value that does not
-conform to its `format` fails the stage (`'not-an-email' is not a 'email'`).
+Whatever form the schema takes, `format` is **checked**, in every schema its
+references reach too, not just recorded: a value that does not conform to its
+`format` fails the stage (`'not-an-email' is not a 'email'`).
 Which formats can be checked depends on the installed `jsonschema`. Out of the
 box, with the default Draft 2020-12 dialect, those are `email` and `idn-email`
 (both only require an `@`), `ipv4`, `ipv6`, `date`, `uuid`, `regex` and

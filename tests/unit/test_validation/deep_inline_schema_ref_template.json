@@ -1,0 +1,12 @@
+{
+    "substitutions": [{ "vars": { "definition": "Email" } }],
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                { "verify": { "status": 200, "body": { "schema": { "$ref": "schema_refs/common.json#/$defs/{{ definition }}" } } } }
+            ]
+        }
+    ]
+}

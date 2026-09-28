@@ -38,15 +38,15 @@ not free their numbers for reuse.
 | `HTTPCHAIN017` | error | Scenario-level template references an undefined name |
 | `HTTPCHAIN018` | warning | Verify expression is not a template (`{{ }}`) — cannot evaluate to the required bool |
 | `HTTPCHAIN019` | error | Invalid pytest marker expression (scenario or stage `marks`) |
-| `HTTPCHAIN020` | warning | Referenced file does not exist (deep, opt-in) |
-| `HTTPCHAIN021` | warning | Schema file is not valid JSON / not a valid schema (deep) |
+| `HTTPCHAIN020` | warning | Referenced file does not exist (deep, opt-in): a file path, a body schema file, or a local file a body schema's `$ref` or `$dynamicRef` names |
+| `HTTPCHAIN021` | warning | A body schema cannot be used (deep): its file is not JSON, its JSON pointer leads nowhere, an `$id` on the pointer's way or in the schema cannot be read (not a string, or not a URI), the schema it selects is not valid, or a `$ref` or `$dynamicRef` it reaches does not resolve (not a string, remote, an absolute path, more `../` than `httpchain_ref_parent_traversal_depth`, outside the root, a pointer to nothing, a malformed `$id`) or points to an invalid schema |
 | `HTTPCHAIN022` | warning | User function cannot be imported (deep) |
 | `HTTPCHAIN023` | warning | Unexpected argument passed to a user function (deep) |
 | `HTTPCHAIN024` | warning | Missing required argument for a user function (deep) |
 | `HTTPCHAIN025` | info | Template parametrize values force collection-time resolution |
 | `HTTPCHAIN026` | warning | `$ref` path matches files under both lookup bases (ambiguous) |
 | `HTTPCHAIN027` | warning | User-defined name shadowed by the reserved `response` namespace |
-| `HTTPCHAIN028` | warning | Scenario directive (`$include`/`$merge`, or file-path `$ref`) inside an inline JSON Schema — not resolved there |
+| `HTTPCHAIN028` | warning | Scenario directive (`$include`/`$merge`) inside an inline JSON Schema — not resolved there; a JSON Schema `$ref` is, to a local file too |
 | `HTTPCHAIN029` | warning | Template expression in a dict **key** — only values are substituted, so the key is sent literally (a `verify.jmespath` key is evaluated as written; one that is not valid JMESPath fails validation instead) |
 | `HTTPCHAIN030` | warning | Template expression in a `functions` substitution's **kwargs** — kwargs are passed to the function unrendered, so it arrives as literal text |
 | `HTTPCHAIN031` | error | `xdist_group` marker in a **stage's** `marks`, naming a group the scenario does not declare — under `--dist loadgroup` it runs that stage apart from the rest of the scenario; put it in the scenario's `marks` (see [pytest-xdist](advanced/parallel.md#running-scenarios-in-parallel-with-pytest-xdist)) |

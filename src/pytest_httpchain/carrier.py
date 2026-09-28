@@ -35,6 +35,7 @@ import pytest
 from pydantic import BaseModel, RootModel, ValidationError
 from pyrate_limiter import Duration, Limiter, Rate
 
+from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds
 from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.har_writer import Exchange
 from pytest_httpchain.models import (
@@ -804,6 +805,9 @@ class Carrier:
     # running context via `cls`.
     scenario: ClassVar[Scenario | None] = None
     scenario_dir: ClassVar[Path | None] = None
+    # What a body schema's references to files are held to: pytest's rootdir
+    # and the parent traversal depth, as for the scenario's $include.
+    ref_bounds: ClassVar[ReferenceBounds] = UNBOUNDED
     client: ClassVar[httpx.Client | None] = None
     aborted: ClassVar[bool] = False
     last_request: ClassVar[httpx.Request | None] = None
@@ -1414,7 +1418,7 @@ class Carrier:
                         # Each check's value is rendered on its own, all before the
                         # first check, through the guard (`_verify_renderer`): a
                         # template that fails is one failure among the step's.
-                        process_verify(step.verify, response, cls.scenario_dir, cls.redaction, render=_verify_renderer(step.verify, step_context))
+                        process_verify(step.verify, response, cls.scenario_dir, cls.redaction, render=_verify_renderer(step.verify, step_context), ref_bounds=cls.ref_bounds)
 
                     case _:
                         raise RuntimeError(f"Unhandled response step: {type(step).__name__}")

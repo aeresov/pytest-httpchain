@@ -19,6 +19,7 @@ from typing import Any, Literal
 import httpx
 import pytest
 
+from pytest_httpchain.body_schema import ReferenceBounds
 from pytest_httpchain.carrier import Carrier
 from pytest_httpchain.constants import ConfigOptions
 from pytest_httpchain.factory import create_test_class
@@ -102,6 +103,9 @@ class JsonModule(pytest.Module):
                 self.name,
                 max_parallel_iterations=max_parallel_iterations,
                 scenario_dir=self.path.parent,
+                # The bounds the scenario's $include was held to, for its body
+                # schemas' references (body_schema).
+                ref_bounds=ReferenceBounds(Path(self.config.rootpath), ref_parent_traversal_depth),
                 # Retaining every iteration's exchange costs memory, so it is
                 # done only when the HAR output that consumes them is on.
                 record_all_exchanges=bool(self.config.getoption("httpchain_output_dir")),

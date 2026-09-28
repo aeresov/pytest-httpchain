@@ -83,6 +83,7 @@ src/pytest_httpchain/
 ├── carrier.py                 # Runtime execution engine (Carrier class): chain state, iteration matrix, threading, reporting
 ├── request_builder.py         # Resolved models -> httpx kwargs (build_client_kwargs, build_request_kwargs) and auth flows (build_auth: basic, digest, bearer, user functions)
 ├── response_steps.py          # Meaning of a single verify/save step (process_verify, process_save) — pure, no chain state
+├── body_schema.py             # verify.body.schema made ready to validate (BodySchema): file + JSON pointer, one referencing registry resolving $refs across the document and into local files held to the `$include` path rules (relative, traversal depth, reference root; never remote), a `$ref`'s target validated in its document's dialect, dialect choice, per-file parse and registry caches; shared by the runtime and `validate --deep`
 ├── utils.py                   # Marker construction, substitution processing, scenario-relative path resolution, location path segments
 ├── report_formatter.py        # HTTP request/response formatting for test reports
 ├── har_writer.py              # HAR file export for HTTP request/response logging

@@ -207,6 +207,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `substitutions` when one stage fakes the clock with a `timestamp` function substitution, or
   `sorted(rows, key=len)` ahead of a save named `len`. The built-in runs in its place, which is
   never a failure, so it is a warning at every level, scenario level included.
+- `verify.body.schema` checks a response against a schema inside a document you already have, an
+  OpenAPI 3.1 component or a file of shared definitions:
+  `"schema": "./openapi.json#/components/schemas/User"`. What follows the file's first `#` is an RFC
+  6901 JSON pointer written as a URI fragment (percent-decoded, `~1` for a `/` in a key, `~0` for a
+  `~`), so a path's response schema is
+  `openapi.json#/paths/~1users~1{id}/get/responses/200/content/application~1json/schema`. The schema
+  it selects keeps its `$ref`s to the rest of the document (`#/components/schemas/Address`), and a
+  `$ref` to another local file (`./address.json`, `common.json#/$defs/Email`) resolves relative to
+  the file it is written in; an inline schema's resolve relative to the scenario file's directory.
+  The dialect is the selected schema's own `$schema`, else the document root's, else Draft 2020-12,
+  and a schema a `$ref` reaches follows the same rule, so a definition in a Draft 7 file is Draft 7
+  however it is reached; `format` is checked in every schema a reference reaches. An `$id` in the
+  schema is the base of the references inside it, as JSON Schema specifies, at its root, on the
+  pointer's way, and in an OpenAPI component too, where JSON Schema itself does not look for one,
+  whether the pointer selects the component or a schema inside it: a bundled document's
+  `"$ref": "/schemas/address"` under `"$id": "https://example.com/schemas/customer"` finds its
+  embedded `/schemas/address` resource. A document a `$ref` reaches is resolved against where it is,
+  whatever `$id` its root declares, as jsonschema resolves one. A reference that names a local file
+  keeps the rules a scenario's `$include` path keeps: a relative path, at most
+  `httpchain_ref_parent_traversal_depth` `../`, to a file inside pytest's rootdir. Nothing is read
+  over the network: a remote reference is not fetched (see Changed), and a file on another host (a
+  UNC path on Windows) is refused before its path is looked up. Each file is parsed, meta-checked
+  and its `$id`s and anchors indexed once while it is unchanged, however many stages, parallel
+  iterations (which wait for the one reading it) and references use it, and each reference is looked
+  up once per verify step, not once per array item it validates. A missing or unreadable file, a
+  pointer that leads nowhere (`'#/components/schemas' has no key 'Usr'`), an `$id` on its way that
+  cannot be read (`$id 5 is not a string`), a selected schema that is not valid, a `$ref` that does
+  not resolve and a schema a `$ref` reaches that validating against shows to be invalid
+  (`$ref '#/components/schemas/Role' points to an invalid JSON Schema: ...`, as `validate --deep`
+  words it) each fail the stage as one verification error naming the file and the pointer. An
+  `http(s)` URL in place of the file, or a fragment that is not a pointer (`openapi.json#User`),
+  fails `validate` and collection. `validate --deep` checks the rest without a response: that the
+  file exists (`HTTPCHAIN020`), is JSON, that the pointer resolves, that the schema it selects is
+  valid, and that every `$ref` and `$dynamicRef` it reaches resolves under the same rules to a
+  schema valid in its dialect (`HTTPCHAIN021`, or `HTTPCHAIN020` for a local file that is not
+  there), following what the runtime follows: a reference beside a Draft 3 to 7 `$ref`, which they
+  ignore, is not reached. An OpenAPI 3.0 document's schemas are a dialect of their own (`nullable`,
+  boolean `exclusiveMinimum`); the docs say how to convert them.
 
 ### Fixed
 
@@ -552,6 +590,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the step's checks would have found, since the whole step rendered before any check ran. Its
   outcome now takes effect when the checks reach that template, so a check before it that failed
   fails the stage instead.
+- A `$ref` in a `verify.body.schema` is resolved by the plugin, not by jsonschema's default
+  registry, which fetched an `http(s)` reference over the network (with a `DeprecationWarning`) and
+  failed on a local file. A reference to a local file now resolves (see Added), and a remote one
+  fails the stage as unresolvable, naming it. Heads-up: a schema that referenced a hosted schema
+  needs a local copy of it, and so does one whose root `$id` is a URL and whose relative
+  references meant documents published beside it (`"$ref": "address.json"` under `"$id":
+  "https://example.com/schemas/user.json"`): they resolve against the `$id`, as before, to a
+  remote document. Drop such an `$id`, or make it relative, and the reference names the file beside
+  the schema.
+- `HTTPCHAIN028` no longer flags a `$ref` to a file inside an inline `verify.body.schema`: such a
+  reference now resolves (see Added). It still flags `$include` and `$merge`, which JSON Schema
+  does not have.
+- The error for a schema `$ref` that does not resolve names what it looked for, `Cannot resolve
+  a reference in inline body schema: $ref '#/$defs/missing' points to nothing in the inline
+  schema`, where it quoted the whole document it looked in, an OpenAPI document included.
+- A `verify.body.schema` file reference is kept as written, where it was read as a path: a
+  `Path` folds the `//` and the trailing `/` a JSON pointer can hold. The editor schema describes it
+  as a plain string without `format: path`, with examples of both forms. Heads-up: the first `#`
+  now ends the file's path, so a schema file whose path holds a `#` (`schemas/v#1/user.json`)
+  cannot be named, even percent-encoded; rename it. A path that starts like a URI, with `http:`,
+  `https:` or `file:`, or a scheme and `//`, is refused as one at load; `./` in front keeps it a
+  path (`./http:v1/user.json`). Any other colon is a path's, as it was (`schemas:v1/user.json`).
 - A `vars` substitution step now builds the template evaluator once, not once per variable.
   Building it is a full pass over the context, so a step cost its number of variables times the
   size of the context, even for variables that hold no template. Values without a template are now

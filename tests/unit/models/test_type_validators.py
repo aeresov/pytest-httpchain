@@ -5,6 +5,8 @@ pass through unchanged, rejected ones raise with the validator's own message.
 """
 
 import json
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import jsonschema
@@ -19,12 +21,15 @@ from pytest_httpchain.models.types import (
     JSONSchemaInline,
     PartialTemplateStr,
     RegexPattern,
+    SchemaFileRef,
+    SchemaFileRefStr,
     TemplateExpression,
     VariableName,
     XMLString,
     check_json_schema,
     convert_namespace_to_dict,
     json_schema_validator_class,
+    parse_schema_file_ref,
 )
 from tests.unit.helpers import BEYOND_RECURSION_LIMIT, nested
 
@@ -245,6 +250,84 @@ class TestCheckJsonSchema:
         """The fallback is the dialect ``jsonschema.validate`` picks, so the
         meta-check and instance validation agree."""
         assert json_schema_validator_class({"type": "object"}) is jsonschema.Draft202012Validator
+
+
+class TestSchemaFileRef:
+    """A ``body.schema`` file reference: a local file, then an RFC 6901 JSON
+    pointer in URI fragment form after its first ``#``."""
+
+    @pytest.mark.parametrize(
+        ("ref", "expected"),
+        [
+            pytest.param("schemas/user.json", SchemaFileRef("schemas/user.json", "", ()), id="no-pointer"),
+            pytest.param("user.json#", SchemaFileRef("user.json", "", ()), id="empty-fragment-is-the-whole-document"),
+            pytest.param(
+                "./openapi.json#/components/schemas/User",
+                SchemaFileRef("./openapi.json", "/components/schemas/User", ("components", "schemas", "User")),
+                id="openapi-component",
+            ),
+            # Percent-decoded first, then split, then unescaped: %2F is a
+            # separator, ~1 a slash in a key, and ~01 is "~1", not "/".
+            pytest.param("a.json#/paths/~1users~1{id}/get", SchemaFileRef("a.json", "/paths/~1users~1{id}/get", ("paths", "/users/{id}", "get")), id="escaped-slash"),
+            pytest.param("a.json#/~0x/~01", SchemaFileRef("a.json", "/~0x/~01", ("~x", "~1")), id="escaped-tilde"),
+            pytest.param("a.json#/a%20b/c%2Fd/%C3%A9", SchemaFileRef("a.json", "/a%20b/c%2Fd/%C3%A9", ("a b", "c", "d", "é")), id="percent-decoded"),
+            # A Path would fold these: "/" is the empty key, "//x" two keys.
+            pytest.param("a.json#/", SchemaFileRef("a.json", "/", ("",)), id="empty-key"),
+            pytest.param("a.json#//x/", SchemaFileRef("a.json", "//x/", ("", "x", "")), id="empty-keys"),
+            pytest.param("a.json#/items/0", SchemaFileRef("a.json", "/items/0", ("items", "0")), id="array-index"),
+            # Only the first '#' splits: the pointer may hold one.
+            pytest.param("a.json#/a#b", SchemaFileRef("a.json", "/a#b", ("a#b",)), id="hash-in-pointer"),
+            # A one-letter scheme is a Windows drive.
+            pytest.param("C:\\schemas\\x.json#/a", SchemaFileRef("C:\\schemas\\x.json", "/a", ("a",)), id="windows-drive"),
+            # A colon is a path's, unless it starts a URI: these loaded as
+            # paths before the field took pointers, and still do.
+            pytest.param("schemas:v1/user.json", SchemaFileRef("schemas:v1/user.json", "", ()), id="colon-in-a-directory"),
+            pytest.param("user-2024-01-01T10:00.json", SchemaFileRef("user-2024-01-01T10:00.json", "", ()), id="colon-in-a-name"),
+            pytest.param("urn:x.json", SchemaFileRef("urn:x.json", "", ()), id="scheme-like-without-authority"),
+            # `./` keeps a path that starts like a URI a path.
+            pytest.param("./http:x/user.json", SchemaFileRef("./http:x/user.json", "", ()), id="dot-slash-before-a-scheme"),
+        ],
+    )
+    def test_parsed(self, ref, expected):
+        assert parse_schema_file_ref(ref) == expected
+        assert validate(SchemaFileRefStr, ref) == ref
+
+    @pytest.mark.parametrize(
+        ("ref", "message"),
+        [
+            pytest.param("https://example.com/openapi.json#/components", "remote schemas are not fetched", id="https"),
+            pytest.param("HTTP://example.com/s.json", "remote schemas are not fetched", id="http-any-case"),
+            pytest.param("file:///srv/s.json", "a local file path, not a URI", id="file-uri"),
+            pytest.param("File:s.json", "a local file path, not a URI", id="file-uri-without-slashes"),
+            pytest.param("ftp://example.com/s.json", "a local file path, not a URI", id="other-scheme-with-authority"),
+            pytest.param("https:s.json", "remote schemas are not fetched", id="https-without-slashes"),
+            # The first '#' ends the path, so a file whose name holds one
+            # cannot be named (rename it).
+            pytest.param("schemas/c#1.json", "must be a JSON pointer starting with '/'", id="hash-in-a-file-name"),
+            pytest.param("#/components/schemas/User", "must name a file before its '#'", id="pointer-only"),
+            pytest.param("", "must name a file before its '#'", id="empty"),
+            pytest.param("a.json#User", "must be a JSON pointer starting with '/'", id="plain-name-anchor"),
+            pytest.param("a.json#/a~2b", "must be followed by 0 (for '~') or 1 (for '/')", id="bad-escape"),
+            pytest.param("a.json#/a~", "must be followed by 0 (for '~') or 1 (for '/')", id="trailing-tilde"),
+            # A tilde spelled %7E is a tilde once decoded: the escape rule holds.
+            pytest.param("a.json#/a%7E2", "must be followed by 0 (for '~') or 1 (for '/')", id="encoded-bad-escape"),
+            pytest.param("a.json#/%FF", "percent-encoding is not UTF-8", id="not-utf8"),
+        ],
+    )
+    def test_refused(self, ref, message):
+        with pytest.raises(ValueError, match=re.escape(message)):
+            parse_schema_file_ref(ref)
+        with pytest.raises(ValidationError, match=re.escape(message)):
+            validate(SchemaFileRefStr, ref)
+
+    def test_path_object_stands_for_its_text(self):
+        """A template renders a fixture's Path as it is, which the field took
+        when it was a Path."""
+        assert validate(SchemaFileRefStr, Path("schemas") / "user.json") == str(Path("schemas") / "user.json")
+
+    def test_template_is_left_to_the_template_branch(self):
+        with pytest.raises(ValidationError, match="contains a template expression at position 8"):
+            validate(SchemaFileRefStr, "schemas/{{ name }}.json")
 
 
 class TestConvertNamespaceToDict:

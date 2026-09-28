@@ -38,6 +38,17 @@ load (a pattern or group holding a template is checked once rendered), and
 `response_steps.process_save`, which checks the pattern a template rendered to
 template text, so both refuse the same groups in the same words.
 
+`parse_schema_file_ref(ref)` — a `verify.body.schema` file reference taken
+apart (`SchemaFileRef`): the file path and, after the first `#`, an RFC 6901
+JSON pointer in URI fragment form (percent-decoded, then split at `/`, then
+`~1`/`~0` unescaped), or a ValueError for a URI (`http:`, `https:`, `file:`,
+or a scheme with `//`: remote schemas are never fetched; any other colon is the
+path's) or a fragment that is not a pointer. Shared by `SchemaFileRefStr`,
+the field's type, which keeps the reference as written (a `Path` would fold the
+pointer's `//` and trailing `/`, both meaningful), `body_schema`, which reads
+the file and follows the pointer at runtime, and `validate --deep`, so all
+three take a reference apart the same way.
+
 ## URL types
 
 URLs are validated but passed to httpx as written, never normalized:

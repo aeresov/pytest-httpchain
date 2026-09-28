@@ -12,8 +12,10 @@ from collections import ChainMap
 from http import HTTPStatus
 
 import httpx
+import jsonschema
 import pytest
 
+from pytest_httpchain.body_schema import ReferenceBounds
 from pytest_httpchain.errors import SaveError, VerificationError
 from pytest_httpchain.models import JSON_TYPE_NAMES, JMESPathSave, RegexSave, Verify
 from pytest_httpchain.models.entities import ResponseBody
@@ -411,6 +413,271 @@ class TestBodySchema:
                 process_verify(verify, response)
         else:
             process_verify(verify, response)
+
+
+class TestBodySchemaFileWithPointer:
+    """A schema taken out of a document by a JSON pointer, its references
+    resolved across the document and into local files (`body_schema`), each
+    problem one failure naming the file and the pointer."""
+
+    OPENAPI = {
+        "openapi": "3.1.0",
+        "components": {
+            "schemas": {
+                "User": {
+                    "type": "object",
+                    "required": ["id", "email"],
+                    "properties": {"id": {"type": "integer"}, "email": {"$ref": "common.json#/$defs/Email"}, "role": {"$ref": "#/components/schemas/Role"}},
+                },
+                "Role": {"enum": ["admin", "user"]},
+                "Invalid": {"type": 12},
+                "Missing": {"$ref": "missing.json"},
+                "Nowhere": {"$ref": "#/components/schemas/Nobody"},
+                "Pair": {"prefixItems": [{"type": "string"}, {"type": "integer"}]},
+                "ByName": {"$ref": "#/components/schemas/Pair/prefixItems/first"},
+            }
+        },
+    }
+
+    @pytest.fixture
+    def api(self, tmp_path):
+        """The OpenAPI document one directory down from the scenario's, a file
+        its schemas reference beside it."""
+        (tmp_path / "api").mkdir()
+        (tmp_path / "api" / "openapi.json").write_text(json.dumps(self.OPENAPI))
+        (tmp_path / "api" / "common.json").write_text(json.dumps({"$defs": {"Email": {"type": "string", "format": "email"}}}))
+        return tmp_path
+
+    def _verify(self, schema, body, scenario_dir, *, ref_root=None, status=None):
+        verify = {"body": {"schema": schema}, **({"status": status} if status else {})}
+        process_verify(Verify.model_validate(verify), httpx.Response(200, json=body), scenario_dir, ref_bounds=ReferenceBounds(ref_root, 3))
+
+    def _failure(self, schema, body, scenario_dir, **kwargs):
+        with pytest.raises(VerificationError) as excinfo:
+            self._verify(schema, body, scenario_dir, **kwargs)
+        return str(excinfo.value)
+
+    def test_component_passes(self, api):
+        self._verify("api/openapi.json#/components/schemas/User", {"id": 1, "email": "a@example.com", "role": "user"}, api, ref_root=api)
+
+    def test_violation_reads_as_any_schema_violation(self, api):
+        """The schema path is the target's own: jsonschema does not put the
+        $ref that reached it in the path."""
+        message = self._failure("api/openapi.json#/components/schemas/User", {"id": 1, "email": "a@example.com", "role": "root"}, api)
+        assert message.startswith("Body schema validation failed: 'root' is not one of ['admin', 'user']\n\nFailed validating 'enum' in schema['properties']['role']:")
+
+    def test_format_is_checked_in_a_referenced_file(self, api):
+        """c00053f's format checking applies to what a reference reaches."""
+        message = self._failure("api/openapi.json#/components/schemas/User", {"id": 1, "email": "nope"}, api)
+        assert message.startswith("Body schema validation failed: 'nope' is not a 'email'")
+
+    @pytest.mark.parametrize(
+        ("pointer", "reason"),
+        [
+            pytest.param("/components/schemas/Nobody", "'#/components/schemas' has no key 'Nobody'", id="missing-key"),
+            pytest.param("/components/schemas/User/required/2", "'#/components/schemas/User/required' is an array of 2, with no item '2'", id="index-out-of-range"),
+            pytest.param("/openapi/x", "'#/openapi' is a string, with nothing in it to select", id="into-a-string"),
+        ],
+    )
+    def test_pointer_leading_nowhere(self, api, pointer, reason):
+        message = self._failure(f"api/openapi.json#{pointer}", {}, api)
+        assert message == f"Body schema pointer '#{pointer}' leads nowhere in file '{api / 'api' / 'openapi.json'}': {reason}"
+
+    @pytest.mark.parametrize(
+        ("name", "content", "error"),
+        [
+            pytest.param("nope.json", None, "[Errno 2] No such file or directory: '{path}'", id="missing"),
+            pytest.param("bad.json", "{not json", "Expecting property name enclosed in double quotes", id="not-json"),
+        ],
+    )
+    def test_unreadable_file_names_the_pointer(self, api, name, content, error):
+        path = api / "api" / name
+        if content is not None:
+            path.write_text(content)
+        message = self._failure(f"api/{name}#/components/schemas/User", {}, api)
+        assert message.startswith(f"Error reading body schema file '{path}#/components/schemas/User': {error.format(path=path)}")
+
+    def test_path_no_file_can_have_is_one_failure(self, tmp_path):
+        """A NUL, one JSON \\u escape away: the OS call raises ValueError, which
+        escaped as a traceback and took the step's other failures with it.
+        Shown escaped."""
+        message = self._failure("a\x00b.json", {}, tmp_path, status=201)
+        # Escaped as repr() escapes it: a Windows path's backslashes too.
+        shown = repr(str(tmp_path / "a\x00b.json"))[1:-1]
+        assert message.split("\n") == [
+            "2 verification checks failed:",
+            "  1. Status code doesn't match: expected 201, got 200",
+            f"  2. Error reading body schema file '{shown}': stat: embedded null character in path",
+        ]
+
+    @pytest.mark.parametrize(
+        ("ref", "reason"),
+        [
+            pytest.param(
+                "../../../../common.json",
+                "exceeds the maximum parent traversal depth of 3 (httpchain_ref_parent_traversal_depth), as a scenario's $include path would",
+                id="too-many-parents",
+            ),
+            pytest.param(
+                "/etc/common.json",
+                "is an absolute path, which is not allowed: a reference to a file is a path relative to the file it is in, as a scenario's $include path is",
+                id="absolute",
+            ),
+        ],
+    )
+    def test_reference_path_rules(self, api, ref, reason):
+        """The carrier passes httpchain_ref_parent_traversal_depth with the
+        rootdir: the rules a scenario's $include path keeps."""
+        scenario_dir = api / "a" / "b" / "c" / "d"
+        message = self._failure({"$ref": ref}, {}, scenario_dir, ref_root=api)
+        assert message == f"Cannot resolve a reference in inline body schema: $ref {ref!r} {reason}"
+
+    def test_pointer_to_an_invalid_schema(self, api):
+        message = self._failure("api/openapi.json#/components/schemas/Invalid", {}, api)
+        assert message.startswith(f"Invalid JSON Schema in file '{api / 'api' / 'openapi.json'}#/components/schemas/Invalid': 12 is not valid under any of the given schemas")
+
+    @pytest.mark.parametrize(
+        ("component", "reason"),
+        [
+            pytest.param("Missing", "$ref 'missing.json' names {missing}, which does not exist", id="missing-file"),
+            # Not referencing's own message, which quotes the whole document.
+            pytest.param("Nowhere", "$ref '#/components/schemas/Nobody' points to nothing in {openapi}", id="pointer-to-nothing"),
+            # What referencing lets through, int() refusing an index by a
+            # name: in `validate --deep`'s words, not as an invalid schema.
+            pytest.param("ByName", "$ref '#/components/schemas/Pair/prefixItems/first' cannot be resolved: invalid literal for int() with base 10: 'first'", id="array-by-a-name"),
+        ],
+    )
+    def test_unresolvable_reference(self, api, component, reason):
+        message = self._failure(f"api/openapi.json#/components/schemas/{component}", {}, api)
+        openapi = api / "api" / "openapi.json"
+        where = f"body schema file '{openapi}#/components/schemas/{component}'"
+        assert message == f"Cannot resolve a reference in {where}: {reason.format(missing=api / 'api' / 'missing.json', openapi=openapi)}"
+
+    def test_bundled_schema_resolves_by_its_ids(self, tmp_path):
+        """The bundling form: a root `$id` is the base of the references
+        inside it, so `/schemas/email` names the embedded resource, not an
+        absolute file path to refuse."""
+        schema = {
+            "$id": "https://example.com/schemas/user",
+            "type": "object",
+            "properties": {"email": {"$ref": "/schemas/email"}},
+            "$defs": {"email": {"$id": "/schemas/email", "type": "string", "format": "email"}},
+        }
+        self._verify(schema, {"email": "a@example.com"}, tmp_path, ref_root=tmp_path)
+        assert self._failure(schema, {"email": "nope"}, tmp_path, ref_root=tmp_path).startswith("Body schema validation failed: 'nope' is not a 'email'")
+
+    def test_reference_outside_the_root(self, api):
+        """The carrier passes pytest's rootdir, which a scenario's $include
+        must stay within too."""
+        project = api / "api" / "project"
+        project.mkdir()
+        message = self._failure({"$ref": "../common.json"}, {}, project, ref_root=project)
+        assert message == (
+            f"Cannot resolve a reference in inline body schema: $ref '../common.json' names {api / 'api' / 'common.json'}, outside the reference root "
+            f"{project.resolve()}: a schema's references must stay within it, as a scenario's $include must"
+        )
+
+    def test_remote_reference(self, tmp_path):
+        message = self._failure({"$ref": "https://schemas.example.com/user.json"}, {}, tmp_path)
+        assert message == (
+            "Cannot resolve a reference in inline body schema: $ref 'https://schemas.example.com/user.json' names https://schemas.example.com/user.json, "
+            "a remote document: remote references are not fetched, so keep it in a local file"
+        )
+
+    @pytest.mark.parametrize(
+        ("referenced", "body", "reason"),
+        [
+            # Meta-checked when validating against it fails: each keyword
+            # crashed on what its meta-schema refuses, in its own words
+            # (jsonschema's UnknownType, re.error, a TypeError comparing).
+            pytest.param({"type": "strin"}, 1, "'strin' is not valid under any of the given schemas", id="unknown-type"),
+            pytest.param({"type": "string", "pattern": "("}, "x", "'(' is not a 'regex'", id="pattern-re-refuses"),
+            pytest.param({"type": "integer", "minimum": "5"}, 1, "'5' is not of type 'number'", id="minimum-not-a-number"),
+            # A reference that is not a string ('int' object has no attribute
+            # 'partition'), a document that is not a schema ('list' object
+            # has no attribute 'items').
+            pytest.param({"$ref": 5}, 1, "5 is not of type 'string'", id="reference-not-a-string"),
+            pytest.param({"$ref": None}, 1, "None is not of type 'string'", id="reference-null"),
+            pytest.param([{"type": "integer"}], 1, "[{'type': 'integer'}] is not of type 'object', 'boolean'", id="document-a-list"),
+            pytest.param(None, 1, "None is not of type 'object', 'boolean'", id="document-null"),
+        ],
+    )
+    def test_invalid_schema_a_reference_reaches(self, tmp_path, referenced, body, reason):
+        """Named by the reference, as `validate --deep` names it."""
+        (tmp_path / "bad.json").write_text(json.dumps(referenced))
+        message = self._failure({"$ref": "bad.json"}, body, tmp_path)
+        assert message.startswith(f"Cannot validate against inline body schema: $ref 'bad.json' points to an invalid JSON Schema: {reason}\n")
+
+    def test_invalid_schema_is_named_by_the_reference_nearest_to_it(self, tmp_path):
+        """Through a component that references another, in the document the
+        pointer selects it from: the reference to the invalid one, whatever
+        references lead there."""
+        components = {"A": {"properties": {"x": {"$ref": "#/components/schemas/B"}}}, "B": {"items": {"$ref": "#/components/schemas/C"}}, "C": {"$ref": ["#/components/schemas/B"]}}
+        (tmp_path / "openapi.json").write_text(json.dumps({"openapi": "3.1.0", "components": {"schemas": components}}))
+        message = self._failure("openapi.json#/components/schemas/A", {"x": [1]}, tmp_path)
+        where = f"body schema file '{tmp_path / 'openapi.json'}#/components/schemas/A'"
+        assert message.startswith(
+            f"Cannot validate against {where}: $ref '#/components/schemas/C' points to an invalid JSON Schema: ['#/components/schemas/B'] is not of type 'string'\n"
+        )
+
+    def test_crash_nothing_accounts_for(self, tmp_path, monkeypatch):
+        """Where the target's meta-check itself runs out of stack, it tells
+        nothing: the keyword's crash is what the step reports."""
+        (tmp_path / "list.json").write_text(json.dumps([{"type": "integer"}]))
+
+        def too_deep(cls, schema, **kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        verify = Verify.model_validate({"body": {"schema": {"$ref": "list.json"}}})
+        monkeypatch.setattr(jsonschema.Draft202012Validator, "check_schema", classmethod(too_deep))
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(verify, httpx.Response(200, json=1), tmp_path, ref_bounds=ReferenceBounds(None, 3))
+        assert str(excinfo.value) == "Cannot validate against inline body schema, a schema it references is not valid: 'list' object has no attribute 'items'"
+
+    def test_reference_that_is_not_a_string_where_the_dialect_allows_one(self, tmp_path):
+        """Draft 4's meta-schema says nothing of `$ref`: an unresolvable
+        reference, not a crash on it, in the words deep uses."""
+        schema = {"$schema": "http://json-schema.org/draft-04/schema#", "properties": {"a": {"$ref": 5}}}
+        (tmp_path / "d4.json").write_text(json.dumps(schema))
+        message = self._failure("d4.json", {"a": 1}, tmp_path)
+        assert message == f"Cannot resolve a reference in body schema file '{tmp_path / 'd4.json'}': $ref 5 is not a string: a reference is a URI reference"
+
+    @pytest.mark.parametrize(
+        ("document", "pointer", "reason"),
+        [
+            # urljoin's TypeError, "Cannot mix str and non-str arguments".
+            pytest.param({"$id": 5, "$defs": {"a": {"type": "integer"}}}, "/$defs/a", "$id 5 is not a string: an $id is a URI reference", id="root-id-a-number"),
+            # Draft 4 reads it with startswith(): "'dict' object has no
+            # attribute 'startswith'".
+            pytest.param(
+                {"$schema": "http://json-schema.org/draft-04/schema#", "definitions": {"wrap": {"id": {"type": "string"}, "definitions": {"a": {"type": "integer"}}}}},
+                "/definitions/wrap/definitions/a",
+                'id {"type": "string"} is not a string: an id is a URI reference',
+                id="draft-4-id-on-the-way-an-object",
+            ),
+        ],
+    )
+    def test_id_that_is_not_a_string_on_the_pointer_s_way(self, tmp_path, document, pointer, reason):
+        """JSON Schema reads it before the schema, so no body passes, in the
+        words `validate --deep` uses, which crashed on it."""
+        (tmp_path / "doc.json").write_text(json.dumps(document))
+        message = self._failure(f"doc.json#{pointer}", 1, tmp_path)
+        assert message == f"Cannot resolve a reference in body schema file '{tmp_path / 'doc.json'}#{pointer}': {reason}"
+
+    def test_template_text_is_refused(self):
+        """A template can render to another template's text, which the
+        field's template branch takes as it is: a file named '{{ y }}' was
+        looked for."""
+        message = str(_failure({"body": {"schema": "{{ y }}"}}))
+        assert message == "verify.body.schema must resolve to a JSON Schema or a schema file, got '{{ y }}'"
+
+    def test_listed_among_the_step_s_other_failures(self, api):
+        message = self._failure("api/openapi.json#/components/schemas/Nobody", {}, api, status=201)
+        assert message.split("\n") == [
+            "2 verification checks failed:",
+            "  1. Status code doesn't match: expected 201, got 200",
+            f"  2. Body schema pointer '#/components/schemas/Nobody' leads nowhere in file '{api / 'api' / 'openapi.json'}': '#/components/schemas' has no key 'Nobody'",
+        ]
 
 
 class TestExpressions:

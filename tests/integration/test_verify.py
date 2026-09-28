@@ -1,6 +1,9 @@
+import json
+import shutil
+
 import pytest
 
-from tests.integration.helpers import named, stage
+from tests.integration.helpers import named, stage, write_scenario
 
 # Every row copies both: user-function and schema-file scenarios need them,
 # and an unused copy is harmless.
@@ -124,3 +127,48 @@ def test_failure_report_lists_every_failed_check_and_a_curl_command(run_scenario
     output = result.stdout.str()
     assert "s3cret" not in output
     assert "expected 404" not in output
+
+
+def test_body_schema_from_an_openapi_document(run_scenario):
+    """A schema an OpenAPI document holds, taken out by a JSON pointer, its
+    `$ref`s resolved across the document (``#/components/schemas/Role``) and
+    into the file beside it (``common.json``, relative to the document, not
+    to the scenario): on every iteration of a parallel stage, whose threads
+    share the parsed document. The pointer may reach any schema in it, a
+    path's response schema too, escapes and all. The scenario sits beside
+    the document's directory, in the tree as in the run, so it is a scenario
+    `validate --deep` checks clean where it is."""
+    result = run_scenario("verify/openapi")
+    result.assert_outcomes(passed=2, failed=1)
+    # The last stage fails: a list of users is not the path's one user.
+    result.stdout.fnmatch_lines(["test_verify_body_schema_openapi.http.json ..F", "*user_list_is_not_one_user*", "Body schema validation failed: 'id' is a required property"])
+
+
+def test_body_schema_reference_outside_the_rootdir_fails(pytester):
+    """A body schema's references are held to pytest's rootdir, as the
+    scenario's own $include is: the plugin hands it to the carrier."""
+    project = pytester.mkdir("project")
+    (project / "pytest.ini").write_text("[pytest]\n")
+    shutil.copy(pytester.copy_example("conftest.py"), project)
+    (pytester.path / "shared.json").write_text(json.dumps({"$defs": {"Ok": {"const": "ok"}}}))
+    response = [{"verify": {"status": 200, "body": {"schema": {"$ref": "../shared.json#/$defs/Ok"}}}}]
+    write_scenario(project, {"stages": [stage("escapes", "/ok", response=response)]})
+
+    result = pytester.runpytest("project")
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines([f"*Cannot resolve a reference in inline body schema: $ref '../shared.json#/$defs/Ok' names *shared.json, outside the reference root {project}*"])
+
+
+def test_body_schema_reference_depth_follows_the_ini_option(pytester):
+    """httpchain_ref_parent_traversal_depth bounds a body schema's references
+    as it bounds the scenario's $include: the plugin hands it to the carrier
+    with the rootdir. Inside the rootdir, one `..` is one too many at 0."""
+    pytester.makeini("[pytest]\nhttpchain_ref_parent_traversal_depth = 0\n")
+    pytester.copy_example("conftest.py")
+    (pytester.path / "shared.json").write_text(json.dumps({"$defs": {"Ok": {"const": "ok"}}}))
+    response = [{"verify": {"status": 200, "body": {"schema": {"$ref": "../shared.json#/$defs/Ok"}}}}]
+    write_scenario(pytester.mkdir("sub"), {"stages": [stage("climbs", "/ok", response=response)]})
+
+    result = pytester.runpytest("sub")
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(["*$ref '../shared.json#/$defs/Ok' exceeds the maximum parent traversal depth of 0 (httpchain_ref_parent_traversal_depth)*"])

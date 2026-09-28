@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
+from pytest_httpchain.body_schema import ReferenceBounds
 from pytest_httpchain.validation.deep import check_scenario_deep
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ValidateResult, diag, result
-from pytest_httpchain.validation.loader import load_with_diagnostics
+from pytest_httpchain.validation.loader import load_with_diagnostics, resolve_root_path
 from pytest_httpchain.validation.semantic import check_scenario, describe_scenario
 
 
@@ -45,6 +46,8 @@ def validate_scenario(
     diagnostics.extend(check_scenario(scenario, test_data))
 
     if deep:
-        diagnostics.extend(check_scenario_deep(scenario, syspaths=syspaths, scenario_dir=path.parent))
+        # The bounds the load held the scenario's references to, for its body schemas'.
+        ref_bounds = ReferenceBounds(root_path if root_path is not None else resolve_root_path(path), ref_parent_traversal_depth)
+        diagnostics.extend(check_scenario_deep(scenario, syspaths=syspaths, scenario_dir=path.parent, ref_bounds=ref_bounds))
 
     return result(diagnostics, describe_scenario(scenario, test_data))

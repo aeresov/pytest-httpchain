@@ -44,7 +44,7 @@ A key-value store persists throughout scenario execution. Variables, fixtures, a
 
 -   **JMESPath** — Assert on values in JSON responses directly (`"jmespath": {"data.id": 42, "items": {"length": 3}}`), or extract them for later stages
 -   **Regex** — Save values from bodies that are not JSON, such as a CSRF token from an HTML form (`"regex": {"csrf": "name=\"csrf\" value=\"([^\"]+)\""}`)
--   **JSON Schema** — Validate response structure against a schema
+-   **JSON Schema** — Validate response structure against a schema, inline or from a file, or one inside a document you already have: `"schema": "./openapi.json#/components/schemas/User"` checks the response against an OpenAPI component, its `$ref`s resolved across the document and into local files, never over the network
 -   **User functions** — Call Python functions for custom extraction, verification, or authentication
 -   **Failure reports** — A failing verify step lists every check that failed, not only the first, and the report gives the request as a ready-to-run `curl` command beside the request and response it shows
 

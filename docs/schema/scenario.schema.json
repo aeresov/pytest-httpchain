@@ -1829,7 +1829,7 @@
                       "type": "object"
                     },
                     {
-                      "format": "path",
+                      "minLength": 1,
                       "type": "string"
                     },
                     {
@@ -1839,11 +1839,27 @@
                       "type": "null"
                     }
                   ],
-                  "default": null
+                  "default": null,
+                  "examples": [
+                    "./schemas/user.json",
+                    "./openapi.json#/components/schemas/User",
+                    {
+                      "properties": {
+                        "id": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ],
+                      "type": "object"
+                    },
+                    "{{ user_schema }}"
+                  ]
                 }
               ],
               "title": "Schema",
-              "description": "JSON schema for validation."
+              "description": "JSON Schema the body must validate against: inline, or a local file, optionally with a JSON pointer into it (openapi.json#/components/schemas/User). Its $refs resolve across the document and into other local files."
             },
             "contains": {
               "anyOf": [

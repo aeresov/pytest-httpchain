@@ -9,8 +9,9 @@ import re
 import types
 import xml.etree.ElementTree
 from collections.abc import Callable, Iterable, Mapping
-from pathlib import Path
-from typing import Annotated, Any, Literal, get_args
+from pathlib import Path, PurePath
+from typing import Annotated, Any, Literal, NamedTuple, get_args
+from urllib.parse import unquote
 
 import graphql
 import httpx
@@ -85,6 +86,77 @@ def validate_json_schema_inline(v: dict[str, Any]) -> dict[str, Any]:
     except Exception as e:
         raise ValueError(f"JSON Schema validation error: {e}") from e
 
+    return v
+
+
+class SchemaFileRef(NamedTuple):
+    """A ``verify.body.schema`` file reference taken apart (`parse_schema_file_ref`):
+    the file's ``path`` and the ``fragment`` after its ``#``, both as written
+    (``""`` for none), and the JSON pointer's ``pointer`` segments, decoded."""
+
+    path: str
+    fragment: str
+    pointer: tuple[str, ...]
+
+
+# What makes a reference a URI, not a path: `http:`, `https:` or `file:`, in
+# any form, or another scheme with an authority (`ftp://host/...`). Any other
+# colon is a path's (`schemas:v1/user.json`, `user-2024-01-01T10:00.json`), and
+# so is a Windows drive's (C:\schemas\user.json, one letter).
+_URI = re.compile(r"(?:https?|file):|[a-z][a-z0-9+.-]+://", re.IGNORECASE)
+# An RFC 6901 escape is ~0 (for ~) or ~1 (for /): any other ~ is not one.
+_BAD_POINTER_ESCAPE = re.compile(r"~(?![01])")
+
+
+def parse_schema_file_ref(ref: str) -> SchemaFileRef:
+    """Take a ``body.schema`` file reference apart, or say why it is not one.
+
+    ``./openapi.json#/components/schemas/User`` is a local file, then, after
+    the first ``#``, an RFC 6901 JSON pointer in URI fragment form:
+    percent-decoded first (``%20`` is a space), then split at each ``/``, each
+    segment unescaped (``~1`` is ``/``, ``~0`` is ``~``). An empty fragment, or
+    none, selects the whole document. Anything that is not a pointer after the
+    ``#``, such as a plain-name anchor, is refused, and so is a URI (an
+    ``http:``, ``https:`` or ``file:`` one, or any with ``//`` after its
+    scheme): remote schemas are never fetched. A path cannot hold a ``#``,
+    then, and ``./`` before one that starts like a URI keeps it a path.
+
+    Shared by the model, which refuses a bad reference at load, the runtime
+    and ``validate --deep``, which read the file and follow the pointer, so
+    all three take a reference apart the same way.
+    """
+    path, _, fragment = ref.partition("#")
+    if not path:
+        raise ValueError(f"A schema file reference must name a file before its '#', got {ref!r}")
+    if uri := _URI.match(path):
+        if uri.group().lower().startswith("http"):
+            raise ValueError(f"A schema file must be a local file: remote schemas are not fetched, got {ref!r}")
+        raise ValueError(f"A schema file must be a local file path, not a URI, got {ref!r}")
+    if not fragment:
+        return SchemaFileRef(path, fragment, ())
+    if not fragment.startswith("/"):
+        raise ValueError(f"The part after '#' must be a JSON pointer starting with '/' (such as '#/components/schemas/User'), got {ref!r}")
+    try:
+        decoded = unquote(fragment, errors="strict")
+    except UnicodeDecodeError as e:
+        raise ValueError(f"The JSON pointer's percent-encoding is not UTF-8, got {ref!r}") from e
+    segments = decoded[1:].split("/")
+    for segment in segments:
+        if _BAD_POINTER_ESCAPE.search(segment):
+            raise ValueError(f"A '~' in a JSON pointer must be followed by 0 (for '~') or 1 (for '/'), got {ref!r}")
+    return SchemaFileRef(path, fragment, tuple(segment.replace("~1", "/").replace("~0", "~") for segment in segments))
+
+
+def validate_schema_file_ref(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
+    """Validate a ``body.schema`` file reference, keeping it as written: a
+    `Path` would normalize the pointer after its ``#`` (``//`` is an empty key,
+    a trailing ``/`` one more). A path object a template renders (a fixture's)
+    stands for its text. A string with a template in it is the engine's to
+    render, left to ``PartialTemplateStr``, as a URL's is (`_literal_url`)."""
+    v: str = handler(str(value) if isinstance(value, PurePath) else value)
+    if template := re.search(TEMPLATE_PATTERN, v):
+        raise ValueError(f"Not a literal file reference: it contains a template expression at position {template.start()}")
+    parse_schema_file_ref(v)
     return v
 
 
@@ -262,6 +334,7 @@ JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)
 JMESPathKey = Annotated[str, AfterValidator(validate_jmespath_key)]
 JSONSchemaInline = Annotated[dict[str, Any], AfterValidator(validate_json_schema_inline)]
 SerializablePath = Annotated[Path, PlainSerializer(lambda x: str(x), return_type=str)]
+SchemaFileRefStr = Annotated[str, WrapValidator(validate_schema_file_ref), WithJsonSchema({"type": "string", "minLength": 1})]
 RegexPattern = Annotated[str, AfterValidator(validate_regex_pattern)]
 # A regex group a `save.regex` entry saves: its number or its name.
 RegexGroupNumber = Annotated[StrictInt, Field(ge=0)]

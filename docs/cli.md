@@ -47,7 +47,7 @@ Findings carry a stable `HTTPCHAINxxx` code and a severity — see
 | --- | --- |
 | `--format text\|json` | `json` emits the whole result, including each diagnostic's `code`, `severity`, `message` and `location`, for editor and CI integration. |
 | `--strict` | Treat warnings as failures for the exit code. |
-| `--deep` | Also import your `module:func` references and check their signatures, and confirm referenced files and schema files exist. |
+| `--deep` | Also import your `module:func` references and check their signatures, and confirm referenced files and schema files exist. A body schema is followed as the runtime follows it: its JSON pointer must resolve, the schema it selects must be valid, and every `$ref` and `$dynamicRef` it reaches must resolve to a valid schema, locally and under the path rules a scenario's `$include` keeps (`--root-path`, `--ref-parent-traversal-depth`) (see [JSON Schema validation](usage/responses.md#a-schema-inside-a-document-openapi-and-shared-schema-files)). |
 | `--syspath DIR` | Extra directory on `sys.path` for `--deep` import resolution. Repeatable. |
 
 `--deep` imports your code, which is why it is opt-in and never runs at pytest

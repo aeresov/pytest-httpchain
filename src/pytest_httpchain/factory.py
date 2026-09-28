@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 
+from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds
 from pytest_httpchain.carrier import Carrier, fresh_scenario_state
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import (
@@ -58,6 +59,7 @@ def create_test_class(
     class_name: str,
     max_parallel_iterations: int = 10_000,
     scenario_dir: Path | None = None,
+    ref_bounds: ReferenceBounds = UNBOUNDED,
     record_all_exchanges: bool = False,
     redaction: Redaction = DEFAULT_REDACTION,
 ) -> type[Carrier]:
@@ -79,6 +81,7 @@ def create_test_class(
             "__doc__": scenario.description,
             "scenario": scenario,
             "scenario_dir": scenario_dir,
+            "ref_bounds": ref_bounds,
             "record_all_exchanges": record_all_exchanges,
             "redaction": redaction,
             "global_context": base_global_context(scenario_context),

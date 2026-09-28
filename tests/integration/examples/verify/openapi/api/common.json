@@ -1,0 +1,5 @@
+{
+    "$defs": {
+        "Email": { "type": "string", "format": "email" }
+    }
+}

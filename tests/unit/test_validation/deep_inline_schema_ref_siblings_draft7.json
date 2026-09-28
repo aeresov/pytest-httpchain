@@ -1,0 +1,23 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "schema": {
+                                "$schema": "http://json-schema.org/draft-07/schema#",
+                                "definitions": { "a": { "type": "object" } },
+                                "$ref": "#/definitions/a",
+                                "properties": { "x": { "$ref": "shared_schema_that_does_not_exist.json" } }
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

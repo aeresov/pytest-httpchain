@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 authors = [{ name = "Alexander Eresov", email = "aeresov@gmail.com" }]
 dependencies = [
+    # attrs.fields, for the validator classes a body schema is validated with
+    # (body_schema): the floor jsonschema 4.18.0 itself requires.
+    "attrs>=22.2.0",
     "deepmerge>=2.0",
     "graphql-core>=3.0.0",
     # 0.28.0 is the first release that takes a socks5h:// proxy, which
@@ -17,6 +20,9 @@ dependencies = [
     "httpx[http2]>=0.28.0",
     "jmespath>=1.0.0",
     "jsonschema>=4.18.0",
+    # The meta-schemas a body schema's registry holds (body_schema): the
+    # floor jsonschema 4.18.0 itself requires, as for attrs.
+    "jsonschema-specifications>=2023.03.6",
     "pydantic>=2.13.4",
     "referencing>=0.28.4",
     "pyrate-limiter>=4.2.0",
@@ -203,6 +209,7 @@ layers = [
     "factory",
     "carrier : dataflow : schema",
     "validation : har_writer : report_formatter : request_builder : response_steps",
+    "body_schema",
     "utils : scoping : redaction",
     "userfunc",
     "models",

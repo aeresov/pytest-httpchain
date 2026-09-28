@@ -8,7 +8,6 @@ to render each check's value (`VerifyRender`). The carrier owns the sequence,
 and a step that fails ends it.
 """
 
-import functools
 import json
 import operator
 import re
@@ -26,7 +25,8 @@ import jsonschema
 import pytest
 import referencing.exceptions
 
-from pytest_httpchain.errors import SaveError, SchemaFileError, StageExecutionError, VerificationError
+from pytest_httpchain.body_schema import UNBOUNDED, InvalidReferencedSchema, ReferenceBounds, SchemaFile, file_body_schema, inline_body_schema
+from pytest_httpchain.errors import SaveError, SchemaFileError, SchemaPointerError, StageExecutionError, VerificationError
 from pytest_httpchain.jsonref import json_equal
 from pytest_httpchain.models import (
     JSON_TYPE_NAMES,
@@ -39,15 +39,13 @@ from pytest_httpchain.models import (
     SubstitutionsSave,
     UserFunctionsSave,
     Verify,
-    check_json_schema,
     is_status_class,
-    json_schema_validator_class,
     regex_group,
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, Redaction
-from pytest_httpchain.templates import TemplatesError
+from pytest_httpchain.templates import TemplatesError, contains_template
 from pytest_httpchain.userfunc import UserFunctionError, call_target, call_user_function
-from pytest_httpchain.utils import optional_as_list, path_segment, process_substitutions, read_json_schema_file, resolve_scenario_path, schema_error_text
+from pytest_httpchain.utils import optional_as_list, path_segment, process_substitutions, schema_error_text
 
 
 def process_save(save_model: Save, response: httpx.Response, context: ChainMap[str, Any]) -> dict[str, Any]:
@@ -161,6 +159,7 @@ def process_verify(
     scenario_dir: Path | None = None,
     redaction: Redaction = DEFAULT_REDACTION,
     render: VerifyRender | None = None,
+    ref_bounds: ReferenceBounds = UNBOUNDED,
 ) -> None:
     """Run one verify step's assertions, raising one `VerificationError` that
     names every check that failed.
@@ -206,6 +205,13 @@ def process_verify(
     the report does, and so does an exact-match expected value: it is a whole
     value of that header. A matcher operand shows as written unless its failure
     would echo what the redaction hides (`text_matcher_failures`).
+
+    ``scenario_dir`` is what a body schema's file path and an inline schema's
+    references to files are relative to, and ``ref_bounds`` what a schema's
+    references to files are held to (`body_schema.ReferenceBounds`): the
+    carrier passes pytest's rootdir and the parent traversal depth, which
+    bound a scenario's ``$include`` too. Without them, a relative reference
+    may name any local file.
     """
     failures = _Failures()
     body = _JsonBody(response, failures)
@@ -327,7 +333,7 @@ def process_verify(
             failures.add(f"Function '{func_item}' verification failed", listed=f"Function {named} verification failed")
 
     if verify_model.body.schema is not None and (schema := rendered("body", "schema")) is not _UNRENDERED:
-        _verify_body_schema(schema, body, scenario_dir, failures)
+        _verify_body_schema(schema, body, scenario_dir, ref_bounds, failures)
 
     def operands(field: str) -> Iterator[Any]:
         """The body operands of ``field`` that rendered, a failure to render
@@ -746,18 +752,31 @@ def _shown(value: Any) -> str:
     return text if len(text) <= _SHOWN_MAX else f"{text[:_SHOWN_MAX]}... ({len(text)} characters)"
 
 
-def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None, failures: _Failures) -> None:
-    """Validate the response body against an inline or file-referenced JSON
-    Schema: one check, which fails once, for its first violation."""
-    if isinstance(schema, str | Path):
-        schema_path = resolve_scenario_path(scenario_dir, schema)
+def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None, ref_bounds: ReferenceBounds, failures: _Failures) -> None:
+    """Validate the response body against an inline JSON Schema, or one in a
+    file, where a JSON pointer may select it (`body_schema`): one check, which
+    fails once, for its first violation, or for why it cannot run.
+
+    Every failure to read the schema is one: a file that is not there or not
+    JSON, a pointer that leads nowhere, a schema its meta-schema refuses, a
+    ``$ref`` that does not resolve, the file named, with the pointer."""
+    if isinstance(schema, str):
+        # Template text a template rendered, which the field's template
+        # branch takes as it is (`_status_failure` refuses its own).
+        if contains_template(schema):
+            failures.add(f"verify.body.schema must resolve to a JSON Schema or a schema file, got {schema!r}")
+            return
+        file = SchemaFile.locate(schema, scenario_dir)
         try:
-            schema = read_json_schema_file(schema_path)
+            body_schema = file_body_schema(file, ref_bounds)
         except SchemaFileError as e:
-            failures.add(f"Error reading body schema file '{schema_path}': {e}", cause=e)
+            failures.add(f"Error reading body schema file '{file}': {e}", cause=e)
+            return
+        except SchemaPointerError as e:
+            failures.add(f"Body schema pointer '#{file.fragment}' leads nowhere in file '{file.path}': {e}", cause=e)
             return
         try:
-            check_json_schema(schema)
+            body_schema.check()
         except Exception as e:
             # A SchemaError, or a crash checking the schema, as the inline
             # schema's check and `validate --deep` catch it: ``re`` refusing a
@@ -765,20 +784,18 @@ def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None,
             # the meta-validator's own recursion on a deeply nested schema,
             # which would take the step's other failures with it. The message
             # must not recurse too (see `schema_error_text`).
-            failures.add(f"Invalid JSON Schema in file '{schema_path}': {schema_error_text(e)}", cause=e)
+            failures.add(f"Invalid JSON Schema in file '{file}': {schema_error_text(e)}", cause=e)
             return
+    else:
+        # Already meta-checked, at model validation.
+        body_schema = inline_body_schema(schema, scenario_dir, ref_bounds)
 
     response_json = body.parsed("validate schema")
     if response_json is _UNPARSABLE:
         return
 
     try:
-        # Already meta-checked (inline at model validation, files just above), so
-        # instantiate the dialect's validator instead of jsonschema.validate,
-        # which would re-run check_schema on every stage. Either way `format`
-        # is only an annotation unless a format checker is passed.
-        validator_class = json_schema_validator_class(schema)
-        validator_class(schema, format_checker=_format_checker(validator_class)).validate(response_json)
+        body_schema.validate(response_json)
     except jsonschema.ValidationError as e:
         failures.add(_schema_violation(e), cause=e)
     except RecursionError as e:
@@ -786,12 +803,23 @@ def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None,
         # (or of a schema that follows it down, ``"items": {"$ref": "#"}``), so
         # it gives out long before the C decoder does.
         failures.add(f"Cannot validate schema, response or schema is nested too deeply: {e}", cause=e)
-    except jsonschema.SchemaError as e:
-        failures.add(f"Invalid body validation schema: {schema_error_text(e)}", cause=e)
     except referencing.exceptions.Unresolvable as e:
-        # An unresolvable $ref inside the schema itself must fail the stage
-        # cleanly, not escape as a raw traceback past the abort machinery.
-        failures.add(f"Cannot resolve $ref in body schema: {e}", cause=e)
+        # A $ref (or $dynamicRef) that does not resolve, or an $id that cannot
+        # be read, must fail the stage cleanly, not escape as a raw traceback
+        # past the abort machinery; and in words that say what it looked for,
+        # where referencing's quote a whole document.
+        failures.add(f"Cannot resolve a reference in {body_schema.where}: {body_schema.why_unresolvable(e)[0]}", cause=e)
+    except InvalidReferencedSchema as e:
+        # The schema was meta-checked, but not the ones its references reach,
+        # whose keywords crash on a value their meta-schema refuses
+        # (jsonschema's UnknownType for `"type": "strin"`): the reference's
+        # target is meta-checked then, and named, as `validate --deep` names it.
+        failures.add(f"Cannot validate against {body_schema.where}: {e}", cause=e)
+    except Exception as e:
+        # What validating against a referenced schema raises that neither its
+        # meta-check nor its `$id`s account for: the meta-check ran out of the
+        # stack a deep validation left it.
+        failures.add(f"Cannot validate against {body_schema.where}, a schema it references is not valid: {schema_error_text(e)}", cause=e)
 
 
 def _response_json(response: httpx.Response, error: type[StageExecutionError], purpose: str) -> Any:
@@ -817,25 +845,6 @@ def _schema_violation(error: jsonschema.ValidationError) -> str:
         return f"Body schema validation failed: {error}"
     except RecursionError:
         return f"Body schema validation failed: {error.message}\n\nFailed validating {error.validator!r} at {error.json_path}: the value is nested too deeply to show"
-
-
-@functools.cache
-def _format_checker(validator_class: type[jsonschema.protocols.Validator]) -> jsonschema.FormatChecker:
-    """The dialect's own format checker, so the checked formats are the ones
-    the schema's ``$schema`` defines and the installed jsonschema can check,
-    except that a check which crashes counts as a nonconforming value.
-
-    jsonschema turns only the exceptions a checker declares into a format
-    failure, and response data reaches the others: ``regex`` compiles the
-    value with ``re``, which raises OverflowError on ``a{4294967296}`` and
-    RecursionError on deeply nested groups. Those would escape as a raw
-    traceback past the abort machinery, with no request/response report.
-    A value its format's checker cannot process does not conform to it.
-    """
-    checker = jsonschema.FormatChecker(formats=())
-    for name, (func, _declared) in validator_class.FORMAT_CHECKER.checkers.items():
-        checker.checks(name, raises=Exception)(func)
-    return checker
 
 
 def text_matcher_failures(

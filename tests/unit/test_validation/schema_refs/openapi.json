@@ -1,0 +1,35 @@
+{
+    "openapi": "3.1.0",
+    "info": { "title": "Users", "version": "1.0.0" },
+    "paths": {},
+    "components": {
+        "schemas": {
+            "User": {
+                "type": "object",
+                "required": ["id", "role", "email"],
+                "properties": {
+                    "id": { "type": "integer" },
+                    "role": { "$ref": "#/components/schemas/Role" },
+                    "email": { "$ref": "common.json#/$defs/Email" }
+                }
+            },
+            "Role": { "enum": ["admin", "user"] },
+            "Invalid": { "type": 12 },
+            "RefsInvalid": { "items": { "$ref": "#/components/schemas/Invalid" } },
+            "RefsMissingFile": { "$ref": "missing.json" },
+            "RefsRemote": { "$ref": "https://schemas.example.com/user.json" },
+            "Customer": {
+                "$id": "https://example.com/schemas/customer",
+                "type": "object",
+                "properties": {
+                    "name": { "$ref": "#/$defs/Name" },
+                    "address": { "$ref": "/schemas/address" }
+                },
+                "$defs": {
+                    "Name": { "type": "string" },
+                    "Address": { "$id": "/schemas/address", "type": "object", "required": ["street"] }
+                }
+            }
+        }
+    }
+}

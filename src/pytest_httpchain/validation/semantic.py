@@ -9,7 +9,6 @@ import warnings
 from collections import Counter
 from collections.abc import Generator, Iterator, Sequence
 from typing import Any
-from urllib.parse import urlparse
 
 import pytest
 
@@ -625,26 +624,16 @@ def _jmespath_contradiction_diagnostics(stage_name: str, expression: str, locati
 
 def _inline_schema_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
     """HTTPCHAIN028: scenario reference directives inside an inline JSON Schema,
-    which the resolver treats as opaque and therefore never processes."""
+    which the resolver treats as opaque and therefore never processes.
 
-    def is_scenario_file_ref(value: str) -> bool:
-        """True for a ``$ref`` naming a scenario file the resolver would have
-        handled, i.e. a relative path to a ``.json`` document.
-
-        JSON Schema ``$ref`` is a URI-reference: absolute URIs (metaschemas and
-        anything the validator's registry serves) and ``$id``-relative
-        references resolve fine through the validator ``response_steps``
-        instantiates, so flagging those is a false positive on a working schema.
-        A one-character scheme is a Windows drive letter, not a URI scheme.
-        """
-        if len(urlparse(value).scheme) > 1:
-            return False
-        return value.split("#", 1)[0].endswith(".json")
+    A ``$ref`` is not one: it is the schema's own, and resolves at runtime,
+    to a local file too (`body_schema`), where ``$include`` and ``$merge``
+    are no JSON Schema keyword at all.
+    """
 
     def directive_keys(root: Any) -> set[str]:
         # String values only: a schema whose `properties` legitimately declares
-        # an "$include" property maps it to a schema object. "$ref" is schema
-        # vocabulary unless it names a file, which nothing can resolve at runtime.
+        # an "$include" property maps it to a schema object.
         # Iterative: the meta-check never descends into `enum`/`const`/`default`
         # values, so a recursive walk overflowed on one nested a few hundred
         # levels deep.
@@ -655,8 +644,6 @@ def _inline_schema_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                 case dict() as node:
                     for key, value in node.items():
                         if key in ("$include", "$merge") and isinstance(value, str):
-                            found.add(key)
-                        elif key == "$ref" and isinstance(value, str) and not value.startswith("#") and is_scenario_file_ref(value):
                             found.add(key)
                         pending.append(value)
                 case list() as items:
@@ -672,7 +659,8 @@ def _inline_schema_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                         DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE,
                         f"Inline JSON schema contains scenario reference directive(s) {sorted(found)}. "
                         f"Inline schemas are standard JSON Schema: scenario directives are not resolved there. "
-                        f"Inline the shared content, or reference the schema by file path instead.",
+                        f"Use a JSON Schema $ref instead (a local file resolves relative to the scenario's directory, "
+                        f"with a JSON pointer after its '#'), or reference the schema by file path.",
                         location=f"stages[{i}].response[{k}].verify.body.schema",
                     )
 
