@@ -15,6 +15,12 @@ _BIG_JSON = {"data": ["x" * 50] * 200}
 _JSON = {"content-type": "application/json"}
 # Parses on every supported interpreter, but pretty-prints in full to 12.5 MB.
 _DEEP_JSON = b"[" * 2_500 + b"]" * 2_500
+# A multipart body, as the plugin sends one: a field, then a binary file.
+_MULTIPART = (
+    b'--XyZ\r\nContent-Disposition: form-data; name="title"\r\n\r\nReport\r\n'
+    b'--XyZ\r\nContent-Disposition: form-data; name="image"; filename="a.png"\r\nContent-Type: image/png\r\n\r\n\x89PNG\r\n'
+    b"--XyZ--\r\n"
+)
 
 
 @pytest.mark.parametrize(
@@ -60,8 +66,40 @@ _DEEP_JSON = b"[" * 2_500 + b"]" * 2_500
         # A streaming body is consumed on send and never buffered.
         pytest.param(
             httpx.Request("POST", "https://example.com/upload", content=iter([b"chunk"])),
-            "POST https://example.com/upload\nhost: example.com\ntransfer-encoding: chunked\n\n<Streaming body (e.g. multipart file upload): consumed on send, not captured>",
+            "POST https://example.com/upload\nhost: example.com\ntransfer-encoding: chunked\n\n<Streaming body: not captured>",
             id="streaming-placeholder",
+        ),
+        # A multipart body part by part: a binary file stands in for itself
+        # alone, where the whole body was one <Binary content>.
+        pytest.param(
+            httpx.Request("POST", "https://example.com/upload", headers={"content-type": "multipart/form-data; boundary=XyZ"}, content=_MULTIPART),
+            "POST https://example.com/upload\nhost: example.com\ncontent-type: multipart/form-data; boundary=XyZ\ncontent-length: 176\n\n"
+            '--XyZ\nContent-Disposition: form-data; name="title"\n\nReport\n'
+            '--XyZ\nContent-Disposition: form-data; name="image"; filename="a.png"\nContent-Type: image/png\n\n<Binary content: 4 bytes>\n'
+            "--XyZ--",
+            id="multipart-part-by-part",
+        ),
+        pytest.param(
+            httpx.Request("POST", "https://example.com/upload", headers={"content-type": "multipart/form-data; boundary=XyZ"}, content=b"--XyZ--\r\n"),
+            "POST https://example.com/upload\nhost: example.com\ncontent-type: multipart/form-data; boundary=XyZ\ncontent-length: 9\n\n--XyZ--",
+            id="multipart-without-parts",
+        ),
+        # Delimited by another boundary than its header names (a stage's own
+        # Content-Type can): shown as any body is.
+        pytest.param(
+            httpx.Request("POST", "https://example.com/upload", headers={"content-type": "multipart/form-data; boundary=other"}, content=_MULTIPART),
+            "POST https://example.com/upload\nhost: example.com\ncontent-type: multipart/form-data; boundary=other\ncontent-length: 176\n\n<Binary content: 176 bytes>",
+            id="multipart-other-boundary",
+        ),
+        # Not a multipart body after all: cut short before its closing
+        # delimiter, or a part without the empty line ending its headers.
+        *(
+            pytest.param(
+                httpx.Request("POST", "https://example.com/upload", headers={"content-type": "multipart/form-data; boundary=XyZ"}, content=content),
+                f"POST https://example.com/upload\nhost: example.com\ncontent-type: multipart/form-data; boundary=XyZ\ncontent-length: {len(content)}\n\n{content.decode()}",
+                id=f"multipart-malformed-{name}",
+            )
+            for name, content in [("unclosed", b'--XyZ\r\nContent-Disposition: form-data; name="a"\r\n\r\nx'), ("no-headers-end", b"--XyZ\r\nx\r\n--XyZ--\r\n")]
         ),
     ],
 )
@@ -316,6 +354,19 @@ def _curl_arguments(command: str) -> list[str]:
             id="too-long",
         ),
         pytest.param(
+            # The plugin's multipart body is bytes, sent as any other: with
+            # the Content-Type naming its boundary.
+            httpx.Request("POST", "https://x.test/upload", headers={"content-type": "multipart/form-data; boundary=XyZ"}, content=b"--XyZ--\r\n"),
+            _lines(
+                "curl -X POST 'https://x.test/upload' \\",
+                "  -H 'content-type: multipart/form-data; boundary=XyZ' \\",
+                # Its line breaks are CRLF, as sent.
+                "  --data-raw '--XyZ--\r",
+                "'",
+            ),
+            id="multipart-captured",
+        ),
+        pytest.param(
             # Its Content-Type's boundary belongs to the uncaptured body: -F writes its own.
             httpx.Request("POST", "https://x.test/upload", files={"file": ("a.txt", b"abc")}),
             _lines(
@@ -450,3 +501,58 @@ def test_deep_json_renders_only_what_is_shown(formatter, message):
         tracemalloc.stop()
     assert body == "\n".join("  " * level + "[" for level in range(40))[:1000] + "... (truncated)"
     assert peak < 2_000_000
+
+
+def _multipart_request(*parts: tuple[bytes, bytes], closing: bytes = b"--XyZ--\r\n") -> httpx.Request:
+    """A request whose body is ``parts``, each its headers and content, delimited by XyZ."""
+    content = b"".join(b"--XyZ\r\n" + headers + b"\r\n\r\n" + data + b"\r\n" for headers, data in parts) + closing
+    return httpx.Request("POST", "https://x.test/", headers={"content-type": "multipart/form-data; boundary=XyZ"}, content=content)
+
+
+_CHUNK = 1 << 20  # report_formatter._DECODE_CHUNK
+
+
+@pytest.mark.parametrize(
+    ("request_", "expected"),
+    [
+        # Text throughout, but for its last byte: binary, as a body would be,
+        # though the report shows none of the text past its first chunk.
+        pytest.param(_multipart_request((b"H: 1", b"t" * (2 * _CHUNK) + b"\xff")), f"--XyZ\nH: 1\n\n<Binary content: {2 * _CHUNK + 1} bytes>\n--XyZ--", id="binary-at-its-end"),
+        # A character split between two chunks is still one character.
+        pytest.param(_multipart_request((b"H: 1", b"t" * (_CHUNK - 1) + "é".encode())), ("--XyZ\nH: 1\n\n" + "t" * 1000)[:1000] + "... (truncated)", id="character-across-chunks"),
+        pytest.param(_multipart_request((b"H: 1", "é".encode() * 10)), "--XyZ\nH: 1\n\n" + "é" * 10 + "\n--XyZ--", id="multibyte-text"),
+        # Malformed past what the report shows (a part without the empty line
+        # ending its headers): not multipart, shown as any body is.
+        pytest.param(
+            _multipart_request((b"H: 1", b"t" * 2000), closing=b"--XyZ\r\nx\r\n--XyZ--\r\n"),
+            ("--XyZ\r\nH: 1\r\n\r\n" + "t" * 2000)[:1000] + "... (truncated)",
+            id="malformed-past-what-is-shown",
+        ),
+        # Parts past what is shown are found, not decoded, and not shown.
+        pytest.param(
+            _multipart_request((b"H: 1", b"t" * 2000), (b"H: 2", b"\xff" * 10)),
+            ("--XyZ\nH: 1\n\n" + "t" * 2000)[:1000] + "... (truncated)",
+            id="part-past-what-is-shown",
+        ),
+        # Headers are shown as far as the report shows them.
+        pytest.param(_multipart_request((b"H: " + "é".encode() * 3000, b"x")), ("--XyZ\nH: " + "é" * 3000)[:1000] + "... (truncated)", id="long-headers"),
+    ],
+)
+def test_format_request_multipart_body(request_, expected):
+    assert format_request(request_).split("\n\n", 1)[1] == expected
+
+
+def test_large_multipart_body_is_decoded_only_as_far_as_it_is_shown():
+    """A failing stage's report shows 1,000 characters of a body, so a large
+    upload is found through part by part and decoded a chunk at a time,
+    keeping only what is shown: split and decoded whole, the 16 MB here was
+    copied four times over."""
+    request = _multipart_request((b'Content-Disposition: form-data; name="a"', b"t" * 8_000_000), (b'Content-Disposition: form-data; name="b"', b"\xff" * 8_000_000))
+    tracemalloc.start()
+    try:
+        body = format_request(request).split("\n\n", 1)[1]
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert body == ('--XyZ\nContent-Disposition: form-data; name="a"\n\n' + "t" * 1000)[:1000] + "... (truncated)"
+    assert peak < 4 * _CHUNK

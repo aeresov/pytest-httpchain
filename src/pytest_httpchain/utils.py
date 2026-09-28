@@ -76,10 +76,10 @@ def request_content(request: httpx.Request) -> bytes | None:
 
     Any other stream is deliberately not iterated a second time: an iterator
     body would be found exhausted, a file-backed multipart body would re-read
-    its files. The plugin's own multipart ``files`` body is built from bytes
-    already in memory and could be re-rendered, but telling it apart takes
-    httpx's private multipart internals, so it is reported as not captured
-    rather than read back. Reporting paths must degrade, not error.
+    its files. The plugin sends none: its multipart bodies (``files`` and
+    ``multipart``) are encoded to bytes before they are sent
+    (`request_builder`), so they are captured as any other body is. Reporting
+    paths must degrade, not error.
     """
     try:
         return request.content

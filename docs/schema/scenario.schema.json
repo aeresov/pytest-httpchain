@@ -494,6 +494,130 @@
       ],
       "title": "DigestAuth"
     },
+    "FileSpec": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "path",
+                      "type": "string"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Path",
+              "description": "File to send; a relative path resolves against the scenario file's directory."
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Content",
+              "description": "The file's content as text, sent UTF-8 encoded."
+            },
+            "base64": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Base64",
+              "description": "The file's content, base64-encoded: for binary data."
+            },
+            "filename": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Filename",
+              "description": "Filename the part is sent with. Not set: the path's last component, or for content and base64 the field's name. An empty string sends the part without a filename."
+            },
+            "content_type": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "examples": [
+                    "image/png",
+                    "application/json"
+                  ]
+                }
+              ],
+              "title": "Content Type",
+              "description": "Content-Type of the part. Not set: guessed from the filename's extension, else application/octet-stream."
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "title": "FileSpec",
+      "description": "A file of a multipart body, written as an object: where its bytes come\nfrom (exactly one of path, content and base64), and the filename and\ncontent type its part is sent with."
+    },
     "FilesBody": {
       "anyOf": [
         {
@@ -511,19 +635,60 @@
                   "additionalProperties": {
                     "anyOf": [
                       {
-                        "format": "path",
-                        "type": "string"
+                        "anyOf": [
+                          {
+                            "format": "path",
+                            "type": "string"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
                       },
                       {
-                        "type": "string"
+                        "$ref": "#/$defs/FileSpec"
+                      },
+                      {
+                        "items": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "format": "path",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            {
+                              "$ref": "#/$defs/FileSpec"
+                            }
+                          ]
+                        },
+                        "type": "array"
                       }
                     ]
                   },
+                  "examples": [
+                    {
+                      "document": "./report.pdf",
+                      "images": [
+                        "./a.png",
+                        {
+                          "content_type": "image/png",
+                          "filename": "photo.png",
+                          "path": "./b.png"
+                        }
+                      ]
+                    }
+                  ],
                   "type": "object"
                 }
               ],
               "title": "Files",
-              "description": "Files to upload from file paths."
+              "description": "Files to upload as multipart/form-data. Files per field name: a path (relative to the scenario file's directory), a file object (exactly one of path, content or base64, and optionally filename and content_type), or a list of them, sent as parts of the same name."
             }
           },
           "required": [
@@ -1243,6 +1408,147 @@
         {}
       ]
     },
+    "Multipart": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "fields": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      {
+                        "items": {
+                          "type": [
+                            "string",
+                            "number",
+                            "boolean"
+                          ]
+                        },
+                        "type": "array"
+                      }
+                    ]
+                  },
+                  "examples": [
+                    {
+                      "draft": false,
+                      "tags": [
+                        "a",
+                        "b"
+                      ],
+                      "title": "Report"
+                    }
+                  ],
+                  "type": "object"
+                }
+              ],
+              "title": "Fields",
+              "description": "Form fields: text, a number or a boolean (sent as true or false), or a list of them, sent as fields of the same name."
+            },
+            "files": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "format": "path",
+                            "type": "string"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "$ref": "#/$defs/FileSpec"
+                      },
+                      {
+                        "items": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "format": "path",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            {
+                              "$ref": "#/$defs/FileSpec"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      }
+                    ]
+                  },
+                  "examples": [
+                    {
+                      "document": "./report.pdf",
+                      "note": {
+                        "content": "inline text",
+                        "content_type": "text/plain",
+                        "filename": "note.txt"
+                      }
+                    }
+                  ],
+                  "type": "object"
+                }
+              ],
+              "title": "Files",
+              "description": "Files per field name: a path (relative to the scenario file's directory), a file object (exactly one of path, content or base64, and optionally filename and content_type), or a list of them, sent as parts of the same name."
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "title": "Multipart",
+      "description": "A multipart/form-data body: form fields and files, each a part of its\nown, the fields first; at least one of the two is set."
+    },
+    "MultipartBody": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "multipart": {
+              "$ref": "#/$defs/Multipart",
+              "description": "multipart/form-data body: form fields and files, each file from a path, text or base64."
+            }
+          },
+          "required": [
+            "multipart"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "MultipartBody"
+    },
     "ParallelForeachConfig": {
       "anyOf": [
         {
@@ -1714,6 +2020,9 @@
                 },
                 {
                   "$ref": "#/$defs/FilesBody"
+                },
+                {
+                  "$ref": "#/$defs/MultipartBody"
                 },
                 {
                   "$ref": "#/$defs/GraphQLBody"

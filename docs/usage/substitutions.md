@@ -440,6 +440,20 @@ or the whole match), so the message says that instead:
 'save.regex.token.group' was declared as '{{ which }}' but rendered to None, which would silently save the default group instead
 ```
 
+So are the `filename` and `content_type` of a
+[multipart file](requests.md#file-uploads-multipart). Left out, they are sent
+as the default ones (the path's name, the content type its extension
+suggests), so the message says that:
+
+```
+'request.body.multipart.files.photo.filename' was declared as '{{ name }}' but rendered to None, which would silently send the default filename instead
+```
+
+A file object one template renders (`"photo": "{{ upload }}"`) is covered as a
+header matcher written as one is, but for its sources: a file sets exactly one
+of `path`, `content` and `base64`, so a `null` in the others is not set, as in
+the same object written out, and the file is sent from the one it sets.
+
 So are the operands of a [`verify.jmespath`](responses.md#jmespath-assertions)
 matcher, `eq`, `ne`, `contains` and `not_contains` included, although `null` is
 an operand they take. There the `null` would not switch the check off but

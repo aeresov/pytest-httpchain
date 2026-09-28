@@ -40,6 +40,10 @@ Each scenario contains 1+ stages executed in order. One stage failure stops the 
 
 A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use Jinja-style expressions (`{{ var }}`) in any request value.
 
+### Request Bodies
+
+JSON, form, XML, text, base64, a binary file and GraphQL, and [multipart uploads](usage/requests.md#file-uploads-multipart) that mix form fields with files: each file read from a path or given inline, several under one name if need be, with its own filename and content type.
+
 ### Response Processing
 
 -   **JMESPath** — Assert on values in JSON responses directly (`"jmespath": {"data.id": 42, "items": {"length": 3}}`), or extract them for later stages

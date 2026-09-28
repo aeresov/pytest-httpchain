@@ -1,0 +1,26 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": {
+                "url": "https://x.test/a",
+                "method": "POST",
+                "body": {
+                    "multipart": {
+                        "fields": { "title": "Report" },
+                        "files": {
+                            "document": "valid_scenario.json",
+                            "more": ["valid_markers.json", { "path": "valid_scenario.json", "filename": "a.json" }],
+                            "note": { "content": "inline, no file", "filename": "note.txt" },
+                            "blob": { "base64": "AAE=" },
+                            "later": "{{ 'known_only_once_rendered' }}.json"
+                        }
+                    }
+                }
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

@@ -616,6 +616,64 @@ JsonTypeName = Literal["string", "number", "integer", "boolean", "array", "objec
 JSON_TYPE_NAMES: tuple[str, ...] = get_args(JsonTypeName)
 
 Base64String = Annotated[str, AfterValidator(validate_base64)]
+
+
+def _is_form_scalar(value: Any) -> bool:
+    """Text, a number or a boolean (an int to Python): what a form field sends."""
+    return isinstance(value, str | int | float)
+
+
+def _form_kind(value: Any) -> str:
+    """How a multipart field's message names what it got, as the scenario
+    would have written it."""
+    if value is None:
+        return "null"
+    if isinstance(value, dict | types.SimpleNamespace):
+        return "an object"
+    return type(value).__name__
+
+
+def validate_multipart_field_value(value: Any) -> Any:
+    """A ``body.multipart.fields`` value: text, a number or a boolean, or a
+    list of them, each sent as a field of its own under the one name.
+
+    One validator for the whole value, rather than a union of pydantic's
+    strict types, so that a value no member takes (a field a template rendered
+    to None, an object) is refused in one sentence naming it, not in five. A
+    tuple a template renders is a list; a set, whose order is arbitrary, is not.
+    """
+    if _is_form_scalar(value):
+        return value
+    if isinstance(value, list | tuple):
+        for i, item in enumerate(value):
+            if not _is_form_scalar(item):
+                raise ValueError(f"A multipart field's list holds text, numbers or booleans, got {_form_kind(item)} at [{i}]")
+        return list(value)
+    raise ValueError(f"A multipart field is text, a number or a boolean, or a list of them, got {_form_kind(value)}")
+
+
+_FORM_SCALAR_SCHEMA: dict[str, Any] = {"type": ["string", "number", "boolean"]}
+MultipartFieldValue = Annotated[
+    Any,
+    AfterValidator(validate_multipart_field_value),
+    WithJsonSchema({"anyOf": [_FORM_SCALAR_SCHEMA, {"type": "array", "items": _FORM_SCALAR_SCHEMA}]}),
+]
+
+# A control character would end the part's Content-Type header line early, or
+# start another: httpx writes the value into the part's headers as it is. A
+# tab is whitespace a header value may hold.
+_CONTROL_CHARACTER = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
+
+
+def validate_part_content_type(value: str) -> str:
+    """A multipart file's ``content_type``: written into its part's headers as
+    given, so without a control character, which would break the part."""
+    if control := _CONTROL_CHARACTER.search(value):
+        raise ValueError(f"A content type must not contain a control character, got {control.group()!r} at position {control.start()}")
+    return value
+
+
+PartContentType = Annotated[str, Field(min_length=1), AfterValidator(validate_part_content_type)]
 NamespaceFromDict = Annotated[Any, AfterValidator(convert_dict_to_namespace)]
 # Accepts a SimpleNamespace or a dict; always yields a dict.
 NamespaceOrDict = Annotated[dict[str, JsonValue], BeforeValidator(convert_namespace_to_dict)]

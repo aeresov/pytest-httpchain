@@ -148,8 +148,8 @@ The scenario's [`client.headers`](scenarios.md#client-configuration) are sent to
 the stage sets replaces the client's of the same name, compared case-insensitively. A client
 `Content-Type` labels the body of every stage that sets none, JSON included, except a body whose
 encoding fixes its type: a [`form`](#form-data-url-encoded) body keeps
-`application/x-www-form-urlencoded`, and a [`files`](#file-uploads-multipart) body
-`multipart/form-data` with the boundary between its parts.
+`application/x-www-form-urlencoded`, and a [`multipart` or `files`](#file-uploads-multipart)
+body `multipart/form-data` with the boundary between its parts.
 
 A failing stage's report shows the headers it sent, with the values of credential headers such as
 `Authorization` as `[REDACTED]` (see [Secrets in reports](../getting-started.md#secrets-in-reports)).
@@ -255,6 +255,59 @@ A failing stage's report shows the headers it sent, with the values of credentia
 
 ### File Uploads (Multipart)
 
+`multipart` sends a `multipart/form-data` body: form fields and files, each a
+part of its own.
+
+```json
+{
+    "request": {
+        "url": "https://api.example.com/reports",
+        "method": "POST",
+        "body": {
+            "multipart": {
+                "fields": {
+                    "title": "{{ title }}",
+                    "tags": ["q3", "finance"],
+                    "draft": false
+                },
+                "files": {
+                    "document": "./report.pdf",
+                    "images": [
+                        "./chart.png",
+                        {"path": "./photo.jpg", "filename": "cover.jpg", "content_type": "image/jpeg"}
+                    ],
+                    "note": {"content": "Figures are preliminary.", "filename": "note.txt", "content_type": "text/plain"}
+                }
+            }
+        }
+    }
+}
+```
+
+-   **`fields`**: each value is text, a number or a boolean, sent as text the
+    way a form value is (`false` as `false`, `12` as `12`); a list sends a field
+    per item, all under the same name.
+-   **`files`**: each field is one file or a list of them, a part per file,
+    all under the same name. A file is a path, or an object with exactly one of
+    `path` (a file to read), `content` (its content as text, sent UTF-8
+    encoded) and `base64` (its content base64-encoded, for binary data), and
+    optionally:
+    -   `filename`: the part's filename. Not set, it is the path's last
+        component, or for `content` and `base64` the field's name. `""` sends
+        the part without one, which most servers read as a form field with a
+        content type of its own, such as a JSON part beside a file.
+    -   `content_type`: the part's `Content-Type`. Not set, it is guessed from
+        the filename's extension, else `application/octet-stream`.
+
+At least one of `fields` and `files` is set. The fields are sent first, then
+the files, each in the order written. A list with nothing in it (a template can
+render one) sends no part, and a body left with no part at all is still sent,
+as an empty multipart body. A template can stand for any value: a field, a
+list of them, a path, a key of a file object, a whole file object or a list of
+files (`"images": "{{ uploads }}"`).
+
+`files` is the same body without form fields, and takes the same forms of file:
+
 ```json
 {
     "request": {
@@ -270,10 +323,37 @@ A failing stage's report shows the headers it sent, with the values of credentia
 }
 ```
 
-Relative paths in `binary` and `files` resolve against the **scenario file's
-directory** — the same rule as `$ref`/`$include` — so data files can live next
-to the test that uses them, independent of where pytest is launched from.
-Absolute paths pass through unchanged.
+The request's `Content-Type` is `multipart/form-data` with the boundary between
+the parts, set over a [client](scenarios.md#client-configuration) `Content-Type`
+too. A stage's own `Content-Type` is sent as written, and the parts are
+delimited by the boundary it names (`multipart/related; boundary=abc`). A
+multipart type that names none, as a `"Content-Type": "multipart/form-data"`
+written out of habit, is sent with the body's boundary added
+(`multipart/form-data; boundary=...`): without one, the server could not find
+the parts. One that names an empty boundary fails the stage, and so does one
+naming a boundary the parts cannot be delimited by as written: holding a `;`,
+ending in whitespace, or starting or ending with a quote
+(`boundary="a;b"`), none of which RFC 2046 allows in a boundary.
+
+A file that is not there fails the stage before anything is sent, naming its
+path as the scenario gives it rather than where it resolved to, in the tidied
+form any path takes (`./report.pdf` fails with
+`File not found for upload: report.pdf`, as a missing `binary` file does);
+`validate --deep` reports it ahead of the run
+([`HTTPCHAIN020`](../diagnostics.md)). A
+`filename` or `content_type` template that renders to `null` fails the stage
+too, rather than sending the default one (see
+[Templates that render to `null`](substitutions.md#templates-that-render-to-null)).
+
+A failing stage's report shows the body part by part, a binary part as its
+size, cut at 1000 characters like any body; the [HAR export](../getting-started.md#har-export)
+records the body as sent (base64-encoded when a part is binary).
+
+Relative paths in `binary`, and the files of `files` and `multipart` (a path,
+or a file object's `path`), resolve against the **scenario file's directory** —
+the same rule as `$ref`/`$include` — so data files can live next to the test
+that uses them, independent of where pytest is launched from. Absolute paths
+pass through unchanged.
 
 ### GraphQL
 

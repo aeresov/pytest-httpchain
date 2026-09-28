@@ -4,6 +4,8 @@ Header values and URL query values are shown through a `Redaction`, which
 defaults to the ``httpchain_redact_*`` ini defaults; bodies are shown as sent.
 """
 
+import codecs
+import email.message
 import json
 import shlex
 from typing import Any
@@ -14,6 +16,9 @@ from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.utils import JSON_PARSE_ERRORS, request_content
 
 _MAX_BODY_CHARS = 1000
+
+# How much of a multipart part `_part_text` decodes at a time.
+_DECODE_CHUNK = 1 << 20
 
 _PRETTY_JSON = json.JSONEncoder(indent=2, ensure_ascii=False)
 
@@ -35,9 +40,12 @@ def _message_lines(start_line: str, headers: httpx.Headers, body: str | None, re
 def format_request(request: httpx.Request, redaction: Redaction = DEFAULT_REDACTION) -> str:
     """Format an httpx Request for display."""
     content = request_content(request)
+    content_type = request.headers.get("content-type", "")
     body = None
     if content is None:
-        body = "<Streaming body (e.g. multipart file upload): consumed on send, not captured>"
+        body = "<Streaming body: not captured>"
+    elif (parts := _format_multipart(content, content_type)) is not None:
+        body = _format_body_text(parts)
     elif content:
         try:
             decoded = content.decode()
@@ -45,7 +53,7 @@ def format_request(request: httpx.Request, redaction: Redaction = DEFAULT_REDACT
             body = f"<Binary content: {len(content)} bytes>"
         else:
             body = _format_body_text(decoded)
-            if "application/json" in request.headers.get("content-type", ""):
+            if "application/json" in content_type:
                 try:
                     body = _format_json(json.loads(decoded))
                 except JSON_PARSE_ERRORS:
@@ -53,6 +61,75 @@ def format_request(request: httpx.Request, redaction: Redaction = DEFAULT_REDACT
                     pass
 
     return _message_lines(f"{request.method} {redaction.url(request.url)}", request.headers, body, redaction)
+
+
+def _format_multipart(content: bytes, content_type: str) -> str | None:
+    """A multipart body shown part by part: each part's headers, then its
+    content as text, or in place of binary content its size, which would
+    otherwise hide the text parts too behind one ``<Binary content>``.
+
+    None for a body that is not multipart, or not delimited by the boundary
+    its Content-Type names (a stage's own header can name another, or none),
+    which is then shown as any other body is.
+
+    Walked by offsets rather than split: the report shows ``_MAX_BODY_CHARS``
+    of it, so a part past them is only found, not decoded (whether the body
+    is multipart is still a question of all of it), and a part shown is
+    decoded no further than it is shown (`_part_text`). Split and decoded, a
+    large upload was copied four times over for a report of a thousand
+    characters.
+    """
+    header = email.message.Message()
+    header["content-type"] = content_type
+    boundary = header.get_boundary()
+    delimiter = f"--{boundary}".encode()
+    if header.get_content_maintype() != "multipart" or not boundary or not content.startswith(delimiter):
+        return None
+    # A part is its delimiter's CRLF, its headers, an empty line and its
+    # content, up to the CRLF before the next delimiter; after the last part
+    # the delimiter is followed by "--".
+    separator = b"\r\n" + delimiter
+    lines: list[str] = []
+    shown = 0  # the lines' length so far, a newline after each
+    start = len(delimiter)
+    while (end := content.find(separator, start)) != -1:
+        headers_start = start + 2 if content.startswith(b"\r\n", start) else start
+        headers_end = content.find(b"\r\n\r\n", headers_start, end)
+        if headers_end == -1:
+            return None
+        # Each line of the part starts past `shown`, so its first `room`
+        # characters reach past what is shown, and a part after them is not.
+        if (room := _MAX_BODY_CHARS + 1 - shown) > 0:
+            # Cut past any character shown: one takes 4 bytes at most, and
+            # one the cut splits (3 bytes at most) is replaced.
+            headers = content[headers_start : min(headers_end, headers_start + 4 * room + 8)]
+            part = [f"--{boundary}", headers.decode(errors="replace").replace("\r\n", "\n"), "", _part_text(content, headers_end + 4, end, room)]
+            lines += part
+            shown += sum(len(line) + 1 for line in part)
+        start = end + len(separator)
+    if not content.startswith(b"--", start):
+        return None
+    lines.append(f"--{boundary}--")
+    return "\n".join(lines)
+
+
+def _part_text(content: bytes, start: int, end: int, room: int) -> str:
+    """A multipart part's content, ``content[start:end]``, as its first
+    ``room`` characters of text, or in place of binary content its size.
+
+    Whether it is text is still a question of all of it, as for any body, so
+    it is decoded throughout, but a chunk at a time and keeping no more than
+    it shows: decoded whole, a large file would be copied as a whole again.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    text = ""
+    try:
+        for offset in range(start, end, _DECODE_CHUNK):
+            text += decoder.decode(content[offset : min(offset + _DECODE_CHUNK, end)])[: room - len(text)]
+        decoder.decode(b"", final=True)
+    except UnicodeDecodeError:
+        return f"<Binary content: {end - start} bytes>"
+    return text
 
 
 def format_response(response: httpx.Response, redaction: Redaction = DEFAULT_REDACTION) -> str:
@@ -134,9 +211,10 @@ def format_curl(request: httpx.Request, redaction: Redaction = DEFAULT_REDACTION
     report is no place for a working credential. What the command cannot hold
     gets a comment too: a binary body or one longer than
     `_MAX_CURL_BODY_CHARS`, which the command reads from a file instead, and
-    one httpx streamed (a multipart upload), which `request_content` does not
-    capture; and a Digest ``Authorization``, which answered one challenge and
-    is left out, with a comment to have curl answer a new one.
+    one httpx streamed, which `request_content` does not capture (the plugin
+    sends none: its multipart bodies are bytes, sent with their boundary as
+    any other body is); and a Digest ``Authorization``, which answered one
+    challenge and is left out, with a comment to have curl answer a new one.
 
     The client's settings are not part of a request, so none are given: no
     TLS options (the command checks certificates as curl does by default), no

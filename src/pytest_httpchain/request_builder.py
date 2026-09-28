@@ -6,11 +6,14 @@ job) and the scenario's directory, which relative paths resolve against.
 """
 
 import base64
+import email.message
+import email.utils
+import mimetypes
 import os
 import re
 import ssl
 import threading
-from collections.abc import Generator, Iterable, Mapping
+from collections.abc import Generator, Iterable, Iterator, Mapping
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -28,9 +31,11 @@ from pytest_httpchain.models import (
     ClientConfig,
     DigestAuth,
     FilesBody,
+    FileSpec,
     FormBody,
     GraphQLBody,
     JsonBody,
+    MultipartBody,
     Request,
     RequestAuth,
     SSLConfig,
@@ -327,13 +332,169 @@ def build_client_kwargs(client: ClientConfig, ssl_config: SSLConfig, auth: Auth 
 
 def _read_file(path: Path, declared: Any, missing: str, unreadable: str) -> bytes:
     """Read a scenario-referenced file, reporting I/O failures as `RequestError`
-    against the path as written in the scenario."""
+    against ``declared``, the path the scenario gives rather than where it
+    resolved to. The model holds a literal one as a `Path`, which tidies it
+    (``./report.pdf`` is named ``report.pdf``), as `validate --deep` names it
+    too. A path no filesystem call
+    takes (a NUL in it, a lone surrogate a template rendered) raises a
+    ValueError, reported the same way."""
     try:
         return path.read_bytes()
     except FileNotFoundError as e:
         raise RequestError(f"{missing}: {declared}") from e
-    except OSError as e:
+    except (OSError, ValueError) as e:
         raise RequestError(f"{unreadable} '{declared}': {e}") from e
+
+
+# One part of a multipart body, as httpx's ``files=`` takes it: the field
+# name, and the filename (None for a form field), content and content type
+# (None for none).
+type _Part = tuple[str, tuple[str | None, bytes, str | None]]
+
+
+def _utf8(text: str, what: str) -> bytes:
+    """``text`` encoded as a multipart part carries it; a lone surrogate a
+    template rendered cannot be, which fails the stage naming ``what``."""
+    try:
+        return text.encode("utf-8")
+    except UnicodeEncodeError as e:
+        raise RequestError(f"Cannot encode {what} as UTF-8: {e}") from e
+
+
+def _b64decode(text: str, what: str) -> bytes:
+    """Base64 ``text`` decoded. The model validated it, unless a template
+    rendered it to template text, which its template branch accepts: that
+    fails the stage, naming ``what``, instead of escaping as the decoder's
+    error: binascii's, or the plain ValueError text holding a character
+    outside ASCII raises (worded here as the ``b64decode`` helper words it)."""
+    if not text.isascii():
+        raise RequestError(f"{what} is not valid base64: it holds a character outside ASCII")
+    try:
+        return base64.b64decode(text, validate=True)
+    except ValueError as e:  # binascii.Error is one
+        raise RequestError(f"{what} is not valid base64: {e}") from e
+
+
+def _form_text(name: str, value: str | int | float) -> str:
+    """A multipart field's value as the text its part carries, as httpx turns
+    a form value into text (its ``primitive_value_to_str``): a boolean as
+    ``true`` or ``false``, anything else with ``str()``. An int past Python's
+    digit limit has no text form, and fails the stage naming its field (see
+    `_encode_param`)."""
+    if value is True or value is False:
+        return "true" if value else "false"
+    try:
+        return str(value)
+    except ValueError as e:
+        raise RequestError(f"Cannot convert multipart field '{name}' to text: {e}") from e
+
+
+def _field_parts(fields: Mapping[str, Any]) -> Iterator[_Part]:
+    """A part per form field, a list's items each a field of the same name."""
+    for name, value in fields.items():
+        for item in value if isinstance(value, list) else [value]:
+            yield name, (None, _utf8(_form_text(name, item), f"multipart field '{name}'"), None)
+
+
+def _file_part(name: str, entry: Path | str | FileSpec, scenario_dir: Path | None) -> tuple[str, bytes, str]:
+    """The ``(filename, content, content type)`` of one file sent under
+    ``name``: read from its path, which resolves against the scenario's
+    directory, or given as text or as base64. Not given, the filename is the
+    path's last component, or the field's name, and the content type is
+    guessed from the filename's extension, else ``application/octet-stream``.
+    An empty filename is sent as none (httpx leaves an empty one out)."""
+    spec = entry if isinstance(entry, FileSpec) else FileSpec(path=entry)
+    if spec.path is not None:
+        content = _read_file(resolve_scenario_path(scenario_dir, spec.path), spec.path, "File not found for upload", "Cannot read file for upload")
+        filename = Path(spec.path).name
+    elif spec.content is not None:
+        content = _utf8(spec.content, f"the content of file '{name}'")
+        filename = name
+    else:
+        content = _b64decode(str(spec.base64), f"The base64 of file '{name}'")
+        filename = name
+    if spec.filename is not None:
+        filename = spec.filename
+    content_type = spec.content_type or mimetypes.guess_file_type(filename)[0] or "application/octet-stream"
+    return filename, content, content_type
+
+
+def _file_parts(files: Mapping[str, Any], scenario_dir: Path | None) -> Iterator[_Part]:
+    """A part per file, a list's items each a file of the same name."""
+    for name, entries in files.items():
+        for entry in entries if isinstance(entries, list) else [entries]:
+            yield name, _file_part(name, entry, scenario_dir)
+
+
+def _multipart_headers(headers: Mapping[str, str]) -> tuple[str, dict[str, str]]:
+    """The boundary a multipart body's parts are delimited by, and the
+    stage's ``headers`` with a Content-Type that names it.
+
+    Without a Content-Type of the stage's own, the body's is
+    multipart/form-data with a fresh boundary, set over a client's too, which
+    cannot name it. The stage's own is the stage's to send, and a boundary it
+    names delimits the parts, for any type (httpx took the boundary of
+    multipart/form-data alone). A multipart type naming none, as
+    ``multipart/form-data`` written out of habit does, has a fresh one
+    appended: sent as written, it would leave the server no boundary to find
+    the parts by. An empty boundary delimits nothing, so a multipart type
+    naming one fails the stage. Any other type is sent as written.
+
+    A boundary reaches httpx's encoder through a Content-Type of its own,
+    unquoted, which httpx reads back cut at a ``;``, without whitespace at its
+    end and without a quote at either end: the parts of ``boundary="a;b"``
+    would be delimited by ``a``, and a server finding none of ``a;b`` would
+    see no fields. A boundary httpx cannot carry as declared fails the stage,
+    as an empty one does (RFC 2046 allows none of those characters there).
+    """
+    fresh = os.urandom(16).hex()
+    for name, value in headers.items():
+        if name.lower() != "content-type":
+            continue
+        message = email.message.Message()
+        message["content-type"] = value
+        # As declared: get_boundary() would drop whitespace at its end.
+        param = message.get_param("boundary")
+        boundary = None if param is None else email.utils.collapse_rfc2231_value(param)
+        if boundary is not None and boundary.strip():
+            if ";" in boundary or boundary != boundary.rstrip() or boundary[0] == '"' or boundary[-1] == '"':
+                raise RequestError(
+                    f"The stage's Content-Type {value!r} names the boundary {boundary!r}, which cannot delimit the parts as declared:"
+                    " a boundary holds no ';', does not end in whitespace, and does not start or end with a quote"
+                )
+            return boundary, dict(headers)
+        if message.get_content_maintype() != "multipart":
+            return fresh, dict(headers)
+        if boundary is not None:
+            raise RequestError(f"The stage's Content-Type {value!r} names an empty boundary, which cannot delimit the parts: name one, or leave it out for one of the body's own")
+        declared = value.rstrip("; \t")
+        return fresh, {**headers, name: f"{declared}; boundary={fresh}"}
+    return fresh, {**headers, "Content-Type": f"multipart/form-data; boundary={fresh}"}
+
+
+def _multipart_content(parts: list[_Part], headers: Mapping[str, str]) -> tuple[bytes, dict[str, str]]:
+    """``parts`` as a multipart body, and the stage's ``headers`` with the
+    Content-Type naming its boundary (`_multipart_headers`).
+
+    Encoded here, and sent as ``content=``: handed to httpx as ``files=``, the
+    body is a stream httpx never buffers, which the report section, the HAR
+    export and the curl command could not show (`utils.request_content`). The
+    encoding is httpx's still, by a request built only to be read, so names
+    and filenames are escaped as it escapes them. Every part goes through
+    ``files=``, a form field as one without a filename: with ``data=`` and no
+    files, httpx would URL-encode the fields instead.
+    """
+    boundary, headers = _multipart_headers(headers)
+    if not parts:
+        # httpx would send no body at all for no files, where a multipart
+        # body without parts is its closing delimiter alone.
+        return f"--{boundary}--\r\n".encode(), headers
+    try:
+        content = httpx.Request("POST", "http://multipart.invalid/", files=parts, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}).read()
+    except (TypeError, ValueError) as e:
+        # A name or boundary httpx cannot encode (a lone surrogate, a non-ASCII boundary).
+        raise RequestError(f"Cannot encode the multipart body: {e}") from e
+    return content, headers
 
 
 def _encode_param(key: str, value: Any) -> str:
@@ -453,8 +614,10 @@ def build_request_kwargs(
             except UserFunctionError as e:
                 raise RequestError(f"Failed to configure authentication: {e}") from e
 
-    # The Content-Type a form or multipart body is encoded for (see below).
+    # The Content-Type a form body is encoded for, and the parts of a
+    # multipart one (see below).
     body_content_type: str | None = None
+    multipart_parts: list[_Part] | None = None
 
     match request_model.body:
         case None:
@@ -483,33 +646,31 @@ def build_request_kwargs(
             request_kwargs["content"] = data
 
         case Base64Body(base64=encoded_data):
-            request_kwargs["content"] = base64.b64decode(encoded_data)
+            request_kwargs["content"] = _b64decode(encoded_data, "The base64 body")
 
         case BinaryBody(binary=file_path):
             path = resolve_scenario_path(scenario_dir, file_path)
             request_kwargs["content"] = _read_file(path, file_path, "Binary file not found", "Cannot read binary file")
 
-        case FilesBody(files=file_paths):
-            files_list = []
-            for field_name, file_path in file_paths.items():
-                path = resolve_scenario_path(scenario_dir, file_path)
-                content = _read_file(path, file_path, "File not found for upload", "Cannot read file for upload")
-                files_list.append((field_name, (path.name, content)))
-            request_kwargs["files"] = files_list
-            if files_list:
-                # httpx encodes the parts with the boundary a multipart
-                # Content-Type header names, so this one is the one used.
-                body_content_type = f"multipart/form-data; boundary={os.urandom(16).hex()}"
+        case FilesBody(files=files):
+            multipart_parts = list(_file_parts(files, scenario_dir))
+
+        case MultipartBody(multipart=multipart):
+            multipart_parts = [*_field_parts(multipart.fields), *_file_parts(multipart.files, scenario_dir)]
 
         case _:
             raise RuntimeError(f"Unhandled request body type: {type(request_model.body).__name__}")
 
+    if multipart_parts is not None:
+        # httpx gives `content=` no type, and the boundary is this body's.
+        request_kwargs["content"], request_kwargs["headers"] = _multipart_content(multipart_parts, request_model.headers)
+
     if body_content_type is not None and _declares_content_type(client.headers) and not _declares_content_type(request_model.headers):
         # httpx gives a body's own Content-Type only to a request that has
         # none, and a client header counts: a scenario-wide
-        # `Content-Type: application/json` labelled every form body JSON and
-        # dropped the multipart boundary, which a stage cannot supply. A body
-        # encoded one way keeps its type; a stage's own header still wins.
+        # `Content-Type: application/json` labelled every form body JSON. A
+        # body encoded one way keeps its type, as a multipart one does (see
+        # above); a stage's own header still wins.
         request_kwargs["headers"] = {**request_model.headers, "Content-Type": body_content_type}
 
     return request_kwargs

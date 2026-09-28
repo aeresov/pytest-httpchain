@@ -14,7 +14,10 @@ from pytest_httpchain.errors import SchemaFileError, SchemaPointerError
 from pytest_httpchain.models import (
     BinaryBody,
     FilesBody,
+    FileSpec,
     FunctionsSubstitution,
+    Multipart,
+    MultipartBody,
     SaveStep,
     Scenario,
     SubstitutionsSave,
@@ -25,7 +28,7 @@ from pytest_httpchain.models import (
     VerifyStep,
 )
 from pytest_httpchain.userfunc import UserFunctionError, call_target, import_function
-from pytest_httpchain.utils import resolve_scenario_path, schema_error_text
+from pytest_httpchain.utils import path_segment, resolve_scenario_path, schema_error_text
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, diag
 
 
@@ -77,6 +80,19 @@ def _check_path_value(value: Any, location: str, base_dir: Path | None = None) -
     path = _literal_path(value)
     if path is not None and not resolve_scenario_path(base_dir, path).exists():
         yield diag(DiagnosticCode.REFERENCED_FILE_NOT_FOUND, f"Referenced file not found: {path}", location)
+
+
+def _check_file(entry: Any, location: str, base_dir: Path | None) -> Iterator[Diagnostic]:
+    """HTTPCHAIN020 for the literal path a multipart body's file names: a path,
+    or a file object's ``path``, and a list's items one at a time. Content given
+    inline (``content``, ``base64``) reads no file."""
+    if isinstance(entry, list):
+        for index, item in enumerate(entry):
+            yield from _check_file(item, f"{location}[{index}]", base_dir)
+    elif isinstance(entry, FileSpec):
+        yield from _check_path_value(entry.path, f"{location}.path", base_dir)
+    else:
+        yield from _check_path_value(entry, location, base_dir)
 
 
 def _check_schema(schema: Any, location: str, base_dir: Path | None, ref_bounds: ReferenceBounds) -> Iterator[Diagnostic]:
@@ -134,8 +150,11 @@ def _file_diagnostics(scenario: Scenario, base_dir: Path | None = None, ref_boun
             case BinaryBody(binary=binary):
                 yield from _check_path_value(binary, f"stages[{i}].request.body.binary", base_dir)
             case FilesBody(files=files):
-                for field, file_path in files.items():
-                    yield from _check_path_value(file_path, f"stages[{i}].request.body.files.{field}", base_dir)
+                for field, entry in files.items():
+                    yield from _check_file(entry, f"stages[{i}].request.body.files{path_segment(field)}", base_dir)
+            case MultipartBody(multipart=Multipart(files=files)):
+                for field, entry in files.items():
+                    yield from _check_file(entry, f"stages[{i}].request.body.multipart.files{path_segment(field)}", base_dir)
             case _:
                 pass
 

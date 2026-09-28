@@ -71,9 +71,15 @@ def test_form_and_multipart_bodies_keep_their_content_type(run_scenario):
         request={"method": "POST", "body": {"files": {"upload": "upload_a.txt"}}},
         response=[{"save": {"jmespath": {"size": "fields.upload.size"}}}, {"verify": {"status": 200, "expressions": ["{{ size == 12 }}"]}}],
     )
-    result = run_scenario({"client": {"headers": {"Content-Type": "application/json"}}, "stages": [form, upload]}, "body_types/upload_a.txt")
+    multipart = stage(
+        "multipart",
+        "/echo/multipart",
+        request={"method": "POST", "body": {"multipart": {"fields": {"a": "1"}}}},
+        response=[{"verify": {"status": 200, "jmespath": {"form.a": ["1"]}}}],
+    )
+    result = run_scenario({"client": {"headers": {"Content-Type": "application/json"}}, "stages": [form, upload, multipart]}, "body_types/upload_a.txt")
 
-    result.assert_outcomes(passed=2)
+    result.assert_outcomes(passed=3)
 
 
 def test_relative_url_rendered_without_base_url_fails_the_stage(run_scenario):

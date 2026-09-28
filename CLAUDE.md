@@ -81,7 +81,7 @@ src/pytest_httpchain/
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule), chain-contiguity ordering hooks
 ├── factory.py                 # Collection-time test-class factory (create_test_class)
 ├── carrier.py                 # Runtime execution engine (Carrier class): chain state, iteration matrix, threading, reporting
-├── request_builder.py         # Resolved models -> httpx kwargs (build_client_kwargs, build_request_kwargs) and auth flows (build_auth: basic, digest, bearer, user functions)
+├── request_builder.py         # Resolved models -> httpx kwargs (build_client_kwargs, build_request_kwargs), multipart bodies encoded to bytes, and auth flows (build_auth: basic, digest, bearer, user functions)
 ├── response_steps.py          # Meaning of a single verify/save step (process_verify, process_save) — pure, no chain state
 ├── body_schema.py             # verify.body.schema made ready to validate (BodySchema): file + JSON pointer, one referencing registry resolving $refs across the document and into local files held to the `$include` path rules (relative, traversal depth, reference root; never remote), a `$ref`'s target validated in its document's dialect, dialect choice, per-file parse and registry caches; shared by the runtime and `validate --deep`
 ├── utils.py                   # Marker construction, substitution processing, scenario-relative path resolution, location path segments

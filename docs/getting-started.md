@@ -53,7 +53,7 @@ Each test that performs a request writes a `.har` file under `DIR` (named from t
 
 A followed redirect adds an entry per hop, each with the body that request carried: a `302` or `303`, and a `301` answering a `POST`, follows up with a bodiless `GET` (a `HEAD` stays a `HEAD`); any other redirect repeats the method and re-sends the original body. When a later hop fails — its target refuses the connection or times out, or the chain exceeds the scenario's redirect limit (`client.max_redirects`, 20 by default) — httpx reports none of the hops before it, so the chain is recorded as a single entry: the failed request.
 
-A multipart (`files`) upload's body is not captured: its entry has `bodySize: -1` and no `postData`, and the report's request section says the body was not captured.
+A multipart (`multipart` or `files`) body is recorded as sent, the boundaries between its parts included: `postData.text` is base64-encoded (`"encoding": "base64"`) when a part is binary.
 
 !!! warning
     HAR files contain full requests and responses, **including credential headers and saved tokens**: a HAR is usually replayed, which needs the real values, so nothing in it is redacted unless `httpchain_har_redact` is on, and bodies never are. Scrub or avoid uploading them as CI artifacts. See [Secrets and sensitive output](advanced/context-layering.md#secrets-and-sensitive-output).

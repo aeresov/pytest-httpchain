@@ -41,6 +41,7 @@ from pytest_httpchain.har_writer import Exchange
 from pytest_httpchain.models import (
     ClientConfig,
     CombinationsParameter,
+    FileSpec,
     IndividualParameter,
     JMESPathMatcher,
     JsonBody,
@@ -305,14 +306,29 @@ def _none_is_compared(model: BaseModel, field: str) -> bool:
     return isinstance(model, JMESPathMatcher) and field in JMESPathMatcher.NULL_OPERANDS
 
 
+def _none_is_not_set(model: BaseModel, field: str) -> bool:
+    """The fields a model itself reads an explicit None in as not set: a
+    `FileSpec`'s sources, of which it counts the ones not None, and takes
+    exactly one. An object rendered whole holding None in another source, as
+    a user function or a saved object may fill the keys it does not use,
+    sends the file from the one it sets, as the same object written out does:
+    the None disables nothing. Declared as a template of its own, a source
+    that rendered to None leaves the file none, which `_rendered_away` reports
+    through the validation error."""
+    return isinstance(model, FileSpec) and field in FileSpec.SOURCES
+
+
 def _none_would(model: BaseModel, field: str) -> str:
     """What a None let through ``field`` would have done, for the refusal to
     say. An optional field reads None as never declared: for most that turns
     a check or a setting off, but a regex save's group left out picks the
     default one (group 1, or the whole match), so the save still runs, from
-    another group."""
+    another group, and a multipart file's filename or content type left out
+    is sent as the default one."""
     if isinstance(model, RegexCapture) and field == "group":
         return "save the default group instead"
+    if isinstance(model, FileSpec) and field in ("filename", "content_type"):
+        return f"send the default {field.replace('_', ' ')} instead"
     return "disable it"
 
 
@@ -378,12 +394,14 @@ def _rendered_away(declared: Any, substituted: Any, keys: _Keys = ()) -> Iterato
 def _rendered_whole_away(declared: Any, rendered: Any, keys: _Keys = ()) -> Iterator[_Vanished]:
     """`_rendered_away` for a model that one template rendered whole: a header
     matcher written as ``"{{ {'contains': ct, 'not_contains': 'text/html'} }}"``,
-    or saved from the response and used as ``"{{ matcher }}"``.
+    or saved from the response and used as ``"{{ matcher }}"``, and each model
+    in a list one rendered (multipart files, ``"images": "{{ files }}"``).
 
     Declared as a single string, such a model's fields are known only once
     validation has built it, so ``rendered`` is the validated model. A field the
     rendered mapping set explicitly (``model_fields_set``) to None is refused; one
-    it left out was never declared.
+    it left out was never declared. A field the model itself reads None in as
+    not set (`_none_is_not_set`) is neither.
 
     A `JMESPathMatcher`, whose null operands (`_none_is_compared`) this would
     misread, is never rendered whole: a template where a ``verify.jmespath``
@@ -395,8 +413,15 @@ def _rendered_whole_away(declared: Any, rendered: Any, keys: _Keys = ()) -> Iter
                 yield from _rendered_whole_away(getattr(declared, name), getattr(rendered, name), (*keys, name))
         case (str() as template, BaseModel()) | (RootModel(root=str() as template), BaseModel()):
             for name in type(rendered).model_fields:
-                if name in rendered.model_fields_set and getattr(rendered, name) is None and not _none_is_a_value(rendered, name):
+                if name in rendered.model_fields_set and getattr(rendered, name) is None and not (_none_is_a_value(rendered, name) or _none_is_not_set(rendered, name)):
                     yield _Vanished((*keys, name), template, would=_none_would(rendered, name))
+        case str(), list() | tuple():
+            # The models are its items (a list of files does not nest), and
+            # any other list a template renders (a JSON body, a query
+            # parameter's values) holds none: those items are not walked.
+            for i, item in enumerate(rendered):
+                if isinstance(item, BaseModel):
+                    yield from _rendered_whole_away(declared, item, (*keys, i))
         case dict(), dict():
             for key, declared_value in declared.items():
                 if key in rendered:

@@ -183,8 +183,9 @@ def request_response_to_har_entry(
             "bodySize": -1,
         }
 
-    # -1 is HAR's "unknown": request_content does not capture a streaming
-    # (multipart) body.
+    # -1 is HAR's "unknown", for a body request_content does not capture: a
+    # stream that is not plain bytes, which the plugin never sends itself (its
+    # multipart bodies are encoded to bytes, and captured as any other body).
     content = request_content(request)
     body_size = -1 if content is None else len(content)
 

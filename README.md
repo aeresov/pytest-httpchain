@@ -42,6 +42,10 @@ Each scenario contains 1+ stages executed in order. One stage failure stops the 
 
 A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use template expressions (`{{ var }}`) in any request **value** — substitution happens dynamically before each stage. (Dict keys are not substituted; `HTTPCHAIN029` flags a template in a key.) Built-in functions give the values tests keep needing without a fixture: the time (`now()`, `timestamp()`), base64, JSON and URL encoding, and SHA-256, MD5 and HMAC-SHA256 digests for signing a request.
 
+### Request bodies
+
+JSON, form, XML, text, base64, a binary file and GraphQL, and multipart uploads that mix form fields with files: each file read from a path or given inline, several under one name if need be, with its own filename and content type.
+
 ### Response processing
 
 -   **JMESPath** — Assert on values in JSON responses directly (`"jmespath": {"data.id": 42, "items": {"length": 3}}`), or extract them for later stages

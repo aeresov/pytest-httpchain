@@ -1,0 +1,20 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": {
+                "url": "https://x.test/a",
+                "method": "POST",
+                "body": {
+                    "files": {
+                        "present": { "path": "valid_scenario.json", "content_type": "application/json" },
+                        "absent": { "path": "definitely_missing_upload_54321.txt" }
+                    }
+                }
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

@@ -111,6 +111,9 @@ def _hide_ancestor_project_markers(monkeypatch):
         # a request's.
         "deep_auth_builtins.json",
         "deep_binary_exists.json",
+        # Every form of multipart file whose path is there, content given
+        # inline (no file to look for), and a path a template completes.
+        "deep_multipart_files_exist.json",
         "deep_templated_func.json",  # a templated reference cannot be resolved statically
         "deep_sig_var_keyword.json",  # **kwargs makes every supplied name fillable
         # Substitution functions are called from templates with arguments the
@@ -378,6 +381,9 @@ DIAGNOSED = [
     ("deep_binary_missing.json", [(C.REFERENCED_FILE_NOT_FOUND, "stages[0].request.body.binary", "definitely_missing_file")]),
     # Named per field / per element, not once for the whole value.
     ("deep_files_missing.json", [(C.REFERENCED_FILE_NOT_FOUND, "stages[0].request.body.files.absent", "definitely_missing_upload")]),
+    # A file object's path, and one in a list, named where it is written.
+    ("deep_files_object_missing.json", [(C.REFERENCED_FILE_NOT_FOUND, "stages[0].request.body.files.absent.path", "definitely_missing_upload")]),
+    ("deep_multipart_file_missing.json", [(C.REFERENCED_FILE_NOT_FOUND, "stages[0].request.body.multipart.files.images[1].path", "definitely_missing_image")]),
     ("deep_ssl_cert_pair_missing.json", [(C.REFERENCED_FILE_NOT_FOUND, "ssl.cert[0]", r"\.crt"), (C.REFERENCED_FILE_NOT_FOUND, "ssl.cert[1]", r"\.key")]),
     ("deep_ssl_verify_missing.json", [(C.REFERENCED_FILE_NOT_FOUND, "ssl.verify", "ca-bundel.pem")]),
     # Three schema-file outcomes: missing, unparseable, parseable but not a schema.

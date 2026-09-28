@@ -1,0 +1,22 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": {
+                "url": "https://x.test/a",
+                "method": "POST",
+                "body": {
+                    "multipart": {
+                        "files": {
+                            "present": "valid_scenario.json",
+                            "images": ["valid_scenario.json", { "path": "definitely_missing_image_54321.png", "filename": "photo.png" }]
+                        }
+                    }
+                }
+            },
+            "response": [
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

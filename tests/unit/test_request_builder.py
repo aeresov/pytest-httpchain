@@ -13,6 +13,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import httpx
 import pytest
@@ -27,6 +28,7 @@ from pytest_httpchain.models import (
     ClientConfig,
     DigestAuth,
     FilesBody,
+    MultipartBody,
     Request,
     SSLConfig,
     UserFunctionKwargs,
@@ -49,10 +51,24 @@ from pytest_httpchain.validation import load_scenario
         # stage failure (M2).
         pytest.param(lambda d: BinaryBody(binary=str(d)), "Cannot read binary file", id="binary-unreadable"),
         pytest.param(lambda d: FilesBody(files={"upload": str(d)}), "Cannot read file for upload", id="files-unreadable"),
+        # A NUL (a JSON "\u0000", or a template's) is refused by the path
+        # call itself, with a ValueError that escaped as a plugin error.
+        pytest.param(lambda d: BinaryBody(binary="a\x00b"), "Cannot read binary file 'a\x00b': ", id="binary-nul"),
+        pytest.param(lambda d: FilesBody(files={"upload": "a\x00b"}), "Cannot read file for upload 'a\x00b': ", id="files-nul"),
+        # Named as the scenario gives it, not where it resolved to: a file
+        # object's path, and a list's item. The model holds it as a Path, so
+        # tidied as `binary`'s is (and as `validate --deep` names it).
+        pytest.param(lambda d: MultipartBody(multipart={"files": {"doc": {"path": "missing.pdf"}}}), "File not found for upload: missing.pdf", id="multipart-object-missing"),
+        pytest.param(
+            lambda d: MultipartBody(multipart={"files": {"doc": "./sub//missing.pdf"}}),
+            f"File not found for upload: {Path('sub', 'missing.pdf')}",
+            id="multipart-path-tidied",
+        ),
+        pytest.param(lambda d: FilesBody(files={"docs": [str(d), "gone/x.txt"]}), "Cannot read file for upload", id="files-list-unreadable"),
     ],
 )
 def test_unreadable_body_file_is_a_request_error(tmp_path, body, message):
-    with pytest.raises(RequestError, match=message):
+    with pytest.raises(RequestError, match=re.escape(message)):
         build_request_kwargs(Request(url="https://example.com/api", method="POST", body=body(tmp_path)))
 
 
@@ -700,6 +716,7 @@ def test_json_null_keeps_the_clients_content_type():
         # boundary. A body encoded one way keeps its type.
         pytest.param({"form": {"a": "1"}}, {}, "application/x-www-form-urlencoded", id="form-keeps-its-type"),
         pytest.param({"files": {"upload": "upload.txt"}}, {}, "multipart/form-data; boundary=", id="files-keep-their-type"),
+        pytest.param({"multipart": {"fields": {"a": "1"}}}, {}, "multipart/form-data; boundary=", id="multipart-keeps-its-type"),
         pytest.param({"form": {"a": "1"}}, {"content-type": "text/plain"}, "text/plain", id="stage-wins-over-form"),
         # Any other body takes the client's, as httpx's own json= does: a JSON
         # API's media type is what a scenario-wide Content-Type is for.
@@ -720,3 +737,191 @@ def test_client_content_type_and_encoded_bodies(tmp_path, monkeypatch, body, hea
         # The parts are delimited by the boundary the header names.
         boundary = sent_type.partition("boundary=")[2]
         assert sent.read().startswith(f"--{boundary}\r\n".encode())
+
+
+def _part(name: str, content: bytes, filename: str | None = None, content_type: str | None = None, boundary: str = "XyZ") -> bytes:
+    """One part of a multipart body as httpx encodes it."""
+    disposition = f'Content-Disposition: form-data; name="{name}"' + (f'; filename="{filename}"' if filename else "")
+    headers = disposition + (f"\r\nContent-Type: {content_type}" if content_type else "")
+    return f"--{boundary}\r\n{headers}\r\n\r\n".encode() + content + b"\r\n"
+
+
+class TestMultipart:
+    """``body.multipart``, and ``body.files`` with it: the parts are encoded
+    here, by httpx, and sent as bytes, which the report and the HAR export can
+    then show, with the Content-Type naming their boundary."""
+
+    # A stage's own Content-Type names the boundary: the body is spelled out.
+    HEADERS = {"Content-Type": "multipart/form-data; boundary=XyZ"}
+
+    def _kwargs(self, tmp_path, body, headers=HEADERS) -> dict:
+        return build_request_kwargs(Request.model_validate({"url": "http://t/", "method": "POST", "headers": headers, "body": body}), tmp_path)
+
+    def test_fields_then_files_with_their_defaults(self, tmp_path):
+        """Fields first, each list item a part of the same name, as httpx
+        writes a form value (true, not True). A file's filename defaults to
+        its path's last component, or to its field's name; its content type
+        is guessed from the filename, else application/octet-stream. An
+        empty filename is sent as none."""
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "report.pdf").write_bytes(b"%PDF")
+        (tmp_path / "b.png").write_bytes(b"PNG")
+        body = {
+            "multipart": {
+                "fields": {"title": "Report", "tags": ["a", 2], "draft": False, "final": True, "ratio": 1.5},
+                "files": {
+                    "document": "docs/report.pdf",
+                    "images": [{"path": "b.png", "filename": "photo.jpg", "content_type": "image/webp"}, {"content": "x", "filename": "c.txt"}],
+                    "note": {"content": "héllo"},
+                    "blob": {"base64": "AAE="},
+                    "meta": {"content": "{}", "filename": "", "content_type": "application/json"},
+                },
+            }
+        }
+        kwargs = self._kwargs(tmp_path, body)
+        assert kwargs["headers"] == self.HEADERS
+        assert kwargs["content"] == b"".join(
+            [
+                _part("title", b"Report"),
+                _part("tags", b"a"),
+                _part("tags", b"2"),
+                _part("draft", b"false"),
+                _part("final", b"true"),
+                _part("ratio", b"1.5"),
+                _part("document", b"%PDF", "report.pdf", "application/pdf"),
+                _part("images", b"PNG", "photo.jpg", "image/webp"),
+                _part("images", b"x", "c.txt", "text/plain"),
+                _part("note", "héllo".encode(), "note", "application/octet-stream"),
+                _part("blob", b"\x00\x01", "blob", "application/octet-stream"),
+                _part("meta", b"{}", None, "application/json"),
+                b"--XyZ--\r\n",
+            ]
+        )
+
+    def test_files_body_sends_its_file_objects_and_lists_alike(self, tmp_path):
+        (tmp_path / "a.txt").write_bytes(b"A")
+        kwargs = self._kwargs(tmp_path, {"files": {"doc": "a.txt", "more": ["a.txt", {"content": "B", "filename": "b.png"}]}})
+        assert kwargs["content"] == b"".join(
+            [_part("doc", b"A", "a.txt", "text/plain"), _part("more", b"A", "a.txt", "text/plain"), _part("more", b"B", "b.png", "image/png"), b"--XyZ--\r\n"]
+        )
+
+    def test_without_parts_the_body_is_its_closing_delimiter(self, tmp_path):
+        """A list rendered empty leaves no part: still a multipart body, as a
+        form without inputs sends one, not none (httpx would send nothing)."""
+        assert self._kwargs(tmp_path, {"multipart": {"fields": {"tags": []}}})["content"] == b"--XyZ--\r\n"
+
+    def test_boundary_is_fresh_and_named_in_the_content_type(self, tmp_path):
+        kwargs = self._kwargs(tmp_path, {"multipart": {"fields": {"a": "1"}}}, headers={"X-Other": "1"})
+        content_type = kwargs["headers"]["Content-Type"]
+        boundary = re.fullmatch("multipart/form-data; boundary=([0-9a-f]{32})", content_type).group(1)
+        assert kwargs["headers"]["X-Other"] == "1"
+        assert kwargs["content"] == _part("a", b"1", boundary=boundary) + f"--{boundary}--\r\n".encode()
+        assert self._kwargs(tmp_path, {"multipart": {"fields": {"a": "1"}}}, headers={})["headers"]["Content-Type"] != content_type
+
+    def test_stage_content_type_is_sent_and_its_boundary_used(self, tmp_path):
+        """Whatever multipart type the stage declares: httpx took the
+        boundary of multipart/form-data alone, and delimited the parts of
+        any other with one of its own, which the header did not name."""
+        headers = {"content-type": 'multipart/mixed; boundary="a b"'}
+        kwargs = self._kwargs(tmp_path, {"multipart": {"fields": {"a": "1"}}}, headers=headers)
+        assert kwargs["headers"] == headers
+        assert kwargs["content"] == _part("a", b"1", boundary="a b") + b"--a b--\r\n"
+
+    @pytest.mark.parametrize(
+        ("content_type", "sent"),
+        [
+            # Written out of habit, and sent as written (httpx's way) it named
+            # no boundary for the server to find the parts by.
+            ("multipart/form-data", "multipart/form-data; boundary={}"),
+            ("Multipart/Mixed; charset=utf-8;", "Multipart/Mixed; charset=utf-8; boundary={}"),
+        ],
+    )
+    def test_multipart_content_type_without_a_boundary_gets_the_bodys(self, tmp_path, content_type, sent):
+        kwargs = self._kwargs(tmp_path, {"multipart": {"fields": {"a": "1"}}}, headers={"Content-Type": content_type, "X-Other": "1"})
+        boundary = re.fullmatch(rb"--([0-9a-f]{32})\r\n.*", kwargs["content"], re.DOTALL).group(1).decode()
+        assert kwargs["headers"] == {"Content-Type": sent.format(boundary), "X-Other": "1"}
+        assert kwargs["content"] == _part("a", b"1", boundary=boundary) + f"--{boundary}--\r\n".encode()
+
+    @pytest.mark.parametrize("content_type", ["text/plain", "text/plain; boundary=", "multipart"])
+    def test_other_content_type_without_a_boundary_is_sent_as_written(self, tmp_path, content_type):
+        """Not a multipart type (``multipart`` alone is none), it is the
+        stage's to send as it is: the parts are delimited by a fresh boundary."""
+        kwargs = self._kwargs(tmp_path, {"multipart": {"fields": {"a": "1"}}}, headers={"Content-Type": content_type})
+        assert kwargs["headers"] == {"Content-Type": content_type}
+        assert re.fullmatch(rb'--([0-9a-f]{32})\r\nContent-Disposition: form-data; name="a"\r\n\r\n1\r\n--\1--\r\n', kwargs["content"])
+
+    @pytest.mark.parametrize("content_type", ["multipart/form-data; boundary=", 'multipart/mixed; boundary=""'])
+    def test_multipart_content_type_with_an_empty_boundary_is_a_request_error(self, tmp_path, content_type):
+        with pytest.raises(RequestError, match=re.escape(f"The stage's Content-Type {content_type!r} names an empty boundary")):
+            self._kwargs(tmp_path, {"files": {"f": {"content": "x"}}}, headers={"Content-Type": content_type})
+
+    @pytest.mark.parametrize(
+        ("content_type", "boundary"),
+        [
+            # httpx reads the boundary back from a Content-Type cut at ';',
+            # so these parts went out delimited by `a` (email unquotes it).
+            ('multipart/form-data; boundary="a;b"', "a;b"),
+            ("multipart/form-data; boundary*=utf-8''a%3Bb", "a;b"),
+            # Whitespace at its end httpx strips, and get_boundary() too.
+            ('multipart/form-data; boundary="abc "', "abc "),
+            ('multipart/mixed; boundary="abc\t"', "abc\t"),
+            # A quote at either end httpx strips.
+            ('multipart/form-data; boundary="\\"ab"', '"ab'),
+            ('multipart/form-data; boundary="ab\\""', 'ab"'),
+            # Any type naming one: its boundary delimits the parts.
+            ('text/plain; boundary="x;y"', "x;y"),
+        ],
+    )
+    @pytest.mark.parametrize("fields", [{"a": "1"}, {"tags": []}], ids=["parts", "no-parts"])
+    def test_boundary_httpx_cannot_carry_as_declared_is_a_request_error(self, tmp_path, content_type, boundary, fields):
+        """Not the one the parts would be delimited by, it left the server no
+        fields and no error. Refused whether or not there are parts, which
+        the plugin writes itself when there are none: a header either works
+        or does not, whatever a template renders."""
+        with pytest.raises(RequestError, match=re.escape(f"The stage's Content-Type {content_type!r} names the boundary {boundary!r}, which cannot delimit the parts as declared")):
+            self._kwargs(tmp_path, {"multipart": {"fields": fields}}, headers={"Content-Type": content_type})
+
+    @pytest.mark.parametrize(("quoted", "boundary"), [('" ab"', " ab"), ('"a\\"b"', 'a"b'), ('"a b"', "a b"), ('"a\tb"', "a\tb")])
+    def test_boundary_httpx_carries_is_the_one_used(self, tmp_path, quoted, boundary):
+        """Whitespace at the start, a quote or whitespace inside: httpx reads
+        them back as they are."""
+        headers = {"Content-Type": f"multipart/form-data; boundary={quoted}"}
+        kwargs = self._kwargs(tmp_path, {"multipart": {"fields": {"a": "1"}}}, headers=headers)
+        assert kwargs["content"] == _part("a", b"1", boundary=boundary) + f"--{boundary}--\r\n".encode()
+
+    def test_sent_as_encoded(self, tmp_path):
+        """On the wire: the bytes, with the Content-Type the client would
+        otherwise replace."""
+        request = Request.model_validate({"url": "http://t/", "method": "POST", "body": {"multipart": {"fields": {"a": "1"}, "files": {"f": {"content": "x"}}}}})
+        sent = _sent(request, ClientConfig(headers={"Content-Type": "application/json"}))
+        boundary = sent.headers["content-type"].partition("boundary=")[2]
+        assert sent.read() == _part("a", b"1", boundary=boundary) + _part("f", b"x", "f", "application/octet-stream", boundary=boundary) + f"--{boundary}--\r\n".encode()
+        assert sent.headers["content-length"] == str(len(sent.read()))
+
+    @pytest.mark.parametrize(
+        ("body", "headers", "message"),
+        [
+            # A template rendered to template text passes the field's template
+            # branch; binascii's error escaped as a plugin error, and text
+            # holding a character outside ASCII raises a plain ValueError.
+            pytest.param({"multipart": {"files": {"f": {"base64": "{{ x }}"}}}}, {}, "The base64 of file 'f' is not valid base64", id="file-base64-template-text"),
+            pytest.param({"base64": "{{ x }}"}, {}, "The base64 body is not valid base64", id="base64-body-template-text"),
+            pytest.param(
+                {"multipart": {"files": {"f": {"base64": "é{{ x }}"}}}},
+                {},
+                "The base64 of file 'f' is not valid base64: it holds a character outside ASCII",
+                id="file-base64-template-text-not-ascii",
+            ),
+            pytest.param({"base64": "é{{ x }}"}, {}, "The base64 body is not valid base64: it holds a character outside ASCII", id="base64-body-template-text-not-ascii"),
+            # Past Python's digit limit an int has no text form.
+            pytest.param({"multipart": {"fields": {"n": 10**5000}}}, {}, "Cannot convert multipart field 'n' to text", id="int-past-digit-limit"),
+            # A lone surrogate, which a template can render, has no UTF-8 form.
+            pytest.param({"multipart": {"fields": {"n": "\udc80"}}}, {}, "Cannot encode multipart field 'n' as UTF-8", id="field-surrogate"),
+            pytest.param({"multipart": {"files": {"f": {"content": "\udc80"}}}}, {}, "Cannot encode the content of file 'f' as UTF-8", id="content-surrogate"),
+            pytest.param({"multipart": {"fields": {"\udc80": "v"}}}, {}, "Cannot encode the multipart body", id="name-surrogate"),
+            pytest.param({"multipart": {"fields": {"n": "v"}}}, {"Content-Type": "multipart/form-data; boundary=é"}, "Cannot encode the multipart body", id="boundary-not-ascii"),
+        ],
+    )
+    def test_unencodable_body_is_a_request_error(self, tmp_path, body, headers, message):
+        with pytest.raises(RequestError, match=re.escape(message)):
+            self._kwargs(tmp_path, body, headers=headers)

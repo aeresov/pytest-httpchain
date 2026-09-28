@@ -50,9 +50,11 @@ from pytest_httpchain.models.types import (
     JsonNumber,
     JSONSchemaInline,
     JsonTypeName,
+    MultipartFieldValue,
     NamespaceFromDict,
     NamespaceOrDict,
     NumberOrTemplate,
+    PartContentType,
     PartialTemplateStr,
     ProxyUrlStr,
     RegexGroupName,
@@ -447,8 +449,123 @@ class BinaryBody(StrictModel):
     binary: SerializablePath | PartialTemplateStr = Field(description="Path to binary file.")
 
 
+class FileSpec(StrictModel):
+    """A file of a multipart body, written as an object: where its bytes come
+    from (exactly one of path, content and base64), and the filename and
+    content type its part is sent with."""
+
+    SOURCES: ClassVar[tuple[str, ...]] = ("path", "content", "base64")
+
+    path: SerializablePath | PartialTemplateStr | None = Field(default=None, description="File to send; a relative path resolves against the scenario file's directory.")
+    content: str | None = Field(default=None, description="The file's content as text, sent UTF-8 encoded.")
+    base64: Base64String | PartialTemplateStr | None = Field(default=None, description="The file's content, base64-encoded: for binary data.")
+    filename: str | None = Field(
+        default=None,
+        description="Filename the part is sent with. Not set: the path's last component, or for content and base64 the field's name. "
+        "An empty string sends the part without a filename.",
+    )
+    content_type: PartContentType | None = Field(
+        default=None,
+        description="Content-Type of the part. Not set: guessed from the filename's extension, else application/octet-stream.",
+        examples=["image/png", "application/json"],
+    )
+
+    @model_validator(mode="after")
+    def _one_source(self) -> Self:
+        sources = [name for name in self.SOURCES if getattr(self, name) is not None]
+        if len(sources) != 1:
+            got = f", got {' and '.join(sources)}" if sources else ""
+            raise ValueError(f"A file object sets exactly one of: {', '.join(self.SOURCES)}{got}")
+        return self
+
+
+def _file_entry_tag(v: Any) -> str:
+    """An object is a `FileSpec`, a list several files under one name, and
+    anything else a path: a template renders any of them."""
+    if isinstance(v, dict | FileSpec):
+        return "object"
+    if isinstance(v, list | tuple):
+        return "list"
+    return "path"
+
+
+def _refuse_null_file(v: Any) -> Any:
+    """A file a template rendered to None, in one sentence: the path branch
+    would refuse it twice, as a path and as template text, under a location
+    spelling out pydantic's union of the two."""
+    if v is None:
+        raise ValueError("A file is a path or a file object, got null")
+    return v
+
+
+# One file: a path, or an object saying more about it. A list here, a list in
+# a list, gets the tag error listing these two. Its namespace is converted
+# here as well as in `FileEntries`: a tuple a template rendered is taken as
+# the list, and `convert_namespace_to_dict` walks lists only.
+_FileEntry = Annotated[
+    Annotated[
+        Annotated[SerializablePath | PartialTemplateStr, Tag("path")] | Annotated[FileSpec, Tag("object")],
+        Discriminator(_file_entry_tag),
+    ],
+    BeforeValidator(convert_namespace_to_dict),
+    BeforeValidator(_refuse_null_file),
+]
+
+# The files under one field name: one, or a list of them, each a part of its
+# own. A template over `vars` renders an object as a SimpleNamespace, which
+# stands for the file object it was written as; converted ahead of the union,
+# keeping its tags in error locations.
+FileEntries = Annotated[
+    Annotated[
+        Annotated[SerializablePath | PartialTemplateStr, Tag("path")] | Annotated[FileSpec, Tag("object")] | Annotated[list[_FileEntry], Tag("list")],
+        Discriminator(_file_entry_tag),
+    ],
+    BeforeValidator(convert_namespace_to_dict),
+    BeforeValidator(_refuse_null_file),
+]
+
+_FILES_DESCRIPTION = (
+    "Files per field name: a path (relative to the scenario file's directory), a file object "
+    "(exactly one of path, content or base64, and optionally filename and content_type), or a list of them, sent as parts of the same name."
+)
+
+
 class FilesBody(StrictModel):
-    files: dict[str, SerializablePath | PartialTemplateStr] = Field(description="Files to upload from file paths.")
+    files: dict[str, FileEntries] = Field(
+        description=f"Files to upload as multipart/form-data. {_FILES_DESCRIPTION}",
+        examples=[{"document": "./report.pdf", "images": ["./a.png", {"path": "./b.png", "filename": "photo.png", "content_type": "image/png"}]}],
+    )
+
+
+class Multipart(StrictModel):
+    """A multipart/form-data body: form fields and files, each a part of its
+    own, the fields first; at least one of the two is set."""
+
+    model_config = ConfigDict(json_schema_extra={"minProperties": 1})
+
+    fields: dict[str, MultipartFieldValue] = Field(
+        default_factory=dict,
+        description="Form fields: text, a number or a boolean (sent as true or false), or a list of them, sent as fields of the same name.",
+        examples=[{"title": "Report", "tags": ["a", "b"], "draft": False}],
+    )
+    files: dict[str, FileEntries] = Field(
+        default_factory=dict,
+        description=_FILES_DESCRIPTION,
+        examples=[{"document": "./report.pdf", "note": {"content": "inline text", "filename": "note.txt", "content_type": "text/plain"}}],
+    )
+
+    @model_validator(mode="after")
+    def _sets_fields_or_files(self) -> Self:
+        # By key, not by emptiness: `{"fields": {}}`, or lists that are empty
+        # once rendered, send a multipart body without parts, as a form
+        # without inputs does.
+        if not self.model_fields_set:
+            raise ValueError("A multipart body sets at least one of: fields, files")
+        return self
+
+
+class MultipartBody(StrictModel):
+    multipart: Multipart = Field(description="multipart/form-data body: form fields and files, each file from a path, text or base64.")
 
 
 class GraphQL(StrictModel):
@@ -469,6 +586,7 @@ get_request_body_discriminator = _create_discriminator(
         Base64Body: "base64",
         BinaryBody: "binary",
         FilesBody: "files",
+        MultipartBody: "multipart",
         GraphQLBody: "graphql",
     },
 )
@@ -482,6 +600,7 @@ RequestBody = Annotated[
     | Annotated[Base64Body, Tag("base64")]
     | Annotated[BinaryBody, Tag("binary")]
     | Annotated[FilesBody, Tag("files")]
+    | Annotated[MultipartBody, Tag("multipart")]
     | Annotated[GraphQLBody, Tag("graphql")],
     Discriminator(get_request_body_discriminator),
 ]

@@ -38,7 +38,7 @@ not free their numbers for reuse.
 | `HTTPCHAIN017` | error | Scenario-level template references an undefined name |
 | `HTTPCHAIN018` | warning | Verify expression is not a template (`{{ }}`) — cannot evaluate to the required bool |
 | `HTTPCHAIN019` | error | Invalid pytest marker expression (scenario or stage `marks`) |
-| `HTTPCHAIN020` | warning | Referenced file does not exist (deep, opt-in): a file path, a body schema file, or a local file a body schema's `$ref` or `$dynamicRef` names |
+| `HTTPCHAIN020` | warning | Referenced file does not exist (deep, opt-in): a file path (`ssl`, a `binary` body, a file a `files` or `multipart` body uploads), a body schema file, or a local file a body schema's `$ref` or `$dynamicRef` names |
 | `HTTPCHAIN021` | warning | A body schema cannot be used (deep): its file is not JSON, its JSON pointer leads nowhere, an `$id` on the pointer's way or in the schema cannot be read (not a string, or not a URI), the schema it selects is not valid, or a `$ref` or `$dynamicRef` it reaches does not resolve (not a string, remote, an absolute path, more `../` than `httpchain_ref_parent_traversal_depth`, outside the root, a pointer to nothing, a malformed `$id`) or points to an invalid schema |
 | `HTTPCHAIN022` | warning | User function cannot be imported (deep) |
 | `HTTPCHAIN023` | warning | Unexpected argument passed to a user function (deep) |

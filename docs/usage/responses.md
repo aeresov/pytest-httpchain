@@ -541,8 +541,9 @@ A relative schema path is resolved against the **scenario file's directory** —
 the same rule as `$ref`/`$include` — so `"./schemas/user.json"` looks for
 `schemas/user.json` next to the test file, regardless of where pytest was
 launched from. The same rule applies to every file path in the dialect:
-`body.binary`, `body.files` values, and `ssl.cert`/`ssl.verify`. Absolute paths
-pass through unchanged.
+`body.binary`, the files of `body.files` and `body.multipart.files` (a path, or a
+file object's `path`), and `ssl.cert`/`ssl.verify`. Absolute paths pass through
+unchanged.
 
 #### A schema inside a document: OpenAPI and shared schema files
 

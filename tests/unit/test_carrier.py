@@ -16,6 +16,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -43,6 +44,8 @@ from pytest_httpchain.models import (
     ClientConfig,
     CombinationsParameter,
     DigestAuth,
+    FilesBody,
+    FileSpec,
     IndividualParameter,
     ParallelForeachConfig,
     ParallelRepeatConfig,
@@ -377,9 +380,82 @@ class TestRenderedAwayFields:
             _render_declared(RegexSave.model_validate({"regex": {"v": {"pattern": "(a)(b)", "group": "{{ x }}"}}}), self.RENDERS_NONE, "save")
         assert str(excinfo.value) == "'save.regex.v.group' was declared as '{{ x }}' but rendered to None, which would silently save the default group instead"
 
+    @pytest.mark.parametrize("field", ["filename", "content_type"])
+    def test_rendered_away_file_name_or_type_says_what_it_would_have_sent(self, field):
+        """A multipart file's filename or content type left out is sent as
+        the default one (the path's name, the guessed type), so the refusal
+        says that."""
+        declared = Request.model_validate({"url": "http://t/", "body": {"multipart": {"files": {"f": {"content": "c", field: "{{ x }}"}}}}})
+        with pytest.raises(StageExecutionError) as excinfo:
+            _render_declared(declared, self.RENDERS_NONE, "request")
+        declared_as = f"'request.body.multipart.files.f.{field}' was declared as " + "'{{ x }}'"
+        assert str(excinfo.value) == f"{declared_as} but rendered to None, which would silently send the default {field.replace('_', ' ')} instead"
+
+    @pytest.mark.parametrize(
+        "specs",
+        [
+            pytest.param([{"content": "a"}, {"content": "b", "filename": None}], id="list-of-dicts"),
+            # `vars` objects in a tuple: the tuple is the list, each namespace
+            # the file object it stands for.
+            pytest.param((SimpleNamespace(content="a"), SimpleNamespace(content="b", filename=None)), id="tuple-of-namespaces"),
+        ],
+    )
+    def test_file_objects_in_a_list_rendered_whole_are_refused_too(self, specs):
+        """A list of file objects one template renders (``"f": "{{ specs }}"``)
+        is a list of models known only once validated: each is checked as a
+        model rendered whole, a key it set to None refused."""
+        context = ChainMap({"specs": specs})
+        declared = FilesBody.model_validate({"files": {"f": "{{ specs }}"}})
+        with pytest.raises(StageExecutionError) as excinfo:
+            _render_declared(declared, context, "request.body")
+        assert str(excinfo.value) == "'request.body.files.f[1].filename' was declared as '{{ specs }}' but rendered to None, which would silently send the default filename instead"
+
+    def test_other_list_rendered_whole_is_not_walked(self, monkeypatch):
+        """Only a list of files holds models, one level deep: any other list
+        a template renders, a JSON body of a million values say, holds none,
+        and walking each of its items, and each list in them, doubled the time
+        the body took to render."""
+        calls = 0
+        walk_whole = carrier_module._rendered_whole_away
+
+        def counted(*args):
+            nonlocal calls
+            calls += 1
+            return walk_whole(*args)
+
+        monkeypatch.setattr(carrier_module, "_rendered_whole_away", counted)
+        declared = Request.model_validate({"url": "http://t/", "method": "POST", "body": {"json": "{{ big }}"}})
+        rendered = _render_declared(declared, ChainMap({"big": [[i, i + 1] for i in range(1000)]}), "request")
+        assert rendered.body.json[999] == [999, 1000]
+        # The model's fields and the body's, but none of the list's items.
+        assert calls < 50
+
+    @pytest.mark.parametrize(
+        ("spec", "sent"),
+        [
+            pytest.param({"path": "a.txt", "content": None, "base64": None}, FileSpec(path=Path("a.txt")), id="dict"),
+            pytest.param(SimpleNamespace(content="a", path=None), FileSpec(content="a"), id="namespace"),
+            pytest.param([{"content": "a", "path": None}], [FileSpec(content="a")], id="in-a-list"),
+        ],
+    )
+    def test_file_object_rendered_whole_with_null_sources_is_sent(self, spec, sent):
+        """A file object counts its sources by value: a None in the ones it
+        does not use (a user function, a saved object filling every key) is
+        not set, as in the same object written out, and disables nothing."""
+        declared = FilesBody.model_validate({"files": {"f": "{{ spec }}"}})
+        assert _render_declared(declared, ChainMap({"spec": spec}), "request.body").files["f"] == sent
+
     @pytest.mark.parametrize(
         ("where", "declared", "path"),
         [
+            # A multipart file's only source: "sets exactly one of: path,
+            # content, base64", asking for what the scenario did set.
+            pytest.param(
+                "request",
+                Request.model_validate({"url": "http://t/", "body": {"multipart": {"files": {"f": {"path": "{{ x }}"}}}}}),
+                "request.body.multipart.files.f.path",
+                id="multipart-file-path",
+            ),
             # A matcher's only field: pydantic's report asked the scenario to
             # "set at least one of: contains, ..." — the field it did set.
             pytest.param("verify", Verify.model_validate({"headers": {"Location": {"contains": "{{ x }}"}}}), "verify.headers.Location.contains", id="single-field-matcher"),

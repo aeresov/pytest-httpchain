@@ -5,6 +5,7 @@ full plugin path: running a scenario with ``--httpchain-output-dir`` must drop a
 file per executed stage, and that file must parse as valid HAR JSON.
 """
 
+import base64
 import json
 from datetime import datetime
 
@@ -168,27 +169,42 @@ def test_har_entries_carry_real_start_times(run_scenario, har_dir):
     assert spread >= 0.4, f"start times span only {spread}s — fabricated at export time?"
 
 
-def test_multipart_upload_degrades_in_har_and_report(run_scenario, har_dir):
-    """A multipart (files) body is a streaming httpx request that httpx never
-    buffers and request_content does not read back; the HAR and report paths
-    must degrade to 'body not captured' instead of erroring — previously the
-    whole HAR file was silently dropped and the request section showed a
-    formatting error."""
+def test_multipart_body_is_captured_in_har_and_report(run_scenario, har_dir):
+    """A multipart body is sent as the bytes it was encoded to, so the HAR
+    entry records it and the report shows it, part by part, a binary file
+    standing in for itself alone (the first file: the report cuts a body at
+    1000 characters). It was a stream httpx never buffered: bodySize -1, no
+    postData, and "not captured" in the report."""
     result = run_scenario(
-        "body_types/test_files_body.http.json",
+        "body_types/test_multipart_body.http.json",
         "body_types/upload_a.txt",
         "body_types/upload_b.bin",
         args=(*HAR_ARGS, "-rA"),
     )
 
     result.assert_outcomes(passed=1)
-    result.stdout.fnmatch_lines(["*HTTP Request*", "*Streaming body*not captured*"])
-    result.stdout.no_fnmatch_line("*Error formatting*")
+    result.stdout.fnmatch_lines(
+        [
+            "*HTTP Request*",
+            'Content-Disposition: form-data; name="title"',
+            "",
+            "Quarterly report",
+            'Content-Disposition: form-data; name="blob"; filename="blob"',
+            "Content-Type: application/octet-stream",
+            "",
+            "<Binary content: 8 bytes>",
+        ]
+    )
     [entry] = har_entries(har_dir)
-    # -1 is HAR's "unknown size": the streaming body is not captured.
-    assert entry["request"]["bodySize"] == -1
-    assert "postData" not in entry["request"]
-    assert entry["response"]["status"] == 200
+    request = entry["request"]
+    sent = {header["name"].lower(): header["value"] for header in request["headers"]}
+    body = base64.b64decode(request["postData"]["text"])
+    assert request["postData"]["encoding"] == "base64"
+    assert request["postData"]["mimeType"] == "multipart/form-data"
+    assert request["bodySize"] == len(body) == int(sent["content-length"])
+    boundary = sent["content-type"].partition("boundary=")[2]
+    assert body.startswith(f'--{boundary}\r\nContent-Disposition: form-data; name="title"\r\n\r\nQuarterly report\r\n'.encode())
+    assert body.endswith(f"--{boundary}--\r\n".encode())
 
 
 # httpx builds a redirect follow-up that keeps the method from the original's

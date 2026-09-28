@@ -197,9 +197,16 @@ def echo_binary():
 
 @app.post("/echo/multipart")
 def echo_multipart():
-    """Echo multipart field names, filenames, and sizes"""
-    fields = {name: {"filename": f.filename, "size": len(f.read())} for name, f in request.files.items()}
-    return {"fields": fields}, HTTPStatus.OK
+    """Echo a multipart body. `form`: each form field's values, in the order
+    sent. `files`: each file part per name, in the order sent, with its
+    filename, content type, size and content as text (undecodable bytes
+    replaced). `fields`: the first file of each name, filename and size."""
+    files: dict[str, list[dict]] = {}
+    for name, f in request.files.items(multi=True):
+        data = f.read()
+        files.setdefault(name, []).append({"filename": f.filename, "content_type": f.content_type, "size": len(data), "text": data.decode(errors="replace")})
+    fields = {name: {"filename": parts[0]["filename"], "size": parts[0]["size"]} for name, parts in files.items()}
+    return {"fields": fields, "form": request.form.to_dict(flat=False), "files": files}, HTTPStatus.OK
 
 
 @app.post("/graphql")

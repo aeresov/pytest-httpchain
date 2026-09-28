@@ -156,12 +156,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header is sent empty (`-H 'X-Empty;'`), and a body without a `Content-Type` is not labelled a
   form, as curl would. A textual body is given as sent (`--data-raw`); a binary one, or one over
   10,000 characters, is read from a file a comment above the command names (`--data-binary
-  @body.bin`), and a multipart upload's, which is not captured, gets a comment saying to add its
-  parts with `-F`. The report's redaction applies: a hidden value stays `[REDACTED]`, and a comment
-  says to fill it in. A digest `Authorization`, which answered one challenge and cannot answer
-  another, is left out, and a comment says to add `--digest -u 'user:password'`. A URL holding
-  brackets or braces gets `--globoff`, so curl does not read them as ranges. The scenario's `ssl`
-  and `client.proxy` settings are not part of the request, and the command has none.
+  @body.bin`), and a multipart body that was not captured, a stream the plugin does not send
+  itself, gets a comment saying to add its parts with `-F`. The report's redaction applies: a
+  hidden value stays `[REDACTED]`, and a comment says to fill it in. A digest `Authorization`,
+  which answered one challenge and cannot answer another, is left out, and a comment says to add
+  `--digest -u 'user:password'`. A URL holding brackets or braces gets `--globoff`, so curl does
+  not read them as ranges. The scenario's `ssl` and `client.proxy` settings are not part of the
+  request, and the command has none.
 - `save.regex` saves values from a body that is not JSON, such as a CSRF token in an HTML form or an
   id in plain text: `{"regex": {"csrf": "name=\"csrf\" value=\"([^\"]+)\"", "order_id": {"pattern":
   "Order #(?P<id>\\d+)", "group": "id"}, "all_ids": {"pattern": "id=(\\d+)", "all": true}}}`. A
@@ -245,6 +246,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   there), following what the runtime follows: a reference beside a Draft 3 to 7 `$ref`, which they
   ignore, is not reached. An OpenAPI 3.0 document's schemas are a dialect of their own (`nullable`,
   boolean `exclusiveMinimum`); the docs say how to convert them.
+- A `multipart` request body sends form fields and files together, which `files` could not:
+  `{"multipart": {"fields": {"title": "Report", "tags": ["a", "b"], "draft": false}, "files":
+  {"document": "./report.pdf"}}}`. A field is text, a number or a boolean, sent as text the way a
+  form value is (`false` as `false`), and a list sends a field per item under the same name. Each
+  `files` entry is one file or a list of them, a part per file under the same name. A file is a
+  path, as before, or an object with exactly one of `path`, `content` (text, sent UTF-8 encoded)
+  and `base64` (binary data), and optionally `filename` (by default the path's last component, or
+  for inline content the field's name; `""` sends none, for a JSON part beside a file) and
+  `content_type` (by default guessed from the filename's extension, else
+  `application/octet-stream`). The fields go first, then the files, in the order written.
+  `files` takes the same file objects and lists; a path string is what it was. Templates work in
+  every value, a whole file object or list of files included, and a `filename` or `content_type`
+  template that renders to `null` fails the stage, `which would silently send the default filename
+  instead`, as other optional fields do; a `null` in a source a rendered file object does not use
+  is not set, as in the object written out. A file that is not there fails the stage naming its
+  path as the scenario gives it, tidied as any path is (`./report.pdf` as `File not found for
+  upload: report.pdf`), and `validate --deep` reports it (`HTTPCHAIN020`), a file object's `path`
+  and a list's items too. A stage's own `Content-Type` is sent as written, and the parts are
+  delimited by the boundary it names, a `multipart/related` or `multipart/mixed` one included,
+  where httpx only took the boundary of a `multipart/form-data` one and delimited the parts with
+  another. A multipart type naming no boundary, such as `multipart/form-data` written out of
+  habit, is sent with the body's added, where the server had none to find the parts by; one
+  naming an empty boundary fails the stage, as does one naming a boundary the parts cannot be
+  delimited by as written (holding a `;`, ending in whitespace, or starting or ending with a quote,
+  none of which RFC 2046 allows), where `boundary="a;b"` had the parts delimited by `a`.
 
 ### Fixed
 
@@ -473,8 +499,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. httpx builds such a follow-up from the original request's body and never reads it; that
   body is plain bytes, so it is now read back from the request, with nothing sent again. A
   redirect that turns the request into a `GET` (a `302` or `303`, or a `301` answering a `POST`)
-  was never affected. A multipart (`files`) upload's body is still reported as not captured, on
-  the first request and on a `307`/`308` follow-up alike: only a plain-bytes body is read back.
+  was never affected. Only a plain-bytes body is read back, which a `files` or `multipart` body
+  now is too (see the `files` entry under Changed), on the first request and on a `307`/`308`
+  follow-up alike.
 - A template holding more than one statement, such as the verify expression
   `{{ ok == True; False }}`, fails the stage instead of evaluating only its first part. simpleeval,
   which evaluates templates, stops at the first `;` and merely warns about the rest, so that
@@ -526,6 +553,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `vars` value took two stack frames per level, and stages failed from about 480 levels with a
   bare traceback. It now takes one frame per level. A value nested past the interpreter's
   recursion limit fails the stage with "Value nested too deeply to substitute".
+- A `base64` request body whose template rendered text holding another template, which its
+  template branch accepts, crashed the run with a traceback instead of failing the stage; it now
+  fails the stage, `The base64 body is not valid base64`, the text ASCII or not. So did a
+  `binary` or `files` path holding a NUL character (a JSON `"\u0000"`, or a template's), which
+  the filesystem refuses: it fails the stage as a file that cannot be read.
 
 ### Changed
 
@@ -620,6 +652,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template is now the scenario's own list, not a fresh copy each time the step runs, as a JSON object
   value already was. A template or user function that changes it in place now changes it for later
   runs too.
+- A `files` body is sent as the bytes it is encoded to, so a failing stage's report shows it and
+  the HAR export records it. httpx streamed it, which neither could read back: the report said
+  `<Streaming body (e.g. multipart file upload): consumed on send, not captured>`, the HAR entry had
+  `bodySize: -1` and no `postData`, and the curl command asked for the parts to be added with `-F`.
+  The report now shows a multipart body part by part, each part's headers and its content, or a
+  binary part's size in place of it, where a single binary file made the whole body one
+  `<Binary content>`; the HAR entry has it as sent, base64-encoded when a part is binary; the
+  curl command sends it with the `Content-Type` naming its boundary, as it sends any other body.
+  The placeholder for a body that is still a stream now reads `<Streaming body: not captured>`.
+  What goes on the wire is unchanged but in three cases. `"files": {}` sent no body at all, and
+  now sends a multipart body without parts, as `multipart` does when its lists render empty. A
+  stage's own `Content-Type` of another multipart type naming a boundary (`multipart/mixed;
+  boundary=abc`) now has the parts delimited by that boundary, where httpx took one from
+  `multipart/form-data` alone and delimited them with a boundary the header did not name. And a
+  stage's own multipart `Content-Type` naming no boundary (`multipart/form-data`) is sent with the
+  body's added, where it named none for the server to find the parts by; one naming an empty
+  boundary, or one the parts cannot be delimited by as written (`boundary="a;b"`, which had them
+  delimited by `a`), fails the stage.
 
 
 ## [0.15.2] - 2026-09-26

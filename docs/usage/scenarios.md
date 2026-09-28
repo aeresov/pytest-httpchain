@@ -253,10 +253,13 @@ after them: default query parameters belong in `params`.
 -   `request.headers` override `headers` by name, case-insensitively: a stage's
     `accept` replaces the client's `Accept`, and the stage's spelling is sent.
 -   A `Content-Type` in `headers` labels every request body, JSON included,
-    except the two whose encoding fixes their type: a `form` body keeps
-    `application/x-www-form-urlencoded`, and a `files` body `multipart/form-data`
-    with the boundary between its parts, which a stage could not write itself.
-    A stage's own `Content-Type` wins over any of them.
+    except those whose encoding fixes their type: a `form` body keeps
+    `application/x-www-form-urlencoded`, and a `multipart` or `files` body
+    `multipart/form-data` with the boundary between its parts, which the
+    client's could not name.
+    A stage's own `Content-Type` wins over any of them, and a multipart one
+    that names no boundary gets the body's (see
+    [File Uploads](requests.md#file-uploads-multipart)).
 -   `params` fill in only the keys the request does not set, neither in its
     URL's query nor in `request.params`: `"url": "/search?locale=de"` keeps
     `locale=de`, and a stage's `"params": {"locale": []}` sends no `locale` at
