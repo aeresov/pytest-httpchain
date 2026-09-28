@@ -14,7 +14,7 @@ import pytest
 
 import pytest_httpchain.validation.loader as validation_loader
 from pytest_httpchain.validation import SEVERITY, DiagnosticCode, load_scenario, resolve_root_path, validate_scenario
-from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
+from tests.unit.helpers import LOADABLE_BUT_DEEP, TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, nested, on_bounded_stack
 
 C = DiagnosticCode
 # A stable importable directory so `userfuncs:<name>` refs resolve under --syspath.
@@ -324,6 +324,9 @@ def test_inline_schema_reaches_the_model_untouched(datadir, fixture, step):
         pytest.param([_stage(response=[{"verify": {"headers": {"x-h": {"matches": ""}}}}])], {}, [], id="empty-matches-is-no-contradiction"),
         # `name` is optional; two stages omitting it are not duplicates.
         pytest.param([_stage(name=""), _stage(name="")], {}, [], id="unnamed-stages-not-duplicates"),
+        # Loads fine, and the name at the bottom is still reported. The checks
+        # walked it recursively and crashed with a RecursionError instead.
+        pytest.param([_stage(substitutions=[{"vars": {"deep": nested("{{ nowhere }}", LOADABLE_BUT_DEEP)}}])], {}, [C.UNDEFINED_VAR], id="value-nested-hundreds-deep"),
         # Only values are substituted: a templated key reaches the wire verbatim.
         pytest.param(
             [_stage(request={"url": "http://server/x", "headers": {"{{ hname }}": "v"}})],

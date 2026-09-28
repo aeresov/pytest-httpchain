@@ -6,7 +6,9 @@ import pytest
 
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.validation import DiagnosticCode, check_scenario
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, nested
 
+C = DiagnosticCode
 _STAGE = {"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}
 
 
@@ -107,3 +109,27 @@ def test_reserved_marker_name_is_diagnostic_not_crash():
     ValueError/SyntaxError used to be caught)."""
     diags = _check([{**_STAGE, "marks": ["_foo"]}])
     assert any(d.code == DiagnosticCode.INVALID_MARKER and d.severity == "error" for d in diags), diags
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        # Template references (extract_template_variables): the name at the bottom is still found.
+        pytest.param({"request": {"url": "https://x.test/", "params": {"p": nested("{{ nowhere }}", BEYOND_RECURSION_LIMIT)}}}, C.UNDEFINED_VAR, id="reference"),
+        # Templated keys (029) are searched in the raw JSON.
+        pytest.param({"request": {"url": "https://x.test/", "params": {"p": nested({"{{ k }}": 1}, BEYOND_RECURSION_LIMIT)}}}, C.TEMPLATE_IN_KEY, id="templated-key"),
+        # The schema meta-check never descends into `enum`, so this reaches the directive search (028).
+        pytest.param(
+            {"response": [{"verify": {"body": {"schema": {"enum": [nested(1, BEYOND_RECURSION_LIMIT)], "properties": {"a": {"$include": "a.json"}}}}}}]},
+            C.SCHEMA_SCENARIO_DIRECTIVE,
+            id="schema-directive",
+        ),
+        # contains_template decides that parametrize values resolve at collection (025).
+        pytest.param({"parametrize": [{"individual": {"p": [nested("{{ 1 }}", BEYOND_RECURSION_LIMIT)]}}]}, C.PARAMETRIZE_COLLECTION_RESOLUTION, id="parametrize-template"),
+    ],
+)
+def test_checks_reach_values_of_any_depth(fields, expected):
+    """Every walk over scenario values is iterative. The recursive ones crashed
+    `validate` and collection with a RecursionError on a value a few hundred
+    levels deep, which loads fine."""
+    assert expected in {d.code for d in _check([{**_STAGE, **fields}])}

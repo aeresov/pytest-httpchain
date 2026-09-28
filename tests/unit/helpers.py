@@ -23,7 +23,24 @@ TOO_DEEP_TO_PARSE = b"[" * 1_000_000 + b"]" * 1_000_000
 # 1,000 on its own, whatever the stack size.
 TOO_DEEP_TO_WALK = b"[" * 1_000 + b"]" * 1_000
 
+# Far past the default recursion limit of 1,000: only a walker that spends no
+# stack frame per level of nesting gets through a value this deep.
+BEYOND_RECURSION_LIMIT = 5_000
+
+# Deep enough that a walker spending two frames per level overflows, shallow
+# enough to load: the reference resolver itself spends one frame per level.
+LOADABLE_BUT_DEEP = 700
+
 _BOUNDED_STACK_SIZE = 8 * 1024 * 1024
+
+
+def nested(leaf: Any, depth: int) -> Any:
+    """``leaf`` under ``depth`` levels of alternating single-key dicts and
+    single-item lists, so a walker's dict and list branches both recur."""
+    value = leaf
+    for level in range(depth):
+        value = [value] if level % 2 else {"k": value}
+    return value
 
 
 def on_bounded_stack[T](fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:

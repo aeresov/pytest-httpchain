@@ -1,11 +1,13 @@
 import uuid
 from collections import ChainMap
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
 from pytest_httpchain.templates import TEMPLATE_BUILTINS, TemplatesError, contains_template, walk
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, LOADABLE_BUT_DEEP, nested
 
 
 class SampleModel(BaseModel):
@@ -68,6 +70,25 @@ class TestWalk:
     @pytest.mark.parametrize("obj", [SampleModel(name="static", value=100), SimpleNamespace(name="static", value=42)], ids=["pydantic", "namespace"])
     def test_template_free_object_returned_as_is(self, obj):
         assert walk(obj, {}) is obj
+
+    def test_nested_namespace_walked_one_frame_per_level(self):
+        """A `vars` value reaches the walk as nested namespaces. Handing vars()
+        to the dict case spent two frames per level, which overflowed at a
+        depth the loader accepts."""
+        value: Any = "{{ x }}"
+        for _ in range(LOADABLE_BUT_DEEP):
+            value = SimpleNamespace(k=value)
+        result = walk(value, {"x": 1})
+        for _ in range(LOADABLE_BUT_DEEP):
+            result = result.k
+        assert result == 1
+
+    def test_value_nested_past_the_stack_fails_as_templates_error(self):
+        """The walk still recurses per level. Past the limit it fails as the
+        TemplatesError the carrier reports as a stage failure, not as a bare
+        RecursionError traceback."""
+        with pytest.raises(TemplatesError, match=r"^Value nested too deeply to substitute \(maximum recursion depth exceeded"):
+            walk(nested("{{ x }}", BEYOND_RECURSION_LIMIT), {"x": 1})
 
 
 @pytest.mark.parametrize(
@@ -206,6 +227,12 @@ def test_env(monkeypatch, expr, expected):
 )
 def test_contains_template(obj, expected):
     assert contains_template(obj) is expected
+
+
+@pytest.mark.parametrize(("leaf", "expected"), [("{{ x }}", True), ("plain", False)])
+def test_contains_template_at_any_depth(leaf, expected):
+    """Iterative: a recursive walk spent two frames per level of nesting."""
+    assert contains_template(nested(leaf, BEYOND_RECURSION_LIMIT)) is expected
 
 
 class TestWalkErrorMessages:

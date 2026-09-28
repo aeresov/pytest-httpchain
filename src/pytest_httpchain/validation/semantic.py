@@ -410,24 +410,27 @@ def _inline_schema_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
             return False
         return value.split("#", 1)[0].endswith(".json")
 
-    def directive_keys(node: Any) -> set[str]:
+    def directive_keys(root: Any) -> set[str]:
         # String values only: a schema whose `properties` legitimately declares
         # an "$include" property maps it to a schema object. "$ref" is schema
         # vocabulary unless it names a file, which nothing can resolve at runtime.
-        match node:
-            case dict():
-                found = set()
-                for key, value in node.items():
-                    if key in ("$include", "$merge") and isinstance(value, str):
-                        found.add(key)
-                    elif key == "$ref" and isinstance(value, str) and not value.startswith("#") and is_scenario_file_ref(value):
-                        found.add(key)
-                    found |= directive_keys(value)
-                return found
-            case list():
-                return set().union(*(directive_keys(item) for item in node))
-            case _:
-                return set()
+        # Iterative: the meta-check never descends into `enum`/`const`/`default`
+        # values, so a recursive walk overflowed on one nested a few hundred
+        # levels deep.
+        found: set[str] = set()
+        pending = [root]
+        while pending:
+            match pending.pop():
+                case dict() as node:
+                    for key, value in node.items():
+                        if key in ("$include", "$merge") and isinstance(value, str):
+                            found.add(key)
+                        elif key == "$ref" and isinstance(value, str) and not value.startswith("#") and is_scenario_file_ref(value):
+                            found.add(key)
+                        pending.append(value)
+                case list() as items:
+                    pending.extend(items)
+        return found
 
     for i, stage in enumerate(scenario.stages):
         for k, step in enumerate(stage.response):
@@ -477,17 +480,23 @@ def _template_key_diagnostics(test_data: dict[str, Any]) -> Iterator[Diagnostic]
     warning, just a wrong request.
     """
 
-    def templated_keys(node: Any, location: str) -> Iterator[tuple[str, str]]:
-        match node:
-            case dict():
-                for key, value in node.items():
-                    child = f"{location}.{key}" if location else str(key)
-                    if isinstance(key, str) and re.search(TEMPLATE_PATTERN, key):
-                        yield key, location
-                    yield from templated_keys(value, child)
-            case list():
-                for index, item in enumerate(node):
-                    yield from templated_keys(item, f"{location}[{index}]")
+    def templated_keys(root: Any, root_location: str) -> Iterator[tuple[str, str]]:
+        # Iterative, in document order: a recursive walk overflowed on a value
+        # nested a few hundred levels deep. Each entry carries the key it sits
+        # under, checked on visit, so a key is reported before its subtree.
+        pending: list[tuple[Any, str, object, str]] = [(root, root_location, None, "")]
+        while pending:
+            node, location, key, parent_location = pending.pop()
+            if isinstance(key, str) and re.search(TEMPLATE_PATTERN, key):
+                yield key, parent_location
+            match node:
+                case dict():
+                    children = [(value, f"{location}.{k}" if location else str(k), k, location) for k, value in node.items()]
+                case list():
+                    children = [(item, f"{location}[{index}]", None, location) for index, item in enumerate(node)]
+                case _:
+                    continue
+            pending.extend(reversed(children))
 
     for key, location in templated_keys(test_data, ""):
         yield diag(

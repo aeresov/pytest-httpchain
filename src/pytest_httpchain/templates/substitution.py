@@ -146,20 +146,26 @@ def _sub_string(line: str, evaluator: EvalWithCompoundTypes) -> Any:
 
 
 def contains_template(obj: Any) -> bool:
-    """True when any string anywhere in the structure holds a template."""
-    match obj:
-        case str():
-            return bool(re.search(TEMPLATE_PATTERN, obj))
-        case dict():
-            return any(contains_template(value) for value in obj.values())
-        case list() | tuple():
-            return any(contains_template(item) for item in obj)
-        case BaseModel():
-            return contains_template(obj.model_dump(mode="python"))
-        case SimpleNamespace():
-            return any(contains_template(value) for value in vars(obj).values())
-        case _:
-            return False
+    """True when any string anywhere in the structure holds a template.
+
+    Iterative on purpose: a recursive walk spent two stack frames per level of
+    nesting, so a value a few hundred levels deep overflowed it.
+    """
+    pending = [obj]
+    while pending:
+        match pending.pop():
+            case str() as text:
+                if re.search(TEMPLATE_PATTERN, text):
+                    return True
+            case dict() as mapping:
+                pending.extend(mapping.values())
+            case list() | tuple() as items:
+                pending.extend(items)
+            case BaseModel() as model:
+                pending.append(model.model_dump(mode="python"))
+            case SimpleNamespace() as namespace:
+                pending.extend(vars(namespace).values())
+    return False
 
 
 def _walk(obj: Any, evaluator: EvalWithCompoundTypes) -> Any:
@@ -182,10 +188,9 @@ def _walk(obj: Any, evaluator: EvalWithCompoundTypes) -> Any:
         case SimpleNamespace():
             if not contains_template(obj):
                 return obj
-
-            namespace_dict = vars(obj)
-            processed_dict = _walk(namespace_dict, evaluator)
-            return SimpleNamespace(**processed_dict)
+            # Walked in place, not by handing vars() to the dict case: that took
+            # two frames per level of a nested ``vars`` value.
+            return SimpleNamespace(**{key: _walk(value, evaluator) for key, value in vars(obj).items()})
         case _:
             return obj
 
@@ -196,5 +201,12 @@ def walk(obj: Any, context: Mapping[str, Any]) -> Any:
     One evaluator serves the whole traversal. A model is dumped, substituted and
     re-validated (so the result is checked against the real field types), and
     returned untouched when it holds no template at all.
+
+    The walk recurses once per level of nesting, so a value nested deeper than
+    the stack allows fails as a `TemplatesError`, which callers already report,
+    rather than as a bare RecursionError.
     """
-    return _walk(obj, _build_evaluator(context))
+    try:
+        return _walk(obj, _build_evaluator(context))
+    except RecursionError as e:
+        raise TemplatesError(f"Value nested too deeply to substitute ({e})") from e
