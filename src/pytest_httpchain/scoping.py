@@ -17,6 +17,7 @@ stage ``substitutions``   same as ``always_run``, plus PRIOR steps' names
                           (steps resolve strictly in order)
 ``skip_if``               the above plus this stage's substitutions
 ``parallel`` config       same as ``skip_if``
+``retry`` config          same as ``skip_if``
 request (per iteration)   the above plus ``foreach`` parameters
 response (per iteration)  the above plus the ``response`` metadata namespace,
                           plus PRIOR steps' saves (steps resolve in order)
@@ -501,7 +502,7 @@ class StageScopes:
 
     @property
     def pre_iteration(self) -> frozenset[str]:
-        """``skip_if`` and the ``parallel`` config. Twin: `with_stage_substitutions`."""
+        """``skip_if``, the ``parallel`` config and the ``retry`` config. Twin: `with_stage_substitutions`."""
         return self.always_run | self.stage_substitutions
 
     @property
@@ -585,8 +586,9 @@ def stage_start_context(global_context: ChainMap[str, Any], stage_fixtures: Mapp
 
 
 def with_stage_substitutions(stage_start: ChainMap[str, Any], stage_substitutions: Mapping[str, Any]) -> ChainMap[str, Any]:
-    """The stage-local context: what ``skip_if`` and the ``parallel`` config
-    see, and the base for every iteration."""
+    """The stage-local context: what ``skip_if``, the ``parallel`` config and
+    the ``retry`` config see, and the base for every iteration (each attempt
+    of one starting from it afresh)."""
     return stage_start.new_child(dict(stage_substitutions))
 
 

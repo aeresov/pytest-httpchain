@@ -1,0 +1,14 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "poll",
+            "retry": { "attempts": 5, "delay": "{{ retry_after }}" },
+            "request": { "url": "{{ server }}/jobs/1" },
+            "response": [
+                { "save": { "jmespath": { "retry_after": "retry_after" } } },
+                { "verify": { "jmespath": { "status": "done" } } }
+            ]
+        }
+    ]
+}

@@ -72,9 +72,10 @@ is resolved as usual (a `$include` inside it still works). It is for lists
 whose entries are alternatives, where concatenation would widen what they
 accept, and for values that are one expected value, where concatenating or
 blending would assert what neither side wrote: pytest-httpchain passes
-`validation.merges_whole`, which matches `verify.status`, each
-`verify.jmespath` expectation and each operand of a matcher there. Both
-predicates compose across file boundaries the same way.
+`validation.merges_whole`, which matches `verify.status` and a stage's
+`retry.on` (lists of alternatives), each `verify.jmespath` expectation and
+each operand of a matcher there. Both predicates compose across file
+boundaries the same way.
 
 The merge root itself is exempt from `atomic`: a reference written *at* an
 atomic position with siblings beside it (`{"$merge": "common.json#/price",

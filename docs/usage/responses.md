@@ -831,6 +831,13 @@ def check_response(response: httpx.Response) -> bool:
     return response.json().get("status") == "ok"
 ```
 
+In a stage with [`retry`](../advanced/retry.md#which-failures-are-retried), a function that
+returned `False` makes another attempt, and so does one that raised a `VerificationError`
+(`from pytest_httpchain.errors import VerificationError`); one that raised anything else crashed,
+and is not retried. A `VerificationError(..., retryable=False)` ends the stage at once, whatever
+attempts are left: a job that failed will not be done at the next poll (see
+[Stopping when the job has failed](../advanced/retry.md#stopping-when-the-job-has-failed)).
+
 ## Save Steps
 
 ### JMESPath Extraction
@@ -989,6 +996,12 @@ def extract_data(response: httpx.Response) -> dict[str, Any]:
 def extract_with_args(response: httpx.Response, key: str) -> dict[str, Any]:
     return {key: response.json().get(key)}
 ```
+
+In a stage with [`retry`](../advanced/retry.md#which-failures-are-retried), a save function
+raises a `SaveError` (`from pytest_httpchain.errors import SaveError`) to have the attempt made
+again, when the response does not hold what it saves yet; one that raised anything else crashed,
+and is not retried. A `SaveError(..., retryable=False)` ends the stage at once, when the response
+says it never will.
 
 ## Complete Example
 

@@ -81,6 +81,10 @@ def _hide_ancestor_project_markers(monkeypatch):
         # substitution is in scope), and a collecting stage saves its names as
         # any stage does: a later stage's foreach iterates over them.
         "parallel_collect_saves_ok.json",
+        # retry resolves once per stage, against what skip_if sees: the
+        # stage's substitutions and parametrize parameters, the scenario's
+        # and an earlier stage's saves.
+        "retry_refs_ok.json",
         # `ids` are never substituted: no collection-resolution info, no
         # undefined-variable warning for display-only text.
         "parametrize_ids_template_no_info.json",
@@ -368,6 +372,10 @@ DIAGNOSED = [
         "parallel_collect_saves_out_of_scope.json",
         [(C.UNDEFINED_VAR, "stages[0].parallel", r"^Stage 'create': parallel references potentially undefined variable\(s\): \['name'\]$")],
     ),
+    # So does retry: the attempts of every iteration follow one schedule,
+    # resolved before the first attempt and its response exist.
+    ("retry_out_of_scope.json", [(C.UNDEFINED_VAR, "stages[0].retry", r"^Stage 'fan_out': retry references potentially undefined variable\(s\): \['polls'\]$")]),
+    ("retry_forward_ref.json", [(C.FORWARD_REF, "stages[0].retry", r"^Stage 'poll': retry references 'retry_after', which is only saved in this stage's response$")]),
     # A skipped stage saves nothing and the chain goes on: a later stage then
     # reads a name only it saves, and fails.
     (
@@ -735,6 +743,40 @@ class TestStatusListMerge:
         scenario, raw = load_scenario(write([_stage(response=[step])]))
         assert raw["stages"][0]["response"][0]["verify"] == expected
         assert scenario.stages[0].response[0].verify.status == ["2xx"]
+
+
+class TestRetryOnMerge:
+    """A stage's retry.on lists alternatives too, any one kind of which makes
+    another attempt: a sibling ["request"] written to narrow a shared
+    ["verify"] was concatenated onto it, and the stage then resent a request
+    that timed out. It merges as a scalar does, as verify.status does."""
+
+    POLL = {"attempts": 10, "delay": 0.5, "on": ["verify"]}
+
+    @pytest.fixture
+    def write(self, tmp_path):
+        (tmp_path / "common.json").write_text(json.dumps({"poll": self.POLL, "stage": _stage(retry=self.POLL)}))
+        return lambda stages: _write(tmp_path, stages)
+
+    @pytest.mark.parametrize(
+        ("stages", "where"),
+        [
+            pytest.param([_stage(retry={"$merge": "common.json#/poll", "on": ["request"]})], "on", id="merge-into-retry"),
+            pytest.param([{"$merge": "common.json#/stage", "retry": {"on": ["request"]}}], "retry.on", id="merge-into-stage"),
+            pytest.param({"s": _stage(retry={"$merge": "common.json#/poll", "on": ["request"]})}, "on", id="mapping-form-stages"),
+            pytest.param([_stage(retry={"$merge": "common.json#/poll", "on": "request"})], "on", id="one-kind-sibling"),
+        ],
+    )
+    def test_different_on_is_a_merge_conflict(self, write, stages, where):
+        result = validate_scenario(write(stages))
+        assert [(d.code, d.message) for d in result.diagnostics] == [(C.REF_ERROR, f"JSON reference resolution error: Merge conflict at {where}")]
+
+    def test_equal_on_keeps_and_other_keys_still_merge(self, write):
+        scenario, raw = load_scenario(write([_stage(retry={"$merge": "common.json#/poll", "on": ["verify"], "backoff": 2})]))
+        assert raw["stages"][0]["retry"] == {"attempts": 10, "delay": 0.5, "on": ["verify"], "backoff": 2}
+        retry = scenario.stages[0].retry
+        assert retry is not None
+        assert retry.on == ["verify"]
 
 
 class TestJmespathExpectationMerge:

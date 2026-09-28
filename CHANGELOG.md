@@ -308,6 +308,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `0` counting as `true` and `false` as in `client.http2`; any other value, `null` included, fails
   the stage before its iterations send anything. The default, `false`, merges as before, and the
   validator, `show` and `graph` count the names as the stage's saves either way.
+- A stage's `retry` attempts it again while it fails, which polling an asynchronous job until it is
+  done needs, as does a read that is only eventually consistent: `"retry": {"attempts": 10, "delay":
+  0.5, "backoff": 2, "max_delay": 5, "on": ["verify", "save", "request"]}`. `attempts` counts the
+  first; `delay` (default 1 second) is the wait before the second attempt, multiplied by `backoff`
+  (default 1) after each, never more than `max_delay`. Each attempt renders the request anew, a
+  fresh `uuid4()` included, sends it and runs every response step in a context of its own: a failed
+  attempt's saves are discarded, and only the one that passes commits its saves. `on` (one kind or a
+  list, default all three) names the failures retried: a verify step's checks, a save step that
+  could not take its values from the response, and the request timing out or its connection failing.
+  A verify or save function is retried when it returns false or raises a `VerificationError` or
+  `SaveError` (`pytest_httpchain.errors`) to say "not yet". Never retried, as every attempt would
+  fail alike: a template that cannot be rendered or renders a value its field or check does not
+  take, a user function that cannot be imported or found or that crashed, a body schema that cannot
+  be read (a missing file, a pointer that leads nowhere, an invalid schema, a `$ref` that does not
+  resolve), a request httpx refuses to send, too many redirects, an auth function that raised, a
+  rate-limit slot that did not come, and a user function's `pytest.skip()`/`xfail()`/`fail()`. After
+  the last attempt the stage fails with that attempt's failure, `... (after 10 attempts)`, as does a
+  `pytest.fail()` or a failure never retried on a later attempt, and the report shows that attempt,
+  `HTTP Response (attempt 10 of 10)`; the HAR export records every attempt of every iteration, and
+  each retried failure logs a line at `INFO`. A sibling `on` beside a `$merge` of a shared `retry` is a merge conflict, as a sibling
+  `verify.status` list is, rather than concatenated: its kinds are alternatives, and concatenated
+  they would retry more than either side wrote. In a `parallel` stage each iteration retries on its
+  own, a wait ends at once when another iteration fails the stage, and each attempt takes a
+  `calls_per_sec` slot, a retried single iteration's too. What factory fixtures enter during the
+  attempts is exited when the iteration ends. The settings but `on` take templates, rendered once
+  per stage before any request against what `skip_if` sees; `validate` checks their references like
+  the `parallel` config's (`HTTPCHAIN003`/`HTTPCHAIN004`, `HTTPCHAIN035`), a setting the stage
+  cannot use fails it before the first request, and a `max_delay` rendered to `null` is refused
+  rather than lift the cap. A `delay`, `backoff` or `max_delay` that is not finite (JSON's `1e999`)
+  is refused at load, by `validate` too, and so is a `true` or `false` in any of the four, written
+  or rendered, which would have been read as `1`: `"attempts": "{{ poll }}"` with a flag for `poll`
+  attempted once.
 
 ### Fixed
 
@@ -511,6 +543,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   iteration, still running, then called `pytest.skip()` or `pytest.xfail()` from a user function,
   and failed with that iteration's message instead of its own on a `pytest.fail()`. Those are now
   secondary to the stage's failure, as any failure of the other iteration's own already was.
+- The HAR export has every request a stage sent. Of a `parallel` stage it left out those of the
+  iterations that failed, were cancelled, or skipped, xfailed or failed from a user function after
+  another iteration had ended the stage, and a stage a user function's `pytest.skip()`,
+  `pytest.xfail()` or `pytest.fail()` ended had no entry at all, not even the request the function
+  answered. They went on the wire all the same: the HAR file now records them, the other
+  iterations' first and the exchange the report shows last.
 - A scenario that is not UTF-8, or that `$include`s a file that is not, fails to load with a
   message naming that file. On a Latin-1 file, `pytest-httpchain resolve`, `show` and `graph`
   printed a raw `UnicodeDecodeError` traceback, and `validate` and collection reported the

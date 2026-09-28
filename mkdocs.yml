@@ -66,6 +66,7 @@ nav:
     - Advanced:
           - Parametrization: advanced/parametrization.md
           - Parallel Execution: advanced/parallel.md
+          - Retries and Polling: advanced/retry.md
           - Context Layering: advanced/context-layering.md
           - $ref & Deep Merging: advanced/ref-merging.md
     - Command Line: cli.md

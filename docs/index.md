@@ -36,6 +36,10 @@ Reuse arbitrary parts of your scenarios with JSON references. Properties merge w
 
 Each scenario contains 1+ stages executed in order. One stage failure stops the chain. Use `always_run` for cleanup stages that should execute regardless, and `skip_if` to skip a stage on a condition known only once the chain is running, such as a value an earlier stage saved.
 
+### Retries and Polling
+
+A stage's [`retry`](advanced/retry.md) attempts it again while it fails, after a wait that can grow each time: poll an asynchronous job until it is done, or ride out eventual consistency and a flaky network. Only the attempt that passes saves anything.
+
 ### Common Data Context
 
 A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use Jinja-style expressions (`{{ var }}`) in any request value.

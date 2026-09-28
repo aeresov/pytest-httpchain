@@ -185,7 +185,7 @@ The sibling `request` adds `method` and a new header. The nested `headers` objec
 A `$ref` (or `$include`/`$merge`) and its sibling properties are combined by **additive deep merge**: siblings extend the referenced value, they do not override it.
 
 1. **Objects**: Recursively merged — sibling keys are added, and keys present in both are merged by these same rules.
-2. **Arrays**: Concatenated — referenced elements first, then sibling elements. Arrays are *not* replaced and *not* merged element-by-element. A `verify.status` list is an exception, [below](#status-lists-merge-whole).
+2. **Arrays**: Concatenated — referenced elements first, then sibling elements. Arrays are *not* replaced and *not* merged element-by-element. A `verify.status` list and a stage's `retry.on` are exceptions, [below](#status-lists-merge-whole).
 3. **Scalars**: A sibling must match the referenced value. Any **differing** scalar raises a merge conflict at load time (`Merge conflict at <path>`).
 4. **Type mismatch**: Combining different JSON types at the same path (object vs array, scalar vs object, …) raises a merge conflict.
 
@@ -222,6 +222,11 @@ Merge conflict at verify.status
 
 To accept more codes, list them all in one place. A reference *inside* `status`
 (`"status": {"$include": "codes.json#/accepted"}`) still resolves as usual.
+
+A stage's [`retry.on`](retry.md#which-failures-are-retried) lists alternatives too: any one
+kind of failure it names makes another attempt. A sibling `["request"]` written
+beside a shared `{"on": ["verify"]}` to narrow it would retry both, resending a
+request that timed out, so `retry.on` merges whole as well (`Merge conflict at on`).
 
 ### JMESPath expectations merge whole
 

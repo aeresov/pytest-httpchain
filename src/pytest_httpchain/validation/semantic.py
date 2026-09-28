@@ -402,6 +402,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
         phase_checks += [
             ("skip_if", raw.get("skip_if"), scope.pre_iteration, skipped.pre_iteration),
             ("parallel", raw.get("parallel"), scope.pre_iteration, skipped.pre_iteration),
+            ("retry", raw.get("retry"), scope.pre_iteration, skipped.pre_iteration),
             ("request", raw.get("request"), scope.request, skipped.request),
         ]
         phase_checks += [
@@ -452,7 +453,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
 
 
 # The raw stage fields a template renders in, in resolution order.
-_STAGE_TEMPLATE_FIELDS = ("parametrize", "always_run", "substitutions", "skip_if", "parallel", "request", "response")
+_STAGE_TEMPLATE_FIELDS = ("parametrize", "always_run", "substitutions", "skip_if", "parallel", "retry", "request", "response")
 
 
 def _rendered_stage_field(stage: Stage, field: str, raw_value: Any) -> Any:

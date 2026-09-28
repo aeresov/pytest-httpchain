@@ -80,7 +80,7 @@ src/pytest_httpchain/
 ├── schema.py                  # build_schema() — JSON Schema generation shared by the schema command
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule), chain-contiguity ordering hooks
 ├── factory.py                 # Collection-time test-class factory (create_test_class)
-├── carrier.py                 # Runtime execution engine (Carrier class): chain state, iteration matrix, threading, reporting
+├── carrier.py                 # Runtime execution engine (Carrier class): chain state, iteration matrix, retry attempts, threading, reporting
 ├── request_builder.py         # Resolved models -> httpx kwargs (build_client_kwargs, build_request_kwargs), multipart bodies encoded to bytes, and auth flows (build_auth: basic, digest, bearer, user functions)
 ├── response_steps.py          # Meaning of a single verify/save step (process_verify, process_save) — pure, no chain state
 ├── body_schema.py             # verify.body.schema made ready to validate (BodySchema): file + JSON pointer, one referencing registry resolving $refs across the document and into local files held to the `$include` path rules (relative, traversal depth, reference root; never remote), a `$ref`'s target validated in its document's dialect, dialect choice, per-file parse and registry caches; shared by the runtime and `validate --deep`
@@ -89,7 +89,7 @@ src/pytest_httpchain/
 ├── har_writer.py              # HAR file export for HTTP request/response logging
 ├── redaction.py               # Redaction: the one set of credential-hiding rules (headers, cookies, URL query) shared by reports, HAR, header verify and request-error messages
 ├── constants.py               # ConfigOptions enum for pytest.ini settings + the shared user-function name grammar
-├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response) + subclasses RequestError, SaveError, VerificationError
+├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response, and whether a stage's retry may retry it) + subclasses RequestError, SaveError, VerificationError
 ├── userfunc.py                # Dynamic function import/invocation, incl. the model-aware call_user_function dispatch
 ├── models/                    # Pydantic models (Scenario, Stage, Request, etc.)
 ├── templates/                 # {{ expression }} substitution engine
@@ -111,6 +111,7 @@ Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix config
    - Walks request model through template engine, then `request_builder.build_request_kwargs()`
    - Executes HTTP request via httpx
    - Processes response steps via `response_steps.process_verify()` / `process_save()`; a verify step gets the declared model and the carrier's renderer (`_verify_renderer`), which renders the step's values one at a time with one evaluator (`templates.walker`), all before the first check runs, so a value that does not render is one failure, listed in its check's place among the step's
+   - With a stage `retry`, makes each iteration's attempts (`Carrier._execute_attempts`): a failure `retry.on` names and another attempt may change (`StageExecutionError.retryable`) waits and attempts again, the request rendered anew and the response steps run in a fresh context
    - Updates global context with saved values
 
 Per-scenario mutable class state (client, abort flag, exchange bookkeeping) is defined once in `carrier.fresh_scenario_state()`; the factory seeds each generated subclass with it and `teardown_class` re-applies it.

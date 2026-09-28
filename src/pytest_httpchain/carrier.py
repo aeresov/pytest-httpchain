@@ -24,11 +24,11 @@ from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Seq
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar, NamedTuple
+from typing import Any, ClassVar, NamedTuple, TypeGuard
 
 import httpx
 import pytest
@@ -50,6 +50,7 @@ from pytest_httpchain.models import (
     ParallelRepeatConfig,
     RegexCapture,
     ResponseBody,
+    RetryConfig,
     SaveStep,
     Scenario,
     Stage,
@@ -227,40 +228,56 @@ def _error_request(e: Exception) -> httpx.Request | None:
     return request if isinstance(request, httpx.Request) else None
 
 
+# The failures sending a request that a stage's ``retry`` (``on: request``)
+# retries: the request timed out, its connection could not be made or broke
+# off, or the server closed it without a complete response. Not what httpx
+# refuses to send as written (a header value, a scheme), too many redirects,
+# what an auth function raised, or a rate-limit slot that never came: the next
+# attempt would repeat those, or wait as long again.
+_NETWORK_ERRORS = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
+
+
 def _request_error(what: str, e: Exception, redaction: Redaction) -> RequestError:
     """``e`` as the stage failure it is, its text shown through ``redaction``:
     the message prints above the request's report section, whose header values
-    it may quote (h11 refusing ``b'Bearer <token>\\n'``)."""
+    it may quote (h11 refusing ``b'Bearer <token>\\n'``). Retryable when the
+    network failed it (`_NETWORK_ERRORS`)."""
     request = _error_request(e)
     text = str(e) if request is None else redaction.error_text(str(e), request.headers)
-    return RequestError(f"{what}: {text}", request=request)
+    return RequestError(f"{what}: {text}", request=request, retryable=isinstance(e, _NETWORK_ERRORS))
 
 
-def _parallel_number(field: str, value: Any) -> float:
-    """A walk()-resolved ``parallel`` setting as a float, or a stage failure.
+def _setting_number(setting: str, value: Any, must_be: str = "a positive number", accepts: Callable[[float], bool] = lambda number: number > 0) -> float:
+    """A walk()-resolved numeric ``parallel`` or ``retry`` setting as a float,
+    or a stage failure saying the ``setting`` ``must_be`` what ``accepts`` takes.
 
-    The numeric fields are `PositiveInt | NumberOrTemplate` and walk() re-validates
-    the config it resolves, but NumberOrTemplate accepts any complete template:
-    a template resolving to another template string satisfies it and arrives here
-    as text. A bare ``float()``/``int()`` would raise ValueError, which is not a
-    stage failure and so escapes as a plugin traceback.
+    The numeric fields are `PositiveInt | NumberOrTemplate` and the like, and
+    walk() re-validates the config it resolves, but NumberOrTemplate accepts
+    any complete template: a template resolving to another template string
+    satisfies it and arrives here as text. A bare ``float()``/``int()`` would
+    raise ValueError, which is not a stage failure and so escapes as a plugin
+    traceback.
     """
     if isinstance(value, bool):
-        # float(True) is 1.0, so without this a resolved bool would silently
-        # configure one worker / one call per second.
-        raise StageExecutionError(f"parallel.{field} must be a positive number, got {value!r}")
+        # float(True) is 1.0: read as it is, a bool would configure one
+        # attempt or a one-second wait. The retry model refuses one, written
+        # or rendered, so none of its settings brings one here; the parallel
+        # model reads one as 1 before it gets here. Kept so that whatever a
+        # model lets through, this never reads a bool as a number.
+        raise StageExecutionError(f"{setting} must be {must_be}, got {value!r}")
     try:
         number = float(value)
     except (TypeError, ValueError, ArithmeticError):
-        raise StageExecutionError(f"parallel.{field} must be a positive number, got {value!r}") from None
-    if not math.isfinite(number) or number <= 0:
-        raise StageExecutionError(f"parallel.{field} must be a positive number, got {value!r}")
+        raise StageExecutionError(f"{setting} must be {must_be}, got {value!r}") from None
+    if not math.isfinite(number) or not accepts(number):
+        raise StageExecutionError(f"{setting} must be {must_be}, got {value!r}")
     return number
 
 
-def _parallel_int(field: str, value: Any) -> int:
-    """`_parallel_number` for a whole-number setting. Truncating instead would
-    turn a resolved 0.5 into 0 — no workers, or a silently disabled limiter.
+def _setting_int(setting: str, value: Any) -> int:
+    """`_setting_number` for a positive whole-number setting. Truncating
+    instead would turn a resolved 0.5 into 0 — no workers, a silently disabled
+    limiter, no attempt at all.
 
     An int is taken as it stands: `PositiveInt` has no upper bound, and routing
     one through ``float()`` would raise OverflowError on a value the callers
@@ -269,12 +286,22 @@ def _parallel_int(field: str, value: Any) -> int:
     """
     if isinstance(value, int) and not isinstance(value, bool):
         if value <= 0:
-            raise StageExecutionError(f"parallel.{field} must be a positive whole number, got {value!r}")
+            raise StageExecutionError(f"{setting} must be a positive whole number, got {value!r}")
         return value
-    number = _parallel_number(field, value)
+    number = _setting_number(setting, value)
     if not number.is_integer():
-        raise StageExecutionError(f"parallel.{field} must be a positive whole number, got {value!r}")
+        raise StageExecutionError(f"{setting} must be a positive whole number, got {value!r}")
     return int(number)
+
+
+def _parallel_number(field: str, value: Any) -> float:
+    """A walk()-resolved ``parallel`` setting as a positive float, or a stage failure."""
+    return _setting_number(f"parallel.{field}", value)
+
+
+def _parallel_int(field: str, value: Any) -> int:
+    """A walk()-resolved ``parallel`` setting as a positive int, or a stage failure."""
+    return _setting_int(f"parallel.{field}", value)
 
 
 def _parallel_values(field: str, value: Any) -> list[Any]:
@@ -326,6 +353,151 @@ def _merged_saves(saved: Sequence[Mapping[str, Any]], collect: bool) -> dict[str
         return merged
     names = dict.fromkeys(name for iteration in saved for name in iteration)
     return {name: [iteration.get(name) for iteration in saved] for name in names}
+
+
+# The error each kind a stage's ``retry.on`` names is a failure of: a verify
+# step's, a save step's, the request's.
+_RETRY_ON_ERRORS: dict[str, type[StageExecutionError]] = {"verify": VerificationError, "save": SaveError, "request": RequestError}
+
+
+@dataclass(frozen=True, slots=True)
+class _RetryPolicy:
+    """A stage's ``retry`` resolved (`_retry_policy`): how many attempts it
+    makes at most, how long it waits before each after the first, and after
+    which failures. `_NO_RETRY` is a stage's without one: one attempt."""
+
+    attempts: int = 1
+    delay: float = 1
+    backoff: float = 1
+    max_delay: float | None = None
+    on: tuple[type[StageExecutionError], ...] = ()
+
+    def retries(self, error: BaseException) -> TypeGuard[StageExecutionError]:
+        """Whether ``error`` ending an attempt makes another, if one is left:
+        a failure of a kind ``on`` names, and one another attempt may not
+        repeat (`StageExecutionError.retryable`). A template or validation
+        error is no stage failure (it is the scenario's own), nor is a pytest
+        outcome a user function raised, and neither is retried."""
+        return isinstance(error, self.on) and error.retryable
+
+    def waits(self) -> Iterator[float]:
+        """The wait before each attempt after the first, in order: ``delay``,
+        multiplied by ``backoff`` after each attempt, never more than
+        ``max_delay``. Exhausted once no attempt is left."""
+        wait = self.delay
+        for _ in range(self.attempts - 1):
+            yield wait if self.max_delay is None else min(wait, self.max_delay)
+            # Past float's range this is inf, which the cap (or the wait's
+            # own, `_wait_to_retry`) takes.
+            wait *= self.backoff
+
+
+_NO_RETRY = _RetryPolicy()
+
+
+def _retry_policy(config: RetryConfig | None) -> _RetryPolicy:
+    """A walk()-resolved ``retry`` as the policy the iterations follow, or a
+    stage failure naming a setting it cannot use. Resolved before any request,
+    as the ``parallel`` config is: a setting a template rendered to template
+    text fails the stage then, not once the first attempt has failed."""
+    if config is None:
+        return _NO_RETRY
+    return _RetryPolicy(
+        attempts=_setting_int("retry.attempts", config.attempts),
+        delay=_setting_number("retry.delay", config.delay, "a number of seconds, 0 or more", lambda number: number >= 0),
+        backoff=_setting_number("retry.backoff", config.backoff, "a number, 1 or more", lambda number: number >= 1),
+        # None is "never declared" here: `_render_declared` already refused a
+        # template that rendered to None.
+        max_delay=_setting_number("retry.max_delay", config.max_delay, "a number of seconds, 0 or more", lambda number: number >= 0) if config.max_delay is not None else None,
+        on=tuple(_RETRY_ON_ERRORS[kind] for kind in ([config.on] if isinstance(config.on, str) else config.on)),
+    )
+
+
+def _wait_to_retry(seconds: float, cancel: threading.Event | None) -> bool:
+    """Wait ``seconds`` before an iteration's next attempt: True once they
+    have passed, False as soon as ``cancel`` (a parallel stage's, `_PoolCancel`)
+    is set, since another iteration ended the stage and a later attempt would
+    add traffic to a stage already failed. A plain sleep would hold the
+    stage's failure back until the wait ran out.
+
+    An event's wait, even without a pool: an interrupt (Ctrl-C) ends it as it
+    ends a sleep. A wait past what a lock can wait (an overflowed backoff) is
+    that long instead, which is as good as forever.
+    """
+    event = cancel if cancel is not None else threading.Event()
+    return not event.wait(min(seconds, threading.TIMEOUT_MAX))
+
+
+def _with_attempts(message: str, attempt: int) -> str:
+    """``message`` saying ``attempt`` attempts ran: at the end of its first
+    line, the one a parallel stage's failure quotes, and before a colon that
+    ends it: ``3 verification checks failed (after 3 attempts):``."""
+    first, newline, rest = message.partition("\n")
+    note = f"(after {attempt} attempts)"
+    if first.endswith(":"):
+        first = f"{first[:-1]} {note}:"
+    else:
+        first = f"{first} {note}" if first else note
+    return f"{first}{newline}{rest}"
+
+
+def _after_attempts(error: BaseException, attempt: int, earlier: tuple[Exchange, ...]) -> StageExecutionError:
+    """How an iteration fails whose ``attempt``-th attempt, after earlier ones
+    that failed, ended in ``error``: that failure, its message saying how many
+    attempts ran (`_with_attempts`), carrying the exchanges of the earlier
+    ones (``earlier``, for the HAR file) and which attempt it is (for the
+    report). A template or validation error ending a later attempt becomes a
+    stage failure, which alone carries these.
+    """
+    if not isinstance(error, StageExecutionError):
+        failure = StageExecutionError(str(error))
+        failure.__cause__ = error
+        error = failure
+    error.args = (_with_attempts(str(error), attempt),)
+    error.attempt = attempt
+    error.earlier_exchanges = earlier
+    return error
+
+
+# Where a pytest outcome a user function raised carries the exchanges of its
+# iteration's attempts (`_note_outcome_exchanges`): pytest's exception has no
+# field for them, and it is the outcome that reaches the stage.
+_OUTCOME_EXCHANGES = "_httpchain_exchanges"
+
+
+def _outcome_exchanges(outcome: BaseException) -> tuple[Exchange, ...]:
+    """The exchanges noted on ``outcome`` (`_note_outcome_exchanges`), oldest first."""
+    return getattr(outcome, _OUTCOME_EXCHANGES, ())
+
+
+def _note_outcome_exchanges(outcome: BaseException, exchanges: Iterable[Exchange]) -> None:
+    """Note ``exchanges`` on ``outcome``, a skip, xfail or fail() a user
+    function raised once requests had gone on the wire, before those it
+    carries already: the HAR file records them (`Carrier.execute_stage`), as
+    it records a failed stage's, being real traffic."""
+    setattr(outcome, _OUTCOME_EXCHANGES, (*exchanges, *_outcome_exchanges(outcome)))
+
+
+def _outcome_after_attempts(outcome: BaseException, attempt: int, earlier: tuple[Exchange, ...]) -> None:
+    """``outcome``, a skip, xfail or fail() a user function raised on the
+    ``attempt``-th attempt, after earlier ones that failed: it ends the stage
+    as it would have on the first attempt, never retried, carrying the earlier
+    attempts' exchanges (``earlier``) for the HAR file. A fail() says how many
+    attempts ran, as a stage failure does (`_with_attempts`); a skip's or an
+    xfail's reason, which is no failure, is left as the function wrote it."""
+    _note_outcome_exchanges(outcome, earlier)
+    if isinstance(outcome, pytest.fail.Exception) and not isinstance(outcome, pytest.xfail.Exception):
+        outcome.msg = _with_attempts(outcome.msg or "", attempt)
+
+
+def _wire_exchanges(request: httpx.Request, response: httpx.Response | None, started: datetime | None) -> list[Exchange]:
+    """The exchanges one request made on the wire, for the HAR file: its
+    redirect chain first, which lives on ``response.history``, each hop
+    carrying its own request. Individual hop start times are not tracked; the
+    request's start is the closest truthful anchor (the first hop IS the
+    request sent then)."""
+    hops: list[Exchange] = [(hop.request, hop, started) for hop in response.history] if response is not None else []
+    return [*hops, (request, response, started)]
 
 
 def _none_is_a_value(model: BaseModel, field: str) -> bool:
@@ -670,11 +842,16 @@ def _render_save[M: BaseModel](declared: M, context: Mapping[str, Any]) -> M:
     it renders that does not validate is the step's `SaveError`, as a verify
     step's is its `VerificationError` (`_validated_verify`): a regex or a
     JMESPath expression a template rendered that does not compile, a group
-    the pattern a template rendered does not have."""
+    the pattern a template rendered does not have. Neither that nor the
+    guard's refusal is retryable: it is the step's templates that failed, not
+    the extraction from this response."""
     try:
         return _render_declared(declared, context, "save", SaveError)
     except ValidationError as e:
-        raise SaveError(str(e)) from e
+        raise SaveError(str(e), retryable=False) from e
+    except SaveError as e:
+        e.retryable = False
+        raise
 
 
 # What `_verify_part` cuts a step down from: nothing set (``model_fields_set``
@@ -737,6 +914,7 @@ def fresh_chain_state() -> dict[str, Any]:
         "last_exchanges": [],
         "last_iterations_attempted": 0,
         "last_shown_exchange_is_failed": False,
+        "last_shown_attempt": None,
         "active_context_managers": [],
     }
 
@@ -762,13 +940,18 @@ def fresh_scenario_state() -> dict[str, Any]:
 
 @dataclass(slots=True, frozen=True)
 class IterationResult:
-    """A successful stage iteration. ``started`` is when the request went on the
-    wire, which is what HAR waterfalls are built from."""
+    """A successful stage iteration: its attempt that succeeded. ``started`` is
+    when the request went on the wire, which is what HAR waterfalls are built
+    from. ``attempt`` is which attempt of the stage's ``retry`` it is, and
+    ``earlier_exchanges`` the exchanges of those before it, when the HAR file
+    records them (`Carrier._execute_attempts`)."""
 
     saved_context: dict[str, Any]
     request: httpx.Request
     response: httpx.Response
     started: datetime
+    attempt: int = 1
+    earlier_exchanges: tuple[Exchange, ...] = ()
 
 
 class _PoolCancel(threading.Event):
@@ -824,6 +1007,11 @@ class _IterationExitError(StageExecutionError):
             response=exchange.response if exchange is not None else None,
             started=exchange.started if exchange is not None else None,
         )
+        if exchange is not None:
+            self.attempt, self.earlier_exchanges = exchange.attempt, exchange.earlier_exchanges
+        elif own_failure is not None:
+            # A user function's skip, xfail or fail(), after its attempts' requests.
+            self.earlier_exchanges = _outcome_exchanges(own_failure)
         self.exit_errors = exit_errors
         self.own_failure = own_failure
         self.result = result
@@ -840,7 +1028,26 @@ def _parallel_failure(idx: int, exc: Exception) -> str:
     return "\n".join([f"Parallel execution failed at iteration {idx}: {first}", *(f"Iteration {idx}: {line}" for line in rest)])
 
 
-def _fold_in_secondary(idx: int, e: BaseException, results: list[IterationResult | None], exit_errors: list[str]) -> None:
+def _result_exchanges(result: IterationResult) -> list[Exchange]:
+    """The exchanges a successful iteration made on the wire, oldest first:
+    its earlier attempts', then the one that succeeded."""
+    return [*result.earlier_exchanges, *_wire_exchanges(result.request, result.response, result.started)]
+
+
+def _failure_exchanges(failure: BaseException) -> list[Exchange]:
+    """The exchanges an iteration that ended in ``failure`` made on the wire,
+    oldest first: its earlier attempts', then the one its last attempt sent,
+    if it sent one. A user function's pytest outcome carries them noted
+    (`_outcome_exchanges`)."""
+    if not isinstance(failure, StageExecutionError):
+        return list(_outcome_exchanges(failure))
+    exchanges = list(failure.earlier_exchanges)
+    if failure.request is not None:
+        exchanges.extend(_wire_exchanges(failure.request, failure.response, failure.started))
+    return exchanges
+
+
+def _fold_in_secondary(idx: int, e: BaseException, results: list[IterationResult | None], exit_errors: list[str], exchanges: list[Exchange] | None = None) -> None:
     """Take in how iteration ``idx`` of a parallel stage ended when that is
     secondary to the stage's outcome: another iteration ended the stage first
     (`_PoolCancel`), and this one was cancelled by it or still running then.
@@ -850,12 +1057,16 @@ def _fold_in_secondary(idx: int, e: BaseException, results: list[IterationResult
     skipped or xfailed one, or replace its failure message. Not what its
     context managers raised on exit: a commit that failed is a side effect the
     user must hear of, so it goes on ``exit_errors``, labelled with the
-    iteration. A success its exit failed is still folded into ``results``: its
-    request went on the wire.
+    iteration. Nor what it sent: a success its exit failed is still folded
+    into ``results``, and a failure's exchanges go on ``exchanges`` (when the
+    HAR file records every exchange; None otherwise), its every attempt's, one
+    cancelled while waiting to retry included: its requests went on the wire.
     """
+    if isinstance(e, _IterationExitError) and e.result is not None:
+        results[idx] = e.result
+    elif exchanges is not None:
+        exchanges.extend(_failure_exchanges(e))
     if isinstance(e, _IterationExitError):
-        if e.result is not None:
-            results[idx] = e.result
         exit_errors.extend(f"Iteration {idx}: {error}" for error in e.exit_errors)
 
 
@@ -878,6 +1089,9 @@ class Carrier:
     last_exchanges: ClassVar[list[Exchange]] = []
     last_iterations_attempted: ClassVar[int] = 0
     last_shown_exchange_is_failed: ClassVar[bool] = False
+    # (attempt, attempts) of the stage's retry the shown exchange came from,
+    # when that was not its first attempt.
+    last_shown_attempt: ClassVar[tuple[int, int] | None] = None
     record_all_exchanges: ClassVar[bool] = False
     # The report's rules (httpchain_redact_*), for failure messages that echo a
     # header's value: they are printed next to the report sections.
@@ -1000,8 +1214,9 @@ class Carrier:
         """Execute one stage end to end.
 
         Gates on the abort/``always_run`` flow, layers the stage context, skips
-        the stage when its ``skip_if`` holds, runs the iteration matrix, and on
-        full success commits the iterations' saves (`_merged_saves`) as a new
+        the stage when its ``skip_if`` holds, runs the iteration matrix, each
+        iteration making the attempts its ``retry`` allows, and on full success
+        commits the iterations' saves (`_merged_saves`) as a new
         global-context layer.
         A failure is reported via ``pytest.fail`` and commits no saves, so the
         context never carries a timing-dependent subset; nor does a skip. The
@@ -1019,6 +1234,7 @@ class Carrier:
         cls.last_exchanges = []
         cls.last_iterations_attempted = 0
         cls.last_shown_exchange_is_failed = False
+        cls.last_shown_attempt = None
 
         # Ahead of the always_run machinery: a failed initialization leaves no
         # context and no client, so every stage skips.
@@ -1030,6 +1246,8 @@ class Carrier:
         # What the context managers of a parallel stage's iterations still
         # running when another one ended the stage raised on exit (`_run_iterations`).
         iteration_exit_errors: list[str] = []
+        # And what they sent, for the HAR file when it records every exchange.
+        secondary_exchanges: list[Exchange] = []
         try:
             stage_fixtures = cls._build_stage_fixtures(fixture_kwargs)
 
@@ -1072,19 +1290,22 @@ class Carrier:
             # Before any request: a switch the stage cannot read must fail it
             # before its iterations send anything, not once they all have.
             collect_saves = _parallel_flag("collect_saves", parallel_config.collect_saves) if parallel_config is not None else False
+            # Against the same context as the parallel config, and before any
+            # request too: a setting the stage cannot use fails it now.
+            retry = _retry_policy(_render_declared(stage.retry, local_context, "retry")) if stage.retry is not None else _NO_RETRY
 
-            results, first_error = cls._run_iterations(stage, local_context, iteration_substitutions, parallel_config, iteration_exit_errors)
+            results, first_error = cls._run_iterations(stage, local_context, iteration_substitutions, parallel_config, iteration_exit_errors, retry, secondary_exchanges)
             completed = [iter_result for iter_result in results if iter_result is not None]
 
             if first_error is None:
-                cls._record_exchanges(completed, failed=None, attempted=total)
+                cls._record_exchanges(completed, failed=None, attempted=total, attempts=retry.attempts, secondary=secondary_exchanges)
                 # Every iteration succeeded, so `completed` is `results` whole:
                 # entry i of a collected list is iteration i's.
                 assert len(completed) == total, "a stage whose iterations all succeeded has every one's result"
                 saves = _merged_saves([iter_result.saved_context for iter_result in completed], collect_saves)
             else:
                 idx, exc = first_error
-                cls._record_exchanges(completed, failed=exc, attempted=total)
+                cls._record_exchanges(completed, failed=exc, attempted=total, attempts=retry.attempts, secondary=secondary_exchanges)
                 # Label the failure as parallel only when the user asked for
                 # parallel, else a plain stage failure would be misreported.
                 if parallel_config is not None:
@@ -1094,6 +1315,11 @@ class Carrier:
         except _STAGE_OUTCOMES as e:
             # Held back, a skip or an xfail too: exiting the context managers may fail the stage.
             outcome = e
+            if not isinstance(e, _STAGE_FAILURE_EXCEPTIONS) and (exchanges := _outcome_exchanges(e)):
+                # A user function's outcome, once requests had gone on the
+                # wire, its iteration's and a parallel stage's other
+                # iterations' (`_run_iterations`): the HAR file records them.
+                cls.last_exchanges = list(exchanges if cls.record_all_exchanges else exchanges[-1:])
         except BaseException:
             # An interrupt or a plugin bug is what gets reported; the context
             # managers are still exited.
@@ -1117,7 +1343,8 @@ class Carrier:
         if isinstance(outcome, _STAGE_FAILURE_EXCEPTIONS):
             pytest.fail(reason=str(outcome), pytrace=False)
         if outcome is not None:
-            # What a user function's pytest.skip/xfail/fail raised, unchanged.
+            # What a user function's pytest.skip/xfail/fail raised, unchanged
+            # but for the attempts a fail() on a later one counts.
             raise outcome
 
         # Only now that the context managers have exited cleanly: a stage their
@@ -1187,40 +1414,42 @@ class Carrier:
         return iteration_substitutions
 
     @classmethod
-    def _record_exchanges(cls, completed: list[IterationResult], failed: Exception | None, attempted: int) -> None:
+    def _record_exchanges(cls, completed: list[IterationResult], failed: Exception | None, attempted: int, attempts: int = 1, secondary: Sequence[Exchange] = ()) -> None:
         """Record this stage's HTTP exchanges for the report and the HAR file.
 
         ``last_request``/``last_response`` are the one exchange the report shows:
         the failing iteration's when it carries request info (its response may
-        legitimately be None), else the last completed one. ``last_exchanges``
-        holds every iteration only when HAR output is on, so an ordinary run
-        never retains more than one response per stage.
+        legitimately be None), else the last completed one: each an iteration's
+        last attempt, which ``last_shown_attempt`` numbers out of the
+        ``attempts`` the stage's retry allows when it was not the first.
+        ``last_exchanges`` holds every iteration, every attempt of each, only
+        when HAR output is on, so an ordinary run never retains more than one
+        response per stage: the completed iterations', then ``secondary``,
+        those of the iterations that failed or were cancelled after the one
+        that failed the stage (`_fold_in_secondary`), then that one's.
         """
-        failed_request, failed_response, failed_started = (failed.request, failed.response, failed.started) if isinstance(failed, StageExecutionError) else (None, None, None)
+        failed_request, failed_response = (failed.request, failed.response) if isinstance(failed, StageExecutionError) else (None, None)
 
-        exchanges: list[Exchange] = []
-        for r in completed:
-            # A redirect chain lives on .history, each hop carrying its own
-            # request: expand it so the HAR shows every wire exchange. Individual
-            # hop start times are not tracked; the iteration's start is the
-            # closest truthful anchor (the first hop IS the request sent then).
-            exchanges.extend((hop.request, hop, r.started) for hop in r.response.history)
-            exchanges.append((r.request, r.response, r.started))
-        if failed_request is not None:
-            if failed_response is not None:
-                exchanges.extend((hop.request, hop, failed_started) for hop in failed_response.history)
-            exchanges.append((failed_request, failed_response, failed_started))
+        exchanges = [exchange for r in completed for exchange in _result_exchanges(r)]
+        exchanges.extend(secondary)
+        if failed is not None:
+            exchanges.extend(_failure_exchanges(failed))
         if not cls.record_all_exchanges:
             exchanges = exchanges[-1:]
 
         cls.last_exchanges = exchanges
         cls.last_iterations_attempted = attempted
 
+        shown_attempt = 1
         if failed_request is not None:
+            assert isinstance(failed, StageExecutionError), "only a stage failure carries a request"
             cls.last_request, cls.last_response = failed_request, failed_response
             cls.last_shown_exchange_is_failed = True
-        elif exchanges:
-            cls.last_request, cls.last_response, _ = exchanges[-1]
+            shown_attempt = failed.attempt
+        elif completed:
+            cls.last_request, cls.last_response = completed[-1].request, completed[-1].response
+            shown_attempt = completed[-1].attempt
+        cls.last_shown_attempt = (shown_attempt, attempts) if shown_attempt > 1 else None
 
     @classmethod
     def _run_iterations(
@@ -1230,44 +1459,53 @@ class Carrier:
         iteration_substitutions: list[dict[str, Any]],
         parallel_config: ParallelConfig | None,
         exit_errors: list[str],
+        retry: _RetryPolicy = _NO_RETRY,
+        secondary_exchanges: list[Exchange] | None = None,
     ) -> tuple[list[IterationResult | None], tuple[int, Exception] | None]:
         """Run the iterations and return ``(results_by_index, first_error)``.
 
         One iteration runs inline; many run in a pool capped at
-        ``max_concurrency`` with an optional global rate limiter. The first
+        ``max_concurrency`` with an optional global rate limiter, which every
+        attempt of an iteration (``retry``) takes a slot of. The first
         iteration to end in anything but success cancels the pool, and its
         outcome is the stage's whenever it is read (`_PoolCancel`), unless
         another iteration raises an interrupt (or, read first, a plugin bug).
         What the context managers of the iterations it cancelled or that were
         still running then raise on exit goes on ``exit_errors``, however this
-        returns or raises (see `_fold_in_secondary`).
+        returns or raises, and what those that failed sent goes on
+        ``secondary_exchanges`` when the HAR file records every exchange (see
+        `_fold_in_secondary`).
         """
         total = len(iteration_substitutions)
+        # Only for the HAR file: an ordinary run keeps one exchange per stage.
+        secondary = secondary_exchanges if cls.record_all_exchanges else None
         results: list[IterationResult | None] = [None] * total
         first_error: tuple[int, Exception] | None = None
         limiter: Limiter | None = None
 
         try:
+            # A single iteration's only attempt cannot block on a fresh bucket,
+            # so without retries the rate-limiting settings have nothing to do.
+            max_rate_limit_delay: float = 60
+            if parallel_config is not None and (total > 1 or retry.attempts > 1):
+                # Guarded rather than cast: the config arrives walk()-resolved,
+                # and a resolved value can still be unusable (see `_setting_number`).
+                # None is "never declared" here: `_render_declared` already
+                # refused a template that rendered to None.
+                calls_per_sec = _parallel_int("calls_per_sec", parallel_config.calls_per_sec) if parallel_config.calls_per_sec is not None else None
+                max_rate_limit_delay = _parallel_number("max_rate_limit_delay", parallel_config.max_rate_limit_delay)
+                limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec is not None else None
+
             if total == 1:
-                # No limiter and no delay budget: a single iteration cannot block
-                # on a fresh bucket, so the pool's rate-limiting arguments have
-                # nothing to do here.
                 try:
-                    results[0] = cls._run_iteration(stage, local_context, iteration_substitutions[0])
+                    results[0] = cls._run_iteration(stage, local_context, iteration_substitutions[0], limiter, max_rate_limit_delay, retry=retry)
                 except _STAGE_FAILURE_EXCEPTIONS as e:
                     first_error = (0, e)
             else:
                 # Only a parallel config can yield more than one iteration:
                 # `_build_iteration_substitutions(None, ...)` returns exactly one.
                 assert parallel_config is not None, "more than one iteration implies a parallel config"
-                # Guarded rather than cast: the config arrives walk()-resolved,
-                # and a resolved value can still be unusable (see `_parallel_number`).
                 max_concurrency = _parallel_int("max_concurrency", parallel_config.max_concurrency)
-                # None is "never declared" here: `_render_declared` already
-                # refused a template that rendered to None.
-                calls_per_sec = _parallel_int("calls_per_sec", parallel_config.calls_per_sec) if parallel_config.calls_per_sec is not None else None
-                max_rate_limit_delay = _parallel_number("max_rate_limit_delay", parallel_config.max_rate_limit_delay)
-                limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec is not None else None
 
                 workers = min(max_concurrency, total)
                 cancel = _PoolCancel()
@@ -1276,7 +1514,7 @@ class Carrier:
                 try:
                     with ThreadPoolExecutor(max_workers=workers) as executor:
                         for idx, iter_vars in enumerate(iteration_substitutions):
-                            future = executor.submit(cls._run_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel, idx)
+                            future = executor.submit(cls._run_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel, idx, retry)
                             futures[future] = idx
 
                         try:
@@ -1292,7 +1530,7 @@ class Carrier:
                                         # Another iteration ended the stage first:
                                         # its outcome, still to be read, is the one
                                         # to report.
-                                        _fold_in_secondary(idx, e, results, exit_errors)
+                                        _fold_in_secondary(idx, e, results, exit_errors, secondary)
                                         continue
                                     if not isinstance(e, _STAGE_FAILURE_EXCEPTIONS):
                                         # A user function's skip, xfail or pytest.fail().
@@ -1310,7 +1548,14 @@ class Carrier:
                             raise
                 finally:
                     # Leaving the pool waited for the iterations still running.
-                    cls._fold_in_unread(futures, read, results, exit_errors)
+                    cls._fold_in_unread(futures, read, results, exit_errors, secondary)
+        except (pytest.skip.Exception, pytest.fail.Exception) as outcome:
+            # A user function's outcome that ended the stage, once the
+            # iterations still running were taken in: what the others sent
+            # went on the wire too, and the stage records the outcome's.
+            if secondary is not None:
+                _note_outcome_exchanges(outcome, [*(exchange for r in results if r is not None for exchange in _result_exchanges(r)), *secondary])
+            raise
         finally:
             # Every Limiter owns a daemon thread that lives until closed.
             if limiter is not None:
@@ -1324,13 +1569,15 @@ class Carrier:
         read: set[int],
         results: list[IterationResult | None],
         exit_errors: list[str],
+        exchanges: list[Exchange] | None = None,
     ) -> None:
         """Take in the iterations whose results the pool's loop did not read:
         those still running when one failed the stage (or skipped it, or the
         run was interrupted), which ended once the pool shut down.
 
         Their requests hit the wire, so each success is folded into
-        ``results`` for the HAR; each failure is secondary (`_fold_in_secondary`).
+        ``results`` for the HAR; each failure is secondary (`_fold_in_secondary`),
+        what it sent going on ``exchanges``.
         An interrupt one of them raised on exit still stops the run, once
         every other one is taken in: pytest.exit()'s, an Exception, was taken
         for a failure and dropped, and a KeyboardInterrupt left the rest's
@@ -1346,7 +1593,7 @@ class Carrier:
                 if interrupt is None:
                     interrupt = e
             except (Exception, pytest.skip.Exception, pytest.fail.Exception) as e:
-                _fold_in_secondary(idx, e, results, exit_errors)
+                _fold_in_secondary(idx, e, results, exit_errors, exchanges)
         if interrupt is not None:
             raise interrupt
 
@@ -1403,9 +1650,10 @@ class Carrier:
         max_rate_limit_delay: float = 60,
         cancel: _PoolCancel | None = None,
         idx: int = 0,
+        retry: _RetryPolicy = _NO_RETRY,
     ) -> IterationResult:
-        """Execute one iteration, then exit the context managers it entered,
-        in the thread that ran it.
+        """Execute one iteration, its every attempt (`_execute_attempts`), then
+        exit the context managers it entered, in the thread that ran it.
 
         A parallel stage's iteration runs in a pool worker, and a thread-bound
         context manager (a ``sqlite3`` connection) can only be exited there;
@@ -1413,6 +1661,13 @@ class Carrier:
         transaction, a pooled connection) to the iterations still running. An
         exit error fails the iteration like any failure (an `_IterationExitError`,
         which keeps its exchange).
+
+        What the attempts of a ``retry`` enter is exited once the last one is
+        done, not attempt by attempt: an exit is not told whether the attempt
+        failed, so exiting early could not undo a failed attempt any better,
+        and an exit error would then have to fail an iteration whose next
+        attempt might pass, or go unreported. What an iteration enters, it
+        exits when it ends.
 
         Iteration ``idx`` of a parallel stage that does not succeed cancels the
         rest of the pool itself (`_PoolCancel.claim`), and before its exits
@@ -1424,7 +1679,7 @@ class Carrier:
         token = _ITERATION_CONTEXT_MANAGERS.set(entered)
         try:
             try:
-                result = cls._execute_single_iteration(stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel)
+                result = cls._execute_attempts(stage, local_context, iter_vars, retry, limiter, max_rate_limit_delay, cancel)
             except BaseException as e:
                 if cancel is not None:
                     cancel.claim(idx)
@@ -1446,6 +1701,68 @@ class Carrier:
             _ITERATION_CONTEXT_MANAGERS.reset(token)
 
     @classmethod
+    def _execute_attempts(
+        cls,
+        stage: Stage,
+        local_context: ChainMap[str, Any],
+        iter_vars: Mapping[str, Any],
+        retry: _RetryPolicy,
+        limiter: Limiter | None = None,
+        max_rate_limit_delay: float = 60,
+        cancel: threading.Event | None = None,
+    ) -> IterationResult:
+        """Make an iteration's attempts: the first, and after each that fails
+        in a way ``retry`` retries (`_RetryPolicy.retries`), a wait of its
+        schedule and another, until one succeeds or none is left.
+
+        Each attempt is `_execute_single_iteration` whole: it renders the
+        request anew (a fresh ``uuid4()``), takes a rate-limit slot, sends,
+        and runs every response step in an iteration context of its own, so a
+        failed attempt's saves go with it. The iteration ends as its last
+        attempt did, a failure saying how many attempts ran (`_after_attempts`).
+        A failure no attempt could change (a template, a validation error, a
+        user function that crashed) ends it at once, and so does a user
+        function's pytest outcome, carrying the earlier attempts' exchanges
+        (`_outcome_after_attempts`). A wait ends early when ``cancel`` is set,
+        and the iteration then fails as cancelled, carrying its attempts'
+        exchanges as any failure after the first attempt does.
+
+        The earlier attempts' exchanges are kept for the HAR file only when it
+        records every exchange: they are real traffic, but an ordinary run
+        must not hold a response per attempt.
+        """
+        earlier: list[Exchange] = []
+        waits = retry.waits()
+        attempt = 1
+        while True:
+            try:
+                result = cls._execute_single_iteration(stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel)
+            except _STAGE_FAILURE_EXCEPTIONS as e:
+                failure = e
+            except (pytest.skip.Exception, pytest.fail.Exception) as e:
+                # A user function ended the stage, which no attempt retries.
+                if attempt > 1:
+                    _outcome_after_attempts(e, attempt, tuple(earlier))
+                raise
+            else:
+                return replace(result, attempt=attempt, earlier_exchanges=tuple(earlier)) if attempt > 1 else result
+            # Outside the handler: the failure raised is the attempt's own, with
+            # nothing handled behind it.
+            if not (retry.retries(failure) and (wait := next(waits, None)) is not None):
+                raise failure if attempt == 1 else _after_attempts(failure, attempt, tuple(earlier))
+            if cls.record_all_exchanges and failure.request is not None:
+                earlier.extend(_wire_exchanges(failure.request, failure.response, failure.started))
+            logger.info("Stage '%s': attempt %d of %d failed, next in %gs: %s", stage.name, attempt, retry.attempts, wait, str(failure).partition("\n")[0])
+            if not _wait_to_retry(wait, cancel):
+                # Secondary to the stage's failure, whose message is the one
+                # shown, but with the attempts made, which went on the wire:
+                # the stage folds them into the HAR file (`_fold_in_secondary`).
+                cancelled = RequestError("Iteration cancelled while waiting to retry: the stage already failed")
+                cancelled.earlier_exchanges = tuple(earlier)
+                raise cancelled
+            attempt += 1
+
+    @classmethod
     def _execute_single_iteration(
         cls,
         stage: Stage,
@@ -1455,8 +1772,9 @@ class Carrier:
         max_rate_limit_delay: float = 60,
         cancel: threading.Event | None = None,
     ) -> IterationResult:
-        """Resolve the request against the iteration context, take a rate-limit
-        slot, send it, and run the response steps in order.
+        """One attempt of an iteration: resolve the request against the
+        iteration context, take a rate-limit slot, send it, and run the
+        response steps in order.
 
         ``cancel`` is the pool-wide cancellation signal: once another iteration
         fails (or the run is interrupted), in-flight iterations stop before
@@ -1518,7 +1836,8 @@ class Carrier:
                             except ScenarioValidationWarning as promoted:
                                 # Promoted by filterwarnings=error: convert it to
                                 # a stage failure so reporting and abort engage.
-                                raise SaveError(str(promoted)) from None
+                                # The scenario's own, which no attempt changes.
+                                raise SaveError(str(promoted), retryable=False) from None
                         iter_context = with_saves(iter_context, step_saved)
                         saved_context.update(step_saved)
 
@@ -1537,6 +1856,11 @@ class Carrier:
             raise
         except (TemplatesError, ValidationError) as e:
             raise StageExecutionError(str(e), request=response.request, response=response, started=started) from e
+        except (pytest.skip.Exception, pytest.fail.Exception) as e:
+            # A user function's skip, xfail or fail(): the request it answered
+            # went on the wire.
+            _note_outcome_exchanges(e, _wire_exchanges(response.request, response, started))
+            raise
 
         return IterationResult(
             saved_context=saved_context,

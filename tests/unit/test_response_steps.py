@@ -17,7 +17,7 @@ import pytest
 
 from pytest_httpchain.body_schema import ReferenceBounds
 from pytest_httpchain.errors import SaveError, VerificationError
-from pytest_httpchain.models import JSON_TYPE_NAMES, JMESPathSave, RegexSave, Verify
+from pytest_httpchain.models import JSON_TYPE_NAMES, JMESPathSave, RegexSave, SubstitutionsSave, UserFunctionsSave, Verify
 from pytest_httpchain.models.entities import ResponseBody
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
 from pytest_httpchain.response_steps import RenderFailure, RenderOutcome, is_json_type, process_save, process_verify
@@ -1520,6 +1520,90 @@ class TestRender:
             process_verify(Verify(status=200), httpx.Response(200), render=_renderer({("status",): RenderFailure(error)}))
         assert str(excinfo.value) == "KeyError in expression"
         assert excinfo.value.__cause__ is cause
+
+
+class TestRetryable:
+    """Whether a stage's ``retry`` may attempt the stage again after the
+    step's failure: after its checks failed on this response, not after one
+    of the scenario's own failures, which the next attempt would repeat (a
+    value that did not render or rendered one its check cannot take, a body
+    schema that cannot be read, a user function that cannot be called or
+    crashed), nor after a function ended it with pytest.fail()."""
+
+    # Each schema file a row names, in the scenario's directory.
+    SCHEMA_FILES = {"job.json": {"components": {"Job": {"type": "object", "required": ["id"]}}}, "invalid.json": {"type": "strin"}}
+
+    @pytest.mark.parametrize(
+        ("verify", "rendered", "retryable"),
+        [
+            pytest.param({"status": 201}, {}, True, id="check"),
+            pytest.param({"user_functions": [f"{HELPERS}:returns_false"]}, {}, True, id="function-returned-false"),
+            # A function's result on this response, however wrong its type.
+            pytest.param({"user_functions": [f"{HELPERS}:returns_none"]}, {}, True, id="function-returned-non-bool"),
+            # What a function raises to say "not yet", as a failed check does.
+            pytest.param({"user_functions": [f"{HELPERS}:not_done_yet"]}, {}, True, id="function-raised-verification-error"),
+            pytest.param({"user_functions": [f"{HELPERS}:not_done_ever"]}, {}, False, id="function-raised-unretryable-verification-error"),
+            # A crash, and a function that cannot be called: every attempt alike.
+            pytest.param({"user_functions": [f"{HELPERS}:raises"]}, {}, False, id="function-crashed"),
+            pytest.param({"user_functions": [f"{HELPERS}:no_such_function"]}, {}, False, id="function-not-found"),
+            pytest.param({"user_functions": ["no_such_module_xyz:check"]}, {}, False, id="module-not-importable"),
+            pytest.param({"user_functions": [f"{HELPERS}:EVENTS"]}, {}, False, id="function-not-callable"),
+            # One unretryable failure is enough, among checks that failed.
+            pytest.param({"status": 201, "user_functions": [f"{HELPERS}:raises"]}, {}, False, id="function-crashed-among-check-failures"),
+            pytest.param({"status": 200}, {("status",): _cannot_render("cannot render status")}, False, id="value-did-not-render"),
+            pytest.param({"status": 201, "headers": {"A": "1"}}, {("headers", "A"): _cannot_render("cannot render A")}, False, id="value-did-not-render-among-check-failures"),
+            # Rendered to template text, which its check cannot take.
+            pytest.param({"status": "{{ x }}"}, {}, False, id="status-must-resolve"),
+            pytest.param({"headers": {"A": {"matches": "{{ ( }}"}}}, {}, False, id="header-pattern-must-resolve"),
+            pytest.param({"body": {"not_matches": ["{{ p }}"]}}, {("body", "not_matches", 0): "("}, False, id="body-pattern-must-resolve"),
+            pytest.param({"jmespath": {"n": {"gt": "{{ x }}"}}}, {}, False, id="matcher-operand-must-resolve"),
+            pytest.param({"status": 201, "jmespath": {"n": {"length": "{{ x }}"}}}, {}, False, id="matcher-operand-must-resolve-among-check-failures"),
+            pytest.param({"body": {"schema": "{{ x }}"}}, {}, False, id="schema-must-resolve"),
+            # Listed with the failure before it, not raised as itself.
+            pytest.param({"status": 201, "expressions": ["{{ x }}"]}, {("expressions", 0): _outcome(lambda: pytest.fail("no"))}, False, id="template-called-fail"),
+            pytest.param({"status": 201, "user_functions": [f"{HELPERS}:fails"]}, {}, False, id="function-called-fail"),
+            # The body failing its schema is this response's; the schema
+            # itself failing to be read is the scenario's.
+            pytest.param({"body": {"schema": "job.json#/components/Job"}}, {}, True, id="body-fails-schema"),
+            pytest.param({"body": {"schema": "missing.json"}}, {}, False, id="schema-file-missing"),
+            pytest.param({"body": {"schema": "job.json#/components/Nobody"}}, {}, False, id="schema-pointer-leads-nowhere"),
+            pytest.param({"body": {"schema": "invalid.json"}}, {}, False, id="schema-file-invalid"),
+            pytest.param({"body": {"schema": {"$ref": "missing.json"}}}, {}, False, id="schema-reference-unresolvable"),
+            pytest.param({"body": {"schema": {"$ref": "invalid.json"}}}, {}, False, id="schema-reference-invalid"),
+        ],
+    )
+    def test_verify(self, tmp_path, verify, rendered, retryable):
+        for name, schema in self.SCHEMA_FILES.items():
+            (tmp_path / name).write_text(json.dumps(schema))
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(Verify.model_validate(verify), httpx.Response(200, json={"n": 1}), scenario_dir=tmp_path, render=_renderer(rendered))
+        assert excinfo.value.retryable is retryable
+
+    @pytest.mark.parametrize(
+        ("save", "response", "retryable"),
+        [
+            pytest.param(JMESPathSave(jmespath={"id": "id"}), httpx.Response(502, text="<html>Bad Gateway</html>"), True, id="body-not-json"),
+            pytest.param(JMESPathSave(jmespath={"n": "length(id)"}), httpx.Response(200, json={"id": 5}), True, id="expression-fails-on-this-body"),
+            pytest.param(RegexSave(regex={"token": "token=(\\w+)"}), httpx.Response(200, text="pending"), True, id="regex-does-not-match"),
+            # Rendered to what the step cannot use, as a value that does not validate.
+            pytest.param(RegexSave.model_validate({"regex": {"token": "{{ ( }}"}}), httpx.Response(200, text="pending"), False, id="pattern-must-resolve"),
+            pytest.param(RegexSave.model_validate({"regex": {"token": {"pattern": "(a)", "group": "{{ y }}"}}}), httpx.Response(200, text="a"), False, id="group-must-resolve"),
+            pytest.param(RegexSave.model_validate({"regex": {"token": {"pattern": "(a)", "all": "{{ y }}"}}}), httpx.Response(200, text="a"), False, id="all-must-resolve"),
+            pytest.param(RegexSave.model_validate({"regex": {"token": {"pattern": "{{ '(a)' }}", "group": 2}}}), httpx.Response(200, text="a"), False, id="group-not-in-pattern"),
+            pytest.param(
+                SubstitutionsSave.model_validate({"substitutions": [{"vars": {"x": "{{ missing }}"}}]}), httpx.Response(200, json={}), False, id="substitution-did-not-render"
+            ),
+            pytest.param(UserFunctionsSave(user_functions=[f"{HELPERS}:not_saved_yet"]), httpx.Response(200, json={}), True, id="function-raised-save-error"),
+            pytest.param(UserFunctionsSave(user_functions=[f"{HELPERS}:returns_none"]), httpx.Response(200, json={}), True, id="function-returned-non-dict"),
+            pytest.param(UserFunctionsSave(user_functions=[f"{HELPERS}:raises"]), httpx.Response(200, json={}), False, id="function-crashed"),
+            pytest.param(UserFunctionsSave(user_functions=[f"{HELPERS}:no_such_function"]), httpx.Response(200, json={}), False, id="function-not-found"),
+            pytest.param(UserFunctionsSave(user_functions=["no_such_module_xyz:extract"]), httpx.Response(200, json={}), False, id="module-not-importable"),
+        ],
+    )
+    def test_save(self, save, response, retryable):
+        with pytest.raises(SaveError) as excinfo:
+            process_save(save, response, ChainMap())
+        assert excinfo.value.retryable is retryable
 
 
 @pytest.mark.parametrize(

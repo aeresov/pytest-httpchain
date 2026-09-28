@@ -1204,6 +1204,56 @@ ParallelConfig = Annotated[
 ]
 
 
+# The failures a stage's `retry` can make another attempt after, by the
+# response step or the request that failed (`RetryConfig.on`).
+RetryOn = Literal["verify", "save", "request"]
+RETRY_ON: tuple[RetryOn, ...] = ("verify", "save", "request")
+
+
+def _refuse_bool(v: Any) -> Any:
+    """A retry setting written or rendered as true or false, refused ahead of
+    its union. The number branches take a bool as 1 (pydantic's lax mode), so
+    `"attempts": true`, or `"{{ poll }}"` rendering a flag, would attempt once
+    and turn retry off without a word, and `"delay": true` wait a second. The
+    JSON Schema's integer and number refuse a boolean already."""
+    if isinstance(v, bool):
+        raise ValueError(f"A retry setting is a number or a template, got {str(v).lower()}")
+    return v
+
+
+# A retry's attempts, seconds and backoff factor. The seconds and the factor
+# are finite, as the carrier resolves them (`_setting_number`), so what it
+# refuses the model refuses at load: JSON's 1e999 reads as inf, which float
+# takes by default. None of them takes a bool (`_refuse_bool`).
+_RetryAttempts = Annotated[PositiveInt | NumberOrTemplate, BeforeValidator(_refuse_bool)]
+_RetrySeconds = Annotated[Annotated[float, Field(ge=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool)]
+_RetryFactor = Annotated[Annotated[float, Field(ge=1, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool)]
+
+
+class RetryConfig(StrictModel):
+    """Attempt the stage again when it fails: poll until the response steps pass, or ride out a failing network."""
+
+    attempts: _RetryAttempts = Field(
+        description="Attempts in all, the first included: 1 attempts once, as without retry.",
+        examples=[10, "{{ max_polls }}"],
+    )
+    delay: _RetrySeconds = Field(default=1.0, description="Seconds to wait before the second attempt.")
+    backoff: _RetryFactor = Field(
+        default=1.0,
+        description="What the wait is multiplied by after each attempt: 2 doubles it. 1 waits delay seconds every time.",
+    )
+    max_delay: _RetrySeconds | None = Field(default=None, description="Seconds a single wait lasts at most; null for no limit.")
+    on: RetryOn | Annotated[list[RetryOn], Field(min_length=1)] = Field(
+        default=list(RETRY_ON),
+        description=(
+            "The failures that make another attempt: a verify step's checks (verify), a save step's extraction (save), "
+            "the request timing out or its connection failing (request). The scenario's own failures are never retried: "
+            "a template that fails to render, a user function that cannot be called or crashes, a body schema that cannot be read."
+        ),
+        examples=["verify", ["verify", "save"]],
+    )
+
+
 class Stage(Marked, Fixtured, Descripted):
     name: str = Field(default="", description="Stage name (human-readable).")
     substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")
@@ -1222,6 +1272,11 @@ class Stage(Marked, Fixtured, Descripted):
     )
     parametrize: Parameters | None = Field(default=None, description="Stage parametrization steps")
     parallel: ParallelConfig | None = Field(default=None, description="Parallel execution configuration for load/stress testing.")
+    retry: RetryConfig | None = Field(
+        default=None,
+        description="Attempt the stage again while it fails, after a wait: each attempt renders and sends the request anew and runs every response step. "
+        "With parallel, each iteration retries on its own.",
+    )
     request: Request = Field(description="HTTP request details.")
     response: Responses = Field(default_factory=list, description="Sequential steps to process the response.")
 

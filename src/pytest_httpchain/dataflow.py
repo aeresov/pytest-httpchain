@@ -117,6 +117,7 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
 
         consumes |= _consumed(extract_template_variables(raw.get("skip_if"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
         consumes |= _consumed(extract_template_variables(raw.get("parallel"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
+        consumes |= _consumed(extract_template_variables(raw.get("retry"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
         consumes |= _consumed(extract_template_variables(raw.get("request"), defined=defined), scope.earlier_saves, scope.request_shadows)
         # Response steps resolve in order, each save layering its names over the
         # context (the runtime's per-step with_saves): once a step re-saves a

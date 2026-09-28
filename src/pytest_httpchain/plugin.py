@@ -708,8 +708,9 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
         # than presenting it as the stage's only exchange. A failure that
         # never recorded a request (template error, rate-limit timeout)
         # shows the last COMPLETED iteration, which must not be labeled as
-        # the failing one.
-        suffix = ""
+        # the failing one. Likewise a retried stage shows its last attempt,
+        # the others being in the HAR output.
+        details: list[str] = []
         if carrier_class.last_iterations_attempted > 1:
             if carrier_class.last_shown_exchange_is_failed:
                 shown = "failing"
@@ -717,7 +718,10 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
                 shown = "last completed"
             else:
                 shown = "last"
-            suffix = f" ({shown} of {carrier_class.last_iterations_attempted} parallel iterations)"
+            details.append(f"{shown} of {carrier_class.last_iterations_attempted} parallel iterations")
+        if (attempt := carrier_class.last_shown_attempt) is not None:
+            details.append(f"attempt {attempt[0]} of {attempt[1]}")
+        suffix = f" ({', '.join(details)})" if details else ""
 
         # The shown request is the final hop's, which may differ from what
         # the stage authored; the full chain is in the HAR output.

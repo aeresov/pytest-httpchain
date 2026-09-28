@@ -100,15 +100,20 @@ def is_inline_schema_position(path: tuple[str | int, ...]) -> bool:
 
 def is_alternatives_position(path: tuple[str | int, ...]) -> bool:
     """True for raw-JSON positions whose list holds alternatives, any one of
-    which passes: ``verify.status`` (one half of the loader's ``atomic``
+    which passes: ``verify.status``, and a stage's ``retry.on``, any one of
+    whose kinds makes another attempt (one half of the loader's ``atomic``
     predicate, `merges_whole`).
 
     Everywhere else a longer list checks more, so a sibling list merged onto a
     fragment's is concatenated. Here concatenation would widen the check: a
-    sibling ``[404]`` on a fragment's ``["2xx"]`` would pass a 200. The value
-    merges as a whole instead, as a scalar does: equal keeps, different is a
-    merge conflict.
+    sibling ``[404]`` on a fragment's ``["2xx"]`` would pass a 200, and a
+    sibling ``["request"]`` written to narrow a shared ``["verify"]`` would
+    resend a request that timed out. The value merges as a whole instead, as a
+    scalar does: equal keeps, different is a merge conflict.
     """
+    match path:
+        case ("stages", _, "retry", "on"):
+            return True
     return _verify_subpath(path) == ("status",)
 
 

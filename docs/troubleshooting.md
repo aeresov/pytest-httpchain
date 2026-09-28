@@ -183,7 +183,7 @@ curl -X POST 'https://api.example.com/users?access_token=[REDACTED]' \
 -   The scenario's `ssl` settings are not part of the request, so the command has none: add `-k` for `"verify": false`, `--cacert` for a CA bundle, `--cert`/`--key` for a client certificate. Nor does it pin the HTTP version; curl negotiates its own.
 -   Nor is the scenario's `client.proxy`: the command connects directly, or through the proxy curl's own environment variables (`https_proxy`, `http_proxy`) name. For an API reachable only through the proxy, add `-x <proxy url>`.
 -   A [digest-authenticated](usage/requests.md#authentication) request's `Authorization` answered one challenge, with its one-time nonce, so it cannot be sent again: the command leaves it out, and the comment says to add `--digest -u 'user:password'`, which answers a new challenge. A basic or bearer `Authorization` is sent (as `[REDACTED]` to fill in, while redacted).
--   For a parallel stage or a followed redirect, the command is for the request the section's title names (`(failing of 3 parallel iterations)`, `(after 1 redirect)`), like the `HTTP Request` section's.
+-   For a parallel stage, a [retried](advanced/retry.md) stage or a followed redirect, the command is for the request the section's title names (`(failing of 3 parallel iterations)`, `(attempt 3 of 10)`, `(after 1 redirect)`), like the `HTTP Request` section's.
 
 ### `[REDACTED]` in a Report
 

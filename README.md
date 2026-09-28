@@ -38,6 +38,10 @@ Reuse arbitrary parts of your scenarios with JSONRef. Properties merge with type
 
 Each scenario contains 1+ stages executed in order. One stage failure stops the chain. Use `always_run` for cleanup stages that should execute regardless, and `skip_if` to skip a stage on a condition known only once the chain is running, such as a value an earlier stage saved.
 
+### Retries and polling
+
+A stage's `retry` attempts it again while it fails, after a wait that can grow each time: poll an asynchronous job until it reports `done`, or ride out eventual consistency and a flaky network (`"retry": {"attempts": 10, "delay": 0.5, "backoff": 2}`). Each attempt sends a freshly rendered request and runs every response step; only the attempt that passes saves anything.
+
 ### Common data context
 
 A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use template expressions (`{{ var }}`) in any request **value** — substitution happens dynamically before each stage. (Dict keys are not substituted; `HTTPCHAIN029` flags a template in a key.) Built-in functions give the values tests keep needing without a fixture: the time (`now()`, `timestamp()`), base64, JSON and URL encoding, and SHA-256, MD5 and HMAC-SHA256 digests for signing a request.

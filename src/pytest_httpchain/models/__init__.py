@@ -8,6 +8,7 @@ Key models:
 - Scenario: Root model representing a complete test scenario
 - ClientConfig: The scenario's shared HTTP client (base URL, default headers, pool)
 - Stage: Individual test stage with request and response processing
+- RetryConfig: a stage's attempts after a failure (polling, flaky networks)
 - Request: HTTP request configuration (method, URL, headers, body, auth)
 - Auth: authentication, built in (basic, digest, bearer) or a user function
 - Verify: Response verification rules (status, headers, JMESPath, body, expressions)
@@ -15,6 +16,7 @@ Key models:
 """
 
 from pytest_httpchain.models.entities import (
+    RETRY_ON,
     Auth,
     AuthCredentials,
     Base64Body,
@@ -53,6 +55,8 @@ from pytest_httpchain.models.entities import (
     ResponseBody,
     Responses,
     ResponseStep,
+    RetryConfig,
+    RetryOn,
     Save,
     SaveStep,
     Scenario,
@@ -93,6 +97,9 @@ __all__ = [
     "ParallelConfigBase",
     "ParallelForeachConfig",
     "ParallelRepeatConfig",
+    "RETRY_ON",
+    "RetryConfig",
+    "RetryOn",
     "Parameters",
     "Parameter",
     "CombinationsParameter",

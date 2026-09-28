@@ -289,6 +289,15 @@ def test_uncalled_helper_in_text_never_rendered_is_not_reported(stage):
             "and one that renders to a function fails the stage. Write env(...)",
             id="stage",
         ),
+        # retry renders with the parallel config, before any request.
+        pytest.param(
+            {},
+            {"retry": {"attempts": 3, "delay": "{{ rand }}"}},
+            "stages[0].retry",
+            "Stage 's': retry uses the built-in function 'rand' without calling it: the template gets the function itself, not its value, "
+            "and one that renders to a function fails the stage. Write rand()",
+            id="retry",
+        ),
         # Parametrize values render at collection, scenario-level templates at
         # scenario initialization: a refusal there fails that.
         pytest.param(
@@ -359,6 +368,7 @@ READ_TOKEN = "https://x.test/{{ token }}"
         pytest.param({"substitutions": [{"vars": {"t": "{{ token }}"}}]}, "stages[1].substitutions", id="substitutions"),
         pytest.param({"skip_if": "{{ token == '' }}"}, "stages[1].skip_if", id="skip-if"),
         pytest.param({"parallel": {"repeat": 2, "max_concurrency": "{{ token }}"}}, "stages[1].parallel", id="parallel"),
+        pytest.param({"retry": {"attempts": 2, "delay": "{{ token }}"}}, "stages[1].retry", id="retry"),
         pytest.param({"response": [{"verify": {"expressions": ["{{ token != '' }}"]}}]}, "stages[1].response", id="response"),
     ],
 )

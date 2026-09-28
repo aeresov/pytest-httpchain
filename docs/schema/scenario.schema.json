@@ -2286,6 +2286,163 @@
       ],
       "title": "ResponseBody"
     },
+    "RetryConfig": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempts": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    }
+                  ],
+                  "examples": [
+                    10,
+                    "{{ max_polls }}"
+                  ]
+                }
+              ],
+              "title": "Attempts",
+              "description": "Attempts in all, the first included: 1 attempts once, as without retry."
+            },
+            "delay": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    }
+                  ],
+                  "default": 1.0
+                }
+              ],
+              "title": "Delay",
+              "description": "Seconds to wait before the second attempt."
+            },
+            "backoff": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "minimum": 1,
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    }
+                  ],
+                  "default": 1.0
+                }
+              ],
+              "title": "Backoff",
+              "description": "What the wait is multiplied by after each attempt: 2 doubles it. 1 waits delay seconds every time."
+            },
+            "max_delay": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Max Delay",
+              "description": "Seconds a single wait lasts at most; null for no limit."
+            },
+            "on": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "verify",
+                        "save",
+                        "request"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "verify",
+                          "save",
+                          "request"
+                        ],
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  ],
+                  "default": [
+                    "verify",
+                    "save",
+                    "request"
+                  ],
+                  "examples": [
+                    "verify",
+                    [
+                      "verify",
+                      "save"
+                    ]
+                  ]
+                }
+              ],
+              "title": "On",
+              "description": "The failures that make another attempt: a verify step's checks (verify), a save step's extraction (save), the request timing out or its connection failing (request). The scenario's own failures are never retried: a template that fails to render, a user function that cannot be called or crashes, a body schema that cannot be read."
+            }
+          },
+          "required": [
+            "attempts"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "RetryConfig",
+      "description": "Attempt the stage again when it fails: poll until the response steps pass, or ride out a failing network."
+    },
     "SSLConfig": {
       "anyOf": [
         {
@@ -2671,6 +2828,18 @@
               "default": null,
               "description": "Parallel execution configuration for load/stress testing.",
               "title": "Parallel"
+            },
+            "retry": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RetryConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Attempt the stage again while it fails, after a wait: each attempt renders and sends the request anew and runs every response step. With parallel, each iteration retries on its own."
             },
             "request": {
               "$ref": "#/$defs/Request",

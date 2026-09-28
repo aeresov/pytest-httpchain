@@ -47,6 +47,11 @@ _resources_lock = threading.Lock()
 _resources: dict[int, dict] = {}
 _last_resource_id = 0
 
+# What POST /jobs started, by id: how many polls each needs to be done and how
+# many it has had. Module-level like the resources, for the same reason.
+_jobs_lock = threading.Lock()
+_jobs: dict[int, dict] = {}
+
 
 def reset_server_state():
     global _counter, _arrived, _last_resource_id
@@ -57,6 +62,8 @@ def reset_server_state():
     with _resources_lock:
         _resources.clear()
         _last_resource_id = 0
+    with _jobs_lock:
+        _jobs.clear()
 
 
 @auth.verify_password
@@ -304,6 +311,34 @@ def delete_resource(resource_id: int):
         if _resources.pop(resource_id, None) is None:
             return {"error": "Resource not found"}, HTTPStatus.NOT_FOUND
     return "", HTTPStatus.NO_CONTENT
+
+
+# ============ Job Endpoints (for retry tests) ============
+
+
+@app.post("/jobs")
+def create_job():
+    """Start a job, done once polled as many times as the JSON body's ``polls``
+    says (3 by default): 202 with its id."""
+    data = request.get_json(force=True, silent=True) or {}
+    with _jobs_lock:
+        job_id = len(_jobs) + 1
+        _jobs[job_id] = {"polls": int(data.get("polls", 3)), "polled": 0}
+    return {"id": job_id, "status": "pending"}, HTTPStatus.ACCEPTED
+
+
+@app.get("/jobs/<int:job_id>")
+def poll_job(job_id: int):
+    """One poll of a job: ``pending`` until its last, ``done`` with its
+    ``result`` from then on. ``polled`` counts the polls, this one included."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return {"error": "Job not found"}, HTTPStatus.NOT_FOUND
+        job["polled"] += 1
+        polled, done = job["polled"], job["polled"] >= job["polls"]
+    body = {"id": job_id, "status": "done" if done else "pending", "polled": polled}
+    return {**body, "result": f"report-{job_id}"} if done else body, HTTPStatus.OK
 
 
 # ============ Redirect Endpoints ============

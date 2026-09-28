@@ -50,6 +50,10 @@ def _edges(flow) -> list[dict]:
         ),
         pytest.param({"parallel": {"foreach": [{"individual": {"x": [1, 2]}}], "max_concurrency": "{{ x }}"}}, ["x"], id="foreach-param-vs-parallel-config"),
         pytest.param({"parallel": {"repeat": 2, "collect_saves": "{{ x }}"}}, ["x"], id="parallel-collect-saves"),
+        # retry resolves with the parallel config: a stage substitution
+        # shadows the save there, a foreach parameter does not.
+        pytest.param({"substitutions": [{"vars": {"x": 3}}], "retry": {"attempts": "{{ x }}", "delay": "{{ y }}"}}, ["y"], id="retry"),
+        pytest.param({"parallel": {"foreach": [{"individual": {"x": [1, 2]}}]}, "retry": {"attempts": "{{ x }}"}}, ["x"], id="foreach-param-vs-retry"),
         # Substitution steps resolve in order: a PRIOR step's name shadows the
         # save for later steps, a LATER step's does not.
         pytest.param({"substitutions": [{"vars": {"x": "local"}}, {"vars": {"z": "{{ x }}"}}]}, [], id="prior-substitution-step-shadows"),

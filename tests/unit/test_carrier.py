@@ -7,6 +7,7 @@ round trip itself is the integration suite's.
 
 import contextvars
 import json
+import math
 import re
 import ssl
 import threading
@@ -53,6 +54,7 @@ from pytest_httpchain.models import (
     RegexSave,
     Request,
     ResponseBody,
+    RetryConfig,
     Scenario,
     SSLConfig,
     Stage,
@@ -1638,6 +1640,622 @@ class TestCollectSaves:
             self._run({"foreach": [{"individual": {"n": [0, 1]}}], "collect_saves": "{{ n == 0 }}"})
 
 
+# A response of the mock job the retry tests poll: pending until its
+# `done_at`-th request, done from then on.
+def _job(done_at: int) -> Callable[[int, httpx.Request], httpx.Response]:
+    def respond(n: int, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "done" if n >= done_at else "pending", "n": n})
+
+    return respond
+
+
+# What waits for a job to be done: a check that the attempt starts from a
+# context without the saves of the attempts before it, the save of the
+# response's number, the check that fails while the job is pending.
+_POLL = [
+    {"verify": {"expressions": ["{{ not exists('n') }}"]}},
+    {"save": {"jmespath": {"n": "n"}}},
+    {"verify": {"jmespath": {"status": "done"}}},
+]
+
+
+class TestRetry:
+    """A stage's ``retry``: after an attempt that fails in a way its ``on``
+    names and another attempt may change, a wait of the backoff schedule and
+    another attempt, which renders the request anew and runs every response
+    step in a fresh context, until one passes or none is left. The waits are
+    recorded, not waited (`_waits`), but where cancellation is the subject."""
+
+    @staticmethod
+    def _waits(monkeypatch) -> list[float]:
+        """The waits before each retry, recorded instead of waited."""
+        waited: list[float] = []
+
+        def wait(seconds: float, cancel: threading.Event | None) -> bool:
+            waited.append(seconds)
+            return True
+
+        monkeypatch.setattr(carrier_module, "_wait_to_retry", wait)
+        return waited
+
+    @staticmethod
+    def _run(
+        stage_fields: dict, respond: Callable[[int, httpx.Request], httpx.Response], carrier: type[Carrier] | None = None, fixtures: dict | None = None
+    ) -> tuple[type[Carrier], list[httpx.Request]]:
+        """Run a stage GETting ``http://mock/job`` unless ``stage_fields`` say
+        otherwise, answered by ``respond(n, request)`` for the n-th request,
+        on ``carrier`` (a fresh one by default). The requests sent come back
+        with the carrier, whether the stage passed or not: read them in a
+        ``finally``, or from a stage that passed."""
+        sent: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return respond(len(sent), request)
+
+        carrier = carrier if carrier is not None else _make_carrier_subclass()
+        carrier.client = httpx.Client(transport=httpx.MockTransport(handler))
+        stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/job"}, **stage_fields})
+        try:
+            carrier.execute_stage(stage, fixtures or {})
+        finally:
+            carrier.client.close()
+        return carrier, sent
+
+    @pytest.mark.parametrize(
+        ("retry", "waits"),
+        [
+            pytest.param({"attempts": 1}, [], id="one-attempt-no-wait"),
+            pytest.param({"attempts": 4}, [1.0, 1.0, 1.0], id="defaults"),
+            pytest.param({"attempts": 5, "delay": 0.5, "backoff": 2}, [0.5, 1.0, 2.0, 4.0], id="backoff"),
+            pytest.param({"attempts": 5, "delay": 1, "backoff": 3, "max_delay": 5}, [1.0, 3.0, 5.0, 5.0], id="capped"),
+            pytest.param({"attempts": 3, "delay": 0, "backoff": 2}, [0.0, 0.0], id="no-delay"),
+            pytest.param({"attempts": 3, "delay": 2, "max_delay": 0}, [0.0, 0.0], id="capped-at-zero"),
+        ],
+    )
+    def test_wait_schedule(self, retry, waits):
+        """Each wait is the one before multiplied by ``backoff``, never more
+        than ``max_delay``: one before each attempt after the first."""
+        assert list(carrier_module._retry_policy(RetryConfig.model_validate(retry)).waits()) == waits
+
+    def test_wait_schedule_past_floats_range(self):
+        """A backoff doubling a thousand times overflows to inf, which the
+        cap takes; uncapped, the wait is inf, which `_wait_to_retry` bounds."""
+        waits = list(carrier_module._retry_policy(RetryConfig(attempts=1100, delay=1, backoff=2, max_delay=60)).waits())
+        assert (len(waits), waits[:3], waits[-1]) == (1099, [1.0, 2.0, 4.0], 60.0)
+        assert list(carrier_module._retry_policy(RetryConfig(attempts=1100, delay=1, backoff=2)).waits())[-1] == math.inf
+
+    def test_polls_until_the_response_steps_pass(self, monkeypatch):
+        """Each attempt renders its request anew, a uuid4() included, and runs
+        every response step in a fresh context: the failed attempts' saves are
+        gone, and the stage commits the one that passed."""
+        waited = self._waits(monkeypatch)
+        cls, sent = self._run(
+            {"retry": {"attempts": 5, "delay": 0.5, "backoff": 2}, "request": {"url": "http://mock/job?attempt={{ uuid4() }}"}, "response": _POLL},
+            _job(done_at=3),
+        )
+        assert len(sent) == 3
+        assert len({request.url.params["attempt"] for request in sent}) == 3
+        assert waited == [0.5, 1.0]
+        assert cls.global_context["n"] == 3
+        # The report shows the attempt that passed, and says which it is.
+        assert (cls.last_response.json(), cls.last_shown_attempt) == ({"status": "done", "n": 3}, (3, 5))
+
+    def test_first_attempt_passing_waits_for_nothing(self, monkeypatch):
+        waited = self._waits(monkeypatch)
+        cls, sent = self._run({"retry": {"attempts": 5}, "response": _POLL}, _job(done_at=1))
+        assert (len(sent), waited, cls.last_shown_attempt) == (1, [], None)
+
+    def test_last_attempt_failing_fails_the_stage(self, monkeypatch):
+        """With its failure, counting the attempts, and committing nothing."""
+        self._waits(monkeypatch)
+        cls = _make_carrier_subclass()
+        with pytest.raises(pytest.fail.Exception, match=r"""^JMESPath 'status' doesn't match: expected "done", got "pending" \(after 3 attempts\)$"""):
+            self._run({"retry": {"attempts": 3}, "response": _POLL}, _job(done_at=4), carrier=cls)
+        assert "n" not in cls.global_context
+        assert (cls.last_response.json()["n"], cls.last_shown_attempt, cls.last_shown_exchange_is_failed) == (3, (3, 3), True)
+
+    @staticmethod
+    def _raise(error: Exception) -> Callable[[int, httpx.Request], httpx.Response]:
+        """Raise ``error`` for the first request, and answer the next with a done job."""
+
+        def respond(n: int, request: httpx.Request) -> httpx.Response:
+            if n == 1:
+                raise error
+            return _job(done_at=1)(n, request)
+
+        return respond
+
+    @staticmethod
+    def _answer(first: httpx.Response) -> Callable[[int, httpx.Request], httpx.Response]:
+        """Answer the first request with ``first``, and the next with a done job."""
+        return lambda n, request: first if n == 1 else _job(done_at=1)(n, request)
+
+    # The response steps each row fails on its first attempt.
+    _STATUS = [{"verify": {"status": 200}}]
+    _SAVE = [{"save": {"jmespath": {"status": "status"}}}]
+    _TEXT = httpx.Response(200, text="<html>Queued</html>")
+    _PENDING = httpx.Response(200, json={"status": "pending"})
+    _HELPERS = "tests.unit.response_steps_test_helpers"
+
+    @pytest.mark.parametrize(
+        ("on", "respond", "response"),
+        [
+            pytest.param("verify", _answer(httpx.Response(503)), _STATUS, id="verify"),
+            pytest.param(["save"], _answer(_TEXT), _SAVE, id="save-body-not-json"),
+            # One kind of several.
+            pytest.param(["verify", "save"], _answer(_TEXT), _SAVE, id="save-of-several"),
+            pytest.param("request", _raise(httpx.ConnectError("refused")), _STATUS, id="connection-refused"),
+            pytest.param("request", _raise(httpx.ReadTimeout("slow")), _STATUS, id="timeout"),
+            pytest.param("request", _raise(httpx.ReadError("reset")), _STATUS, id="connection-broken-off"),
+            pytest.param("request", _raise(httpx.RemoteProtocolError("Server disconnected without sending a response.")), _STATUS, id="server-disconnected"),
+            # A function saying "not yet" with the step's own failure.
+            pytest.param("verify", _answer(_PENDING), [{"verify": {"user_functions": [f"{_HELPERS}:done_or_not_yet"]}}], id="verify-function-raised-verification-error"),
+            pytest.param("save", _answer(_PENDING), [{"save": {"user_functions": [f"{_HELPERS}:result_or_not_yet"]}}], id="save-function-raised-save-error"),
+        ],
+    )
+    def test_retried(self, monkeypatch, on, respond, response):
+        """A failure of a kind ``on`` names: the second attempt passes."""
+        self._waits(monkeypatch)
+        _cls, sent = self._run({"retry": {"attempts": 3, "on": on}, "response": response}, respond)
+        assert len(sent) == 2
+
+    @pytest.mark.parametrize(
+        ("on", "respond", "response", "message"),
+        [
+            # A kind `on` does not name.
+            pytest.param("save", _answer(httpx.Response(503)), _STATUS, r"^Status code doesn't match: expected 200, got 503$", id="verify-not-named"),
+            pytest.param("verify", _answer(_TEXT), _SAVE, r"^Cannot extract variables, response is not valid JSON", id="save-not-named"),
+            pytest.param(["verify", "save"], _raise(httpx.ConnectError("refused")), _STATUS, r"^HTTP connection error: refused$", id="request-not-named"),
+            # A request error the next attempt would repeat, `on: request` or not.
+            pytest.param(
+                "request", _raise(httpx.LocalProtocolError("Illegal header value")), _STATUS, r"^HTTP request failed: Illegal header value$", id="request-refused-by-httpx"
+            ),
+            pytest.param("request", _raise(httpx.TooManyRedirects("Exceeded maximum allowed redirects.")), _STATUS, r"^HTTP request failed: Exceeded", id="too-many-redirects"),
+            # What auth code raised, httpx running it inside the request.
+            pytest.param("request", _raise(RuntimeError("token service down")), _STATUS, r"^Unexpected error during HTTP request: token service down$", id="auth-code-raised"),
+        ],
+    )
+    def test_not_retried(self, monkeypatch, on, respond, response, message):
+        waited = self._waits(monkeypatch)
+        sent: list[httpx.Request] = []
+
+        def counted(n: int, request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return respond(n, request)
+
+        with pytest.raises(pytest.fail.Exception, match=message):
+            self._run({"retry": {"attempts": 3, "on": on}, "response": response}, counted)
+        assert (len(sent), waited) == (1, [])
+
+    @pytest.mark.parametrize(
+        ("stage_fields", "requests", "message"),
+        [
+            # The scenario's own templates fail every attempt alike.
+            pytest.param({"request": {"url": "http://mock/{{ missing }}"}}, 0, "'missing' is not defined", id="request-template"),
+            pytest.param({"request": {"url": "http://mock/job", "timeout": "{{ gone }}"}}, 0, r"^'request\.timeout' was declared as", id="request-rendered-to-none"),
+            pytest.param(
+                {"response": [{"verify": {"status": 200, "expressions": ["{{ missing > 1 }}"]}}]},
+                1,
+                r"^2 verification checks failed:\n  1\. Status code doesn't match: expected 200, got 503\n  2\. .*'missing' is not defined",
+                id="verify-value-among-check-failures",
+            ),
+            pytest.param({"response": [{"verify": {"status": "{{ gone }}"}}]}, 1, r"^'verify\.status' was declared as", id="verify-rendered-to-none"),
+            pytest.param({"response": [{"save": {"jmespath": {"x": "{{ gone }}"}}}]}, 1, r"^2 validation errors for JMESPathSave\njmespath\.x", id="save-rendered-invalid"),
+            pytest.param(
+                {"response": [{"save": {"regex": {"x": {"pattern": "(a)", "group": "{{ gone }}"}}}}]}, 1, r"^'save\.regex\.x\.group' was declared as", id="save-rendered-to-none"
+            ),
+            pytest.param({"response": [{"save": {"jmespath": {"x": "{{ missing }}"}}}]}, 1, "'missing' is not defined", id="save-template"),
+            pytest.param(
+                {"response": [{"save": {"substitutions": [{"vars": {"x": "{{ missing }}"}}]}}]},
+                1,
+                "^Error processing substitutions: .*'missing' is not defined",
+                id="save-substitution",
+            ),
+            # Rendered to template text, which its check cannot take.
+            pytest.param({"response": [{"verify": {"status": "{{ template_text }}"}}]}, 1, r"^verify\.status must resolve to a status code", id="verify-rendered-template-text"),
+            pytest.param(
+                {"response": [{"save": {"regex": {"x": "{{ template_text }}"}}}]},
+                1,
+                r"^Error saving variable x: pattern must resolve to a regular expression",
+                id="save-rendered-template-text",
+            ),
+            # A user function that crashed, or cannot be called, fails every
+            # attempt alike: `validate --deep` reports the latter (HTTPCHAIN022).
+            pytest.param({"response": [{"verify": {"user_functions": [f"{_HELPERS}:raises"]}}]}, 1, r"^Error calling user function .*: boom$", id="verify-function-crashed"),
+            pytest.param({"response": [{"save": {"user_functions": [f"{_HELPERS}:raises"]}}]}, 1, r"^Error calling user function .*: boom$", id="save-function-crashed"),
+            pytest.param(
+                {"response": [{"verify": {"user_functions": [f"{_HELPERS}:is_done_typo"]}}]},
+                1,
+                r"^Error calling user function .*: Function 'is_done_typo' not found",
+                id="verify-function-not-found",
+            ),
+            pytest.param(
+                {"response": [{"save": {"user_functions": ["no_such_module_xyz:extract"]}}]},
+                1,
+                r"^Error calling user function .*: Failed to import module 'no_such_module_xyz'",
+                id="save-module-not-importable",
+            ),
+            # The body schema cannot be read: `validate --deep` reports it (HTTPCHAIN020).
+            pytest.param(
+                {"response": [{"verify": {"body": {"schema": "no_such_schema.json"}}}]}, 1, r"^Error reading body schema file '.*no_such_schema\.json'", id="schema-file-missing"
+            ),
+            # A pytest outcome ends the stage wherever it is raised.
+            pytest.param({"response": [{"verify": {"user_functions": [f"{_HELPERS}:fails"]}}]}, 1, "^custom check failed$", id="function-called-fail"),
+        ],
+    )
+    def test_never_retried(self, monkeypatch, stage_fields, requests, message):
+        waited = self._waits(monkeypatch)
+        sent: list[httpx.Request] = []
+
+        def respond(n: int, request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return httpx.Response(503, json={})
+
+        carrier = _make_carrier_subclass(global_context=ChainMap({"gone": None, "template_text": "{{ ( }}"}))
+        with pytest.raises(pytest.fail.Exception, match=message) as excinfo:
+            self._run({"retry": {"attempts": 3}, **stage_fields}, respond, carrier=carrier)
+        assert "attempts)" not in str(excinfo.value)
+        assert (len(sent), waited) == (requests, [])
+
+    def test_skip_is_never_retried(self, monkeypatch):
+        waited = self._waits(monkeypatch)
+        with pytest.raises(pytest.skip.Exception):
+            self._run({"retry": {"attempts": 3}, "response": [{"verify": {"user_functions": ["tests.unit.response_steps_test_helpers:skips"]}}]}, _job(done_at=1))
+        assert waited == []
+
+    def test_rate_limit_exhausted_is_not_retryable(self):
+        """Another attempt would wait as long again for a slot."""
+        limiter = Limiter(Rate(1, Duration.SECOND))
+        try:
+            assert limiter.try_acquire("api", blocking=False)
+            with pytest.raises(RequestError, match="Rate limit exceeded") as excinfo:
+                Carrier._execute_single_iteration(make_stage(), ChainMap(), {}, limiter=limiter, max_rate_limit_delay=0.05)
+            assert excinfo.value.retryable is False
+        finally:
+            limiter.close()
+
+    @pytest.mark.parametrize(
+        ("function", "outcome", "message"),
+        [
+            pytest.param("fails_once_done", pytest.fail.Exception, r"^job vanished \(after 2 attempts\)$", id="fail"),
+            # No failure: the reason is the function's, as it wrote it.
+            pytest.param("skips_once_done", pytest.skip.Exception, r"^job moved elsewhere$", id="skip"),
+            pytest.param("xfails_once_done", pytest.xfail.Exception, r"^known bug$", id="xfail"),
+        ],
+    )
+    @pytest.mark.parametrize(("record_all", "recorded"), [pytest.param(True, [1, 2], id="har"), pytest.param(False, [2], id="no-har")])
+    def test_user_function_ending_a_later_attempt(self, monkeypatch, function, outcome, message, record_all, recorded):
+        """A function's pytest.fail(), skip() or xfail() on a later attempt
+        ends the stage there, never retried, as on the first attempt. Every
+        attempt's request went on the wire, and the HAR has them all: they
+        were dropped, with the stage's only exchanges on the outcome's way out."""
+        waited = self._waits(monkeypatch)
+        cls = _make_carrier_subclass(record_all_exchanges=record_all)
+        with pytest.raises((pytest.skip.Exception, pytest.fail.Exception), match=message) as excinfo:
+            self._run({"retry": {"attempts": 5}, "response": [{"verify": {"user_functions": [f"{self._HELPERS}:{function}"]}}]}, _job(done_at=2), carrier=cls)
+        assert excinfo.type is outcome
+        assert len(waited) == 1
+        assert [response.json()["n"] for _request, response, _started in cls.last_exchanges] == recorded
+
+    def test_user_function_ending_a_later_attempt_then_an_exit_error(self, monkeypatch):
+        """What the iteration's attempts entered raising on exit fails it
+        after the outcome, which keeps its attempts' exchanges and count."""
+        self._waits(monkeypatch)
+
+        @contextmanager
+        def lease():
+            yield "l"
+            raise RuntimeError("release failed")
+
+        cls = _make_carrier_subclass(record_all_exchanges=True)
+        exit_error = "Exiting the context manager from fixture 'lease' failed: RuntimeError: release failed"
+        with pytest.raises(pytest.fail.Exception, match=rf"^job vanished \(after 2 attempts\)\n{re.escape(exit_error)}\n{re.escape(exit_error)}$"):
+            self._run(
+                {
+                    "retry": {"attempts": 5},
+                    "request": {"url": "http://mock/job?lease={{ lease() }}"},
+                    "response": [{"verify": {"user_functions": [f"{self._HELPERS}:fails_once_done"]}}],
+                },
+                _job(done_at=2),
+                carrier=cls,
+                fixtures={"lease": lease},
+            )
+        assert [response.json()["n"] for _request, response, _started in cls.last_exchanges] == [1, 2]
+
+    def test_user_function_ending_the_only_attempt_is_recorded(self):
+        """Without retry too: the request the outcome answered is in the HAR."""
+        cls = _make_carrier_subclass(record_all_exchanges=True)
+        with pytest.raises(pytest.skip.Exception, match="^not on this server$"):
+            self._run({"response": [{"verify": {"user_functions": [f"{self._HELPERS}:skips"]}}]}, _job(done_at=1), carrier=cls)
+        assert [response.json()["n"] for _request, response, _started in cls.last_exchanges] == [1]
+
+    def test_later_attempt_failing_otherwise_ends_the_iteration(self, monkeypatch):
+        """A template failing on the second attempt ends the iteration there,
+        a stage failure that counts the attempts made."""
+        self._waits(monkeypatch)
+        calls: list[int] = []
+
+        def token() -> str:
+            calls.append(1)
+            if len(calls) > 1:
+                raise RuntimeError("token expired")
+            return "t"
+
+        with pytest.raises(pytest.fail.Exception, match=r"token expired.* \(after 2 attempts\)$"):
+            self._run(
+                {"retry": {"attempts": 5}, "request": {"url": "http://mock/job?token={{ token() }}"}, "response": self._STATUS},
+                lambda n, request: httpx.Response(503),
+                fixtures={"token": token},
+            )
+        assert len(calls) == 2
+
+    @pytest.mark.parametrize(
+        ("message", "noted"),
+        [
+            pytest.param("Status code doesn't match: expected 200, got 503", "Status code doesn't match: expected 200, got 503 (after 3 attempts)", id="one-line"),
+            # Before the colon of a count of failures, on the line a parallel stage's failure quotes.
+            pytest.param("2 verification checks failed:\n  1. a\n  2. b", "2 verification checks failed (after 3 attempts):\n  1. a\n  2. b", id="several-failures"),
+            pytest.param(
+                "Body does not match schema: 'id' is required\n\nFailed validating",
+                "Body does not match schema: 'id' is required (after 3 attempts)\n\nFailed validating",
+                id="multi-line",
+            ),
+        ],
+    )
+    def test_after_attempts_message(self, message, noted):
+        error = VerificationError(message)
+        earlier = ((httpx.Request("GET", "http://mock/job"), None, None),)
+        assert carrier_module._after_attempts(error, 3, earlier) is error
+        assert (str(error), error.attempt, error.earlier_exchanges) == (noted, 3, earlier)
+
+    def test_after_attempts_of_a_template_error(self):
+        """Only a stage failure carries the attempt and the earlier exchanges."""
+        cause = TemplatesError("'token' is not defined")
+        error = carrier_module._after_attempts(cause, 2, ())
+        assert (type(error), str(error), error.__cause__, error.attempt) == (StageExecutionError, "'token' is not defined (after 2 attempts)", cause, 2)
+
+    def test_parallel_iterations_retry_each_on_its_own(self, monkeypatch):
+        """Iteration i's job is done at its i-th attempt; a job never done
+        fails its iteration once its attempts are spent, and the stage."""
+        self._waits(monkeypatch)
+        attempts: dict[str, int] = {}
+        lock = threading.Lock()
+
+        def respond(n: int, request: httpx.Request) -> httpx.Response:
+            job = request.url.path.rsplit("/", 1)[-1]
+            with lock:
+                attempts[job] = attempts.get(job, 0) + 1
+                done = job != "never" and attempts[job] >= int(job)
+            return httpx.Response(200, json={"status": "done" if done else "pending"})
+
+        stage_fields = {"retry": {"attempts": 3}, "request": {"url": "http://mock/job/{{ job }}"}, "response": [{"verify": {"jmespath": {"status": "done"}}}]}
+        self._run({**stage_fields, "parallel": {"foreach": [{"individual": {"job": ["1", "2", "3"]}}], "max_concurrency": 3}}, respond)
+        assert attempts == {"1": 1, "2": 2, "3": 3}
+
+        attempts.clear()
+        cls = _make_carrier_subclass()
+        failed = r"""^Parallel execution failed at iteration 1: JMESPath 'status' doesn't match: expected "done", got "pending" \(after 3 attempts\)$"""
+        with pytest.raises(pytest.fail.Exception, match=failed):
+            self._run({**stage_fields, "parallel": {"foreach": [{"individual": {"job": ["1", "never"]}}], "max_concurrency": 2}}, respond, carrier=cls)
+        assert attempts == {"1": 1, "never": 3}
+        assert cls.last_shown_attempt == (3, 3)
+
+    def test_wait_ends_when_cancelled(self):
+        cancel = threading.Event()
+        threading.Timer(0.05, cancel.set).start()
+        start = time.monotonic()
+        assert carrier_module._wait_to_retry(30, cancel) is False
+        assert time.monotonic() - start < 5
+        # Not cancelled: the wait runs its course.
+        assert carrier_module._wait_to_retry(0.01, threading.Event()) is True
+        assert carrier_module._wait_to_retry(0.01, None) is True
+
+    @pytest.mark.parametrize(
+        ("record_all", "har_paths"),
+        [
+            # Iteration 1's attempt went on the wire before it was cancelled,
+            # so the HAR has it, ahead of the one that failed the stage.
+            pytest.param(True, ["/job/1", "/job/0"], id="har"),
+            pytest.param(False, ["/job/0"], id="no-har"),
+        ],
+    )
+    def test_another_iteration_failing_interrupts_the_wait(self, monkeypatch, record_all, har_paths):
+        """Iteration 1 waits 30 seconds to retry; iteration 0, answered only
+        once that wait began, fails the stage, which cancels the wait: the
+        stage fails at once with iteration 0's failure, not 30 seconds later.
+        What iteration 1 sent before it was cancelled was dropped from the
+        HAR with its failure."""
+        waiting = threading.Event()
+        interrupted: list[bool] = []
+        wait = carrier_module._wait_to_retry
+
+        def recorded(seconds: float, cancel: threading.Event | None) -> bool:
+            waiting.set()
+            done = wait(seconds, cancel)
+            interrupted.append(not done)
+            return done
+
+        monkeypatch.setattr(carrier_module, "_wait_to_retry", recorded)
+
+        def respond(n: int, request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/job/0":
+                assert waiting.wait(timeout=5)
+                return httpx.Response(500, json={})
+            return httpx.Response(200, text="<html>Queued</html>")
+
+        cls = _make_carrier_subclass(record_all_exchanges=record_all)
+        start = time.monotonic()
+        with pytest.raises(pytest.fail.Exception, match=r"^Parallel execution failed at iteration 0: Status code doesn't match: expected 200, got 500$"):
+            self._run(
+                {
+                    "parallel": {"foreach": [{"individual": {"n": [0, 1]}}], "max_concurrency": 2},
+                    # A 500 is not retried, a body that is no JSON is.
+                    "retry": {"attempts": 3, "delay": 30, "on": "save"},
+                    "request": {"url": "http://mock/job/{{ n }}"},
+                    "response": [{"verify": {"status": 200}}, {"save": {"jmespath": {"status": "status"}}}],
+                },
+                respond,
+                carrier=cls,
+            )
+        assert time.monotonic() - start < 5
+        assert interrupted == [True]
+        assert [request.url.path for request, _response, _started in cls.last_exchanges] == har_paths
+
+    @pytest.mark.parametrize(
+        ("parallel", "retry", "slots"),
+        [
+            # A single iteration's only attempt needs no limiter...
+            pytest.param({"repeat": 1, "calls_per_sec": 100}, None, 0, id="one-attempt"),
+            # ...but when retried, each attempt takes a slot, the first too.
+            pytest.param({"repeat": 1, "calls_per_sec": 100}, {"attempts": 3}, 3, id="one-iteration-retried"),
+            pytest.param({"foreach": [{"individual": {"n": [0, 1]}}], "calls_per_sec": 100}, {"attempts": 3}, 6, id="each-iteration-retried"),
+        ],
+    )
+    def test_each_attempt_takes_a_rate_limit_slot(self, monkeypatch, parallel, retry, slots):
+        """Each iteration's job is done at its third attempt."""
+        self._waits(monkeypatch)
+        taken: list[int] = []
+        attempts: dict[str, int] = {}
+        lock = threading.Lock()
+
+        def acquire(limiter: Limiter, timeout: float, cancel: threading.Event | None) -> bool:
+            taken.append(1)
+            return True
+
+        def respond(n: int, request: httpx.Request) -> httpx.Response:
+            with lock:
+                attempts[request.url.path] = attempts.get(request.url.path, 0) + 1
+                return httpx.Response(200 if attempts[request.url.path] == 3 else 503)
+
+        cls = _make_carrier_subclass(_acquire_rate_slot=staticmethod(acquire))
+        stage_fields = {"parallel": parallel, "request": {"url": "http://mock/job/{{ get('n', 0) }}"}, "response": self._STATUS}
+        if retry is None:
+            with pytest.raises(pytest.fail.Exception):
+                self._run(stage_fields, respond, carrier=cls)
+        else:
+            self._run({**stage_fields, "retry": retry}, respond, carrier=cls)
+        assert len(taken) == slots
+
+    def test_context_managers_are_exited_when_the_iteration_ends(self, monkeypatch):
+        """Each attempt that calls a factory fixture enters what it returns;
+        all are exited once the last attempt is done, last entered first, not
+        attempt by attempt."""
+        self._waits(monkeypatch)
+        events: list[str] = []
+
+        @contextmanager
+        def lease(n):
+            events.append(f"enter {n}")
+            yield n
+            events.append(f"exit {n}")
+
+        def respond(n: int, request: httpx.Request) -> httpx.Response:
+            events.append(f"send {n}")
+            return httpx.Response(200 if n == 3 else 503)
+
+        leases = iter(range(1, 10))
+        self._run(
+            {"retry": {"attempts": 3}, "request": {"url": "http://mock/job?lease={{ lease(next_lease()) }}"}, "response": self._STATUS},
+            respond,
+            fixtures={"lease": lease, "next_lease": lambda: next(leases)},
+        )
+        assert events == ["enter 1", "send 1", "enter 2", "send 2", "enter 3", "send 3", "exit 3", "exit 2", "exit 1"]
+
+    @pytest.mark.parametrize(("record_all", "recorded"), [(True, [1, 2, 3]), (False, [3])])
+    def test_every_attempt_is_recorded_for_the_har(self, monkeypatch, record_all, recorded):
+        """Real traffic, each attempt's: kept only when the HAR records every
+        exchange, the last attempt's alone otherwise, as for any stage."""
+        self._waits(monkeypatch)
+        cls, _sent = self._run({"retry": {"attempts": 5}, "response": _POLL}, _job(done_at=3), carrier=_make_carrier_subclass(record_all_exchanges=record_all))
+        assert [response.json()["n"] for _request, response, _started in cls.last_exchanges] == recorded
+
+    @pytest.mark.parametrize(("record_all", "recorded"), [(True, [1, 2]), (False, [2])])
+    def test_every_attempt_of_a_failed_stage_is_recorded(self, monkeypatch, record_all, recorded):
+        self._waits(monkeypatch)
+        cls = _make_carrier_subclass(record_all_exchanges=record_all)
+        with pytest.raises(pytest.fail.Exception):
+            self._run({"retry": {"attempts": 2}, "response": _POLL}, _job(done_at=3), carrier=cls)
+        assert [response.json()["n"] for _request, response, _started in cls.last_exchanges] == recorded
+
+    def test_settings_render_in_the_stage_scope(self, monkeypatch):
+        """Against the stage's own substitutions, as the parallel config is."""
+        waited = self._waits(monkeypatch)
+        with pytest.raises(pytest.fail.Exception, match=r"\(after 3 attempts\)$"):
+            self._run(
+                {"substitutions": [{"vars": {"tries": 3, "pause": 0.25}}], "retry": {"attempts": "{{ tries }}", "delay": "{{ pause }}"}, "response": self._STATUS},
+                lambda n, request: httpx.Response(503),
+            )
+        assert waited == [0.25, 0.25]
+
+    @pytest.mark.parametrize(
+        ("retry", "message"),
+        [
+            # Template text, which the template branch takes as it is.
+            pytest.param({"attempts": "{{ value }}"}, r"^retry\.attempts must be a positive number, got '\{\{ x \}\}'$", id="attempts-template-text"),
+            pytest.param({"attempts": 2, "delay": "{{ value }}"}, r"^retry\.delay must be a number of seconds, 0 or more, got '\{\{ x \}\}'$", id="delay-template-text"),
+            pytest.param({"attempts": 2, "backoff": "{{ value }}"}, r"^retry\.backoff must be a number, 1 or more, got '\{\{ x \}\}'$", id="backoff-template-text"),
+            pytest.param(
+                {"attempts": 2, "max_delay": "{{ value }}"}, r"^retry\.max_delay must be a number of seconds, 0 or more, got '\{\{ x \}\}'$", id="max-delay-template-text"
+            ),
+        ],
+    )
+    def test_unusable_setting_fails_before_any_request(self, retry, message):
+        sent: list[httpx.Request] = []
+        carrier = _make_carrier_subclass(global_context=ChainMap({"value": "{{ x }}"}))
+        with pytest.raises(pytest.fail.Exception, match=message):
+            self._run({"retry": retry}, lambda n, request: sent.append(request) or httpx.Response(200), carrier=carrier)
+        assert sent == []
+
+    @pytest.mark.parametrize(
+        ("retry", "value", "message"),
+        [
+            # An optional setting read as never declared: no cap at all.
+            pytest.param(
+                {"attempts": 2, "max_delay": "{{ value }}"},
+                None,
+                r"^'retry\.max_delay' was declared as '\{\{ value \}\}' but rendered to None, which would silently disable it$",
+                id="max-delay-none",
+            ),
+            # Invalid there anyway: refused with the template named.
+            pytest.param({"attempts": "{{ value }}"}, None, r"^'retry\.attempts' was declared as '\{\{ value \}\}' but rendered to None$", id="attempts-none"),
+            pytest.param({"attempts": "{{ value }}"}, 0, r"validation errors? for RetryConfig\nattempts", id="attempts-zero"),
+            # A flag where a number belongs: read as 1, it would attempt once
+            # and fail on the first failure as if retry were not there.
+            pytest.param(
+                {"attempts": "{{ value }}"},
+                True,
+                r"validation error for RetryConfig\nattempts\n  Value error, A retry setting is a number or a template, got true",
+                id="attempts-bool",
+            ),
+            pytest.param(
+                {"attempts": 2, "delay": "{{ value }}"},
+                False,
+                r"validation error for RetryConfig\ndelay\n  Value error, A retry setting is a number or a template, got false",
+                id="delay-bool",
+            ),
+            pytest.param({"attempts": 2, "backoff": "{{ value }}"}, 0.5, r"validation errors? for RetryConfig\nbackoff", id="backoff-below-one"),
+            pytest.param(
+                {"attempts": 2, "max_delay": "{{ value }}"},
+                math.inf,
+                r"validation errors? for RetryConfig\nmax_delay\.constrained-float\n  Input should be a finite number",
+                id="max-delay-infinite",
+            ),
+        ],
+    )
+    def test_rendered_setting_the_stage_cannot_use(self, retry, value, message):
+        sent: list[httpx.Request] = []
+        with pytest.raises(pytest.fail.Exception, match=message):
+            self._run({"retry": retry}, lambda n, request: sent.append(request) or httpx.Response(200), carrier=_make_carrier_subclass(global_context=ChainMap({"value": value})))
+        assert sent == []
+
+    def test_foreach_parameter_is_out_of_scope(self):
+        """One schedule for the whole stage, decided before its iterations
+        exist, as the validator's HTTPCHAIN003 at ``stages[i].retry`` says."""
+        with pytest.raises(pytest.fail.Exception, match=r"'n' is not defined"):
+            self._run({"parallel": {"foreach": [{"individual": {"n": [1, 2]}}]}, "retry": {"attempts": "{{ n }}"}}, lambda n, request: httpx.Response(200))
+
+
 # What iteration 1's context manager raises on exit in the parallel stages of
 # `TestContextManagerFixtureCleanup` (a straggler's, or a cancelled one's), as the stage reports it.
 _ITERATION_1_EXIT_ERROR = "Iteration 1: Exiting the context manager from fixture 'a' failed: RuntimeError: commit of 1 rejected"
@@ -1898,17 +2516,13 @@ class TestContextManagerFixtureCleanup:
             cls.client.close()
 
     @pytest.mark.parametrize(
-        ("status", "end", "straggler_end", "message", "exchanges"),
+        ("status", "end", "straggler_end", "message"),
         [
-            # The straggler's request went on the wire, so its exchange is in
-            # the HAR, before the stage's failing one, which is recorded last
-            # for the report to show.
             pytest.param(
                 500,
                 None,
                 None,
                 f"Parallel execution failed at iteration 0: Status code doesn't match: expected 200, got 500\n{_ITERATION_1_EXIT_ERROR}",
-                ["/1?t=1", "/0?t=0"],
                 id="stage-failed",
             ),
             # The straggler's own skip, xfail or pytest.fail() is secondary to
@@ -1921,18 +2535,17 @@ class TestContextManagerFixtureCleanup:
                     None,
                     straggler_end,
                     f"Parallel execution failed at iteration 0: Status code doesn't match: expected 200, got 500\n{_ITERATION_1_EXIT_ERROR}",
-                    ["/0?t=0"],
                     id=f"stage-failed-straggler-{name}",
                 )
                 for straggler_end, name in ((pytest.skip, "skipped"), (pytest.xfail, "xfailed"), (pytest.fail, "failed"))
             ),
             # A skip is no failure, so the straggler's error on exit fails the
             # stage, as it does a skipped stage's own.
-            pytest.param(200, pytest.skip, None, _ITERATION_1_EXIT_ERROR, [], id="stage-skipped"),
+            pytest.param(200, pytest.skip, None, _ITERATION_1_EXIT_ERROR, id="stage-skipped"),
         ],
     )
     @_EITHER_READ_ORDER
-    def test_error_on_exit_of_a_straggler_is_reported(self, status, end, straggler_end, message, exchanges, straggler_read_first):
+    def test_error_on_exit_of_a_straggler_is_reported(self, status, end, straggler_end, message, straggler_read_first):
         """An iteration still running when another one ends the stage exits its
         own when it ends, and what its exit raises is listed after the stage's
         own failure, labelled with the iteration: a commit that failed is a
@@ -1940,7 +2553,13 @@ class TestContextManagerFixtureCleanup:
 
         Read before the stage's failure, while that iteration's exits still
         ran, the straggler failed on exit was taken for the stage's failure,
-        and the failure that ended the stage was dropped."""
+        and the failure that ended the stage was dropped.
+
+        Both requests went on the wire, so the HAR has both, however the
+        straggler ended and whether a failure or a skip ended the stage: the
+        straggler's first, the one of the iteration that ended the stage
+        last, for the report to show. A straggler that failed, or any
+        iteration but the one a skip ended the stage with, was left out."""
         events: list[str] = []
         cls = _make_carrier_subclass(record_all_exchanges=True)
         # Both caught, so a wrong outcome fails this test rather than skipping it.
@@ -1950,7 +2569,7 @@ class TestContextManagerFixtureCleanup:
         assert str(excinfo.value) == message
         assert sorted(events[:2]) == ["enter 0", "enter 1"]
         assert events[2:] == ["exit 0", "exit 1"]
-        assert [str(request.url).removeprefix("http://mock") for request, _, _ in cls.last_exchanges] == exchanges
+        assert [str(request.url).removeprefix("http://mock") for request, _, _ in cls.last_exchanges] == ["/1?t=1", "/0?t=0"]
 
     @pytest.mark.parametrize(
         ("straggler_status", "straggler_end"),
@@ -1970,12 +2589,14 @@ class TestContextManagerFixtureCleanup:
         one, or replaced its failure message. And read before the stage's
         failure, while the exits of the iteration that failed it still ran
         (a rollback), any such outcome was taken for the stage's, the
-        straggler's failed verification included."""
+        straggler's failed verification included. Its request went on the
+        wire, so the HAR has it, where it was left out with the failure."""
         events: list[str] = []
+        cls = _make_carrier_subclass(record_all_exchanges=True)
         # Both caught, so a wrong outcome fails this test rather than skipping it.
         with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
             self._run_with_a_straggler(
-                _make_carrier_subclass(),
+                cls,
                 events,
                 status=500,
                 straggler_status=straggler_status,
@@ -1986,6 +2607,7 @@ class TestContextManagerFixtureCleanup:
         assert excinfo.type is pytest.fail.Exception
         assert str(excinfo.value) == _ITERATION_0_FAILED
         assert events[2:] == ["exit 0", "exit 1"]
+        assert [str(request.url).removeprefix("http://mock") for request, _, _ in cls.last_exchanges] == ["/1?t=1", "/0?t=0"]
 
     @pytest.mark.parametrize(
         ("status", "exit_error", "end", "raised", "cancelled_on_exit"),

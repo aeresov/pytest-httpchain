@@ -1,0 +1,39 @@
+{
+    "description": "retry polls an asynchronous job until it is done, and keeps the saves of the attempt that passed",
+    "marks": ["usefixtures('api_root')"],
+    "client": { "base_url": "{{ env('HTTPCHAIN_EXAMPLE_API_ROOT') }}" },
+    "stages": [
+        {
+            "name": "submit",
+            "request": { "method": "POST", "url": "/jobs", "body": { "json": { "polls": 3 } } },
+            "response": [
+                { "verify": { "status": 202 } },
+                { "save": { "jmespath": { "job_id": "id" } } }
+            ]
+        },
+        {
+            "name": "wait_for_job",
+            "retry": { "attempts": 5, "delay": 0.01, "backoff": 2, "on": "verify" },
+            "request": { "url": "/jobs/{{ job_id }}", "headers": { "X-Attempt-Id": "{{ uuid4() }}" } },
+            "response": [
+                { "verify": { "expressions": ["{{ not exists('polled') }}"] } },
+                { "save": { "jmespath": { "polled": "polled", "result": "result" } } },
+                { "verify": { "status": 200, "jmespath": { "status": "done" } } }
+            ]
+        },
+        {
+            "name": "saved_by_the_last_attempt",
+            "description": "The job was polled three times, and the saves are the third poll's: the failed attempts' went with them",
+            "request": { "url": "/jobs/{{ job_id }}" },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "jmespath": { "polled": 4 },
+                        "expressions": ["{{ polled == 3 }}", "{{ result == 'report-' + str(job_id) }}"]
+                    }
+                }
+            ]
+        }
+    ]
+}

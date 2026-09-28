@@ -341,6 +341,8 @@ it saves nothing (see the notes below), so `created_ids` does not exist, and
   with `Parallel execution failed at iteration N: ...`
 - Iterations do not see one another's saves; each resolves against the stage
   context plus its own parameters
+- With a stage [`retry`](retry.md#with-parallel), each iteration makes its own
+  attempts, and each attempt takes a `calls_per_sec` slot
 - Use rate limiting to avoid overwhelming servers or hitting rate limits
 - Monitor memory usage with very high concurrency values
 

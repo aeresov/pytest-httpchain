@@ -51,6 +51,8 @@ pytest --httpchain-output-dir ./har-output
 
 Each test that performs a request writes a `.har` file under `DIR` (named from the test node id) and a "HAR File" section is added to that test's report.
 
+The file has every request the stage sent, which is real traffic whatever came of it: each iteration's of a [`parallel`](advanced/parallel.md) stage, one that failed or was cancelled after another failed the stage included, each attempt's of a stage that [retries](advanced/retry.md), and the request a user function answered with `pytest.skip()`, `pytest.xfail()` or `pytest.fail()`. The exchange the report shows comes last.
+
 A followed redirect adds an entry per hop, each with the body that request carried: a `302` or `303`, and a `301` answering a `POST`, follows up with a bodiless `GET` (a `HEAD` stays a `HEAD`); any other redirect repeats the method and re-sends the original body. When a later hop fails — its target refuses the connection or times out, or the chain exceeds the scenario's redirect limit (`client.max_redirects`, 20 by default) — httpx reports none of the hops before it, so the chain is recorded as a single entry: the failed request.
 
 A multipart (`multipart` or `files`) body is recorded as sent, the boundaries between its parts included: `postData.text` is base64-encoded (`"encoding": "base64"`) when a part is binary.
@@ -184,4 +186,5 @@ Use Jinja-style `{{ expression }}` syntax to reference context values in any req
     - Renders template expressions
     - Executes the HTTP request
     - Processes response steps (verify/save)
+    - With a `retry`, attempts the request and its response steps again after a wait while they fail
 4. If a stage fails, remaining stages are skipped (unless `always_run: true`)

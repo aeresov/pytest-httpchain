@@ -69,14 +69,15 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
             try:
                 step_saved.update(process_substitutions(save_model.substitutions, context))
             except TemplatesError as e:
-                raise SaveError(f"Error processing substitutions: {e}") from e
+                # The step's own templates: no other response changes them.
+                raise SaveError(f"Error processing substitutions: {e}", retryable=False) from e
 
         case UserFunctionsSave():
             for func_item in save_model.user_functions:
                 try:
                     func_result = call_user_function(func_item, response=response)
                 except UserFunctionError as e:
-                    raise SaveError(f"Error calling user function '{func_item}': {e}") from e
+                    raise SaveError(f"Error calling user function '{func_item}': {e}", retryable=_raised_retryable(e)) from e
 
                 if not isinstance(func_result, dict):
                     raise SaveError(f"Save function must return dict, got {type(func_result).__name__}")
@@ -102,18 +103,20 @@ def _regex_save(name: str, entry: str | RegexCapture, text: str) -> Any:
     before any match is tried so that ``all`` finding nothing cannot hide it.
     """
     pattern, group, every = (entry.pattern, entry.group, entry.all) if isinstance(entry, RegexCapture) else (entry, None, False)
+    # Each refusal is of what the step's templates rendered, as a value that
+    # does not validate is (`carrier._render_save`): not retryable.
     if not isinstance(every, bool):
-        raise SaveError(f"Error saving variable {name}: all must resolve to true or false, got {every!r}")
+        raise SaveError(f"Error saving variable {name}: all must resolve to true or false, got {every!r}", retryable=False)
     if isinstance(group, str) and not group.isidentifier():
-        raise SaveError(f"Error saving variable {name}: group must resolve to a group's number or name, got {group!r}")
+        raise SaveError(f"Error saving variable {name}: group must resolve to a group's number or name, got {group!r}", retryable=False)
     try:
         compiled = re.compile(pattern)
     except (re.error, OverflowError, RecursionError) as e:
-        raise SaveError(f"Error saving variable {name}: pattern must resolve to a regular expression, got {pattern!r} ({e})") from e
+        raise SaveError(f"Error saving variable {name}: pattern must resolve to a regular expression, got {pattern!r} ({e})", retryable=False) from e
     try:
         chosen = regex_group(compiled, group)
     except ValueError as e:
-        raise SaveError(f"Error saving variable {name}: {e}") from e
+        raise SaveError(f"Error saving variable {name}: {e}", retryable=False) from e
     if every:
         return [match.group(chosen) for match in compiled.finditer(text)]
     match = compiled.search(text)
@@ -237,8 +240,10 @@ def process_verify(
             raise outcome
         if not failures and len(ending) == 1 and (fail := ending[0][2]) is not None:
             raise fail
+        # Each a value that did not render or a pytest.fail(), neither of
+        # which a stage's retry retries.
         for message, cause, _outcome in ending:
-            failures.add(message, cause=cause)
+            failures.add(message, cause=cause, retryable=False)
         error = failures.error()
         raise error from error.__cause__
 
@@ -247,7 +252,7 @@ def process_verify(
         `_UNRENDERED` once the step has its failure to render."""
         match value := step.value(where):
             case RenderFailure(error=error):
-                failures.add(str(error), cause=error.__cause__)
+                failures.add(str(error), cause=error.__cause__, retryable=False)
                 return _UNRENDERED
             case RenderOutcome(outcome=outcome):
                 end_step(outcome, _template_at(where), where)
@@ -321,7 +326,7 @@ def process_verify(
         try:
             result = call_user_function(func_item, response=response)
         except UserFunctionError as e:
-            failures.add(f"Error calling user function '{func_item}': {e}", cause=e, listed=f"Error calling user function {named}: {e}")
+            failures.add(f"Error calling user function '{func_item}': {e}", cause=e, listed=f"Error calling user function {named}: {e}", retryable=_raised_retryable(e))
             continue
         except (pytest.skip.Exception, pytest.fail.Exception) as e:
             end_step(e, f"Function {named}", ("user_functions", i))
@@ -444,23 +449,34 @@ class _Failures:
     counted on a first line (``3 verification checks failed:``), then listed
     one numbered line each; a message of several lines (a schema error's)
     keeps its later lines, indented under its first.
+
+    The error is retryable (a stage's ``retry`` may attempt the stage again)
+    unless one of its failures is not: one of the scenario's own, which the
+    next attempt would repeat (a value that did not render, or rendered one
+    its check cannot take, an `_Unusable`; a body schema that cannot be read;
+    a user function that cannot be called, or crashed), or a pytest.fail(),
+    which ends the stage wherever it is raised.
     """
 
-    __slots__ = ("_items",)
+    __slots__ = ("_items", "_retryable")
 
     def __init__(self) -> None:
         self._items: list[tuple[str, BaseException | None, str]] = []
+        self._retryable = True
 
     def __bool__(self) -> bool:
         return bool(self._items)
 
-    def add(self, message: str | None, *, cause: BaseException | None = None, listed: str | None = None) -> None:
+    def add(self, message: str | None, *, cause: BaseException | None = None, listed: str | None = None, retryable: bool = True) -> None:
         """Record a failed check's ``message``, if any: None is a check that passed.
         ``cause`` is what the check caught, chained when the failure is the only one.
         ``listed`` is how the failure reads among several, where it differs:
-        one that must say which of several like it failed (a user function)."""
+        one that must say which of several like it failed (a user function).
+        ``retryable`` is False for a failure another attempt would not change,
+        as an `_Unusable` message is."""
         if message is not None:
             self._items.append((message, cause, message if listed is None else listed))
+            self._retryable = self._retryable and retryable and not isinstance(message, _Unusable)
 
     def extend(self, messages: Iterable[str]) -> None:
         for message in messages:
@@ -480,10 +496,33 @@ class _Failures:
                 lines.append(f"{marker}{first}")
                 lines.extend(f"{' ' * len(marker)}{line}" if line else "" for line in rest)
             message, cause = "\n".join(lines), None
-        error = VerificationError(message)
+        error = VerificationError(message, retryable=self._retryable)
         # Set even to None: that suppresses the context too.
         error.__cause__ = cause
         return error
+
+
+class _Unusable(str):
+    """A check's failure message saying the value one of the step's templates
+    rendered is not one the check can take: template text where a status, a
+    number, a JSON type, a length or a regular expression belongs, which the
+    field's template branch took as it is. It is the scenario's, as a value
+    that does not validate is, so a stage's ``retry`` does not retry the step
+    (`_Failures.add`); a prefix written onto one keeps the class.
+    """
+
+    __slots__ = ()
+
+
+def _raised_retryable(error: UserFunctionError) -> bool:
+    """Whether a verify or save function whose call failed with ``error`` may
+    pass on the next attempt: when what it raised is itself a retryable stage
+    failure, a `VerificationError` or `SaveError` the function raises to say
+    the response is not what it waits for yet. One that could not be imported
+    or found, or that raised anything else (a KeyError, a TypeError), fails
+    every attempt alike, and a crash is the function's to fix."""
+    cause = error.__cause__
+    return isinstance(cause, StageExecutionError) and cause.retryable
 
 
 def _status_failure(expected: Any, actual: int) -> str | None:
@@ -498,7 +537,7 @@ def _status_failure(expected: Any, actual: int) -> str | None:
     accepted = expected if isinstance(expected, list) else [expected]
     for entry in accepted:
         if isinstance(entry, str) and not is_status_class(entry):
-            return f"verify.status must resolve to a status code or a class such as 2xx, got {entry!r}"
+            return _Unusable(f"verify.status must resolve to a status code or a class such as 2xx, got {entry!r}")
     if any(actual // 100 == int(entry[0]) if isinstance(entry, str) else actual == entry for entry in accepted):
         return None
     shown = f"one of [{', '.join(map(str, accepted))}]" if isinstance(expected, list) else str(expected)
@@ -630,7 +669,7 @@ def _jmespath_matcher_failures(expression: str, matcher: JMESPathMatcher, actual
         if key in matcher.model_fields_set:
             failure = _matcher_failure(key, getattr(matcher, key), actual)
             if failure is not None:
-                yield f"{subject}{failure}"
+                yield type(failure)(f"{subject}{failure}")
 
 
 def _matcher_failure(key: str, operand: Any, actual: Any) -> str | None:
@@ -655,7 +694,7 @@ def _matcher_failure(key: str, operand: Any, actual: Any) -> str | None:
             return None if json_equal(actual, operand) == (key == "eq") else mismatch()
         case "gt" | "ge" | "lt" | "le":
             if not is_json_type(operand, "number"):
-                return f": {key} must resolve to a number, got {operand!r}"
+                return _Unusable(f": {key} must resolve to a number, got {operand!r}")
             if not is_json_type(actual, "number"):
                 return cannot_judge("a number")
             return None if _ORDERINGS[key](actual, operand) else mismatch()
@@ -679,15 +718,15 @@ def _matcher_failure(key: str, operand: Any, actual: Any) -> str | None:
                 # And one re cannot compile for a repeat count or a nesting too
                 # big: raised out of the step, it would take the step's other
                 # failures with it.
-                return f": {key} must resolve to a regular expression, got {operand!r} ({e})"
+                return _Unusable(f": {key} must resolve to a regular expression, got {operand!r} ({e})")
             return None if found == (key == "matches") else mismatch()
         case "type":
             if operand not in JSON_TYPE_NAMES:
-                return f": type must resolve to one of {', '.join(JSON_TYPE_NAMES)}, got {operand!r}"
+                return _Unusable(f": type must resolve to one of {', '.join(JSON_TYPE_NAMES)}, got {operand!r}")
             return None if is_json_type(actual, operand) else f" doesn't match: expected type {operand}, got {_shown(actual)} ({json_type(actual)})"
         case "length":
             if not is_json_type(operand, "integer") or operand < 0:
-                return f": length must resolve to a non-negative integer, got {operand!r}"
+                return _Unusable(f": length must resolve to a non-negative integer, got {operand!r}")
             if not isinstance(actual, str | list | dict):
                 return cannot_judge("a string, array or object")
             return None if len(actual) == operand else f" doesn't match: expected length {operand}, got {_shown(actual)} (length {len(actual)})"
@@ -759,21 +798,23 @@ def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None,
 
     Every failure to read the schema is one: a file that is not there or not
     JSON, a pointer that leads nowhere, a schema its meta-schema refuses, a
-    ``$ref`` that does not resolve, the file named, with the pointer."""
+    ``$ref`` that does not resolve, the file named, with the pointer. Each is
+    the scenario's, and not retryable: only the body failing the schema, or
+    nested too deeply to validate, is this response's."""
     if isinstance(schema, str):
         # Template text a template rendered, which the field's template
         # branch takes as it is (`_status_failure` refuses its own).
         if contains_template(schema):
-            failures.add(f"verify.body.schema must resolve to a JSON Schema or a schema file, got {schema!r}")
+            failures.add(f"verify.body.schema must resolve to a JSON Schema or a schema file, got {schema!r}", retryable=False)
             return
         file = SchemaFile.locate(schema, scenario_dir)
         try:
             body_schema = file_body_schema(file, ref_bounds)
         except SchemaFileError as e:
-            failures.add(f"Error reading body schema file '{file}': {e}", cause=e)
+            failures.add(f"Error reading body schema file '{file}': {e}", cause=e, retryable=False)
             return
         except SchemaPointerError as e:
-            failures.add(f"Body schema pointer '#{file.fragment}' leads nowhere in file '{file.path}': {e}", cause=e)
+            failures.add(f"Body schema pointer '#{file.fragment}' leads nowhere in file '{file.path}': {e}", cause=e, retryable=False)
             return
         try:
             body_schema.check()
@@ -784,7 +825,7 @@ def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None,
             # the meta-validator's own recursion on a deeply nested schema,
             # which would take the step's other failures with it. The message
             # must not recurse too (see `schema_error_text`).
-            failures.add(f"Invalid JSON Schema in file '{file}': {schema_error_text(e)}", cause=e)
+            failures.add(f"Invalid JSON Schema in file '{file}': {schema_error_text(e)}", cause=e, retryable=False)
             return
     else:
         # Already meta-checked, at model validation.
@@ -808,18 +849,18 @@ def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None,
         # be read, must fail the stage cleanly, not escape as a raw traceback
         # past the abort machinery; and in words that say what it looked for,
         # where referencing's quote a whole document.
-        failures.add(f"Cannot resolve a reference in {body_schema.where}: {body_schema.why_unresolvable(e)[0]}", cause=e)
+        failures.add(f"Cannot resolve a reference in {body_schema.where}: {body_schema.why_unresolvable(e)[0]}", cause=e, retryable=False)
     except InvalidReferencedSchema as e:
         # The schema was meta-checked, but not the ones its references reach,
         # whose keywords crash on a value their meta-schema refuses
         # (jsonschema's UnknownType for `"type": "strin"`): the reference's
         # target is meta-checked then, and named, as `validate --deep` names it.
-        failures.add(f"Cannot validate against {body_schema.where}: {e}", cause=e)
+        failures.add(f"Cannot validate against {body_schema.where}: {e}", cause=e, retryable=False)
     except Exception as e:
         # What validating against a referenced schema raises that neither its
         # meta-check nor its `$id`s account for: the meta-check ran out of the
         # stack a deep validation left it.
-        failures.add(f"Cannot validate against {body_schema.where}, a schema it references is not valid: {schema_error_text(e)}", cause=e)
+        failures.add(f"Cannot validate against {body_schema.where}, a schema it references is not valid: {schema_error_text(e)}", cause=e, retryable=False)
 
 
 def _response_json(response: httpx.Response, error: type[StageExecutionError], purpose: str) -> Any:
@@ -896,7 +937,7 @@ def text_matcher_failures(
             except (re.error, OverflowError, RecursionError) as e:
                 # Quoted unless its text is in the hidden part.
                 quoted = REDACTED if hides and str(pattern) in text and str(pattern) not in shown else repr(pattern)
-                yield f"{subject}: {key} must resolve to a regular expression, got {quoted} ({e})"
+                yield _Unusable(f"{subject}: {key} must resolve to a regular expression, got {quoted} ({e})")
                 continue
             if key == "matches" and not found:
                 yield f"{subject} doesn't match '{pattern}'"
