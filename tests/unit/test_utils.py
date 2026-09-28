@@ -1,6 +1,7 @@
 import httpx
 import pytest
 
+import pytest_httpchain.templates.substitution as substitution_module
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
 from pytest_httpchain.templates import TemplatesError
@@ -47,6 +48,33 @@ class TestProcessSubstitutions:
         against, which a single mutating context layer would erase."""
         with pytest.raises(TemplatesError, match="Undefined variable"):
             process_substitutions([VarsSubstitution(vars={"first": 1, "second": "{{ first + 1 }}"})])
+
+    def test_vars_step_builds_one_evaluator(self, monkeypatch):
+        """A vars step renders all its values through one evaluator. Walking
+        each value on its own built one per value, and each build is a full
+        pass over the context. The evaluator is built at the step's first
+        template, so a step without templates builds none. Each build sees the
+        context as it stood before the step, so `plain`, seeded before that
+        first template, is not in it. A template-free value is stored as it
+        is, even once the step's evaluator exists."""
+        contexts: list[list[str]] = []
+        build = substitution_module._build_evaluator
+
+        def counting_build(context):
+            contexts.append(sorted(context))
+            return build(context)
+
+        monkeypatch.setattr(substitution_module, "_build_evaluator", counting_build)
+        substitutions = [
+            VarsSubstitution(vars={"plain": 0, "a": "{{ x }}", "b": "{{ x + 1 }}", "c": ["{{ x + 2 }}"], "fixed": [1, 2]}),
+            VarsSubstitution(vars={"literal": "no template", "number": 5}),
+            VarsSubstitution(vars={"total": "{{ a + b + c[0] }}", "label": "a={{ a }}"}),
+        ]
+        result = process_substitutions(substitutions, {"x": 1})
+
+        assert result == {"plain": 0, "a": 1, "b": 2, "c": [3], "fixed": [1, 2], "literal": "no template", "number": 5, "total": 6, "label": "a=1"}
+        assert result["fixed"] is substitutions[0].vars["fixed"]
+        assert contexts == [["x"], ["a", "b", "c", "fixed", "literal", "number", "plain", "x"]]
 
     @pytest.mark.parametrize(
         ("function", "args", "expected"),

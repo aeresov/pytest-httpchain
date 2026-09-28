@@ -1,5 +1,6 @@
 import uuid
 from collections import ChainMap
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 
@@ -89,6 +90,16 @@ class TestWalk:
         RecursionError traceback."""
         with pytest.raises(TemplatesError, match=r"^Value nested too deeply to substitute \(maximum recursion depth exceeded"):
             walk(nested("{{ x }}", BEYOND_RECURSION_LIMIT), {"x": 1})
+
+    def test_context_nested_past_the_stack_fails_as_templates_error(self):
+        """Building the evaluator reads the whole context, and a ChainMap
+        nested in ChainMaps resolves through one frame per level. Past the
+        limit that fails the same way as a value nested too deeply."""
+        context: Mapping[str, Any] = {"x": 1}
+        for _ in range(BEYOND_RECURSION_LIMIT):
+            context = ChainMap(context)
+        with pytest.raises(TemplatesError, match=r"^Value nested too deeply to substitute \(maximum recursion depth exceeded"):
+            walk("{{ x }}", context)
 
 
 @pytest.mark.parametrize(
@@ -369,13 +380,27 @@ class TestWalker:
         substitute = walker({"a": 1, "items": [1, 2]})
         assert substitute({"x": "{{ a }}", "y": ["{{ [i * 2 for i in items] }}", "n={{ a }}"]}) == {"x": 1, "y": [[2, 4], "n=1"]}
 
-    def test_builds_one_evaluator_for_every_call(self, monkeypatch):
-        built = []
-        real = substitution._build_evaluator
-        monkeypatch.setattr(substitution, "_build_evaluator", lambda context: built.append(context) or real(context))
-        substitute = walker({"a": 1})
-        assert [substitute("{{ a + 1 }}"), substitute("{{ a + 2 }}")] == [2, 3]
-        assert len(built) == 1
+    def test_one_evaluator_serves_every_call(self, monkeypatch):
+        """The evaluator is built when the walker is bound, not per call: that
+        per-call pass over the context is what the walker exists to save."""
+        builds: list[dict[str, Any]] = []
+        build = substitution._build_evaluator
+
+        def counting_build(context):
+            builds.append(dict(context))
+            return build(context)
+
+        monkeypatch.setattr(substitution, "_build_evaluator", counting_build)
+        render = walker({"x": 1})
+
+        assert [render("{{ x }}"), render({"k": ["{{ x + 1 }}"]}), render("x={{ x }}")] == [1, {"k": [2]}, "x=1"]
+        assert builds == [{"x": 1}]
+
+    def test_context_is_read_when_bound(self):
+        context = {"x": 1}
+        render = walker(context)
+        context["x"] = 2
+        assert render("{{ x }}") == 1
 
     @pytest.mark.parametrize(
         "failing",

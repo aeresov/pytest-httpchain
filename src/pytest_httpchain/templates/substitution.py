@@ -69,11 +69,11 @@ TEMPLATE_BUILTINS = frozenset({*SAFE_FUNCTIONS, *JSON_LITERALS, "exists", "get",
 
 
 def _build_evaluator(context: Mapping[str, Any]) -> EvalWithCompoundTypes:
-    """Build one evaluator for a whole ``walk()`` traversal.
+    """Build one evaluator for a ``walker()``, which every ``walk()`` binds.
 
     simpleeval is meant to be built once and fed many expressions. The maps
-    derive purely from ``context``, so each ``walk()`` builds its own — which
-    also keeps parallel iterations sharing nothing.
+    derive purely from ``context``, so each walker builds its own — which also
+    keeps parallel iterations sharing nothing, as long as none shares a walker.
     """
     # One traversal, not three. ``context`` is a ChainMap that gains a layer per
     # stage and per save step, so every pass over it resolves each name through
@@ -209,6 +209,35 @@ def _walk(obj: Any, evaluator: EvalWithCompoundTypes) -> Any:
             return obj
 
 
+def _depth_guarded[T](fn: Callable[..., T], *args: Any) -> T:
+    """Call ``fn``, failing a structure nested past the stack as the
+    `TemplatesError` callers already report, not as a bare RecursionError."""
+    try:
+        return fn(*args)
+    except RecursionError as e:
+        raise TemplatesError(f"Value nested too deeply to substitute ({e})") from e
+
+
+def walker(context: Mapping[str, Any]) -> Callable[[Any], Any]:
+    """`walk` bound to one context: the evaluator is built once, here, and
+    serves every call.
+
+    For a caller that renders many values against the same context. Building
+    the evaluator is a full pass over the context, so calling `walk` per value
+    pays that pass once per value. The context is read now, so later changes to
+    the mapping are not seen. A call that raises leaves the evaluator as it
+    found it, so a caller catching each value's `TemplatesError` apart (a verify
+    step rendering check by check) gets the next one substituted as though it
+    came first.
+
+    Not thread-safe: simpleeval mutates its evaluator while evaluating (a
+    comprehension swaps in its own name lookup), so a thread or parallel
+    iteration builds a walker of its own, never shares one.
+    """
+    evaluator = _depth_guarded(_build_evaluator, context)
+    return lambda obj: _depth_guarded(_walk, obj, evaluator)
+
+
 def walk(obj: Any, context: Mapping[str, Any]) -> Any:
     """Substitute every template in a structure, returning the same shape.
 
@@ -220,29 +249,4 @@ def walk(obj: Any, context: Mapping[str, Any]) -> Any:
     the stack allows fails as a `TemplatesError`, which callers already report,
     rather than as a bare RecursionError.
     """
-    try:
-        return _walk(obj, _build_evaluator(context))
-    except RecursionError as e:
-        raise TemplatesError(f"Value nested too deeply to substitute ({e})") from e
-
-
-def walker(context: Mapping[str, Any]) -> Callable[[Any], Any]:
-    """`walk` bound to ``context``, for substituting many structures against
-    one context each on its own: ``walker(context)(obj)`` is ``walk(obj,
-    context)``, and one evaluator, built here, serves every call.
-
-    For a caller that must catch each structure's `TemplatesError` apart, where
-    one ``walk()`` per structure would rebuild the evaluator from the whole
-    context every time. A call that raises leaves the evaluator as it found
-    it, so the next one is substituted as though it came first. As in `walk`,
-    a structure nested deeper than the stack allows fails as a `TemplatesError`.
-    """
-    evaluator = _build_evaluator(context)
-
-    def walk_one(obj: Any) -> Any:
-        try:
-            return _walk(obj, evaluator)
-        except RecursionError as e:
-            raise TemplatesError(f"Value nested too deeply to substitute ({e})") from e
-
-    return walk_one
+    return walker(context)(obj)

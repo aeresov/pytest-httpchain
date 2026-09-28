@@ -26,13 +26,16 @@ from pytest_httpchain.templates import (
 # Recursively substitute template expressions
 result = walk(obj, context)
 
-# The same, bound to one context, for many structures substituted each on its
-# own (each call raising its own TemplatesError): one evaluator, built here,
-# serves every call. walk() builds one per call from the whole context, which
-# at runtime is a ChainMap of a layer per stage and per save step — the carrier
-# renders a verify step's values this way, one failure per value.
-substitute = walker(context)
-first, second = substitute(obj1), substitute(obj2)
+# walk() bound to one context. It builds the simpleeval evaluator (a full
+# pass over the context) once, and every call reuses it. Use it to render
+# many values against the same context, each on its own: a call that raises
+# its TemplatesError leaves the walker as it found it. walk() pays that pass
+# once per call, and at runtime the context is a ChainMap of a layer per stage
+# and per save step — the carrier renders a verify step's values this way, one
+# failure per value. Not thread-safe (simpleeval mutates the evaluator
+# mid-eval): one walker per thread or parallel iteration, never a shared one.
+render = walker(context)
+first, second = render(obj_a), render(obj_b)
 
 # Check whether any {{ }} occurs anywhere in a nested structure
 # (str/dict/list/tuple/BaseModel/SimpleNamespace) — carrier uses this to decide

@@ -503,6 +503,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the step's checks would have found, since the whole step rendered before any check ran. Its
   outcome now takes effect when the checks reach that template, so a check before it that failed
   fails the stage instead.
+- A `vars` substitution step now builds the template evaluator once, not once per variable.
+  Building it is a full pass over the context, so a step cost its number of variables times the
+  size of the context, even for variables that hold no template. Values without a template are now
+  kept as they are, without a walk. 300 variables against a 5,000-name context took about 0.3 s
+  and now take about 5 ms, or well under 1 ms when no value is a template. A list value without a
+  template is now the scenario's own list, not a fresh copy each time the step runs, as a JSON object
+  value already was. A template or user function that changes it in place now changes it for later
+  runs too.
+
 
 ## [0.15.2] - 2026-09-26
 
