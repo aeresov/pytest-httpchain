@@ -33,7 +33,7 @@ not free their numbers for reuse.
 | `HTTPCHAIN012` | error | `$ref` resolution failed |
 | `HTTPCHAIN013` | warning | File extension is not `.json` |
 | `HTTPCHAIN014` | error | Invalid JSON in the scenario or a file it includes: a syntax error, a duplicate object key, bytes that are not UTF-8, or an integer too long to parse |
-| `HTTPCHAIN015` | error | Failed to parse JSON file |
+| `HTTPCHAIN015` | error | Failed to parse JSON file (for example, nested too deeply to parse) |
 | `HTTPCHAIN016` | error | Fixture referenced in a scenario-level template |
 | `HTTPCHAIN017` | error | Scenario-level template references an undefined name |
 | `HTTPCHAIN018` | warning | Verify expression is not a template (`{{ }}`) — cannot evaluate to the required bool |

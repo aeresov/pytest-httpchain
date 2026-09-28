@@ -5,6 +5,7 @@ tests/integration/test_verify.py and test_save.py; this pins the failure
 messages and the edge cases a mock server cannot produce cheaply.
 """
 
+import functools
 import json
 import re
 from collections import ChainMap
@@ -21,13 +22,30 @@ from pytest_httpchain.response_steps import RenderFailure, RenderOutcome, is_jso
 from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.userfunc import UserFunctionError
 from tests.unit import response_steps_test_helpers
+from tests.unit.helpers import TOO_DEEP_TO_PARSE, on_bounded_stack
 
 NOT_JSON = httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
+# The decoder raises RecursionError, which is not a ValueError: a narrower except
+# let it escape the chain-abort machinery, with no report section and no HAR entry.
+# Tests parse it via `on_bounded_stack`, where it overflows on every interpreter.
+TOO_DEEP_JSON = httpx.Response(200, content=TOO_DEEP_TO_PARSE, headers={"content-type": "application/json"})
+# Past the int-to-str digit limit (4300 by default) json.loads raises a bare
+# ValueError, not a JSONDecodeError.
+INT_TOO_LONG = httpx.Response(200, content=b'{"a": ' + b"1" * 5000 + b"}")
 
 
-def test_jmespath_save_rejects_non_json_response():
-    with pytest.raises(SaveError, match="response is not valid JSON"):
-        process_save(JMESPathSave(jmespath={"value": "key"}), NOT_JSON, ChainMap())
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        pytest.param(NOT_JSON, "response is not valid JSON", id="not-json"),
+        pytest.param(TOO_DEEP_JSON, "response JSON is nested too deeply to parse", id="too-deep"),
+        pytest.param(INT_TOO_LONG, "response is not valid JSON", id="int-too-long"),
+    ],
+)
+def test_jmespath_save_rejects_non_json_response(response, message):
+    """In the words a verify step uses for the same body (`_JsonBody`)."""
+    with pytest.raises(SaveError, match=f"^Cannot extract variables, {message}: "):
+        on_bounded_stack(process_save, JMESPathSave(jmespath={"value": "key"}), response, ChainMap())
 
 
 class TestStatus:
@@ -112,15 +130,16 @@ class TestBodySchema:
             # UnicodeDecodeError is a ValueError, not a JSONDecodeError, so a
             # narrower except let it escape the chain-abort machinery.
             b'{"type": "\xff\xfe object"}',
+            TOO_DEEP_TO_PARSE,
         ],
-        ids=["missing", "non-utf8"],
+        ids=["missing", "non-utf8", "too-deep"],
     )
     def test_unreadable_schema_file_fails_cleanly(self, tmp_path, content):
         schema_path = tmp_path / "schema.json"
         if content is not None:
             schema_path.write_bytes(content)
         with pytest.raises(VerificationError, match="Error reading body schema file"):
-            process_verify(Verify(body=ResponseBody(schema=str(schema_path))), httpx.Response(200, json={"id": 1}))
+            on_bounded_stack(process_verify, Verify(body=ResponseBody(schema=str(schema_path))), httpx.Response(200, json={"id": 1}))
 
     def test_schema_file_that_is_not_a_json_schema_fails_cleanly(self, tmp_path):
         """Valid JSON, invalid JSON Schema: only compiling it can tell, so the
@@ -129,6 +148,31 @@ class TestBodySchema:
         schema_path.write_text(json.dumps({"type": 12}))
         with pytest.raises(VerificationError, match="Invalid JSON Schema in file"):
             process_verify(Verify(body=ResponseBody(schema=str(schema_path))), httpx.Response(200, json={}))
+
+    @pytest.mark.parametrize(
+        "schema",
+        [
+            # The meta-schema's `format: regex` check declares only re.error, so
+            # a pattern that re.compile rejects any other way escaped the stage raw.
+            {"type": "string", "pattern": "a{4294967296}"},
+            {"type": "string", "pattern": "(" * 1000 + ")" * 1000},
+            # No regex involved: the meta-validator itself recurses too deep, so
+            # a tolerant regex format checker alone would not cover it.
+            functools.reduce(lambda inner, _: {"not": inner}, range(500), {"type": "string"}),
+            # The meta-check fails cleanly, but the error's str() pretty-prints
+            # the deep `type` value, inside the except clause.
+            {"type": functools.reduce(lambda inner, _: [inner], range(1_000), [])},
+        ],
+        ids=["pattern-overflow", "pattern-nesting", "schema-nesting", "error-text-nesting"],
+    )
+    def test_schema_file_whose_meta_check_crashes_fails_cleanly(self, tmp_path, schema):
+        """A meta-check that raises something other than SchemaError must still
+        fail the stage as a verification error naming the file, not a bare
+        traceback with no request/response report."""
+        schema_path = tmp_path / "schema.json"
+        schema_path.write_text(json.dumps(schema))
+        with pytest.raises(VerificationError, match=r"Invalid JSON Schema in file '.*schema\.json': "):
+            process_verify(Verify(body=ResponseBody(schema=str(schema_path))), httpx.Response(200, json="x"))
 
     @pytest.mark.parametrize(
         ("pattern", "error"),
@@ -186,7 +230,7 @@ class TestBodySchema:
     def test_body_too_deep_to_validate(self):
         """A schema recursing as deep as the body cannot be checked on it."""
         schema = {"type": "array", "items": {"$ref": "#"}}
-        with pytest.raises(VerificationError, match="^Cannot validate schema, response JSON is nested too deeply to validate: maximum recursion depth exceeded"):
+        with pytest.raises(VerificationError, match="^Cannot validate schema, response or schema is nested too deeply: maximum recursion depth exceeded"):
             process_verify(Verify(body=ResponseBody(schema=schema)), self.DEEP)
 
     @pytest.mark.parametrize(

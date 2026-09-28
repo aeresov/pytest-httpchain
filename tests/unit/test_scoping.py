@@ -20,6 +20,7 @@ from pytest_httpchain.scoping import (
     with_stage_substitutions,
 )
 from pytest_httpchain.templates import TEMPLATE_BUILTINS
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, nested
 
 
 def make_scenario() -> Scenario:
@@ -157,6 +158,13 @@ def test_template_references(template, expected):
     this set: a name wrongly included is a false warning on working scenarios, a
     name wrongly dropped is a missed one."""
     assert extract_template_variables(template) == expected
+
+
+def test_template_references_found_at_any_depth():
+    """Iterative: a recursive walk spent two frames per level of nesting, and
+    crashed `validate`, collection, `show` and `graph` on a value a few hundred
+    levels deep that loads fine."""
+    assert extract_template_variables(nested("{{ token }}", BEYOND_RECURSION_LIMIT)) == {"token"}
 
 
 def test_template_builtins_is_single_source():

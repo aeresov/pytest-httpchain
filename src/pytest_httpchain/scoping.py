@@ -89,17 +89,23 @@ def _extract_names_from_expr(expr: str) -> set[str]:
 
 
 def extract_template_variables(obj: Any) -> set[str]:
-    """Variable names referenced by every ``{{ expr }}`` in a structure."""
-    match obj:
-        case str():
-            names = {name for match in re.finditer(TEMPLATE_PATTERN, obj) for name in _extract_names_from_expr(match.group("expr"))}
-            return names - TEMPLATE_BUILTINS
-        case dict():
-            return set().union(*(extract_template_variables(value) for value in obj.values()))
-        case list():
-            return set().union(*(extract_template_variables(item) for item in obj))
-        case _:
-            return set()
+    """Variable names referenced by every ``{{ expr }}`` in a structure.
+
+    Iterative on purpose: a recursive walk spent two stack frames per level of
+    nesting, so a value a few hundred levels deep, which loads fine, crashed
+    validation with a RecursionError.
+    """
+    names: set[str] = set()
+    pending = [obj]
+    while pending:
+        match pending.pop():
+            case str() as text:
+                names.update(name for match in re.finditer(TEMPLATE_PATTERN, text) for name in _extract_names_from_expr(match.group("expr")))
+            case dict() as mapping:
+                pending.extend(mapping.values())
+            case list() as items:
+                pending.extend(items)
+    return names - TEMPLATE_BUILTINS
 
 
 def substitution_names(substitutions: Substitutions) -> set[str]:

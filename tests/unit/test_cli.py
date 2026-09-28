@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from pytest_httpchain.cli import app
 from pytest_httpchain.schema import build_schema
+from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
 
 runner = CliRunner()
 # typer renders usage errors through rich, which colours them whenever
@@ -245,12 +246,12 @@ def test_unreadable_include_exits_one_naming_the_file(include_scenario, tmp_path
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows' non-strict realpath passes such a path through, so it is reported as not found")
 @pytest.mark.parametrize("command", ["resolve", "show", "graph"])
 def test_include_path_the_os_rejects_exits_one(tmp_path, command):
-    """The OS path call's ValueError on a NUL escaped as a raw traceback."""
-    scenario = _write(tmp_path / "test_x.http.json", {"stages": [{"name": "s", "$include": "a\x00.json"}]})
+    """The OS path call's ValueError on a lone surrogate escaped as a raw traceback."""
+    scenario = _write(tmp_path / "test_x.http.json", {"stages": [{"name": "s", "$include": "\ud800.json"}]})
     result = runner.invoke(app, [command, str(scenario)])
     assert result.exit_code == 1
     assert result.stdout == ""
-    assert r"Reference path 'a\x00.json' is not a valid file path" in result.stderr
+    assert r"Reference path '\ud800.json' is not a valid file path" in result.stderr
 
 
 # --- show / graph ---
@@ -305,6 +306,27 @@ def test_inspection_of_unloadable_file_exits_one(tmp_path, command):
     assert result.exit_code == 1
     assert result.stdout == ""
     assert result.stderr.startswith(f"error: cannot load {missing}: ")
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        pytest.param(b'{"stages": ' + TOO_DEEP_TO_PARSE + b"}", "nested too deeply (", id="too-deep-to-parse"),
+        pytest.param(b'{"stages": ' + TOO_DEEP_TO_WALK + b"}", "nested too deeply (", id="too-deep-to-walk"),
+    ],
+)
+@pytest.mark.parametrize("command", ["resolve", "show", "graph"])
+def test_file_nested_too_deeply_exits_one_with_an_error_line(tmp_path, command, content, reason):
+    """One `error:` line, not a traceback: a RecursionError is not even a
+    ValueError. (A file that is not UTF-8: `test_unreadable_include_exits_one_naming_the_file`.)"""
+    scenario = tmp_path / "test_x.http.json"
+    scenario.write_bytes(content)
+    result = on_bounded_stack(runner.invoke, app, [command, str(scenario)])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    prefix = "error: " if command == "resolve" else f"error: cannot load {scenario}: "
+    assert result.stderr.startswith(f"{prefix}Failed to load JSON from {scenario}: {reason}")
+    assert result.stderr.count("\n") == 1
 
 
 def test_show_invalid_scenario_exits_one(tmp_path):

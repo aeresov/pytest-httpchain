@@ -94,6 +94,13 @@ This only affects a literal `}` that is adjacent to the template close; a single
 - `BaseModel` (Pydantic): Dumps, processes, and revalidates
 - `SimpleNamespace`: Processes namespace attributes
 
+### Nesting depth
+`contains_template` walks iteratively, so any depth works. `walk` rebuilds the
+structure and still recurses once per level of nesting (a namespace included).
+A value nested past the interpreter's recursion limit fails as `TemplatesError`
+("Value nested too deeply to substitute"), which callers already report as a
+stage failure, never as a bare `RecursionError`.
+
 ### Built-in Functions
 Safe functions available in expressions:
 - Type conversion: `bool`, `int`, `float`, `str`, `dict`, `list`, `tuple`, `set`

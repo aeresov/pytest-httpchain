@@ -25,6 +25,14 @@ from pytest_httpchain.userfunc import call_target, wrap_function
 
 logger = logging.getLogger(__name__)
 
+# What parsing JSON raises on bad *input*, as opposed to a bug. ``ValueError``
+# subsumes ``json.JSONDecodeError`` and ``UnicodeDecodeError`` (undecodable
+# bytes, which ``httpx.Response.json()`` raises too). ``RecursionError`` is what
+# CPython's decoder raises on deeply nested input (``[`` * 100_000), and it is
+# not a ValueError: left out, it escapes the chain-abort machinery as a raw
+# traceback, with no report section and no HAR entry.
+JSON_PARSE_ERRORS = (ValueError, RecursionError)
+
 
 def optional_as_list(value: Any) -> list[Any]:
     """None -> [], anything else -> [value]: adapts HeaderMatcher's optional
@@ -85,16 +93,32 @@ def read_json_schema_file(path: Path) -> Any:
     """Parse a referenced JSON Schema file, or raise `SchemaFileError`.
 
     The catch is the load-bearing part and must not be re-derived per caller:
-    ``ValueError`` subsumes both ``json.JSONDecodeError`` and
-    ``UnicodeDecodeError``, so a non-UTF-8 schema file fails cleanly instead of
-    escaping the abort machinery as a raw traceback. ``utf-8-sig`` accepts a
-    byte-order mark, as the scenario loader does. The meta-check stays with the
-    callers, which report an unparseable file and an invalid schema differently.
+    `JSON_PARSE_ERRORS` makes a non-UTF-8 or too deeply nested schema file fail
+    cleanly instead of escaping the abort machinery as a raw traceback.
+    ``utf-8-sig`` accepts a byte-order mark, as the scenario loader does. The
+    meta-check stays with the callers, which report an unparseable file and an
+    invalid schema differently.
     """
     try:
         return json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as e:
+    except (OSError, *JSON_PARSE_ERRORS) as e:
         raise SchemaFileError(str(e)) from e
+
+
+def schema_error_text(e: Exception) -> str:
+    """``str(e)`` for a jsonschema error, or its bare ``message`` when that is
+    too deep to render.
+
+    jsonschema's ``__str__`` pretty-prints the failing instance in Python, a
+    few frames per level, so a body or schema a few hundred levels deep raises
+    ``RecursionError`` while the failure is being *described* — inside an
+    ``except`` clause, where no sibling clause can catch it. ``message`` is
+    rendered during validation and is always safe to read.
+    """
+    try:
+        return str(e)
+    except RecursionError:
+        return getattr(e, "message", type(e).__name__)
 
 
 def make_marker(mark_str: str) -> pytest.MarkDecorator:

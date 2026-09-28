@@ -22,6 +22,20 @@ REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 
 REF_KEYS = ("$include", "$merge", "$ref")
 
+# What loading a file can raise besides the resolver's own errors, wrapped into
+# `ReferenceResolverError` with the original as ``__cause__``, which consumers
+# classify on. Content the reader itself rejects (bytes that are not UTF-8, an
+# integer too long to parse) is already an `InvalidJSONError` naming the file,
+# see `_parse_json_rejecting_duplicates`. Deep nesting raises RecursionError,
+# which is not a ValueError: from CPython's decoder at thousands of levels, and
+# from the resolver's own walk, one frame per level, at under a thousand.
+_LOAD_ERRORS = (OSError, json.JSONDecodeError, RecursionError)
+
+
+def _load_error_text(e: BaseException) -> str:
+    """Why a load failed. A bare RecursionError does not say it was the nesting."""
+    return f"nested too deeply ({e})" if isinstance(e, RecursionError) else str(e)
+
 
 def _raise_on_conflict(config: Any, path: list[Any], base: Any, nxt: Any) -> Any:
     """deepmerge strategy: keep equal values, raise on any real conflict.
@@ -153,8 +167,8 @@ class ReferenceResolver:
 
             return self.resolve_document(data, path.parent, root_path)
 
-        except (OSError, json.JSONDecodeError) as e:
-            raise ReferenceResolverError(f"Failed to load JSON from {path}: {e}") from e
+        except _LOAD_ERRORS as e:
+            raise ReferenceResolverError(f"Failed to load JSON from {path}: {_load_error_text(e)}") from e
 
     def _resolve_refs(
         self,
@@ -231,8 +245,8 @@ class ReferenceResolver:
             child_resolver = self._create_child_resolver(root_path)
             return child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data, root_path=root_path, doc_path=doc_path)
 
-        except (OSError, json.JSONDecodeError) as e:
-            raise ReferenceResolverError(f"Failed to load external reference {file_path}: {e}") from e
+        except _LOAD_ERRORS as e:
+            raise ReferenceResolverError(f"Failed to load external reference {file_path}: {_load_error_text(e)}") from e
         finally:
             self.tracker.clear_external_ref(resolved_path, pointer)
 

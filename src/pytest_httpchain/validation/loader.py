@@ -202,13 +202,17 @@ def load_with_diagnostics(
         try:
             loaded = load_scenario(path, root_path=root_path, ref_parent_traversal_depth=ref_parent_traversal_depth)
         except ReferenceResolverError as e:
-            # Content the reader rejected (not UTF-8, a duplicate key, ...) and
-            # a plain syntax error the resolver wrapped are JSON content
-            # problems — no reference is involved in either.
+            # Content the reader rejected (not UTF-8 — RFC 8259 requires it — a
+            # duplicate key, ...) and a plain syntax error the resolver wrapped
+            # are JSON content problems — no reference is involved in either.
+            # Deep nesting is not: the text is valid, but deeper than the
+            # parser or the resolver can go.
             if isinstance(e, InvalidJSONError):
                 diagnostics.append(diag(DiagnosticCode.INVALID_JSON, f"Invalid JSON: {e}"))
             elif isinstance(e.__cause__, json.JSONDecodeError):
                 diagnostics.append(diag(DiagnosticCode.INVALID_JSON, f"Invalid JSON syntax: {e.__cause__}"))
+            elif isinstance(e.__cause__, RecursionError):
+                diagnostics.append(diag(DiagnosticCode.PARSE_ERROR, f"Failed to parse JSON file: nested too deeply ({e.__cause__})"))
             else:
                 diagnostics.append(diag(DiagnosticCode.REF_ERROR, f"JSON reference resolution error: {e}"))
         except json.JSONDecodeError as e:

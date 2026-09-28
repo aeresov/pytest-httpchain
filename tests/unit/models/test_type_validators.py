@@ -5,6 +5,7 @@ pass through unchanged, rejected ones raise with the validator's own message.
 """
 
 import json
+from types import SimpleNamespace
 
 import jsonschema
 import pytest
@@ -22,8 +23,10 @@ from pytest_httpchain.models.types import (
     VariableName,
     XMLString,
     check_json_schema,
+    convert_namespace_to_dict,
     json_schema_validator_class,
 )
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, nested
 
 
 def validate(annotated_type, value):
@@ -242,3 +245,36 @@ class TestCheckJsonSchema:
         """The fallback is the dialect ``jsonschema.validate`` picks, so the
         meta-check and instance validation agree."""
         assert json_schema_validator_class({"type": "object"}) is jsonschema.Draft202012Validator
+
+
+class TestConvertNamespaceToDict:
+    """The validator behind JSON bodies, inline schemas and jmespath operands."""
+
+    def test_converts_at_every_depth_keeping_key_order(self):
+        value = {"b": 1, "a": SimpleNamespace(z=[1, SimpleNamespace(y=2)], x={}), "c": [{"d": SimpleNamespace()}]}
+        converted = convert_namespace_to_dict(value)
+        assert converted == {"b": 1, "a": {"z": [1, {"y": 2}], "x": {}}, "c": [{"d": {}}]}
+        assert list(converted) == ["b", "a", "c"]
+        assert list(converted["a"]) == ["z", "x"]
+
+    def test_value_nested_past_the_recursion_limit(self):
+        """Iterative: the loader accepts any depth, and a recursive walk overflowed."""
+        converted = convert_namespace_to_dict(nested(SimpleNamespace(leaf=1), BEYOND_RECURSION_LIMIT))
+        # Unwrapped level by level: == on it recurses in C, which Windows caps
+        # at 3,000 levels.
+        for level in reversed(range(BEYOND_RECURSION_LIMIT)):
+            converted = converted[0] if level % 2 else converted["k"]
+        assert converted == {"leaf": 1}
+
+    def test_shared_value_is_copied_where_it_occurs(self):
+        shared = [SimpleNamespace(k=1)]
+        converted = convert_namespace_to_dict({"a": shared, "b": shared})
+        assert converted == {"a": [{"k": 1}], "b": [{"k": 1}]}
+        assert converted["a"] is not converted["b"]
+
+    def test_value_that_contains_itself_is_refused(self):
+        """A plain loop would never end on it (the recursive walk overflowed)."""
+        cyclic: list = []
+        cyclic.append(cyclic)
+        with pytest.raises(ValueError, match="contains itself"):
+            convert_namespace_to_dict(cyclic)

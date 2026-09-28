@@ -6,6 +6,7 @@ import pytest
 
 from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, InvalidJSONError, ReferenceResolverError
 from pytest_httpchain.jsonref.loader import load_json
+from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
 
 
 def test_missing_reference_file(datadir):
@@ -13,6 +14,23 @@ def test_missing_reference_file(datadir):
         load_json(datadir / "case_missing_ref.json")
 
 
+def test_nul_in_reference_path(create_json_file):
+    """Path operations raise a bare ValueError on a NUL byte."""
+    file = create_json_file("main.json", {"data": {"$ref": "a\0b.json"}})
+    with pytest.raises(ReferenceResolverError, match=r"Reference path contains a NUL character: 'a\\x00b.json'"):
+        load_json(file)
+
+
+@pytest.mark.parametrize(
+    ("content", "cause", "reason"),
+    [
+        pytest.param(b'{"invalid": json}', json.JSONDecodeError, "Expecting value", id="malformed"),
+        # Not a ValueError at all.
+        pytest.param(TOO_DEEP_TO_PARSE, RecursionError, r"nested too deeply \(.*while decoding a JSON array", id="too-deep-to-parse"),
+        # Parses, but the resolver's own walk spends a frame per level.
+        pytest.param(TOO_DEEP_TO_WALK, RecursionError, r"nested too deeply \(maximum recursion depth exceeded\)$", id="too-deep-to-walk"),
+    ],
+)
 @pytest.mark.parametrize(
     ("entry", "match"),
     [
@@ -20,13 +38,16 @@ def test_missing_reference_file(datadir):
         pytest.param("main.json", "Failed to load external reference bad.json", id="referenced-file"),
     ],
 )
-def test_malformed_json_chains_the_decode_error(tmp_path, entry, match):
-    """The validator reports INVALID_JSON by finding a JSONDecodeError as the cause."""
-    (tmp_path / "bad.json").write_text('{"invalid": json}')
+def test_unloadable_json_chains_the_cause(tmp_path, entry, match, content, cause, reason):
+    """One exception type for every consumer; the validator classifies on the
+    chained cause (INVALID_JSON for syntax, PARSE_ERROR for depth). Content the
+    reader rejects itself, bytes that are not UTF-8 included, is an
+    InvalidJSONError instead (`test_unreadable_content_names_its_file`)."""
+    (tmp_path / "bad.json").write_bytes(content)
     (tmp_path / "main.json").write_text('{"data": {"$ref": "bad.json"}}')
-    with pytest.raises(ReferenceResolverError, match=match) as excinfo:
-        load_json(tmp_path / entry)
-    assert isinstance(excinfo.value.__cause__, json.JSONDecodeError)
+    with pytest.raises(ReferenceResolverError, match=f"^{match}.*: {reason}") as excinfo:
+        on_bounded_stack(load_json, tmp_path / entry)
+    assert isinstance(excinfo.value.__cause__, cause)
 
 
 @pytest.mark.parametrize("entry", ["dup.json", "main.json"], ids=["main-file", "referenced-file"])
@@ -63,11 +84,12 @@ def test_unreadable_content_names_its_file(tmp_path, entry, content, match, caus
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows' non-strict realpath passes such a path through, so it is reported as not found")
-@pytest.mark.parametrize("ref", ["a\x00.json", "\ud800.json"], ids=["nul", "lone-surrogate"])
-def test_reference_path_the_os_rejects_is_a_resolver_error(tmp_path, ref):
-    """One JSON \\u escape spells either, and the OS path call rejects both with
-    a ValueError outside every caller's except block: a raw traceback. The
-    message shows the path's repr, since neither prints as itself."""
+def test_reference_path_the_os_rejects_is_a_resolver_error(tmp_path):
+    """A lone surrogate, one JSON \\u escape away, is rejected by the OS path
+    call with a ValueError outside every caller's except block: a raw
+    traceback. The message shows the path's repr, since it does not print as
+    itself. (A NUL is refused before the path call: `test_nul_in_reference_path`.)"""
+    ref = "\ud800.json"
     (tmp_path / "main.json").write_text(json.dumps({"data": {"$include": ref}}))
     with pytest.raises(ReferenceResolverError, match="is not a valid file path") as excinfo:
         load_json(tmp_path / "main.json")

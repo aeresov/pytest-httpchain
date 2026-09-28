@@ -26,8 +26,9 @@ def load_json(
     Opaque positions merge that way too. Positions compose across file
     boundaries: spliced-in content is judged at the reference site.
 
-    Raises ``ReferenceResolverError`` on unreadable JSON, merge conflicts, and
-    circular references.
+    Raises ``ReferenceResolverError`` on unreadable, malformed, non-UTF-8 or too
+    deeply nested JSON (chaining the original error as ``__cause__``), merge
+    conflicts, and circular references.
     """
     resolver = ReferenceResolver(max_parent_traversal_depth, root_path, opaque=opaque, atomic=atomic)
     return resolver.resolve_file(path)

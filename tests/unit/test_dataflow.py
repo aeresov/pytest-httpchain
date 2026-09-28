@@ -5,6 +5,7 @@ import pytest
 
 from pytest_httpchain.dataflow import analyze_dataflow
 from pytest_httpchain.models import Scenario
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, nested
 
 
 def _scenario(stages, **top):
@@ -60,6 +61,9 @@ def _edges(flow) -> list[dict]:
         # expression, a key, never is.
         pytest.param({"response": [{"verify": {"jmespath": {"id": "{{ x }}", "tags": {"contains": "{{ y }}"}}}}]}, ["x", "y"], id="verify-jmespath-values"),
         pytest.param({"response": [{"verify": {"jmespath": {"'{{ x }}'": 1}}}]}, [], id="verify-jmespath-key"),
+        # A recursive reference search crashed `show` and `graph` on a value a
+        # few hundred levels deep.
+        pytest.param({"request": {"url": "https://x.test/", "params": {"p": nested("{{ x }}", BEYOND_RECURSION_LIMIT)}}}, ["x"], id="reference-nested-past-the-recursion-limit"),
     ],
 )
 def test_consumer_of_earlier_saves(consumer, expected):

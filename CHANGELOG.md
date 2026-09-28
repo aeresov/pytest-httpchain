@@ -171,19 +171,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`a{4294967296}`, or thousands of nested groups) as an `OverflowError` or `RecursionError`. It
   now fails its check: `Header 'X-Request-Id' (value: '12345'): matches must resolve to a regular
   expression, got '{{ ( }}' (missing ), unterminated subpattern at position 3)`.
-- A `verify.body.schema` file whose `pattern` is too big for `re` to compile, or which is nested
-  too deeply to check, escaped the stage as a raw `OverflowError` or `RecursionError` traceback
-  (an inline schema's is refused when the scenario loads). It now fails the check as any invalid
-  schema file does: `Invalid JSON Schema in file '...': the repetition number is too large`.
-- `verify.body.schema` against a body Python's `json` cannot read though it is not malformed, an
-  integer longer than 4300 digits or an array nested some thousand levels deep, escaped the stage
-  as a raw `ValueError` or `RecursionError` traceback, past the chain's abort handling and its
-  request/response report. It now fails the stage: `Cannot validate schema, response is not valid
-  JSON: ...`, or `... response JSON is nested too deeply to parse: ...`. So does a body `json`
-  reads but jsonschema cannot handle, nested some hundreds of levels deep: a violation found in it
-  is reported without the value pretty-printed, which recursed past Python's limit, and a schema
-  that recurses as deep as the body (`"items": {"$ref": "#"}`) fails the check with `Cannot
-  validate schema, response JSON is nested too deeply to validate`.
+- A response body Python's `json` cannot read though it is not malformed, an integer longer than
+  4300 digits or an array nested some thousand levels deep, escaped `verify.body.schema` and a
+  JMESPath `save` as a raw `ValueError` or `RecursionError` traceback, past the chain's abort
+  handling, with no request/response report and no HAR entry. Both now fail the stage: `Cannot
+  ..., response is not valid JSON: ...`, or `... response JSON is nested too deeply to parse:
+  ...`. A `verify.body.schema` file nested that deeply fails with "Error reading body schema
+  file", and `validate --deep` reports it as `HTTPCHAIN021`. The HTTP report shows such a body as
+  text; it used to show an error placeholder that also dropped the start line and headers.
+- `verify.body.schema` no longer escapes as a bare `RecursionError` on a body or schema file that
+  parses but is some hundreds of levels deep. A violation found in such a body is reported
+  without the value pretty-printed, which recursed past Python's limit, and a schema that recurses
+  as deep as the body (`"items": {"$ref": "#"}`) fails the check with `Cannot validate schema,
+  response or schema is nested too deeply`. `validate --deep` no longer crashes while describing
+  why such a schema file is invalid, and reports `HTTPCHAIN021`.
 - A `$merge`/`$include` sibling beside a fragment at a position that merges whole, an inline
   `verify.body.schema` or a `verify.status` list, was compared with Python's equality inside
   lists and objects, where `true == 1`: `{"const": true}` beside `{"const": 1}` kept one and
@@ -356,8 +357,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   print that message and exit 1. An integer longer than Python converts (4300 digits by default)
   failed the same way and is now `HTTPCHAIN014` too (`.../common.json cannot be parsed: Exceeds
   the limit ...`). A reference path the operating system rejects, such as
-  `"$include": "a\u0000.json"`, also printed a traceback; it is now `HTTPCHAIN012`
-  (`Reference path 'a\x00.json' is not a valid file path: ...`).
+  `"$include": "a\u0000.json"` or a lone surrogate, also printed a traceback; it is now
+  `HTTPCHAIN012` (`Reference path contains a NUL character: 'a\x00.json'`). A scenario, or a file
+  it includes, nested too deeply to parse stays `HTTPCHAIN015`, now worded "nested too deeply",
+  and `resolve`, `show` and `graph` print one `error:` line for it and exit 1 instead of a
+  traceback.
 - A UTF-8 file that starts with a byte-order mark, as some editors on Windows save one, is no
   longer rejected as invalid JSON (`Unexpected UTF-8 BOM`). Scenarios, the files they `$include`,
   `$merge` or `$ref`, and `verify.body.schema` files all accept the mark.
@@ -400,6 +404,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and an HTTPS server may negotiate, all the requests to that server share one connection, which
   httpx holds to 100 requests at once (fewer if the server allows fewer) whatever the pool: a
   stage that needs more in flight sets `client.http2` to `false`.
+- A body schema file (`verify.body.schema: "./schemas/x.json"`) whose meta-check crashes now
+  fails the stage with `Invalid JSON Schema in file '...'`. The meta-schema's `format: regex`
+  check expects only `re.error`, so a `pattern` that `re.compile` rejects some other way escaped
+  raw: `a{4294967296}` raised `OverflowError` and about 1000 nested groups raised
+  `RecursionError`. A schema nested a few hundred levels deep overflowed the meta-validator's own
+  recursion the same way. The stage failed with a bare traceback, with no request/response report
+  and no HAR entry. Inline schemas and `validate --deep` already reported these cases cleanly.
+- The HTTP report no longer renders a deeply nested JSON body in full only to cut it to 1,000
+  characters. Indentation grows with depth, so the full rendering is quadratic in the body's size:
+  a 10 kB body 5,000 levels deep rendered to 50 MB. Rendering now stops at the cap.
+- `validate`, pytest collection, `show` and `graph` no longer crash with a `RecursionError` on a
+  scenario value nested a few hundred levels deep, such as a `vars` value, a query parameter or a
+  `parametrize` value. The file loaded fine, but the checks that find template references,
+  templated keys and scenario directives walked it recursively, two stack frames per level, and
+  overflowed near 450 levels. They now walk it iteratively, so any depth the loader accepts is
+  checked. So does model validation, which converted a `json` request body, an inline
+  `verify.body.schema` or a `verify.jmespath` operand recursively and crashed on one nested past
+  Python's recursion limit.
+- Running a stage with such a value no longer crashes either. Substituting templates in a nested
+  `vars` value took two stack frames per level, and stages failed from about 480 levels with a
+  bare traceback. It now takes one frame per level. A value nested past the interpreter's
+  recursion limit fails the stage with "Value nested too deeply to substitute".
 
 ### Changed
 

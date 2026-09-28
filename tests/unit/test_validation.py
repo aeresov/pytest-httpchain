@@ -16,6 +16,7 @@ import pytest
 import pytest_httpchain.validation.loader as validation_loader
 from pytest_httpchain.models import JMESPathMatcher
 from pytest_httpchain.validation import SEVERITY, DiagnosticCode, load_scenario, resolve_root_path, validate_scenario
+from tests.unit.helpers import LOADABLE_BUT_DEEP, TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, nested, on_bounded_stack
 
 C = DiagnosticCode
 # A stable importable directory so `userfuncs:<name>` refs resolve under --syspath.
@@ -120,6 +121,9 @@ DIAGNOSED = [
     # A duplicated organizational key is a JSON-content error at load, not
     # a silent last-wins, and not a $ref error.
     ("duplicate_json_key.json", [(C.INVALID_JSON, None, "Duplicate key 'check'")]),
+    # Saved as Latin-1. RFC 8259 requires UTF-8, so the file is invalid JSON,
+    # like a syntax error, and not an unexplained parse failure.
+    ("not_utf8.json", [(C.INVALID_JSON, None, r"^Invalid JSON: .*not_utf8\.json is not valid UTF-8: 'utf-8' codec can't decode byte 0xe9")]),
     ("schema_error.json", [(C.SCHEMA, "stages -> 0 -> request", "Field required")]),
     # Models forbid extra keys: a typo fails naming the key and its location.
     ("request_field_typo.json", [(C.SCHEMA, "stages -> 0 -> request -> headerz", "Extra inputs are not permitted")]),
@@ -291,6 +295,26 @@ def test_deep_disabled_does_not_check_imports(datadir):
     assert validate_scenario(datadir / "deep_import_missing.json").diagnostics == []
 
 
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        # The decoder's RecursionError is not a ValueError.
+        pytest.param(TOO_DEEP_TO_PARSE, "Schema file is not valid JSON: .*while decoding a JSON array", id="too-deep-to-parse"),
+        pytest.param(b'{"items": ' * 1_000 + b"{}" + b"}" * 1_000, "not a valid JSON Schema", id="too-deep-to-check"),
+        # The meta-check fails cleanly, but the error's str() pretty-prints the
+        # deep `type` value, inside the except clause.
+        pytest.param(b'{"type": ' + TOO_DEEP_TO_WALK + b"}", "not a valid JSON Schema: .* is not valid under any of the given schemas", id="too-deep-to-describe"),
+    ],
+)
+def test_deep_schema_file_nested_too_deeply(tmp_path, content, message):
+    """Generated, not a ``test_validation/`` fixture: the payloads are too big to commit."""
+    (tmp_path / "schema.json").write_bytes(content)
+    result = on_bounded_stack(validate_scenario, _write(tmp_path, [_stage(response=[{"verify": {"body": {"schema": "schema.json"}}}])]), deep=True)
+
+    assert [(d.code, d.location) for d in result.diagnostics] == [(C.SCHEMA_FILE_INVALID, "stages[0].response[0].verify.body.schema")]
+    assert re.search(message, result.diagnostics[0].message)
+
+
 def test_wrong_extension_warns(datadir):
     result = validate_scenario(datadir / "wrong_extension.txt")
     assert _codes(result) == [C.WRONG_EXTENSION]
@@ -299,6 +323,27 @@ def test_wrong_extension_warns(datadir):
 
 def test_directory_is_not_a_file(tmp_path):
     assert _codes(validate_scenario(tmp_path)) == [C.NOT_A_FILE]
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        # The decoder's RecursionError is not a ValueError.
+        pytest.param(TOO_DEEP_TO_PARSE, r"\(.*while decoding a JSON array", id="too-deep-to-parse"),
+        # Parses, but the resolver's own walk spends a frame per level.
+        pytest.param(TOO_DEEP_TO_WALK, r"\(maximum recursion depth exceeded\)$", id="too-deep-to-walk"),
+    ],
+)
+def test_file_nested_too_deeply_is_a_parse_error(tmp_path, content, reason):
+    """Valid JSON, but deeper than the parser or the resolver can go: PARSE_ERROR,
+    not INVALID_JSON. Generated, not a ``test_validation/`` fixture: the payloads
+    are too big to commit."""
+    path = tmp_path / "test_x.http.json"
+    path.write_bytes(b'{"stages": ' + content + b"}")
+    result = on_bounded_stack(validate_scenario, path)
+
+    assert [(d.code, d.location) for d in result.diagnostics] == [(C.PARSE_ERROR, None)]
+    assert re.search(f"^Failed to parse JSON file: nested too deeply {reason}", result.diagnostics[0].message)
 
 
 @pytest.mark.parametrize(
@@ -501,6 +546,9 @@ class TestJmespathExpectationMerge:
         pytest.param([_stage(marks=["xdist_group('other')"])], {"marks": ["xdist_group('db')"]}, [C.STAGE_XDIST_GROUP], id="stage-adds-xdist-group"),
         # xdist reads the group back from after the node id's last '@'.
         pytest.param([_stage()], {"marks": ["xdist_group('db[1]@main')"]}, [], id="bracket-before-at-in-xdist-group"),
+        # Loads fine, and the name at the bottom is still reported. The checks
+        # walked it recursively and crashed with a RecursionError instead.
+        pytest.param([_stage(substitutions=[{"vars": {"deep": nested("{{ nowhere }}", LOADABLE_BUT_DEEP)}}])], {}, [C.UNDEFINED_VAR], id="value-nested-hundreds-deep"),
         # Only values are substituted: a templated key reaches the wire verbatim.
         pytest.param(
             [_stage(request={"url": "http://server/x", "headers": {"{{ hname }}": "v"}})],
@@ -589,10 +637,11 @@ class TestFileContent:
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Windows' non-strict realpath passes such a path through, so it is reported as not found")
     def test_reference_path_the_os_rejects_is_a_ref_error(self, tmp_path):
-        """A NUL in a reference path fell through to HTTPCHAIN015, not naming the reference."""
-        result = validate_scenario(_write(tmp_path, [{"$include": "a\x00.json"}]))
+        """A path the OS path call rejects (a lone surrogate) fell through to
+        HTTPCHAIN015, not naming the reference."""
+        result = validate_scenario(_write(tmp_path, [{"$include": "\ud800.json"}]))
         assert _codes(result) == [C.REF_ERROR]
-        assert r"Reference path 'a\x00.json' is not a valid file path" in result.errors[0]
+        assert r"Reference path '\ud800.json' is not a valid file path" in result.errors[0]
 
     def test_byte_order_mark_is_accepted(self, tmp_path):
         scenario = _write(tmp_path, [_stage()])

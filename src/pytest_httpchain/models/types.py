@@ -164,17 +164,51 @@ def convert_dict_to_namespace(v: Any) -> Any:
 
 
 def convert_namespace_to_dict(v: Any) -> Any:
-    """Recursively normalize ``SimpleNamespace`` back to dicts, so the value is
-    JSON-serializable."""
-    match v:
-        case types.SimpleNamespace():
-            return {key: convert_namespace_to_dict(value) for key, value in vars(v).items()}
-        case list():
-            return [convert_namespace_to_dict(item) for item in v]
-        case dict():
-            return {key: convert_namespace_to_dict(value) for key, value in v.items()}
-        case _:
-            return v
+    """Normalize ``SimpleNamespace`` back to dicts at every depth, so the value
+    is JSON-serializable. Lists and dicts are copied, keys in their order.
+
+    Iterative: it runs as a validator on JSON bodies, inline schemas and
+    ``verify.jmespath`` operands, where the loader accepts a value of any depth,
+    and a recursive walk overflowed on one nested past the recursion limit. A
+    value that contains itself (a fixture's self-referencing list) is refused
+    with a ValueError, which pydantic reports, where the recursion overflowed
+    and a plain loop would never end.
+    """
+    containers = (types.SimpleNamespace, dict, list)
+    if not isinstance(v, containers):
+        return v
+    root: list[Any] = [None]
+    # The containers being copied, from the root down to the one in hand: a
+    # member among them is a cycle, while one met again elsewhere is only
+    # shared and is copied once more, as the recursive walk did.
+    in_progress: set[int] = set()
+    # (value to copy, the container its copy goes in, the key there), or the
+    # id of a container whose members are all copied.
+    pending: list[tuple[Any, Any, Any] | int] = [(v, root, 0)]
+    while pending:
+        entry = pending.pop()
+        if isinstance(entry, int):
+            in_progress.discard(entry)
+            continue
+        value, parent, slot = entry
+        if id(value) in in_progress:
+            raise ValueError("the value contains itself, so it cannot be converted to JSON")
+        match value:
+            case types.SimpleNamespace() | dict():
+                copy: Any = {}
+                members: Iterable[tuple[Any, Any]] = (vars(value) if isinstance(value, types.SimpleNamespace) else value).items()
+            case _:
+                copy = [None] * len(value)
+                members = enumerate(value)
+        parent[slot] = copy
+        in_progress.add(id(value))
+        pending.append(id(value))
+        for key, member in members:
+            # Every key is placed now, so the copy keeps the original's order.
+            copy[key] = member
+            if isinstance(member, containers):
+                pending.append((member, copy, key))
+    return root[0]
 
 
 def convert_namespace_items_to_dict(v: Any) -> Any:

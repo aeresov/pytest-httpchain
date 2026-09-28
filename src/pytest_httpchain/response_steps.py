@@ -26,7 +26,7 @@ import jsonschema
 import pytest
 import referencing.exceptions
 
-from pytest_httpchain.errors import SaveError, SchemaFileError, VerificationError
+from pytest_httpchain.errors import SaveError, SchemaFileError, StageExecutionError, VerificationError
 from pytest_httpchain.jsonref import json_equal
 from pytest_httpchain.models import (
     JSON_TYPE_NAMES,
@@ -44,7 +44,7 @@ from pytest_httpchain.models import (
 from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, Redaction
 from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.userfunc import UserFunctionError, call_target, call_user_function
-from pytest_httpchain.utils import optional_as_list, path_segment, process_substitutions, read_json_schema_file, resolve_scenario_path
+from pytest_httpchain.utils import optional_as_list, path_segment, process_substitutions, read_json_schema_file, resolve_scenario_path, schema_error_text
 
 
 def process_save(save_model: Save, response: httpx.Response, context: ChainMap[str, Any]) -> dict[str, Any]:
@@ -53,11 +53,7 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
 
     match save_model:
         case JMESPathSave():
-            try:
-                response_json = response.json()
-            except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                raise SaveError(f"Cannot extract variables, response is not valid JSON: {e}") from e
-
+            response_json = _response_json(response, SaveError, "extract variables")
             for var_name, jmespath_expr in save_model.jmespath.items():
                 try:
                     step_saved[var_name] = jmespath.search(jmespath_expr, response_json)
@@ -724,9 +720,11 @@ def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None,
         except Exception as e:
             # A SchemaError, or a crash checking the schema, as the inline
             # schema's check and `validate --deep` catch it: ``re`` refusing a
-            # ``pattern`` too big to compile (OverflowError, RecursionError),
-            # which would take the step's other failures with it.
-            failures.add(f"Invalid JSON Schema in file '{schema_path}': {e}", cause=e)
+            # ``pattern`` too big to compile (OverflowError, RecursionError), or
+            # the meta-validator's own recursion on a deeply nested schema,
+            # which would take the step's other failures with it. The message
+            # must not recurse too (see `schema_error_text`).
+            failures.add(f"Invalid JSON Schema in file '{schema_path}': {schema_error_text(e)}", cause=e)
             return
 
     response_json = body.parsed("validate schema")
@@ -743,15 +741,27 @@ def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None,
     except jsonschema.ValidationError as e:
         failures.add(_schema_violation(e), cause=e)
     except RecursionError as e:
-        # A schema that recurses as deep as the body (``"items": {"$ref": "#"}``)
-        # on one nested some hundreds of levels deep, which json parses.
-        failures.add(f"Cannot validate schema, response JSON is nested too deeply to validate: {e}", cause=e)
+        # Validation recurses in Python, several frames per level of the body
+        # (or of a schema that follows it down, ``"items": {"$ref": "#"}``), so
+        # it gives out long before the C decoder does.
+        failures.add(f"Cannot validate schema, response or schema is nested too deeply: {e}", cause=e)
     except jsonschema.SchemaError as e:
-        failures.add(f"Invalid body validation schema: {e}", cause=e)
+        failures.add(f"Invalid body validation schema: {schema_error_text(e)}", cause=e)
     except referencing.exceptions.Unresolvable as e:
         # An unresolvable $ref inside the schema itself must fail the stage
         # cleanly, not escape as a raw traceback past the abort machinery.
         failures.add(f"Cannot resolve $ref in body schema: {e}", cause=e)
+
+
+def _response_json(response: httpx.Response, error: type[StageExecutionError], purpose: str) -> Any:
+    """The body parsed as JSON, or ``error`` naming what it was needed for, in
+    the words `_JsonBody.parsed` uses for a verify step."""
+    try:
+        return response.json()
+    except ValueError as e:
+        raise error(f"Cannot {purpose}, response is not valid JSON: {e}") from e
+    except RecursionError as e:
+        raise error(f"Cannot {purpose}, response JSON is nested too deeply to parse: {e}") from e
 
 
 def _schema_violation(error: jsonschema.ValidationError) -> str:

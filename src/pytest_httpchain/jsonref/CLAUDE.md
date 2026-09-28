@@ -34,6 +34,19 @@ merge uses it (an equal value keeps, a different one conflicts), and so do
 `verify.jmespath` (`response_steps`) and the validator's contradiction checks
 on it. It lives here, the lowest layer that needs it, so all three agree.
 
+### Load errors
+
+Every failure surfaces as `ReferenceResolverError`, so callers need one
+`except`. Content the reader rejects — bytes that are not UTF-8 (a UTF-8
+byte-order mark is accepted), an integer too long to parse, a duplicate object
+key — is an `InvalidJSONError` naming the file, raised directly (`DuplicateKeyError`
+is one). Any other load failure is chained as `__cause__`: `OSError`,
+`JSONDecodeError`, or `RecursionError` (nested deeper than the decoder or the
+resolver's own walk can go). The validator classifies on the type and that
+cause. jsonref sits below `utils` in the layering, so it keeps its own list of
+these errors (`_LOAD_ERRORS` in `plumbing/reference.py`) instead of importing
+the plugin's.
+
 ### Opaque subtrees
 
 `opaque` is an optional predicate over document positions (tuples of dict

@@ -13,6 +13,11 @@ def validate_ref_path(ref_path: str, base_path: Path, root_path: Path, max_paren
     Tried in order: the referencing file's directory, then ``root_path``. The
     result must exist and stay inside ``root_path``.
     """
+    # No filesystem accepts a NUL byte: resolve() below would raise a bare
+    # ValueError, escaping every caller as a traceback.
+    if "\0" in ref_path:
+        raise ReferenceResolverError(f"Reference path contains a NUL character: {ref_path!r}")
+
     # Absolute paths bypass the traversal limit and escape the sandbox, and
     # scenario files are portable — so judge "absolute" under both flavors: the
     # host's Path alone lets "/etc/passwd" through on Windows and "C:\\x" on POSIX.
@@ -41,9 +46,9 @@ def validate_ref_path(ref_path: str, base_path: Path, root_path: Path, max_paren
         try:
             resolved = (base / ref_path).resolve()
         except ValueError as e:
-            # A NUL, or a lone surrogate the filesystem encoding cannot hold —
-            # both one JSON \u escape away. The OS call's ValueError is outside
-            # every caller's except block, so it escaped as a raw traceback.
+            # A lone surrogate the filesystem encoding cannot hold, one JSON \u
+            # escape away (a NUL is refused above). The OS call's ValueError is
+            # outside every caller's except block, so it escaped as a raw traceback.
             # repr keeps the message printable.
             raise ReferenceResolverError(f"Reference path {ref_path!r} is not a valid file path: {e}") from e
         if not resolved.exists():
