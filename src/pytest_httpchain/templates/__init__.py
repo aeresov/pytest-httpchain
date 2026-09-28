@@ -7,11 +7,22 @@ values, with variables, functions and comprehensions.
 
 from pytest_httpchain.templates.exceptions import TemplatesError
 from pytest_httpchain.templates.expressions import TEMPLATE_PATTERN, TEMPLATE_PATTERN_ECMA, extract_template_expression, is_complete_template
-from pytest_httpchain.templates.substitution import TEMPLATE_BUILTINS, contains_template, get_max_comprehension_length, set_max_comprehension_length, walk, walker
+from pytest_httpchain.templates.substitution import (
+    CALL_ONLY_BUILTINS,
+    CONTEXT_HELPERS,
+    TEMPLATE_BUILTINS,
+    call_form,
+    contains_template,
+    get_max_comprehension_length,
+    set_max_comprehension_length,
+    walk,
+    walker,
+)
 
 __all__ = [
     "walk",
     "walker",
+    "call_form",
     "contains_template",
     "get_max_comprehension_length",
     "set_max_comprehension_length",
@@ -20,5 +31,7 @@ __all__ = [
     "TEMPLATE_PATTERN",
     "TEMPLATE_PATTERN_ECMA",
     "TEMPLATE_BUILTINS",
+    "CONTEXT_HELPERS",
+    "CALL_ONLY_BUILTINS",
     "TemplatesError",
 ]

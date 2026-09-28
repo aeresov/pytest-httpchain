@@ -40,7 +40,7 @@ Each scenario contains 1+ stages executed in order. One stage failure stops the 
 
 ### Common data context
 
-A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use template expressions (`{{ var }}`) in any request **value** — substitution happens dynamically before each stage. (Dict keys are not substituted; `HTTPCHAIN029` flags a template in a key.)
+A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use template expressions (`{{ var }}`) in any request **value** — substitution happens dynamically before each stage. (Dict keys are not substituted; `HTTPCHAIN029` flags a template in a key.) Built-in functions give the values tests keep needing without a fixture: the time (`now()`, `timestamp()`), base64, JSON and URL encoding, and SHA-256, MD5 and HMAC-SHA256 digests for signing a request.
 
 ### Response processing
 
@@ -99,7 +99,6 @@ Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix i
             ]
         },
         "update_user": {
-            "fixtures": ["now_utc"],
             "request": {
                 "url": "/users/{{ user_id }}",
                 "method": "PUT",
@@ -107,7 +106,7 @@ Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix i
                     "json": {
                         "user": {
                             "name": "{{ user_name }}_updated",
-                            "timestamp": "{{ str(now_utc) }}"
+                            "timestamp": "{{ now() }}"
                         }
                     }
                 }
@@ -131,19 +130,6 @@ Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix i
 }
 ```
 
-The one stage above that needs Python is `update_user`, which asks for a `now_utc` fixture — ordinary pytest fixtures, resolved from your `conftest.py`:
-
-```python
-# conftest.py
-import pytest
-from datetime import datetime
-
-
-@pytest.fixture
-def now_utc():
-    return datetime.now()
-```
-
 Scenario we created:
 
 -   the scenario's HTTP client gets a base URL, so every stage gives only its path
@@ -154,9 +140,8 @@ Scenario we created:
     we verify the call returned code 200  
     assuming JSON body is returned, we extract a value by JMESPath expression `user.name` and save it to common data context under `user_name` key
 -   **update_user**  
-    `now_utc` fixture value is injected into common data context  
     url is assembled using `user_id` variable from common data context  
-    we create JSON body in place using values from common data context, note that `now_utc` is converted to string in place  
+    we create JSON body in place using values from common data context, and the current UTC time from the built-in `now()`  
     HTTP PUT call with body is made  
     we verify the call returned code 200
 -   **cleanup**  

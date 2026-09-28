@@ -86,7 +86,7 @@ saved as `HTTPCHAIN004`, naming the stage *and* the phase it appears in.
 ```json
 "{{ user_id }}"
 "{{ user_id + 1 }}"
-"{{ str(timestamp) }}"
+"{{ str(timestamp()) }}"
 "{{ 'prefix_' + name }}"
 ```
 

@@ -23,7 +23,7 @@ Substitutions can be defined at scenario or stage level:
         },
         {
             "functions": {
-                "timestamp": "mymodule:get_timestamp"
+                "sequence": "mymodule:next_sequence"
             }
         }
     ]
@@ -114,7 +114,7 @@ Bind a name to a Python function so it can be **called** from templates:
         {
             "functions": {
                 "uuid": "uuid:uuid4",
-                "timestamp": "mymodule:get_timestamp",
+                "sequence": "mymodule:next_sequence",
                 "config": "mymodule:load_config"
             }
         }
@@ -124,11 +124,13 @@ Bind a name to a Python function so it can be **called** from templates:
 
 ```python
 # mymodule.py
-from datetime import datetime
+import itertools
+
+_counter = itertools.count(1)
 
 
-def get_timestamp() -> str:
-    return datetime.now().isoformat()
+def next_sequence() -> str:
+    return f"seq-{next(_counter)}"
 
 
 def load_config() -> dict:
@@ -143,7 +145,7 @@ value; referencing it bare renders the function object itself:
 {
     "headers": {
         "X-Request-Id": "{{ uuid() }}",
-        "X-Timestamp": "{{ timestamp() }}"
+        "X-Sequence": "{{ sequence() }}"
     },
     "body": {
         "json": {"environment": "{{ config()['environment'] }}"}
@@ -226,6 +228,169 @@ Available functions in expressions:
 -   `uuid4()`, `rand()`, `randint(top)`
 -   `env(var, default)`
 -   `get(var, default)`, `exists(var)`
+-   time: `now()`, `timestamp()`, `timestamp_ms()`
+-   encoding: `b64encode()`, `b64decode()`, `json_dumps()`, `json_loads()`
+-   URLs: `urlencode()`, `quote()`
+-   hashing: `sha256()`, `md5()`, `hmac_sha256()`
+
+The time, encoding, URL and hashing helpers cover the values a test otherwise
+needs a fixture or a user function for. Each returns plain text, a number or,
+for `json_loads`, JSON data. Call them with their parentheses: `{{ now }}`
+alone is the function, not the time, so a template that renders to a helper
+fails the stage ("Uncalled function ... call it: now()"), and `validate` warns
+of a helper used without being called (`HTTPCHAIN035`), such as
+`str(timestamp)` or `dict(at=timestamp)`. The same goes for `uuid4`, `env`,
+`rand` and `randint`, which are no use uncalled either. A save named like one
+of them fails the same way where it has not landed: `{{ quote }}` in an
+`always_run` cleanup stage, after the stage that saves `quote` failed, gets
+the built-in function, and the message says that no value named `quote` is
+defined there.
+
+#### Time
+
+| Call | Returns |
+| --- | --- |
+| `now()` | The current UTC time in ISO 8601, with its offset and always with microseconds: `2026-09-27T12:34:56.789012+00:00` |
+| `now(fmt)` | The current UTC time formatted with Python's `strftime`: `now('%Y-%m-%d')` is `2026-09-27`. `%s` is refused: the C library formats it as local time, off by the host's UTC offset; use `timestamp()` for Unix seconds |
+| `timestamp()` | The current Unix time in whole seconds, as a number |
+| `timestamp_ms()` | The current Unix time in whole milliseconds, as a number |
+
+`timestamp()` and `timestamp_ms()` are numbers, and a header value must be
+text: a header that is the call alone, `"X-Timestamp": "{{ timestamp() }}"`,
+fails the stage ("Input should be a valid string"). Write
+`"{{ str(timestamp()) }}"`, or put the call inside text
+(`"t={{ timestamp() }}"`), which renders as text. A number is fine as it is in
+`params` and in a JSON body.
+
+Every call reads the clock, so two calls in one request can differ. To use one
+moment in several places, bind it once in `vars`; an expiry an hour ahead is
+`timestamp() + 3600`:
+
+```json
+{
+    "substitutions": [{"vars": {"sent_at": "{{ now() }}", "expires": "{{ timestamp() + 3600 }}"}}],
+    "stages": [
+        {
+            "name": "create_order",
+            "request": {
+                "url": "https://api.example.com/orders",
+                "method": "POST",
+                "headers": {"X-Sent-At": "{{ sent_at }}"},
+                "body": {"json": {"placed_at": "{{ sent_at }}", "expires": "{{ expires }}"}}
+            }
+        }
+    ]
+}
+```
+
+#### Encoding
+
+| Call | Returns |
+| --- | --- |
+| `b64encode(value, urlsafe=false)` | The base64 of `value`, padded: text is encoded as UTF-8 first, and bytes (from a fixture or function) are taken as they are. `urlsafe=true` (or `true` as the second argument) uses `-` and `_` for `+` and `/` |
+| `b64decode(value, urlsafe=false)` | The text base64 `value` encodes, which must be UTF-8. Padding is optional; `urlsafe=true` reads the URL-safe alphabet |
+| `json_dumps(value)` | `value` as JSON text, as Python's `json.dumps` writes it by default: `{"a": 1, "b": [1, 2]}`, with non-ASCII characters escaped. A `vars` object is written as the object it is |
+| `json_loads(text)` | The JSON value `text` holds, objects as dicts |
+
+Reading a claim from a JWT a login stage saved:
+
+```json
+{
+    "headers": {"X-User": "{{ json_loads(b64decode(token.split('.')[1], urlsafe=true))['sub'] }}"}
+}
+```
+
+For HTTP Basic authentication there is nothing to encode by hand: use the
+built-in [`basic` auth](requests.md#authentication).
+
+#### URLs
+
+| Call | Returns |
+| --- | --- |
+| `urlencode(obj)` | A query string from an object, a `vars` object or a dict, encoded as `params` would send it: `{"q": "a b", "tag": ["x", "y"]}` gives `q=a+b&tag=x&tag=y`. A list repeats its key, `true` and `false` stay lowercase, and `null` sends an empty value. Bytes (from a fixture or function) are percent-encoded as they are. A value that is itself an object or a list of lists fails, and so does a function passed without calling it (`dict(at=now)`) |
+| `quote(text, safe='')` | `text` percent-encoded (UTF-8) for one path segment: every reserved character is encoded, `/` included, unless it is listed in `safe` |
+
+`params` is still the way to send a stage's own query; `urlencode` is for a
+query inside a value, such as a callback URL passed as a parameter.
+`quote` keeps a value from breaking the path it goes in:
+
+```json
+{
+    "url": "https://api.example.com/files/{{ quote(file_name) }}",
+    "params": {"return_to": "https://app.example.com/done?{{ urlencode(state) }}"}
+}
+```
+
+#### Hashing
+
+| Call | Returns |
+| --- | --- |
+| `sha256(value)` | The hex SHA-256 digest of `value` |
+| `md5(value)` | The hex MD5 digest of `value`, for checksums such as `Content-MD5`, not for security |
+| `hmac_sha256(key, message, encoding='hex')` | The HMAC-SHA256 of `message` under `key`, as hex, or as base64 with `'base64'` |
+
+Text is encoded as UTF-8 first. A number fails rather than being turned into
+text for you: `sha256(str(order_id))` says which text is hashed. Signing a
+request, with the signed text sent as the body so that the two are the same
+bytes:
+
+```json
+{
+    "substitutions": [
+        {"vars": {"sent_at": "{{ str(timestamp()) }}", "payload": {"order": 42, "qty": 1}}},
+        {"vars": {"body_text": "{{ json_dumps(payload) }}"}}
+    ],
+    "request": {
+        "url": "https://api.example.com/orders",
+        "method": "POST",
+        "headers": {
+            "Content-Type": "application/json",
+            "X-Timestamp": "{{ sent_at }}",
+            "X-Signature": "{{ hmac_sha256(api_secret, sent_at + '.' + body_text) }}"
+        },
+        "body": {"text": "{{ body_text }}"}
+    }
+}
+```
+
+#### Errors
+
+A helper given a value it cannot take fails the stage, naming the function and
+the template:
+
+```text
+TypeError in expression '{{ sha256(order_id) }}': sha256() takes text or bytes, not int
+ValueError in expression '{{ b64decode(token) }}': b64decode() got text that is not base64 (Only base64 data is allowed)
+```
+
+#### Your names come first
+
+A name you define yourself, a variable, fixture, parameter, saved value or
+function substitution, takes precedence over a built-in of the same name,
+except that `get()` and `exists()` always call the built-in. In a scenario that
+saves `timestamp`, `{{ timestamp }}` reads the saved value, and
+`{{ timestamp() }}` still calls the built-in unless your `timestamp` is itself
+a function: a fixture or a function substitution.
+
+Your name wins only where it is in scope. Before a save lands, or outside the
+stage whose `fixtures` list names it, the built-in of that name is what a
+template gets: a read gets the function instead of your value, and a call runs
+the built-in, silently. `validate` reads names the same way. A read out of
+scope is reported as any name used out of scope (`HTTPCHAIN003`, `004` or, at
+scenario level, the errors `016`/`017`), with a note on what the read gets:
+the built-in in your value's place or, for a built-in that is no use as a
+value (`now`, `timestamp`, `env`, ...), a function no template may render to,
+which fails the stage (at scenario level, scenario initialization). A use as a
+function cannot fail there: a call where your fixture or function substitution
+is out of scope, or the name handed to a function (`key=len`) where your
+definition is. Each is the warning `HTTPCHAIN036`, at every level.
+A stage that fakes the clock with `{"functions": {"timestamp": "clock:fixed"}}`
+leaves every other stage, and the scenario-level `substitutions`, calling the
+real `timestamp()`, and `validate` says so:
+[filter](../diagnostics.md#filtering-collection-warnings) `HTTPCHAIN036` if
+that is what you mean, or give your function a name of its own. `show` and
+`graph` list a save named like a built-in as consumed where a template reads
+it.
 
 ### List/Dict Comprehensions
 

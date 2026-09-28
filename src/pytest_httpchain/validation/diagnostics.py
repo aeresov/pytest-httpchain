@@ -50,6 +50,8 @@ class DiagnosticCode(StrEnum):
     NODE_ID_SEPARATOR_IN_STAGE_NAME = "HTTPCHAIN032"
     UNREADABLE_XDIST_GROUP = "HTTPCHAIN033"
     RELATIVE_URL_WITHOUT_BASE_URL = "HTTPCHAIN034"
+    UNCALLED_BUILTIN = "HTTPCHAIN035"
+    BUILTIN_STANDS_IN = "HTTPCHAIN036"
 
 
 # A code's severity is a property of the code, not of the site that raises it:
@@ -94,6 +96,8 @@ SEVERITY: dict[DiagnosticCode, Severity] = {
     DiagnosticCode.NODE_ID_SEPARATOR_IN_STAGE_NAME: "error",
     DiagnosticCode.UNREADABLE_XDIST_GROUP: "error",
     DiagnosticCode.RELATIVE_URL_WITHOUT_BASE_URL: "error",
+    DiagnosticCode.UNCALLED_BUILTIN: "warning",
+    DiagnosticCode.BUILTIN_STANDS_IN: "warning",
 }
 
 

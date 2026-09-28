@@ -175,9 +175,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate` and collection; once a template renders them, they fail the stage as a save error, as
   does template text a template renders there. The saved names are known to `validate`'s order
   checks and to `show`/`graph`, as a JMESPath save's are.
+- Template built-ins for the values a test otherwise needed a fixture or a user function for.
+  Time: `now()` is the current UTC time in ISO 8601 with its offset and always with microseconds
+  (`2026-09-27T12:34:56.789012+00:00`), `now('%Y-%m-%d')` formats it with `strftime` (except `%s`,
+  which the C library formats as local time: `timestamp()` is the epoch value), and `timestamp()`
+  and `timestamp_ms()` are Unix seconds and milliseconds. Encoding: `b64encode` and `b64decode`
+  (text as UTF-8, `urlsafe=true` or a second argument `true` for the URL-safe alphabet, padding
+  optional when decoding, so a JWT segment reads as it is), `json_dumps` (`json.dumps`' defaults,
+  a `vars` object written as the object it is) and `json_loads`. URLs: `urlencode` builds a query
+  string from an object as `params` sends one (a list repeats its key, `true`/`false`, an empty
+  value for `null`, bytes percent-encoded as they are rather than as their `b'...'` repr), and
+  `quote` percent-encodes a path segment, `/` included unless given in `safe`. Hashing: `sha256`,
+  `md5` and `hmac_sha256(key, message, encoding='hex')`, hex or `'base64'`, for signing a request.
+  Each returns plain text, a number or JSON data; a value it cannot take (a number to hash, text
+  that is not base64 or not JSON, an object or an uncalled function nested in `urlencode`) fails
+  the stage with a message naming the function, and so does a template that renders to a helper
+  uncalled (`{{ now }}`, or a save named `now` that has not landed), rather than sending
+  `<function now at 0x...>`. A name the scenario defines itself, a variable, fixture, parameter,
+  save or function substitution, still wins over a built-in of the same name where it is in scope,
+  `get()` and `exists()` excepted: `{{ timestamp }}` reads a saved `timestamp`, while
+  `{{ timestamp() }}` calls the built-in unless that `timestamp` is a fixture's or function
+  substitution's function. The docs' three "use a fixture for a timestamp" examples now use
+  `now()`.
+- `HTTPCHAIN035` (warning): a built-in function that is no use as a value, a helper above or
+  `uuid4`, `env`, `rand` or `randint`, used without calling it, such as `{{ now }}`, `{{ env }}`,
+  `str(timestamp)` or `dict(at=timestamp)`, which gets the function itself rather than its value. A
+  built-in handed to a function that may take one, a `key=` or a user function's argument, is not
+  reported, nor is one in text the runtime never renders (a function substitution's `kwargs`).
+- `HTTPCHAIN036` (warning): a built-in's name the scenario defines too, used as a function where
+  that definition is not in scope, such as `timestamp()` in another stage or in the scenario-level
+  `substitutions` when one stage fakes the clock with a `timestamp` function substitution, or
+  `sorted(rows, key=len)` ahead of a save named `len`. The built-in runs in its place, which is
+  never a failure, so it is a warning at every level, scenario level included.
 
 ### Fixed
 
+- `{{ env }}`, the `env` built-in written without its parentheses, rendered the repr of
+  `os.environ`'s `get`, which lists every environment variable with its value, into the request,
+  and so into the HAR file and the report, and `validate` said nothing. A template that renders to
+  `env`, `uuid4`, `rand` or `randint` uncalled now fails the stage as one that renders to a helper
+  does (`Uncalled function in expression '{{ env }}': ... call it: env(...)`), `HTTPCHAIN035`
+  warns of it, and `env` inside an expression (`str(env)`) no longer carries the environment in its
+  text.
+- A name the scenario defines that a template built-in also has, such as a save called `max`,
+  `sum` or `round` (or, now, `timestamp` or `now`), was left out of `validate`'s checks and of
+  `show`/`graph`: every built-in's name was dropped from a template's references, so a later stage
+  reading the save drew no edge, and a read before the save was not reported, though it rendered
+  the built-in function (`<built-in function max>`) into the request. A name the scenario defines
+  is now a reference wherever a template reads it, which is what the runtime resolves: out of scope
+  it is reported, with a note that the built-in is used instead. A call to a fixture or function
+  substitution named like one, made where that fixture or function is not in scope, silently ran
+  the built-in, and still does; `HTTPCHAIN036` now says so, as a warning at scenario level too,
+  where such a call does not fail.
 - A header matcher's `matches` or `not_matches` that a template rendered to text `re` cannot
   compile, such as `{{ ( }}` saved from a response (the field's template branch takes template
   text as it is), escaped the stage as a raw `re.error` traceback, and one too big to compile

@@ -724,7 +724,7 @@ Add computed values to context:
         "substitutions": [
             {
                 "vars": {
-                    "timestamp": "{{ str(now_utc) }}"
+                    "received_at": "{{ now() }}"
                 }
             },
             {
@@ -737,18 +737,8 @@ Add computed values to context:
 }
 ```
 
-The template evaluator does not expose `datetime`, so provide values like timestamps via a fixture and reference the stage with `fixtures: ["now_utc"]`:
-
-```python
-# conftest.py
-import pytest
-from datetime import datetime
-
-
-@pytest.fixture
-def now_utc():
-    return datetime.now()
-```
+`now()` is one of the template [built-in functions](substitutions.md#built-in-functions),
+with `timestamp()` and helpers for base64, JSON, URLs and hashes.
 
 ### User Function Save
 

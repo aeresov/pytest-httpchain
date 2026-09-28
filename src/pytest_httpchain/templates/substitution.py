@@ -1,4 +1,5 @@
 import ast
+import inspect
 import os
 import re
 from collections.abc import Callable, Mapping
@@ -22,6 +23,7 @@ from simpleeval import (
 
 from pytest_httpchain.templates.exceptions import TemplatesError
 from pytest_httpchain.templates.expressions import TEMPLATE_PATTERN, extract_template_expression
+from pytest_httpchain.templates.functions import HELPER_FUNCTIONS
 
 
 def set_max_comprehension_length(length: int) -> None:
@@ -34,6 +36,13 @@ def get_max_comprehension_length() -> int:
     """The current process-wide cap, so ``pytest_unconfigure`` can restore what
     it found (an in-process pytester run must not leak its cap to the host)."""
     return simpleeval.MAX_COMPREHENSION_LENGTH
+
+
+def env(key: str, default: Any = None) -> Any:
+    """``os.environ.get``, as a function of its own: the bound method's repr
+    lists every environment variable with its value, so a template that got
+    it uncalled (``str(env)``) sent the whole environment in its request."""
+    return os.environ.get(key, default)
 
 
 SAFE_FUNCTIONS = {
@@ -53,7 +62,9 @@ SAFE_FUNCTIONS = {
     "tuple": tuple,
     "set": set,
     "uuid4": lambda: str(uuid4()),
-    "env": os.environ.get,
+    "env": env,
+    # Time, encoding, hashing and URL helpers (see functions.py).
+    **HELPER_FUNCTIONS,
 }
 
 # JSON-style boolean literals (lowercase) for compatibility
@@ -63,9 +74,44 @@ JSON_LITERALS = {
     "null": None,
 }
 
+# The context helpers `_build_evaluator` binds to each context. It merges them
+# last, so a user callable of the same name never replaces them: a call always
+# reaches the built-in, which the validator's reference model relies on.
+CONTEXT_HELPERS = frozenset({"exists", "get"})
+
 # Names an expression gets for free. The validator reads this to tell an
 # undefined variable from an engine-provided name.
-TEMPLATE_BUILTINS = frozenset({*SAFE_FUNCTIONS, *JSON_LITERALS, "exists", "get", *DEFAULT_FUNCTIONS})
+TEMPLATE_BUILTINS = frozenset({*SAFE_FUNCTIONS, *JSON_LITERALS, *CONTEXT_HELPERS, *DEFAULT_FUNCTIONS})
+
+# The built-ins of no use but called: the time, encoding, URL and hashing
+# helpers (functions.py), uuid4, env, rand and randint. Rendered uncalled
+# (``{{ now }}``), each would put its repr (``<function now at 0x...>``) in the
+# request, so `_eval_expr` refuses that and the validator warns of it
+# (HTTPCHAIN035). The conversions and the collection and math built-ins
+# (``str``, ``len``, ``max``) are left out: a ``key=`` takes them as they are.
+CALL_ONLY_BUILTINS = frozenset({*HELPER_FUNCTIONS, "uuid4", "env", "rand", "randint"})
+_CALL_ONLY_FUNCTIONS = {name: function for name, function in (SAFE_FUNCTIONS | DEFAULT_FUNCTIONS).items() if name in CALL_ONLY_BUILTINS}
+# By identity, which every value has: a template's value may be unhashable.
+_CALL_ONLY = {id(function): name for name, function in _CALL_ONLY_FUNCTIONS.items()}
+
+
+def _takes_arguments(function: Callable[..., Any]) -> bool:
+    """Whether ``function`` cannot be called without arguments (so if its
+    signature cannot be read, to be safe)."""
+    try:
+        parameters = inspect.signature(function).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(p.default is p.empty and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in parameters)
+
+
+_CALL_FORMS = {name: f"{name}(...)" if _takes_arguments(function) else f"{name}()" for name, function in _CALL_ONLY_FUNCTIONS.items()}
+
+
+def call_form(name: str) -> str:
+    """How advice writes a call of the call-only built-in ``name``: ``now()``,
+    or ``env(...)`` for one that cannot be called without arguments."""
+    return _CALL_FORMS[name]
 
 
 def _build_evaluator(context: Mapping[str, Any]) -> EvalWithCompoundTypes:
@@ -94,8 +140,8 @@ def _build_evaluator(context: Mapping[str, Any]) -> EvalWithCompoundTypes:
             names[key] = value
 
     # Merge order is load-bearing: last wins, so user callables shadow the safe
-    # functions while `exists`/`get` cannot be overridden, and user names shadow
-    # the JSON literals.
+    # functions while `exists`/`get` (CONTEXT_HELPERS) cannot be overridden, and
+    # user names shadow the JSON literals.
     return EvalWithCompoundTypes(
         functions=SAFE_FUNCTIONS
         | DEFAULT_FUNCTIONS
@@ -108,12 +154,24 @@ def _build_evaluator(context: Mapping[str, Any]) -> EvalWithCompoundTypes:
     )
 
 
+class _UncalledBuiltin(Exception):
+    """An expression evaluated to a call-only built-in itself, not to its value."""
+
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.name = name
+
+
 def _eval_expr(evaluator: EvalWithCompoundTypes, expr: str, *, as_text: bool = False) -> Any:
     """Evaluate one expression; every failure becomes a `TemplatesError`.
 
     ``as_text`` returns the value's ``str()`` for interpolation. That runs in
     here because it can raise too — an int past Python's digit limit, an object
     whose ``__str__`` fails — and must fail the same way.
+
+    A value that is a call-only built-in itself (``{{ now }}``, parentheses
+    forgotten, or a save of that name that has not landed) is refused rather
+    than rendered as its repr (`CALL_ONLY_BUILTINS`).
     """
     # Rebuilt in its original {{ … }} form: an f-string would collapse the braces
     # and show text that is not in the user's scenario.
@@ -127,7 +185,17 @@ def _eval_expr(evaluator: EvalWithCompoundTypes, expr: str, *, as_text: bool = F
         if len(statements) > 1:
             raise InvalidExpression(f"a template holds one expression, not {len(statements)} statements separated by ';'")
         value = evaluator.eval(expr, statements[0] if statements else None)
+        if (name := _CALL_ONLY.get(id(value))) is not None:
+            raise _UncalledBuiltin(name)
         return str(value) if as_text else value
+    except _UncalledBuiltin as e:
+        # A built-in is what the name evaluates to only where no value of the
+        # user's has that name: parentheses forgotten, or the user's own name
+        # (a save that has not landed) out of scope. The message holds both.
+        raise TemplatesError(
+            f"Uncalled function in expression '{display}': no value named '{e.name}' is defined here, so {e.name} is the built-in function, "
+            f"not a value; if the built-in is meant, call it: {call_form(e.name)}"
+        ) from None
     except NameNotDefined as e:
         raise TemplatesError(f"Undefined variable in expression '{display}': {e}") from e
     except FunctionNotDefined as e:

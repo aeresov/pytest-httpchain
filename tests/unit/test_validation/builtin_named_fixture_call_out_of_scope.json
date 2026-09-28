@@ -1,0 +1,15 @@
+{
+    "stages": [
+        {
+            "name": "early",
+            "request": { "url": "https://x.test/a", "headers": { "X-Sent-At": "{{ str(timestamp()) }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "late",
+            "fixtures": ["timestamp"],
+            "request": { "url": "https://x.test/b", "headers": { "X-Sent-At": "{{ str(timestamp()) }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

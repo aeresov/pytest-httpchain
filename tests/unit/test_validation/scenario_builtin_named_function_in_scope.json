@@ -1,0 +1,16 @@
+{
+    "substitutions": [
+        { "functions": { "timestamp": "clock:fixed" } },
+        { "vars": { "started": "{{ timestamp() }}" } }
+    ],
+    "client": { "headers": { "X-Client-Time": "{{ str(timestamp()) }}" } },
+    "stages": [
+        {
+            "name": "frozen",
+            "always_run": "{{ timestamp() > 0 }}",
+            "parametrize": [ { "individual": { "at": ["{{ timestamp() }}"] } } ],
+            "request": { "url": "https://x.test/a", "headers": { "X-Started": "{{ str(started) }}", "X-At": "{{ str(at) }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

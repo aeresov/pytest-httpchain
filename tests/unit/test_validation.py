@@ -85,6 +85,10 @@ def _hide_ancestor_project_markers(monkeypatch):
         # A regex save's names are known, to later steps and later stages, and
         # its pattern sees a prior step's save.
         "save_regex_ok.json",
+        # The built-in helpers are engine-provided in every phase, scenario
+        # level included; calling one whose name a stage saves (timestamp())
+        # reaches the built-in, and reading it after the save reads the save.
+        "template_helpers_ok.json",
         "substitution_function_kwargs_literal_ok.json",  # only a template is dead text
         # client.base_url (templated from scenario substitutions) completes a
         # relative URL, literal or after a template; an absolute one ignores it.
@@ -176,6 +180,39 @@ DIAGNOSED = [
         "scenario_template_fixture_ref.json",
         [(C.FIXTURE_IN_SCENARIO_TEMPLATE, "substitutions", r"\['srv'\]"), (C.FIXTURE_IN_SCENARIO_TEMPLATE, "ssl", r"\['ca_path'\]")],
     ),
+    # A call under a built-in's name that the scenario defines as a fixture or
+    # function substitution, made where no scenario-level template can see
+    # that definition, runs the built-in: nothing fails, so it is a warning,
+    # not the 016/017 error a fixture or undefined READ there is. In the stage,
+    # where the definition is in scope, the call reaches it.
+    (
+        "scenario_builtin_named_fixture_call.json",
+        [
+            (
+                C.BUILTIN_STANDS_IN,
+                "substitutions",
+                r"^Scenario-level 'substitutions' uses the function now\(\), but the scenario's own definition of 'now' is not in scope there "
+                r"\(a scenario-level substitution step sees only the steps before it: no fixture, and nothing a stage defines\), "
+                r"so the template built-in runs instead$",
+            )
+        ],
+    ),
+    # A stage faking the clock leaves the built-in to the scenario level.
+    (
+        "scenario_builtin_named_call_stage_function.json",
+        [(C.BUILTIN_STANDS_IN, "substitutions", r"uses the function timestamp\(\), but the scenario's own definition of 'timestamp'")],
+    ),
+    # A step before the one that defines the function runs the built-in, where
+    # a read of a name defined later crashes (017).
+    ("scenario_builtin_named_call_later_step.json", [(C.BUILTIN_STANDS_IN, "substitutions", r"uses the function now\(\), but the scenario's own definition of 'now'")]),
+    # Where the function substitution IS in scope, no 036 anywhere: a later
+    # scenario-level step, client, a parametrize value (resolved against the
+    # scenario substitutions) and always_run each call the user's timestamp().
+    # Only the parametrize timing note remains.
+    (
+        "scenario_builtin_named_function_in_scope.json",
+        [(C.PARAMETRIZE_COLLECTION_RESOLUTION, "stages[0].parametrize", "resolve at collection time")],
+    ),
     # `client` resolves once per scenario, like ssl and auth: no fixtures, and
     # only scenario substitutions.
     ("client_template_fixture_ref.json", [(C.FIXTURE_IN_SCENARIO_TEMPLATE, "client", r"'client' templates: \['token'\]")]),
@@ -210,6 +247,46 @@ DIAGNOSED = [
     ("scenario_fixture_shadows_save.json", [(C.FIXTURE_SHADOWS_SAVE, None, r"\['token'\]")]),
     # Saved later is an ordering bug, reported as such rather than as undefined.
     ("forward_reference.json", [(C.FORWARD_REF, "stages[0].request", "'token' is referenced before it is saved")]),
+    # A save named like a built-in helper: reading it ahead of the save gets
+    # the built-in function, which is no value, so it is still an ordering
+    # bug, and the stage fails. The call (timestamp()) beside it reaches the
+    # built-in and is not.
+    (
+        "builtin_name_forward_ref.json",
+        [
+            (
+                C.FORWARD_REF,
+                "stages[0].request",
+                r"'timestamp' is referenced before it is saved \(saved in stage 'clock'\); where no definition of 'timestamp' is in scope, "
+                r"the name is the template built-in function, not a value, and a template that renders to it fails the stage$",
+            )
+        ],
+    ),
+    # A fixture may hold a function, which a call reaches first: outside the
+    # fixture's stage the call silently runs the built-in timestamp() instead.
+    (
+        "builtin_named_fixture_call_out_of_scope.json",
+        [
+            (
+                C.BUILTIN_STANDS_IN,
+                "stages[0].request",
+                r"^Stage 'early': request uses the function timestamp\(\), but the scenario's own definition of 'timestamp' is not in scope there, "
+                r"so the template built-in runs instead$",
+            )
+        ],
+    ),
+    # A helper without its parentheses gets the function, not its value; one
+    # handed to a key= stays a function, as it should.
+    (
+        "uncalled_helper.json",
+        [
+            (
+                C.UNCALLED_BUILTIN,
+                "stages[0].request",
+                r"^Stage 'search': request uses the built-in functions \['now', 'timestamp_ms'\] without calling them: .* Write now\(\), timestamp_ms\(\)$",
+            )
+        ],
+    ),
     ("same_stage_forward.json", [(C.FORWARD_REF, "stages[0].request", "'sid', which is only saved in this stage's response")]),
     ("substitution_intra_list_forward.json", [(C.FORWARD_REF, "stages[0].substitutions", "'b' before the substitution step that defines it")]),
     ("response_step_forward.json", [(C.FORWARD_REF, "stages[0].response", "'token' before the save that produces it")]),

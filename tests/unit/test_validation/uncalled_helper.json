@@ -1,0 +1,9 @@
+{
+    "stages": [
+        {
+            "name": "search",
+            "request": { "url": "https://x.test/search?at={{ timestamp_ms }}", "params": { "sent": "{{ now }}", "order": "{{ sorted(['b', 'a'], key=sha256) }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

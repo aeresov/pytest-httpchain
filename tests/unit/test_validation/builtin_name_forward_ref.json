@@ -1,0 +1,17 @@
+{
+    "stages": [
+        {
+            "name": "early",
+            "request": { "url": "https://x.test/a", "headers": { "X-Sent-At": "{{ str(timestamp()) }}", "X-Server-Time": "{{ timestamp }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "clock",
+            "request": { "url": "https://x.test/clock" },
+            "response": [
+                { "verify": { "status": 200 } },
+                { "save": { "jmespath": { "timestamp": "data.timestamp" } } }
+            ]
+        }
+    ]
+}

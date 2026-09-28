@@ -24,6 +24,11 @@ response (per iteration)  the above plus the ``response`` metadata namespace,
 Stage ``parametrize`` *values* are the exception: they resolve at collection
 time against scenario substitutions only, which is why `StageScopes` exposes
 ``scenario_substitutions`` separately.
+
+The template built-ins (``now()``, ``len()``, ``true``, ...) are in scope in
+every phase, beneath the user's names: a user name shadows a built-in of the
+same name, except that a call to ``get()`` or ``exists()`` always reaches the
+built-in (see `extract_template_variables` and `extract_builtin_stand_ins`).
 """
 
 import ast
@@ -31,7 +36,7 @@ import re
 from collections import ChainMap
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
 from pytest_httpchain.models import (
     CombinationsParameter,
@@ -51,7 +56,7 @@ from pytest_httpchain.models import (
     VarsSubstitution,
     normalize_list_input,
 )
-from pytest_httpchain.templates import TEMPLATE_BUILTINS, TEMPLATE_PATTERN
+from pytest_httpchain.templates import CALL_ONLY_BUILTINS, CONTEXT_HELPERS, TEMPLATE_BUILTINS, TEMPLATE_PATTERN
 
 # The name under which response metadata is injected into response-step contexts.
 RESPONSE_META_NAME = "response"
@@ -64,18 +69,43 @@ SCENARIO_TEMPLATE_FIELDS = ("substitutions", "auth", "ssl", "client")
 # --------------------------------------------------------------------------- #
 
 
-def _extract_names_from_expr(expr: str) -> set[str]:
-    """Free identifiers referenced by a Python expression.
+class _TemplateNames(NamedTuple):
+    """The free identifiers of some template text, by how each is used."""
 
-    Comprehension targets and lambda parameters are local bindings, not context
-    references. Falls back to a permissive regex if the expression doesn't parse.
+    read: set[str]
+    """Names used as a value anywhere but as a call's function."""
+    called: set[str]
+    """Names called (``now()``)."""
+    loose: set[str]
+    """The read names that are not handed to a function that may take one:
+    ``{{ now }}``, ``str(now)`` and ``dict(at=now)``, not
+    ``sorted(rows, key=len)`` or ``sign(now)`` (see `_extract_names_from_expr`)."""
+
+
+def _extract_names_from_expr(expr: str) -> _TemplateNames:
+    """Free identifiers a Python expression reads, and those it calls.
+
+    A name is called where it is the function of a call (``now()``) and read
+    anywhere else, ``sorted(rows, key=len)``'s ``len`` included; one used both
+    ways is in both sets. Comprehension targets and lambda parameters are local
+    bindings, not context references. Falls back to a permissive regex, every
+    identifier read, if the expression doesn't parse.
+
+    A read is loose unless it is handed to a function that may take a function:
+    any argument of a user's function (``sign(now)``, ``sign(clock=now)``), or
+    the ``key=`` of a built-in or a method (``sorted``, ``min``, ``max``,
+    ``list.sort``). Any other argument of a built-in or a method
+    (``str(now)``, ``dict(at=now)``, ``'{}'.format(now)``) is loose: none of
+    those takes a function, so each would work on its repr.
     """
     try:
         tree = ast.parse(expr.strip(), mode="eval")
     except SyntaxError:
-        return set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", expr))
+        return _TemplateNames(set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", expr)), set(), set())
 
     bound: set[str] = set()
+    callees: set[int] = set()
+    arguments: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.comprehension):
             bound |= {n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)}
@@ -84,29 +114,123 @@ def _extract_names_from_expr(expr: str) -> set[str]:
             for arg in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg):
                 if arg is not None:
                     bound.add(arg.arg)
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                callees.add(id(node.func))
+            if isinstance(node.func, ast.Name) and node.func.id not in TEMPLATE_BUILTINS:
+                takes_functions = [argument.value if isinstance(argument, ast.Starred) else argument for argument in node.args]
+                takes_functions += [keyword.value for keyword in node.keywords]
+            else:
+                takes_functions = [keyword.value for keyword in node.keywords if keyword.arg == "key"]
+            arguments.update(id(argument) for argument in takes_functions)
 
-    loaded = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
-    return loaded - bound
+    names = _TemplateNames(set(), set(), set())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id not in bound:
+            if id(node) in callees:
+                names.called.add(node.id)
+            else:
+                names.read.add(node.id)
+                if id(node) not in arguments:
+                    names.loose.add(node.id)
+    return names
 
 
-def extract_template_variables(obj: Any) -> set[str]:
-    """Variable names referenced by every ``{{ expr }}`` in a structure.
+def _template_names(obj: Any) -> _TemplateNames:
+    """`_extract_names_from_expr` over every ``{{ expr }}`` in a structure.
 
     Iterative on purpose: a recursive walk spent two stack frames per level of
     nesting, so a value a few hundred levels deep, which loads fine, crashed
     validation with a RecursionError.
     """
-    names: set[str] = set()
+    names = _TemplateNames(set(), set(), set())
     pending = [obj]
     while pending:
         match pending.pop():
             case str() as text:
-                names.update(name for match in re.finditer(TEMPLATE_PATTERN, text) for name in _extract_names_from_expr(match.group("expr")))
+                for match in re.finditer(TEMPLATE_PATTERN, text):
+                    expr_names = _extract_names_from_expr(match.group("expr"))
+                    names.read.update(expr_names.read)
+                    names.called.update(expr_names.called)
+                    names.loose.update(expr_names.loose)
             case dict() as mapping:
                 pending.extend(mapping.values())
             case list() as items:
                 pending.extend(items)
-    return names - TEMPLATE_BUILTINS
+    return names
+
+
+@dataclass(frozen=True)
+class DefinedNames:
+    """What a scenario defines anywhere, which a built-in's name in a template
+    is looked up in (`extract_template_variables`,
+    `extract_builtin_stand_ins`); from `defined_names`."""
+
+    names: frozenset[str]
+    """Every name: substitutions, parameters, saves and fixtures, scenario-level
+    and per stage."""
+    callables: frozenset[str]
+    """The names that may hold a function, which a call reaches before a
+    built-in: fixtures (a factory fixture returns one) and function
+    substitutions."""
+
+
+def extract_template_variables(obj: Any, *, defined: DefinedNames) -> set[str]:
+    """Variable names referenced by every ``{{ expr }}`` in a structure: the
+    names a template reads, and those it calls that are no built-in's.
+
+    A built-in's name (`TEMPLATE_BUILTINS`) read (``{{ timestamp }}``) counts
+    where the scenario defines that name too: the runtime looks a read up among
+    the user's names first, so in a scenario that saves ``timestamp`` it means
+    the save, and is checked for scope and order, and consumes the save, like
+    any other name. Where the save has not landed yet the read gets the
+    built-in function instead, which is what gets reported.
+
+    A call under a built-in's name (``timestamp()``) is never one of these: a
+    saved value is no function to consume, and out of the scope of the user's
+    function of that name the call runs the built-in. Where the scenario
+    defines such a function, `extract_builtin_stand_ins` has the call.
+    """
+    names = _template_names(obj)
+    read = {name for name in names.read if name not in TEMPLATE_BUILTINS or name in defined.names}
+    return read | (names.called - TEMPLATE_BUILTINS)
+
+
+def extract_builtin_stand_ins(obj: Any, *, defined: DefinedNames) -> set[str]:
+    """The built-ins' names the templates in ``obj`` use only as functions,
+    where the scenario defines that name too: out of the scope of the user's
+    definition, the built-in stands in for it, and nothing fails.
+
+    A name counts where it is called (``timestamp()``) and the scenario defines
+    it as a fixture or function substitution (``defined.callables``), the names
+    a call reaches before the built-in; ``get()`` and ``exists()``
+    (`CONTEXT_HELPERS`) never, since a call always reaches those. It counts too
+    where it is handed to a function that takes one (``sorted(rows, key=len)``,
+    `_extract_names_from_expr`) and the scenario defines it at all, which that
+    read, a reference too (`extract_template_variables`), finds in scope. A
+    name the templates also use as a value (``{{ now }}``, ``str(now)``) does
+    not count: that use gets the built-in function out of scope, the reference
+    checks' business. The validator reports a stand-in out of scope as such
+    (HTTPCHAIN036), never as an undefined name.
+    """
+    names = _template_names(obj)
+    called = (names.called & defined.callables) - CONTEXT_HELPERS
+    passed = (names.read - names.loose) & defined.names
+    return ((called | passed) & TEMPLATE_BUILTINS) - names.loose
+
+
+def extract_uncalled_builtins(obj: Any, *, defined: DefinedNames) -> set[str]:
+    """The call-only built-ins (`CALL_ONLY_BUILTINS`: ``now``, ``sha256``,
+    ``env``, ...) a template in ``obj`` uses as a value without calling them,
+    which renders the function itself (``{{ now }}`` for ``{{ now() }}``); the
+    runtime refuses it.
+
+    Handed to a function that may take one (``sorted(rows, key=sha256)``, a
+    user's ``sign(now)``) a built-in is used as a function, and a name the
+    scenario defines is the user's (and a reference,
+    `extract_template_variables`), so neither is reported.
+    """
+    return (_template_names(obj).loose & CALL_ONLY_BUILTINS) - defined.names
 
 
 def substitution_names(substitutions: Substitutions) -> set[str]:
@@ -177,6 +301,27 @@ def foreach_parameter_names(parallel: ParallelConfig | None) -> set[str]:
             return set()
 
 
+def _function_substitution_names(substitutions: Substitutions) -> set[str]:
+    return {name for sub in substitutions if isinstance(sub, FunctionsSubstitution) for name in sub.functions}
+
+
+def defined_names(scenario: Scenario) -> DefinedNames:
+    """Every name the scenario introduces anywhere, and those that may hold a
+    function. A built-in's name in a template is the user's where it is one of
+    these (see `extract_template_variables` and `extract_builtin_stand_ins`)."""
+    fixtures = {*scenario.fixtures, *(name for stage in scenario.stages for name in stage.fixtures)}
+    functions = _function_substitution_names(scenario.substitutions)
+    for stage in scenario.stages:
+        functions |= _function_substitution_names(stage.substitutions)
+        for step in stage.response:
+            if isinstance(step, SaveStep) and isinstance(step.save, SubstitutionsSave):
+                functions |= _function_substitution_names(step.save.substitutions)
+    return DefinedNames(
+        names=frozenset(extract_defined_variables(scenario) | extract_saved_variables(scenario) | fixtures),
+        callables=frozenset(fixtures | functions),
+    )
+
+
 def extract_defined_variables(scenario: Scenario) -> set[str]:
     """Every name substitutions and parameters define, scenario-wide. The
     order-aware checks use `stage_scopes` instead."""
@@ -242,16 +387,20 @@ def _raw_substitution_entry_templates(entry: Any) -> Any:
     return rendered
 
 
-def substitution_step_refs(raw_substitutions: Any) -> Iterator[tuple[set[str], frozenset[str]]]:
+def substitution_step_templates(raw_substitutions: Any) -> Iterator[tuple[Any, frozenset[str]]]:
     """Walk raw substitution steps in resolution order, yielding
-    ``(names the step references, names defined by PRIOR steps)``.
+    ``(what the runtime renders of the step, names defined by PRIOR steps)``.
 
     Steps resolve strictly in order, so the prior-name set is both the scope
-    addition (validation) and the shadow addition (dataflow) for that step.
+    addition (validation) and the shadow addition (dataflow) for that step. The
+    rendered part is the ``vars`` values and ``functions`` import names, not a
+    function's kwargs, which reach it raw: every reader of a step's templates
+    (references, `extract_builtin_stand_ins`, `extract_uncalled_builtins`)
+    reads the same text.
     """
     prior_names: frozenset[str] = frozenset()
     for entry in raw_list_entries(raw_substitutions):
-        yield extract_template_variables(_raw_substitution_entry_templates(entry)), prior_names
+        yield _raw_substitution_entry_templates(entry), prior_names
         prior_names |= frozenset(_raw_substitution_entry_names(entry))
 
 
@@ -261,15 +410,16 @@ def _raw_save_substitutions(step_raw: Any) -> Any:
     return save.get("substitutions") if isinstance(save, dict) else None
 
 
-def response_step_refs(stage: Stage, raw_response: Any) -> Iterator[tuple[set[str], frozenset[str]]]:
-    """Walk response steps in resolution order, yielding ``(names referenced,
-    names saved by STRICTLY EARLIER steps of this stage)``.
+def response_step_templates(stage: Stage, raw_response: Any) -> Iterator[tuple[Any, frozenset[str]]]:
+    """Walk response steps in resolution order, yielding ``(what the runtime
+    renders of the step, names saved by STRICTLY EARLIER steps of this stage)``.
 
-    The response-phase sibling of `substitution_step_refs`: a save lands only
-    once its own step has run, so a step reading a name a LATER step saves is a
-    forward reference, not a hit. The raw entries carry the template text and
-    the validated steps say what each saves, so the two are walked in lockstep
-    (`raw_list_entries` keeps the name-keyed mapping form paired correctly).
+    The response-phase sibling of `substitution_step_templates`: a save lands
+    only once its own step has run, so a step reading a name a LATER step saves
+    is a forward reference, not a hit. The raw entries carry the template text
+    and the validated steps say what each saves, so the two are walked in
+    lockstep (`raw_list_entries` keeps the name-keyed mapping form paired
+    correctly).
 
     A substitutions-save step yields one tuple per ENTRY rather than one for the
     step, because `response_steps.process_save` renders those entries itself,
@@ -288,10 +438,10 @@ def response_step_refs(stage: Stage, raw_response: Any) -> Iterator[tuple[set[st
         step_raw = raw_steps[k] if k < len(raw_steps) else None
         visible = prior_saves | all_stage_saves if opaque_save_seen else prior_saves
         if isinstance(step, SaveStep) and isinstance(step.save, SubstitutionsSave):
-            for entry_refs, prior_entry_names in substitution_step_refs(_raw_save_substitutions(step_raw)):
-                yield entry_refs, visible | prior_entry_names
+            for entry_templates, prior_entry_names in substitution_step_templates(_raw_save_substitutions(step_raw)):
+                yield entry_templates, visible | prior_entry_names
         else:
-            yield extract_template_variables(step_raw), visible
+            yield step_raw, visible
         prior_saves |= frozenset(saved_in_step(step))
         if isinstance(step, SaveStep) and not isinstance(step.save, JMESPathSave | RegexSave | SubstitutionsSave):
             opaque_save_seen = True
@@ -311,7 +461,7 @@ class StageScopes:
     contexts, and each names its runtime twin.
 
     ``saves`` is the exception: no phase unions it, because a stage's own saves
-    become visible step by step, which `response_step_refs` tracks. It remains a
+    become visible step by step, which `response_step_templates` tracks. It remains a
     reporting input (`cli show`, `dataflow.StageFlow`, the first-save index) —
     reading it as in-stage visibility is what produced the bug that split it out.
     """
@@ -346,7 +496,7 @@ class StageScopes:
         """Response steps as they start, before any of this stage's own saves
         have landed: the request scope plus the ``response`` namespace. Steps
         resolve strictly in order, so each additionally sees PRIOR steps' saves
-        (see `response_step_refs`, whose runtime twin is `with_saves`).
+        (see `response_step_templates`, whose runtime twin is `with_saves`).
         Twin: `response_step_context`."""
         return self.request | frozenset({RESPONSE_META_NAME})
 
@@ -356,7 +506,7 @@ class StageScopes:
     @property
     def always_run_shadows(self) -> frozenset[str]:
         """Also the base shadows of each substitution step, to which prior steps'
-        names add cumulatively (see `substitution_step_refs`)."""
+        names add cumulatively (see `substitution_step_templates`)."""
         return self.scenario_fixtures | self.stage_fixtures | self.parametrize_params
 
     @property

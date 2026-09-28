@@ -53,6 +53,8 @@ not free their numbers for reuse.
 | `HTTPCHAIN032` | error | Stage name contains `::`, pytest's node-id separator — the stage cannot be run by its node id, and `--dist loadscope` runs it apart from the rest of the scenario |
 | `HTTPCHAIN033` | error | Scenario's `xdist_group` name has a `]` after its last `@` — pytest-xdist ignores such a group, so `--dist loadgroup` does not keep the scenario's stages together |
 | `HTTPCHAIN034` | error | Stage `request.url` is relative (`/users/1`, or `/users/{{ id }}`), but the scenario's `client` sets no `base_url` to resolve it against (see [Client configuration](usage/scenarios.md#client-configuration)) |
+| `HTTPCHAIN035` | warning | A [built-in function](usage/substitutions.md#built-in-functions) that is no use as a value (a time, encoding, URL or hashing helper, `uuid4`, `env`, `rand` or `randint`) used without calling it (`{{ now }}` for `{{ now() }}`, `{{ env }}`, or `str(timestamp)`) — the template gets the function itself, not its value, and one that renders to a function fails the stage (a parametrize value, collection; a scenario-level template, scenario initialization) |
+| `HTTPCHAIN036` | warning | A [built-in's](usage/substitutions.md#your-names-come-first) name the scenario defines too, used as a function where that definition is not in scope (in another stage, in a scenario-level template, in a step before the one defining it): called (`timestamp()`) where the scenario's is a fixture or function substitution, or handed to a function (`sorted(rows, key=len)`) — the built-in runs in its place, silently |
 
 ## Deep (opt-in) checks
 

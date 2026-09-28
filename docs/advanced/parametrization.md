@@ -184,8 +184,9 @@ Without `ids`, each run's test id is built from its values, as with pytest's own
 parametrize: a string, number or boolean appears as is (`[1]`, `[GET-/users]`),
 anything else as its parameter name and position (`[user0]`).
 
-A template that draws values at random (`uuid4()`, `rand()`, `randint()`) is
-resolved when the scenario is collected, and every
+A template that draws values at random (`uuid4()`, `rand()`, `randint()`) or
+reads the clock (`now()`, `timestamp()`) is resolved when the scenario is
+collected, and every
 [pytest-xdist](parallel.md#running-scenarios-in-parallel-with-pytest-xdist)
 worker collects on its own. Each worker then gets different ids, and the run
 stops with "Different tests were collected between gw0 and gw1". Give such a

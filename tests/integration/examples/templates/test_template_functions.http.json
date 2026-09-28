@@ -1,0 +1,81 @@
+{
+    "substitutions": [
+        {
+            "vars": {
+                "started": "{{ now() }}",
+                "secret": "s3cr3t",
+                "filters": { "category": "books & more", "sort": "price" },
+                "query": { "q": "a b", "tags": ["x", "y"] }
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "signed_post",
+            "description": "Time, hashing and encoding helpers build a request; the same helpers check what arrived",
+            "fixtures": ["server"],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/echo/json",
+                "body": {
+                    "json": {
+                        "started": "{{ started }}",
+                        "day": "{{ now('%Y-%m-%d') }}",
+                        "ts": "{{ timestamp() }}",
+                        "ms": "{{ timestamp_ms() }}",
+                        "digest": "{{ sha256(started) }}",
+                        "checksum": "{{ md5(started) }}",
+                        "signature": "{{ hmac_sha256(secret, started, 'base64') }}",
+                        "encoded": "{{ b64encode(json_dumps(query), urlsafe=true) }}",
+                        "segment": "{{ quote('a b/c') }}",
+                        "qs": "{{ urlencode(query) }}"
+                    }
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "jmespath": {
+                            "received.started": "{{ started }}",
+                            "received.digest": "{{ sha256(started) }}",
+                            "received.checksum": "{{ md5(started) }}",
+                            "received.signature": "{{ hmac_sha256(secret, started, 'base64') }}",
+                            "received.segment": "a%20b%2Fc",
+                            "received.qs": "q=a+b&tags=x&tags=y"
+                        }
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "day": "received.day",
+                            "sent_ms": "received.ms",
+                            "sent_ts": "received.ts",
+                            "encoded": "received.encoded"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ day == started[:10] }}",
+                            "{{ sent_ts <= timestamp() and sent_ms <= timestamp_ms() }}",
+                            "{{ sent_ms // 1000 in (sent_ts, sent_ts + 1) }}",
+                            "{{ json_loads(b64decode(encoded, urlsafe=true)) == {'q': 'a b', 'tags': ['x', 'y']} }}"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "encoded_query",
+            "description": "urlencode builds a query the server reads back as written",
+            "fixtures": ["server"],
+            "request": { "url": "{{ server }}/search?{{ urlencode(filters) }}" },
+            "response": [
+                { "verify": { "status": 200, "jmespath": { "category": "books & more", "sort": "price" } } }
+            ]
+        }
+    ]
+}

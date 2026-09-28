@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from pytest_httpchain.templates import TEMPLATE_BUILTINS, TemplatesError, contains_template, substitution, walk, walker
+from pytest_httpchain.templates import CONTEXT_HELPERS, TEMPLATE_BUILTINS, TemplatesError, contains_template, substitution, walk, walker
 from tests.unit.helpers import BEYOND_RECURSION_LIMIT, LOADABLE_BUT_DEEP, nested
 
 
@@ -322,9 +322,18 @@ class TestWalkErrorMessages:
 @pytest.mark.parametrize("name", sorted(TEMPLATE_BUILTINS))
 def test_advertised_builtin_resolves(name):
     """M14: every name the validator treats as engine-provided must resolve —
-    to a function, or a JSON literal's value — not raise "Undefined variable"."""
-    result = walk("{{ " + name + " }}", {})
+    to a function, or a JSON literal's value — not raise "Undefined variable".
+    Read inside a list: a helper that a template renders to is refused."""
+    [result] = walk("{{ [" + name + "] }}", {})
     assert callable(result) or result is None or isinstance(result, bool)
+
+
+@pytest.mark.parametrize("name", sorted(CONTEXT_HELPERS))
+def test_context_helpers_are_never_shadowed(name):
+    """A user callable named get or exists never replaces the built-in, which
+    the validator's reference model assumes: a call to either is no reference
+    to a user name."""
+    assert walk("{{ " + name + "('x') }}", {name: lambda *_: "user"}) != "user"
 
 
 class TestChainMapContextSemantics:

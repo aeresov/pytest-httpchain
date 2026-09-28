@@ -99,6 +99,34 @@ def test_regex_save_names_are_saves_and_feed_edges():
     assert _edges(flow) == [{"producer": 0, "consumer": 1, "vars": ["csrf"]}]
 
 
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        # The read is the save's: the runtime looks up the user's names first.
+        pytest.param("https://x.test/?since={{ timestamp }}", ["timestamp"], id="read"),
+        # A saved value is no function, so the call reaches the built-in.
+        pytest.param("https://x.test/?at={{ timestamp() }}", [], id="call"),
+    ],
+)
+def test_save_named_like_a_builtin_is_consumed_where_read(url, expected):
+    """A save named like a built-in helper (timestamp, now, quote, ...) still
+    draws its edge: dropping every built-in's name from the references left it
+    out of `show` and `graph`."""
+    flow = analyze_dataflow(*_scenario([_producer(timestamp="meta.ts"), _stage("consumer", request={"url": url})]))
+    assert flow.stages[1].consumes == expected
+    assert _edges(flow) == ([{"producer": 0, "consumer": 1, "vars": expected}] if expected else [])
+
+
+def test_call_under_a_saved_name_consumes_nothing_where_a_fixture_shares_it():
+    """A stage elsewhere requesting a `timestamp` fixture makes the name a
+    possible function, but where the save is in scope its value is no function:
+    the call reaches the built-in and reads nothing from the producer."""
+    consumer = _stage("consumer", request={"url": "https://x.test/?at={{ timestamp() }}"})
+    flow = analyze_dataflow(*_scenario([_producer(timestamp="meta.ts"), consumer, _stage("clock", fixtures=["timestamp"])]))
+    assert flow.stages[1].consumes == []
+    assert _edges(flow) == []
+
+
 def test_latest_producer_selected():
     """A re-saved variable is attributed to its LAST writer before the consumer
     (stage b), matching runtime ChainMap layering — not the first (M10)."""

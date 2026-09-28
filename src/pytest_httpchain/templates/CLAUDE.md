@@ -51,16 +51,22 @@ is_complete_template("Hello {{ name }}")  # False
 extract_template_expression("{{ value }}")  # "value"
 ```
 
-Two more exports are part of the public surface (the main plugin's models and
+More exports are part of the public surface (the main plugin's models and
 validator depend on them, so treat them as API, not internals):
 
 - `TEMPLATE_PATTERN` — the compiled-ready regex (with named `expr` group) that
   defines `{{ ... }}` syntax. The single source of truth shared by the engine,
   the models (to type a field as a template), and the validator.
 - `TEMPLATE_BUILTINS` — the set of names available inside an expression without
-  the user defining them (safe functions, JSON literals, `exists`/`get`, and
-  simpleeval defaults). The validator uses it to tell a genuine typo from an
-  engine-provided name.
+  the user defining them (safe functions, the helpers of `functions.py`, JSON
+  literals, `exists`/`get`, and simpleeval defaults). The validator uses it to
+  tell a genuine typo from an engine-provided name.
+- `CONTEXT_HELPERS` — `exists`/`get`, the built-ins a user callable never
+  shadows; `CALL_ONLY_BUILTINS` — the built-ins of no use but called (the
+  `functions.py` helpers, `uuid4`, `env`, `rand`, `randint`), which are refused
+  when a template renders to one uncalled. The validator's reference model
+  (`scoping`) reads both. `call_form(name)` writes the call its advice names:
+  `now()`, or `env(...)` for one that takes arguments.
 
 ## Key Behaviors
 
@@ -111,6 +117,44 @@ Safe functions available in expressions:
 - Collections: `len`, `sorted`, `enumerate`, `zip`, `range`
 - Utilities: `uuid4()`, `env(var, default)`
 - Context helpers: `get(var, default)`, `exists(var)`
+- Time: `now(fmt=None)` (UTC, ISO 8601 with offset and microseconds, or `strftime(fmt)`; `%s` refused, as the C library formats it in local time), `timestamp()`, `timestamp_ms()`
+- Encoding: `b64encode(value, urlsafe=False)`, `b64decode(value, urlsafe=False)` (padding optional, UTF-8 result), `json_dumps(value)` (json.dumps defaults, a `vars` namespace encoded as its object), `json_loads(text)`
+- URLs: `urlencode(mapping)` (encoded as httpx encodes `request.params`: list values repeat the key, `true`/`false`, empty for None; bytes percent-encoded as they are, where httpx sends their repr; nested objects and functions refused), `quote(text, safe='')`
+- Hashing: `sha256(value)`, `md5(value)`, `hmac_sha256(key, message, encoding='hex')` (`'hex'` or `'base64'`)
+
+The time, encoding, URL and hashing helpers live in `functions.py`
+(`HELPER_FUNCTIONS`, merged into `SAFE_FUNCTIONS`, so `TEMPLATE_BUILTINS`
+covers them). Each returns a plain value (text, a number, JSON data), never an
+object of a class of its own, so they add nothing an expression can reach
+through; the function objects themselves are reachable as names like every
+built-in, and simpleeval refuses their dunder attributes. Text arguments are
+encoded as UTF-8, and a number where text or bytes is expected is refused, not
+`str()`-ed. A bad argument raises a TypeError or ValueError naming the helper,
+which `_eval_expr` wraps as the template's `TemplatesError`. An expression
+that evaluates to a call-only built-in itself (`CALL_ONLY_BUILTINS`: a helper,
+`uuid4`, `env`, `rand`, `randint`; `{{ now }}`, parentheses forgotten) is a
+`TemplatesError` too ("Uncalled function"), not its repr in a request. The
+check is by identity, since a value may be unhashable. The same holds where
+the user's own value of that name is missing (a save that has not landed), so
+the message says no value of the name is defined there before it says to call
+the built-in. The validator warns of the mistake statically (HTTPCHAIN035),
+`str(now)` and `dict(at=now)` included. `env` is a function of the engine's,
+not `os.environ.get`: that bound method's repr lists the whole environment,
+which `str(env)` would have put in a request.
+
+User names shadow the built-ins (the evaluator's merge order), except
+`exists`/`get` (`CONTEXT_HELPERS`), which are merged last so that a call always
+reaches them: a read (`{{ now }}`) finds a user value first, a call
+(`{{ now() }}`) a user callable, and a call under a user *value* still reaches
+the built-in. `scoping` models this statically: a built-in's name counts as a
+reference (`extract_template_variables`) where the scenario defines that name
+and a template reads it; a call under it is none. A name used only as a
+function, called where the scenario defines it as a fixture or function
+substitution (a possible callable; `exists`/`get` never) or handed to a
+function (`key=len`) where the scenario defines it at all, never fails out of
+the scope of the user's definition, since the built-in stands in:
+`extract_builtin_stand_ins` has those, which the validator reports out of
+scope as a warning (HTTPCHAIN036), never as an undefined name.
 
 ### JSON-style Literals
 For compatibility with JSON syntax, lowercase boolean literals are supported:

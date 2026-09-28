@@ -161,7 +161,6 @@ runs.
     "stages": [
         {
             "name": "parallel_updates",
-            "fixtures": ["now_utc"],
             "parallel": {
                 "foreach": [
                     {
@@ -177,7 +176,7 @@ runs.
                 "method": "PATCH",
                 "body": {
                     "json": {
-                        "last_accessed": "{{ str(now_utc) }}"
+                        "last_accessed": "{{ now() }}"
                     }
                 }
             }
@@ -186,7 +185,7 @@ runs.
 }
 ```
 
-> `datetime` is not available inside `{{ }}` expressions. For a timestamp, expose a fixture (e.g. `now_utc` returning `datetime.now()` from a `conftest.py`) and reference it with `fixtures: ["now_utc"]`, as shown above.
+> The request renders once per iteration, when the iteration starts, so each call's `now()` reads the clock then. With `calls_per_sec`, that is before the iteration waits for its rate-limit slot: the request goes out up to `max_rate_limit_delay` seconds (60 by default) after its `now()` or `timestamp()` was read, which a signature with a freshness window has to allow for. For one timestamp shared by every call, bind it in the stage's `substitutions`, which render once, before the iterations start: `{"vars": {"started": "{{ now() }}"}}`.
 
 ## Load Testing Example
 
