@@ -45,6 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A reference path containing a NUL character (`"$include": "a\u0000b.json"`) is now rejected as
   a reference error (`HTTPCHAIN012`). Before, `resolve`, `show` and `graph` crashed on the bare
   `ValueError` from the path lookup, and `validate` reported it as `HTTPCHAIN015`.
+- `validate`, pytest collection, `show` and `graph` no longer crash with a `RecursionError` on a
+  scenario value nested a few hundred levels deep, such as a `vars` value, a query parameter or a
+  `parametrize` value. The file loaded fine, but the checks that find template references,
+  templated keys and scenario directives walked it recursively, two stack frames per level, and
+  overflowed near 450 levels. They now walk it iteratively, so any depth the loader accepts is
+  checked.
+- Running a stage with such a value no longer crashes either. Substituting templates in a nested
+  `vars` value took two stack frames per level, and stages failed from about 480 levels with a
+  bare traceback. It now takes one frame per level. A value nested past the interpreter's
+  recursion limit fails the stage with "Value nested too deeply to substitute".
 
 ## [0.15.2] - 2026-09-26
 

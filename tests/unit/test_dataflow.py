@@ -5,6 +5,7 @@ import pytest
 
 from pytest_httpchain.dataflow import analyze_dataflow
 from pytest_httpchain.models import Scenario
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, nested
 
 
 def _scenario(stages, **top):
@@ -52,6 +53,9 @@ def _edges(flow) -> list[dict]:
         # once the stage re-saves a name, later steps read its own fresh value.
         pytest.param({"response": [{"save": {"jmespath": {"x": "b"}}}, {"verify": {"expressions": ["{{ x != '' }}"]}}]}, [], id="own-resave-shadows-later-steps"),
         pytest.param({"response": [{"verify": {"expressions": ["{{ x != '' }}"]}}, {"save": {"jmespath": {"x": "b"}}}]}, ["x"], id="reference-before-own-resave"),
+        # A recursive reference search crashed `show` and `graph` on a value a
+        # few hundred levels deep.
+        pytest.param({"request": {"url": "https://x.test/", "params": {"p": nested("{{ x }}", BEYOND_RECURSION_LIMIT)}}}, ["x"], id="reference-nested-past-the-recursion-limit"),
     ],
 )
 def test_consumer_of_earlier_saves(consumer, expected):
