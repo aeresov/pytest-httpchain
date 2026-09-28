@@ -267,6 +267,14 @@ scenario initialization: the first stage fails, and every later stage skips). A 
 sets to `null` fails, naming the field and that template, while a key it leaves
 out is simply not checked.
 
+So is the `group` of a [`save.regex`](responses.md#regex-extraction) entry.
+Left out, it does not switch the save off but picks the default group (group 1,
+or the whole match), so the message says that instead:
+
+```
+'save.regex.token.group' was declared as '{{ which }}' but rendered to None, which would silently save the default group instead
+```
+
 So are the operands of a [`verify.jmespath`](responses.md#jmespath-assertions)
 matcher, `eq`, `ne`, `contains` and `not_contains` included, although `null` is
 an operand they take. There the `null` would not switch the check off but
@@ -283,14 +291,16 @@ object, even one shaped like a matcher (`{"ne": null}`): a matcher is written
 as an object, never rendered whole.
 
 A required field such as `url`, `timeout` or a built-in auth's credential
-(`request.auth.bearer`, `auth.basic.password`), and a header matcher whose only
+(`request.auth.bearer`, `auth.basic.password`), the `pattern` and `all` of a
+`save.regex` entry written as an object, and a header matcher whose only
 field rendered to `null`, cannot be switched off, but they fail with the same
 message, naming the field and the template; it just ends at "rendered to None".
 A bearer token that rendered to `null` does not send the request without
 credentials, nor with the scenario's.
 An exact-match header string is a value in the `headers` map rather than a
 field, and fails validation when its template renders to `null`; so does an
-entry of a `verify.status` list (`["{{ created_status }}", 409]`).
+entry of a `verify.status` list (`["{{ created_status }}", 409]`), and a
+`save.regex` pattern written as a string.
 
 If something else in the same request or setting, or the same verify check
 (a header matcher, a `jmespath` entry), is invalid too, pydantic's report on it

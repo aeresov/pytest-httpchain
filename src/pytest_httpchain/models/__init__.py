@@ -11,7 +11,7 @@ Key models:
 - Request: HTTP request configuration (method, URL, headers, body, auth)
 - Auth: authentication, built in (basic, digest, bearer) or a user function
 - Verify: Response verification rules (status, headers, JMESPath, body, expressions)
-- Save: Data extraction from responses (JMESPath, substitutions, user functions)
+- Save: Data extraction from responses (JMESPath, regex, substitutions, user functions)
 """
 
 from pytest_httpchain.models.entities import (
@@ -42,6 +42,8 @@ from pytest_httpchain.models.entities import (
     ParallelRepeatConfig,
     Parameter,
     Parameters,
+    RegexCapture,
+    RegexSave,
     Request,
     RequestAuth,
     RequestBody,
@@ -70,7 +72,7 @@ from pytest_httpchain.models.entities import (
     validate_rendered_scenario_auth,
     validate_rendered_verify,
 )
-from pytest_httpchain.models.types import JSON_TYPE_NAMES, check_json_schema, is_relative_url, is_status_class, json_schema_validator_class
+from pytest_httpchain.models.types import JSON_TYPE_NAMES, check_json_schema, is_relative_url, is_status_class, json_schema_validator_class, regex_group
 
 __all__ = [
     "Scenario",
@@ -94,6 +96,8 @@ __all__ = [
     "ResponseBody",
     "Save",
     "JMESPathSave",
+    "RegexSave",
+    "RegexCapture",
     "SubstitutionsSave",
     "UserFunctionsSave",
     "Substitutions",
@@ -128,6 +132,7 @@ __all__ = [
     "is_relative_url",
     "is_status_class",
     "json_schema_validator_class",
+    "regex_group",
     "parametrize_values_contain_template",
     "normalize_list_input",
     "validate_rendered_scenario_auth",

@@ -46,6 +46,7 @@ from pytest_httpchain.models import (
     IndividualParameter,
     ParallelForeachConfig,
     ParallelRepeatConfig,
+    RegexSave,
     Request,
     ResponseBody,
     Scenario,
@@ -368,6 +369,14 @@ class TestRenderedAwayFields:
             _render_declared(declared, self.RENDERS_NONE, where)
         assert str(excinfo.value) == f"'{path}' was declared as " + "'{{ x }}' but rendered to None, which would silently disable it"
 
+    def test_rendered_away_regex_group_says_what_it_would_have_saved(self):
+        """A regex save's group left out does not disable the save: it saves
+        the default group (group 1, or the whole match), so the refusal says
+        that, not that the None would have disabled anything."""
+        with pytest.raises(StageExecutionError) as excinfo:
+            _render_declared(RegexSave.model_validate({"regex": {"v": {"pattern": "(a)(b)", "group": "{{ x }}"}}}), self.RENDERS_NONE, "save")
+        assert str(excinfo.value) == "'save.regex.v.group' was declared as '{{ x }}' but rendered to None, which would silently save the default group instead"
+
     @pytest.mark.parametrize(
         ("where", "declared", "path"),
         [
@@ -390,6 +399,8 @@ class TestRenderedAwayFields:
             ),
             pytest.param("auth", DigestAuth.model_validate({"digest": {"username": "{{ x }}", "password": "p"}}), "auth.digest.username", id="scenario-auth-digest-username"),
             pytest.param("verify", Verify.model_validate({"user_functions": ["{{ x }}"]}), "verify.user_functions[0]", id="function-name-in-a-list"),
+            pytest.param("save", RegexSave.model_validate({"regex": {"v": {"pattern": "{{ x }}"}}}), "save.regex.v.pattern", id="regex-save-pattern"),
+            pytest.param("save", RegexSave.model_validate({"regex": {"v": {"pattern": "(a)", "all": "{{ x }}"}}}), "save.regex.v.all", id="regex-save-all"),
         ],
     )
     def test_rendered_away_field_validation_rejects_is_named(self, where, declared, path):
@@ -419,6 +430,18 @@ class TestRenderedAwayFields:
         with pytest.raises(StageExecutionError) as excinfo:
             _render_declared(Verify.model_validate({"headers": {"Location": template}}), context, "verify")
         assert str(excinfo.value) == f"'verify.headers.Location.contains' was declared as {template!r} but rendered to None, which would silently disable it"
+
+    @pytest.mark.parametrize("source", ["saved", "vars"])
+    def test_regex_capture_rendered_whole_is_refused_too(self, source):
+        """A ``save.regex`` entry written as one template renders a capture
+        object, as a header matcher can be: a key it set to None is refused,
+        from a saved object or from a ``vars`` one (a namespace), saying what
+        the None would have done, as for a group declared as a template."""
+        capture = {"pattern": "(a)(b)", "group": None}
+        context = ChainMap(VarsSubstitution(vars={"capture": capture}).vars) if source == "vars" else {"capture": capture}
+        with pytest.raises(StageExecutionError) as excinfo:
+            _render_declared(RegexSave.model_validate({"regex": {"v": "{{ capture }}"}}), context, "save")
+        assert str(excinfo.value) == "'save.regex.v.group' was declared as '{{ capture }}' but rendered to None, which would silently save the default group instead"
 
     @pytest.mark.parametrize(
         ("declared", "context", "path", "invalid"),
@@ -456,6 +479,58 @@ class TestRenderedAwayFields:
         validation rejects surfaces as pydantic reports it."""
         with pytest.raises(ValidationError, match="timeout"):
             _render_declared(Request.model_validate({"url": "http://t/", "timeout": "{{ x }}"}), {"x": "slow"}, "request")
+
+    @pytest.mark.parametrize(
+        ("save", "context", "message"),
+        [
+            pytest.param({"regex": {"v": "{{ p }}"}}, {"p": "("}, "Invalid regular expression", id="regex-pattern"),
+            pytest.param({"regex": {"v": {"pattern": "{{ p }}", "group": 2}}}, {"p": "(a)"}, r"regex '\(a\)' has no group 2", id="regex-group"),
+            pytest.param({"regex": {"v": {"pattern": "(a)", "group": "{{ g }}"}}}, {"g": "b"}, "has no group named 'b'", id="regex-group-name"),
+            # The same for every save kind: it failed as a bare stage error.
+            pytest.param({"jmespath": {"v": "{{ p }}"}}, {"p": "[bad"}, "Invalid JMESPath expression", id="jmespath-expression"),
+        ],
+    )
+    def test_rendered_save_that_does_not_validate_is_a_save_error(self, save, context, message):
+        """A value a save step's template rendered that validation refuses is
+        the step's SaveError, as a verify step's is its VerificationError,
+        with pydantic's report on it as the message."""
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+        cls = _make_carrier_subclass(client=client)
+        try:
+            with pytest.raises(StageExecutionError) as excinfo:
+                cls._execute_single_iteration(Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"save": save}]}), ChainMap(context), {})
+        finally:
+            client.close()
+        assert type(excinfo.value) is SaveError
+        assert re.search(message, str(excinfo.value))
+        assert isinstance(excinfo.value.__cause__, ValidationError)
+        # Carried for the report and the HAR entry, as every step's failure is.
+        assert excinfo.value.response is not None
+
+    @pytest.mark.parametrize(
+        ("pattern", "saved"),
+        [
+            # Escaped, the braces are regex: the page's own placeholder.
+            pytest.param(r"\{\{\s*(\w+)\s*\}\}", "name", id="escaped-braces"),
+            # A repeat count from a template, its braces inside the expression.
+            pytest.param(r"\d{{ '{' + str(n) + '}' }}", "123", id="templated-count"),
+            # Spaced out of the template, the braces are the text `{ 3 }`.
+            pytest.param(r"\d{ {{ n }} }", "4{ 3 }", id="spaced-count-is-text"),
+        ],
+    )
+    def test_braces_in_a_regex_pattern(self, pattern, saved):
+        """A `{{` in a pattern always opens a template (responses.md, Regex
+        Extraction): the forms the docs give for literal braces and for a
+        templated repeat count save what they say."""
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, text="<p>Hi {{ name }}: 12345, 4{ 3 }</p>")))
+        cls = _make_carrier_subclass(client=client)
+        try:
+            result = cls._execute_single_iteration(
+                Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"save": {"regex": {"v": pattern}}}]}), ChainMap({"n": 3}), {}
+            )
+        finally:
+            client.close()
+        assert result.saved_context == {"v": saved}
 
     @pytest.mark.parametrize(
         ("declared", "context"),

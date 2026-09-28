@@ -46,6 +46,7 @@ from pytest_httpchain.models import (
     ParallelConfig,
     ParallelForeachConfig,
     ParallelRepeatConfig,
+    RegexCapture,
     ResponseBody,
     SaveStep,
     Scenario,
@@ -303,18 +304,31 @@ def _none_is_compared(model: BaseModel, field: str) -> bool:
     return isinstance(model, JMESPathMatcher) and field in JMESPathMatcher.NULL_OPERANDS
 
 
+def _none_would(model: BaseModel, field: str) -> str:
+    """What a None let through ``field`` would have done, for the refusal to
+    say. An optional field reads None as never declared: for most that turns
+    a check or a setting off, but a regex save's group left out picks the
+    default one (group 1, or the whole match), so the save still runs, from
+    another group."""
+    if isinstance(model, RegexCapture) and field == "group":
+        return "save the default group instead"
+    return "disable it"
+
+
 # Where a value sits in a dumped model: field names and dict keys, list indices.
 type _Keys = tuple[str | int, ...]
 
 
 class _Vanished(NamedTuple):
     """A declared field a template rendered to None: where it sits, the
-    template as written, and whether None is an operand there
-    (`_none_is_compared`)."""
+    template as written, whether None is an operand there
+    (`_none_is_compared`), and what it would have done otherwise
+    (`_none_would`)."""
 
     keys: _Keys
     template: str
     compared: bool = False
+    would: str = "disable it"
 
 
 def _rendered_away(declared: Any, substituted: Any, keys: _Keys = ()) -> Iterator[_Vanished]:
@@ -332,13 +346,13 @@ def _rendered_away(declared: Any, substituted: Any, keys: _Keys = ()) -> Iterato
     to dicts first), so what was declared is always a template.
     """
 
-    def field(declared_value: Any, substituted_value: Any, field_keys: _Keys, compared: bool = False) -> Iterator[_Vanished]:
+    def field(declared_value: Any, substituted_value: Any, field_keys: _Keys, compared: bool = False, would: str = "disable it") -> Iterator[_Vanished]:
         if isinstance(declared_value, RootModel):
             # Dumped as its bare root value, not as {"root": ...}: the root is the
             # field, at the model's own place (a user-function name).
             declared_value = declared_value.root
         if declared_value is not None and substituted_value is None:
-            yield _Vanished(field_keys, declared_value, compared)
+            yield _Vanished(field_keys, declared_value, compared, would)
         else:
             yield from _rendered_away(declared_value, substituted_value, field_keys)
 
@@ -349,7 +363,7 @@ def _rendered_away(declared: Any, substituted: Any, keys: _Keys = ()) -> Iterato
             # Only the declared fields were dumped (`_render_declared`).
             for name in type(declared).model_fields:
                 if name in substituted and not _none_is_a_value(declared, name):
-                    yield from field(getattr(declared, name), substituted[name], (*keys, name), _none_is_compared(declared, name))
+                    yield from field(getattr(declared, name), substituted[name], (*keys, name), _none_is_compared(declared, name), _none_would(declared, name))
         case dict(), dict():
             for key, declared_value in declared.items():
                 if key in substituted:
@@ -381,7 +395,7 @@ def _rendered_whole_away(declared: Any, rendered: Any, keys: _Keys = ()) -> Iter
         case (str() as template, BaseModel()) | (RootModel(root=str() as template), BaseModel()):
             for name in type(rendered).model_fields:
                 if name in rendered.model_fields_set and getattr(rendered, name) is None and not _none_is_a_value(rendered, name):
-                    yield _Vanished((*keys, name), template)
+                    yield _Vanished((*keys, name), template, would=_none_would(rendered, name))
         case dict(), dict():
             for key, declared_value in declared.items():
                 if key in rendered:
@@ -471,7 +485,7 @@ def _validate_substituted[M: BaseModel](
             raise
         refusal = _rendered_to_none(where, vanished[0])
         restored = substituted
-        for keys, template, _ in vanished:
+        for keys, template, *_ in vanished:
             restored = _replaced(restored, keys, template)
         try:
             validate(restored)
@@ -481,7 +495,7 @@ def _validate_substituted[M: BaseModel](
     vanished = vanished or list(_rendered_whole_away(declared, rendered))
     if vanished:
         first = vanished[0]
-        raise error(_rendered_to_none(where, first) if first.compared else f"{_rendered_to_none(where, first)}, which would silently disable it")
+        raise error(_rendered_to_none(where, first) if first.compared else f"{_rendered_to_none(where, first)}, which would silently {first.would}")
     return rendered
 
 
@@ -585,6 +599,18 @@ def _validated_verify(declared: Verify, substituted: Any) -> Verify:
         return _validate_substituted(declared, substituted, "verify", VerificationError, functools.partial(validate_rendered_verify, declared))
     except ValidationError as e:
         raise VerificationError(str(e)) from e
+
+
+def _render_save[M: BaseModel](declared: M, context: Mapping[str, Any]) -> M:
+    """A save step rendered through the guard (`_render_declared`). A value
+    it renders that does not validate is the step's `SaveError`, as a verify
+    step's is its `VerificationError` (`_validated_verify`): a regex or a
+    JMESPath expression a template rendered that does not compile, a group
+    the pattern a template rendered does not have."""
+    try:
+        return _render_declared(declared, context, "save", SaveError)
+    except ValidationError as e:
+        raise SaveError(str(e)) from e
 
 
 # What `_verify_part` cuts a step down from: nothing set (``model_fields_set``
@@ -1364,7 +1390,7 @@ class Carrier:
                         # and re-evaluate already-rendered values — so response-
                         # derived text containing '{{ }}' would be executed as an
                         # expression.
-                        save_model = step.save if isinstance(step.save, SubstitutionsSave) else _render_declared(step.save, step_context, "save", SaveError)
+                        save_model = step.save if isinstance(step.save, SubstitutionsSave) else _render_save(step.save, step_context)
                         step_saved = process_save(save_model, response, step_context)
                         # The static HTTPCHAIN027 check cannot see dynamically
                         # produced keys, so the shadowing is surfaced here too.

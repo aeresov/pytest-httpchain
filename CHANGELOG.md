@@ -162,6 +162,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   another, is left out, and a comment says to add `--digest -u 'user:password'`. A URL holding
   brackets or braces gets `--globoff`, so curl does not read them as ranges. The scenario's `ssl`
   and `client.proxy` settings are not part of the request, and the command has none.
+- `save.regex` saves values from a body that is not JSON, such as a CSRF token in an HTML form or an
+  id in plain text: `{"regex": {"csrf": "name=\"csrf\" value=\"([^\"]+)\"", "order_id": {"pattern":
+  "Order #(?P<id>\\d+)", "group": "id"}, "all_ids": {"pattern": "id=(\\d+)", "all": true}}}`. A
+  pattern is searched for in the body's text (`re.search`), and the variable is group 1 of the first
+  match when the pattern has groups, else the whole match. As an object, `group` picks a group by
+  number (`0` for the whole match) or by name, and `all` saves a list of that group from every
+  match, `[]` when none. A pattern that does not match fails the step, naming the variable and the
+  pattern; a group that took no part in its match saves `null`. Patterns may hold templates, so a
+  `{{` in one always opens a template and literal braces are escaped (`\\{\\{`), and `group` and
+  `all` may be templates. An invalid pattern, and a group a written-out pattern does not have, fail
+  `validate` and collection; once a template renders them, they fail the stage as a save error, as
+  does template text a template renders there. The saved names are known to `validate`'s order
+  checks and to `show`/`graph`, as a JMESPath save's are.
 
 ### Fixed
 

@@ -1461,6 +1461,162 @@
       "title": "ParallelRepeatConfig",
       "description": "Execute the same request N times in parallel."
     },
+    "RegexCapture": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "pattern": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "title": "Pattern",
+              "description": "Regular expression searched for in the response body's text (re.search)."
+            },
+            "group": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Group",
+              "description": "The group to save: its number (0 for the whole match) or its name. Not set: group 1 if the pattern has groups, else the whole match."
+            },
+            "all": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        true,
+                        false
+                      ],
+                      "type": "boolean"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    }
+                  ],
+                  "default": false
+                }
+              ],
+              "title": "All",
+              "description": "Save a list holding the group of every match (re.finditer), empty when nothing matches, instead of the first match's group."
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "RegexCapture",
+      "description": "A save.regex entry written as an object: the pattern, which of its\ngroups to save, and whether from the first match or from every match."
+    },
+    "RegexSave": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Description",
+              "description": "Optional description for this component"
+            },
+            "regex": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "$ref": "#/$defs/RegexCapture"
+                      }
+                    ]
+                  },
+                  "examples": [
+                    {
+                      "all_ids": {
+                        "all": true,
+                        "pattern": "id=(\\d+)"
+                      },
+                      "csrf": "name=\"csrf\" value=\"([^\"]+)\"",
+                      "order_id": {
+                        "group": "id",
+                        "pattern": "Order #(?P<id>\\d+)"
+                      }
+                    }
+                  ],
+                  "type": "object"
+                }
+              ],
+              "title": "Regex",
+              "description": "A pattern per variable, searched for in the response body's text (re.search): the variable is group 1 of the first match if the pattern has groups, else the whole match. Or an object: pattern, group (a number or a name) and all (a list from every match). A pattern that does not match fails the step, unless all is set."
+            }
+          },
+          "required": [
+            "regex"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "RegexSave",
+      "description": "Save what regular expressions find in the response body's text, for\nbodies that are not JSON (HTML, plain text)."
+    },
     "Request": {
       "anyOf": [
         {
@@ -1879,6 +2035,9 @@
               "anyOf": [
                 {
                   "$ref": "#/$defs/JMESPathSave"
+                },
+                {
+                  "$ref": "#/$defs/RegexSave"
                 },
                 {
                   "$ref": "#/$defs/SubstitutionsSave"

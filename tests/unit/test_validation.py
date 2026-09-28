@@ -82,6 +82,9 @@ def _hide_ancestor_project_markers(monkeypatch):
         # A user_functions save returns arbitrary keys, so nothing after it can
         # be called a forward reference.
         "response_opaque_save_no_false_forward_ref.json",
+        # A regex save's names are known, to later steps and later stages, and
+        # its pattern sees a prior step's save.
+        "save_regex_ok.json",
         "substitution_function_kwargs_literal_ok.json",  # only a template is dead text
         # client.base_url (templated from scenario substitutions) completes a
         # relative URL, literal or after a template; an absolute one ignores it.
@@ -213,6 +216,21 @@ DIAGNOSED = [
     # One unavailable name is one finding, however many steps reference it.
     ("substitution_duplicate_forward_refs.json", [(C.FORWARD_REF, "stages[0].substitutions", "'t' before")]),
     ("response_duplicate_forward_refs.json", [(C.FORWARD_REF, "stages[0].response", "'token' before")]),
+    # A regex save's names are known one by one, like a JMESPath save's: after
+    # an earlier regex save, a pattern reading a later one's name is still
+    # a forward reference, and not a name that may already exist.
+    ("save_regex_forward_ref.json", [(C.FORWARD_REF, "stages[0].response", "'customer' before the save that produces it")]),
+    # A group a literal pattern does not have fails at load, as at runtime.
+    (
+        "save_regex_group_unknown.json",
+        [
+            (
+                C.SCHEMA,
+                "stages -> 0 -> response -> 0 -> save -> save -> regex -> regex -> order_id -> capture",
+                r"regex 'Order #\(\?P<id>\\d\+\)' has no group named 'order' \(its named groups: 'id'\)",
+            )
+        ],
+    ),
     # always_run is evaluated before stage substitutions and before the stage runs.
     (
         "always_run_out_of_scope.json",

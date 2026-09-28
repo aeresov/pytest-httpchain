@@ -7,6 +7,7 @@ finally checked against the real type. Hence the ``concrete | template`` unions
 value.
 """
 
+import re
 import warnings
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -54,6 +55,8 @@ from pytest_httpchain.models.types import (
     NumberOrTemplate,
     PartialTemplateStr,
     ProxyUrlStr,
+    RegexGroupName,
+    RegexGroupNumber,
     RegexPattern,
     SerializablePath,
     StatusClass,
@@ -66,6 +69,7 @@ from pytest_httpchain.models.types import (
     XMLString,
     convert_namespace_items_to_dict,
     convert_namespace_to_dict,
+    regex_group,
     validate_function_import_name,
     validate_unquoted_partial_template_str,
 )
@@ -560,6 +564,69 @@ class JMESPathSave(Descripted):
     jmespath: dict[VariableName, JMESPathExpression | PartialTemplateStr] = Field(description="JMESPath expressions to extract values from response.")
 
 
+class RegexCapture(StrictModel):
+    """A save.regex entry written as an object: the pattern, which of its
+    groups to save, and whether from the first match or from every match."""
+
+    pattern: RegexPattern | PartialTemplateStr = Field(description="Regular expression searched for in the response body's text (re.search).")
+    group: RegexGroupNumber | RegexGroupName | TemplateExpressionOnly | None = Field(
+        default=None,
+        description="The group to save: its number (0 for the whole match) or its name. Not set: group 1 if the pattern has groups, else the whole match.",
+    )
+    all: Literal[True, False] | TemplateExpressionOnly = Field(
+        default=False,
+        description="Save a list holding the group of every match (re.finditer), empty when nothing matches, instead of the first match's group.",
+    )
+
+    @model_validator(mode="after")
+    def _group_is_in_the_pattern(self) -> Self:
+        """A group a literal pattern does not have fails at load. One a
+        template renders is checked once it has, when re-validated here, or
+        by `response_steps.process_save` when it rendered to template text."""
+        if self.group is not None and not contains_template([self.pattern, self.group]):
+            regex_group(re.compile(self.pattern), self.group)
+        return self
+
+
+def _regex_entry_tag(v: Any) -> str:
+    """An object is a `RegexCapture`, anything else a pattern: a template
+    that renders an object where a pattern is written makes it a capture,
+    as a header matcher can be rendered whole."""
+    return "capture" if isinstance(v, dict | RegexCapture) else "pattern"
+
+
+# A template over `vars` renders an object as a SimpleNamespace, which stands
+# for the capture object. Ahead of the union, keeping its tags in error
+# locations.
+RegexSaveEntry = Annotated[
+    Annotated[
+        Annotated[RegexPattern | PartialTemplateStr, Tag("pattern")] | Annotated[RegexCapture, Tag("capture")],
+        Discriminator(_regex_entry_tag),
+    ],
+    BeforeValidator(convert_namespace_to_dict),
+]
+
+
+class RegexSave(Descripted):
+    """Save what regular expressions find in the response body's text, for
+    bodies that are not JSON (HTML, plain text)."""
+
+    regex: dict[VariableName, RegexSaveEntry] = Field(
+        description=(
+            "A pattern per variable, searched for in the response body's text (re.search): the variable is group 1 of the first match "
+            "if the pattern has groups, else the whole match. Or an object: pattern, group (a number or a name) and all "
+            "(a list from every match). A pattern that does not match fails the step, unless all is set."
+        ),
+        examples=[
+            {
+                "csrf": 'name="csrf" value="([^"]+)"',
+                "order_id": {"pattern": "Order #(?P<id>\\d+)", "group": "id"},
+                "all_ids": {"pattern": "id=(\\d+)", "all": True},
+            }
+        ],
+    )
+
+
 class SubstitutionsSave(Descripted):
     """Save data using variable substitutions."""
 
@@ -575,6 +642,7 @@ class UserFunctionsSave(Descripted):
 get_save_discriminator = _create_discriminator(
     {
         JMESPathSave: "jmespath",
+        RegexSave: "regex",
         SubstitutionsSave: "substitutions",
         UserFunctionsSave: "user_functions",
     },
@@ -582,7 +650,10 @@ get_save_discriminator = _create_discriminator(
 
 
 Save = Annotated[
-    Annotated[JMESPathSave, Tag("jmespath")] | Annotated[SubstitutionsSave, Tag("substitutions")] | Annotated[UserFunctionsSave, Tag("user_functions")],
+    Annotated[JMESPathSave, Tag("jmespath")]
+    | Annotated[RegexSave, Tag("regex")]
+    | Annotated[SubstitutionsSave, Tag("substitutions")]
+    | Annotated[UserFunctionsSave, Tag("user_functions")],
     Discriminator(get_save_discriminator),
 ]
 

@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from pytest_httpchain.errors import SaveError, VerificationError
-from pytest_httpchain.models import JSON_TYPE_NAMES, JMESPathSave, Verify
+from pytest_httpchain.models import JSON_TYPE_NAMES, JMESPathSave, RegexSave, Verify
 from pytest_httpchain.models.entities import ResponseBody
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
 from pytest_httpchain.response_steps import RenderFailure, RenderOutcome, is_json_type, process_save, process_verify
@@ -46,6 +46,124 @@ def test_jmespath_save_rejects_non_json_response(response, message):
     """In the words a verify step uses for the same body (`_JsonBody`)."""
     with pytest.raises(SaveError, match=f"^Cannot extract variables, {message}: "):
         on_bounded_stack(process_save, JMESPathSave(jmespath={"value": "key"}), response, ChainMap())
+
+
+PAGE = httpx.Response(
+    200,
+    text='<form><input name="csrf" value="tok-1"></form>\n<p>Order #42</p>\n<a href="?id=7">7</a> <a href="?id=8">8</a>',
+    headers={"content-type": "text/html; charset=utf-8"},
+)
+
+
+def _save_regex(entry, response: httpx.Response = PAGE):
+    """What one ``save.regex`` entry, as declared (and so as rendered: no
+    template in it), saves from ``response``."""
+    return process_save(RegexSave.model_validate({"regex": {"v": entry}}), response, ChainMap())["v"]
+
+
+class TestRegexSave:
+    """``save.regex``: values from a body that is not JSON."""
+
+    @pytest.mark.parametrize(
+        ("entry", "expected"),
+        [
+            # Group 1 when the pattern has groups, else the whole match.
+            pytest.param('name="csrf" value="([^"]+)"', "tok-1", id="first-group"),
+            pytest.param("Order #\\d+", "Order #42", id="whole-match"),
+            pytest.param("(Order) #(\\d+)", "Order", id="first-of-several"),
+            pytest.param("Order #(?P<id>\\d+)", "42", id="named-group-is-numbered"),
+            # (?:...) is not a group.
+            pytest.param("(?:Order) #\\d+", "Order #42", id="non-capturing"),
+            pytest.param({"pattern": "Order #(?P<id>\\d+)", "group": "id"}, "42", id="group-name"),
+            pytest.param({"pattern": "(Order) #(\\d+)", "group": 2}, "42", id="group-number"),
+            pytest.param({"pattern": "(Order) #(\\d+)", "group": 0}, "Order #42", id="group-zero"),
+            # The first match only: there are two ids.
+            pytest.param("id=(\\d+)", "7", id="first-match"),
+            pytest.param({"pattern": "id=(\\d+)", "all": True}, ["7", "8"], id="all"),
+            pytest.param({"pattern": "id=\\d+", "all": True}, ["id=7", "id=8"], id="all-whole-matches"),
+            pytest.param({"pattern": "(?P<k>id)=(?P<v>\\d+)", "group": "v", "all": True}, ["7", "8"], id="all-group-name"),
+            # Nothing matching is a value with all: an empty list, not an error.
+            pytest.param({"pattern": "sku=(\\d+)", "all": True}, [], id="all-without-a-match"),
+            # A group that took no part in its match is None, as re has it.
+            pytest.param("Order #(\\d+)|(pending)", "42", id="alternative-that-matched"),
+            pytest.param({"pattern": "(pending)|Order #(\\d+)", "group": 1}, None, id="group-that-did-not-take-part"),
+            # re.search, flags inline: `.` stops at a newline unless (?s).
+            pytest.param({"pattern": "</form>(.*)</p>", "all": True}, [], id="dot-stops-at-a-newline"),
+            pytest.param("(?s)</form>(.*)</p>", "\n<p>Order #42", id="dotall-inline-flag"),
+            pytest.param("(?i)ORDER #(\\d+)", "42", id="ignorecase-inline-flag"),
+        ],
+    )
+    def test_saves(self, entry, expected):
+        assert _save_regex(entry) == expected
+
+    def test_body_is_searched_as_decoded_text(self):
+        """``response.text``, decoded by the charset the response declares, as
+        ``verify.body`` reads it."""
+        response = httpx.Response(200, content="café au lait".encode("latin-1"), headers={"content-type": "text/plain; charset=latin-1"})
+        assert _save_regex("caf(.)", response) == "é"
+
+    def test_every_entry_is_saved(self):
+        save = RegexSave.model_validate({"regex": {"csrf": 'value="([^"]+)"', "order_id": "Order #(\\d+)", "ids": {"pattern": "id=(\\d+)", "all": True}}})
+        assert process_save(save, PAGE, ChainMap()) == {"csrf": "tok-1", "order_id": "42", "ids": ["7", "8"]}
+
+    @pytest.mark.parametrize(
+        ("entry", "pattern"),
+        [
+            pytest.param("sku=(\\d+)", "sku=(\\d+)", id="pattern"),
+            pytest.param({"pattern": "sku=(\\d+)", "group": 1}, "sku=(\\d+)", id="capture"),
+        ],
+    )
+    def test_no_match_fails_naming_the_variable_and_the_pattern(self, entry, pattern):
+        with pytest.raises(SaveError) as excinfo:
+            _save_regex(entry)
+        assert str(excinfo.value) == f"Error saving variable v: regex '{pattern}' does not match the response body"
+
+    def test_step_stops_at_its_first_error(self):
+        save = RegexSave.model_validate({"regex": {"first": "sku=(\\d+)", "second": "(nothing)"}})
+        with pytest.raises(SaveError, match="^Error saving variable first: "):
+            process_save(save, PAGE, ChainMap())
+
+    # The rendered entries below hold template text a template rendered (a
+    # value saved from a response), which each field's template branch takes
+    # as it is: validation cannot judge them, so the save does.
+
+    @pytest.mark.parametrize(
+        ("pattern", "error"),
+        [
+            pytest.param("{{ ( }}", "missing ), unterminated subpattern at position 3", id="re-error"),
+            pytest.param("a{4294967296}{{ x }}", "the repetition number is too large", id="overflow"),
+            pytest.param("(" * 5000 + "{{ x }}" + ")" * 5000, "maximum recursion depth exceeded", id="recursion"),
+        ],
+    )
+    def test_template_text_pattern_re_refuses_fails_cleanly(self, pattern, error):
+        with pytest.raises(SaveError) as excinfo:
+            _save_regex(pattern)
+        assert str(excinfo.value) == f"Error saving variable v: pattern must resolve to a regular expression, got {pattern!r} ({error})"
+
+    @pytest.mark.parametrize(
+        ("capture", "message"),
+        [
+            pytest.param(
+                {"pattern": "{{ x }}(a)", "group": 2},
+                "regex '{{ x }}(a)' has no group 2 (it has 1 group; 0 is the whole match)",
+                id="group-number",
+            ),
+            pytest.param({"pattern": "{{ x }}(a)", "group": "id"}, "regex '{{ x }}(a)' has no group named 'id' (it has no named groups)", id="group-name"),
+            # Checked before any match is tried: all finding nothing does not
+            # hide it behind an empty list.
+            pytest.param(
+                {"pattern": "{{ x }}(a)", "group": 2, "all": True},
+                "regex '{{ x }}(a)' has no group 2 (it has 1 group; 0 is the whole match)",
+                id="group-number-with-all",
+            ),
+            pytest.param({"pattern": "(a)", "group": "{{ y }}"}, "group must resolve to a group's number or name, got '{{ y }}'", id="group-template-text"),
+            pytest.param({"pattern": "(a)", "all": "{{ y }}"}, "all must resolve to true or false, got '{{ y }}'", id="all-template-text"),
+        ],
+    )
+    def test_rendered_capture_that_cannot_be_saved_fails_cleanly(self, capture, message):
+        with pytest.raises(SaveError) as excinfo:
+            _save_regex(capture)
+        assert str(excinfo.value) == f"Error saving variable v: {message}"
 
 
 class TestStatus:

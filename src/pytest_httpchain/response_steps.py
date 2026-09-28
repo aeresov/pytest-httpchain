@@ -33,6 +33,8 @@ from pytest_httpchain.models import (
     HeaderMatcher,
     JMESPathMatcher,
     JMESPathSave,
+    RegexCapture,
+    RegexSave,
     Save,
     SubstitutionsSave,
     UserFunctionsSave,
@@ -40,6 +42,7 @@ from pytest_httpchain.models import (
     check_json_schema,
     is_status_class,
     json_schema_validator_class,
+    regex_group,
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, Redaction
 from pytest_httpchain.templates import TemplatesError
@@ -59,6 +62,10 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
                     step_saved[var_name] = jmespath.search(jmespath_expr, response_json)
                 except jmespath.exceptions.JMESPathError as e:
                     raise SaveError(f"Error saving variable {var_name}: {e}") from e
+
+        case RegexSave():
+            for var_name, entry in save_model.regex.items():
+                step_saved[var_name] = _regex_save(var_name, entry, response.text)
 
         case SubstitutionsSave():
             try:
@@ -81,6 +88,40 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
             raise RuntimeError(f"Unhandled save type: {type(save_model).__name__}")
 
     return step_saved
+
+
+def _regex_save(name: str, entry: str | RegexCapture, text: str) -> Any:
+    """What one ``save.regex`` entry saves from the body's ``text``: its
+    group (`regex_group`) in the first match, or with ``all`` a list of it
+    from every match, empty when there is none. A group that took no part in
+    its match is None, as ``re`` has it.
+
+    The entry comes rendered and validated, its literal pattern's group
+    checked at load. A template can render to template text, though, which
+    each field's template branch takes as it is: a pattern that ``re``
+    refuses, a group or an ``all`` that is none. Each fails the step here,
+    as does a group the pattern a template rendered does not have, checked
+    before any match is tried so that ``all`` finding nothing cannot hide it.
+    """
+    pattern, group, every = (entry.pattern, entry.group, entry.all) if isinstance(entry, RegexCapture) else (entry, None, False)
+    if not isinstance(every, bool):
+        raise SaveError(f"Error saving variable {name}: all must resolve to true or false, got {every!r}")
+    if isinstance(group, str) and not group.isidentifier():
+        raise SaveError(f"Error saving variable {name}: group must resolve to a group's number or name, got {group!r}")
+    try:
+        compiled = re.compile(pattern)
+    except (re.error, OverflowError, RecursionError) as e:
+        raise SaveError(f"Error saving variable {name}: pattern must resolve to a regular expression, got {pattern!r} ({e})") from e
+    try:
+        chosen = regex_group(compiled, group)
+    except ValueError as e:
+        raise SaveError(f"Error saving variable {name}: {e}") from e
+    if every:
+        return [match.group(chosen) for match in compiled.finditer(text)]
+    match = compiled.search(text)
+    if match is None:
+        raise SaveError(f"Error saving variable {name}: regex '{pattern}' does not match the response body")
+    return match.group(chosen)
 
 
 # Where a value is declared in a verify step: ``("status",)``, ``("headers",

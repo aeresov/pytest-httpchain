@@ -635,6 +635,85 @@ Extract values from JSON responses:
 }
 ```
 
+### Regex Extraction
+
+For a body that is not JSON, such as an HTML page or plain text, a `regex` save
+takes values out of its text with [Python regular
+expressions](https://docs.python.org/3/library/re.html#regular-expression-syntax):
+a CSRF token from a form, an id from a sentence.
+
+```json
+{
+    "save": {
+        "regex": {
+            "csrf": "name=\"csrf\" value=\"([^\"]+)\"",
+            "order_id": {"pattern": "Order #(?P<id>\\d+)", "group": "id"},
+            "all_ids": {"pattern": "id=(\\d+)", "all": true}
+        }
+    }
+}
+```
+
+Each key is the variable to save, and each value a pattern, searched for
+anywhere in the body (`re.search`) as text, decoded as the response's charset
+says. The variable is group 1 of the first match when the pattern has groups,
+and the whole match when it has none: `csrf` above is the token, not the
+`name="csrf" value="..."` around it. A named group counts in the numbering, and
+`(?:...)` does not.
+
+An object picks the group, or every match:
+
+| Key       | Value                                                                                                         |
+|-----------|---------------------------------------------------------------------------------------------------------------|
+| `pattern` | The regular expression (required).                                                                            |
+| `group`   | The group to save: its number, `0` for the whole match, or its name. Not set: as for a string above.         |
+| `all`     | `true` saves a list of that group from every match, in order, and `[]` when nothing matches. Default `false`. |
+
+A pattern that does not match fails the step, naming the variable and the
+pattern:
+
+```text
+Error saving variable csrf: regex 'name="csrf" value="([^"]+)"' does not match the response body
+```
+
+With `all`, nothing matching is not an error but an empty list, which a later
+`verify` can check (`"{{ len(all_ids) > 0 }}"`). A group that takes no part in
+its match, one side of an alternation (`(pending)|Order #(\d+)`), saves
+`null`, as Python's `re` has it.
+
+The values are strings (a list of strings with `all`), compared as such
+(`"{{ order_id == '1042' }}"`), or converted where a number is wanted
+(`"{{ int(order_id) }}"`). Flags go in the pattern itself: `(?i)` ignores
+case, `(?s)` lets `.` match a newline, which it does not by default (a match
+spanning lines of HTML needs it), and `(?m)` makes `^` and `$` match at each
+line. In JSON a backslash is written twice: `\\d+` is the
+pattern `\d+`, and a `"` inside the pattern is `\"`.
+
+A pattern may hold templates, rendered before the search in the response
+step's scope: `"<a href=\"(/item/{{ item_id }})\">"`. What a template puts
+there is part of the pattern, so a `.` or a `+` in a value is regex syntax, not
+the character. `group` and `all` take a template too. A pattern that is not a
+valid regular expression, or a `group` the pattern does not have, fails
+`validate` and collection when the pattern is written out, and fails the stage
+when a template renders it:
+
+```text
+regex 'Order #(?P<id>\d+)' has no group named 'order' (its named groups: 'id')
+```
+
+Because a pattern takes templates, a `{{` in one always opens a template,
+closed by the first `}}`, as in any value (a header or body `matches` pattern
+too). Braces the body holds, such as a page's own `{{ name }}` placeholders,
+are matched escaped: `"\\{\\{\\s*(\\w+)\\s*\\}\\}"`. A repeat count taken from
+a template keeps its braces inside the expression: with `n` at 3,
+`"\\d{{ '{' + str(n) + '}' }}"` renders `\d{3}`, while `"\\d{{{ n }}}"` is not a
+valid template, and `"\\d{ {{ n }} }"` renders `\d{ 3 }`, which Python's `re`
+reads as a digit followed by the text `{ 3 }`, not as a count.
+
+The saved names are known to `validate`, which reports a template reading one
+before the step that saves it, and to [`show` and `graph`](../cli.md), which
+list them among the stage's saves.
+
 ### Substitutions Save
 
 Add computed values to context:

@@ -1,0 +1,14 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/page" },
+            "response": [
+                { "save": { "regex": { "csrf": "name=\"csrf\" value=\"([^\"]+)\"" } } },
+                { "save": { "regex": { "order_id": "Order #(\\d+) for {{ customer }}" } } },
+                { "save": { "regex": { "customer": "Customer: (\\w+)" } } },
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

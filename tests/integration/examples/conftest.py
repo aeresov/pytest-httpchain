@@ -294,6 +294,20 @@ def template_literal_body():
     return {"tpl": "literal {{ probe }} text"}, HTTPStatus.OK
 
 
+@app.get("/page")
+def html_page():
+    """An HTML page, not JSON, for regex saves: a form's CSRF token, an order
+    number in running text, and a list of links."""
+    page = (
+        "<html><body>\n"
+        '<form action="/echo/form" method="post"><input type="hidden" name="csrf" value="c5rf-t0ken"></form>\n'
+        "<p>Order #1042 is confirmed.</p>\n"
+        '<ul><li><a href="/item/1">One</a></li><li><a href="/item/2">Two</a></li><li><a href="/item/3">Three</a></li></ul>\n'
+        "</body></html>\n"
+    )
+    return page, HTTPStatus.OK, {"Content-Type": "text/html; charset=utf-8"}
+
+
 # ============ Verification Endpoints ============
 
 

@@ -1,0 +1,68 @@
+{
+    "stages": [
+        {
+            "name": "read_page",
+            "description": "Save values from an HTML page with regular expressions",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/page"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "headers": {"Content-Type": {"contains": "text/html"}}
+                    }
+                },
+                {
+                    "save": {
+                        "regex": {
+                            "csrf": "name=\"csrf\" value=\"([^\"]+)\"",
+                            "order_id": {"pattern": "Order #(?P<id>\\d+)", "group": "id"},
+                            "item_ids": {"pattern": "/item/(\\d+)", "all": true},
+                            "coupons": {"pattern": "coupon=(\\w+)", "all": true}
+                        }
+                    }
+                },
+                {
+                    "save": {
+                        "regex": {
+                            "last_item": "<a href=\"(/item/{{ item_ids[-1] }})\">([^<]+)</a>"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ csrf == 'c5rf-t0ken' }}",
+                            "{{ order_id == '1042' }}",
+                            "{{ item_ids == ['1', '2', '3'] }}",
+                            "{{ coupons == [] }}",
+                            "{{ last_item == '/item/3' }}"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "submit_form",
+            "description": "Send the saved token back with the form",
+            "fixtures": ["server"],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/echo/form",
+                "body": {
+                    "form": {"csrf": "{{ csrf }}", "order": "{{ order_id }}", "item": "{{ last_item }}"}
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "jmespath": {"form": {"eq": {"csrf": "c5rf-t0ken", "order": "1042", "item": "/item/3"}}}
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -55,6 +55,9 @@ def _edges(flow) -> list[dict]:
         # once the stage re-saves a name, later steps read its own fresh value.
         pytest.param({"response": [{"save": {"jmespath": {"x": "b"}}}, {"verify": {"expressions": ["{{ x != '' }}"]}}]}, [], id="own-resave-shadows-later-steps"),
         pytest.param({"response": [{"verify": {"expressions": ["{{ x != '' }}"]}}, {"save": {"jmespath": {"x": "b"}}}]}, ["x"], id="reference-before-own-resave"),
+        # A regex save's names layer the same way, and its patterns are rendered.
+        pytest.param({"response": [{"save": {"regex": {"x": "(b)"}}}, {"verify": {"expressions": ["{{ x != '' }}"]}}]}, [], id="own-regex-resave-shadows-later-steps"),
+        pytest.param({"response": [{"save": {"regex": {"z": "id={{ x }}", "w": {"pattern": "(a)", "group": "{{ y }}"}}}}]}, ["x", "y"], id="regex-save-templates"),
         # An entry of a status list takes a template of its own.
         pytest.param({"response": [{"verify": {"status": ["{{ x }}", 304]}}]}, ["x"], id="verify-status-list-entry"),
         # A verify.jmespath value and a matcher operand are rendered; the
@@ -85,6 +88,15 @@ def test_same_stage_save_and_use_no_self_edge():
     assert flow.stages[0].saves == ["token"]
     assert flow.stages[0].consumes == []
     assert flow.edges == []
+
+
+def test_regex_save_names_are_saves_and_feed_edges():
+    """``show`` and ``graph`` list a regex save's names as a JMESPath save's,
+    and draw the edge to the stage reading them."""
+    producer = _stage("page", response=[{"save": {"regex": {"csrf": 'value="([^"]+)"', "ids": {"pattern": "id=(\\d+)", "all": True}}}}])
+    flow = analyze_dataflow(*_scenario([producer, _stage("submit", request={"url": "https://x.test/", "headers": {"X-CSRF": "{{ csrf }}"}})]))
+    assert flow.stages[0].saves == ["csrf", "ids"]
+    assert _edges(flow) == [{"producer": 0, "consumer": 1, "vars": ["csrf"]}]
 
 
 def test_latest_producer_selected():

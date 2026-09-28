@@ -110,6 +110,37 @@ def validate_jmespath_key(v: str) -> str:
 
 validate_regex_pattern = create_string_validator(re.compile, "Invalid regular expression")
 
+
+def validate_regex_group_name(v: str) -> str:
+    """A regex group's name, which ``re`` takes only as a Python identifier,
+    so a name that cannot be one fails at load whatever the pattern."""
+    if not v.isidentifier():
+        raise ValueError(f"Invalid group name {v!r}: a group is a number (0 for the whole match) or the name of a (?P<name>...) group")
+    return v
+
+
+def regex_group(pattern: re.Pattern[str], group: int | str | None) -> int | str:
+    """The group of ``pattern`` a ``save.regex`` entry saves from a match:
+    ``group`` when set, and otherwise group 1 when the pattern has any
+    groups, else the whole match (0). A ValueError says why ``pattern`` has
+    no such group.
+
+    Shared by the model, which checks a literal pattern's group at load, and
+    `response_steps.process_save`, which checks one a template rendered: the
+    same groups are refused in the same words, before any match is tried.
+    """
+    if group is None:
+        return 1 if pattern.groups else 0
+    if isinstance(group, int):
+        if group > pattern.groups:
+            count = "no groups" if not pattern.groups else "1 group" if pattern.groups == 1 else f"{pattern.groups} groups"
+            raise ValueError(f"regex '{pattern.pattern}' has no group {group} (it has {count}; 0 is the whole match)")
+    elif group not in pattern.groupindex:
+        names = f"its named groups: {', '.join(map(repr, pattern.groupindex))}" if pattern.groupindex else "it has no named groups"
+        raise ValueError(f"regex '{pattern.pattern}' has no group named {group!r} ({names})")
+    return group
+
+
 validate_xml = create_string_validator(xml.etree.ElementTree.fromstring, "Invalid XML")
 
 validate_graphql_query = create_string_validator(graphql.parse, "Invalid GraphQL query")
@@ -232,6 +263,9 @@ JMESPathKey = Annotated[str, AfterValidator(validate_jmespath_key)]
 JSONSchemaInline = Annotated[dict[str, Any], AfterValidator(validate_json_schema_inline)]
 SerializablePath = Annotated[Path, PlainSerializer(lambda x: str(x), return_type=str)]
 RegexPattern = Annotated[str, AfterValidator(validate_regex_pattern)]
+# A regex group a `save.regex` entry saves: its number or its name.
+RegexGroupNumber = Annotated[StrictInt, Field(ge=0)]
+RegexGroupName = Annotated[str, AfterValidator(validate_regex_group_name)]
 XMLString = Annotated[str, AfterValidator(validate_xml)]
 GraphQLQuery = Annotated[str, AfterValidator(validate_graphql_query)]
 TemplateExpression = Annotated[str, AfterValidator(validate_template_expression)]

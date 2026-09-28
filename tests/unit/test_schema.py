@@ -63,11 +63,33 @@ def test_schema_metadata_is_hoisted_out_of_jsonref_branches():
     assert schema["$defs"]["Stage"]["title"], "$defs entry lost its title"
 
 
+def test_schema_descriptions_carry_no_rst_markup():
+    """A model's class docstring becomes its schema description, which an
+    editor shows on hover as plain text: RST's ``literal`` backticks, at home
+    in the code's other docstrings, would show there as they are typed."""
+    offenders: list[str] = []
+
+    def collect(node, path):
+        match node:
+            case dict():
+                if isinstance(node.get("description"), str) and "``" in node["description"]:
+                    offenders.append(path)
+                for key, value in node.items():
+                    collect(value, f"{path}.{key}")
+            case list():
+                for index, item in enumerate(node):
+                    collect(item, f"{path}[{index}]")
+
+    collect(build_schema(), "$")
+    assert not offenders, f"RST double backticks in schema descriptions: {offenders}"
+
+
 def test_schema_patterns_are_ecma262_compatible():
     """JSON Schema defines `pattern` as an ECMA-262 regex. Python's named-group
     spelling `(?P<name>...)` is a SyntaxError in JS engines, and VS Code's JSON
     language service silently drops a pattern it cannot compile — so no emitted
-    pattern may use Python-only syntax."""
+    pattern may use Python-only syntax. Examples and defaults are instances,
+    not schemas: a ``save.regex`` example's ``pattern`` is a Python regex."""
     patterns: list[str] = []
 
     def collect(node):
@@ -76,7 +98,7 @@ def test_schema_patterns_are_ecma262_compatible():
                 for key, value in node.items():
                     if key == "pattern" and isinstance(value, str):
                         patterns.append(value)
-                    else:
+                    elif key not in ("examples", "default"):
                         collect(value)
             case list():
                 for item in node:

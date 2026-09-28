@@ -41,6 +41,7 @@ from pytest_httpchain.models import (
     ParallelConfig,
     ParallelForeachConfig,
     Parameters,
+    RegexSave,
     ResponseStep,
     SaveStep,
     Scenario,
@@ -128,6 +129,8 @@ def saved_in_step(response_step: ResponseStep) -> set[str]:
     match response_step.save:
         case JMESPathSave(jmespath=jmespath):
             return set(jmespath.keys())
+        case RegexSave(regex=regex):
+            return set(regex.keys())
         case SubstitutionsSave(substitutions=substitutions):
             return substitution_names(substitutions)
         case _:
@@ -290,7 +293,7 @@ def response_step_refs(stage: Stage, raw_response: Any) -> Iterator[tuple[set[st
         else:
             yield extract_template_variables(step_raw), visible
         prior_saves |= frozenset(saved_in_step(step))
-        if isinstance(step, SaveStep) and not isinstance(step.save, JMESPathSave | SubstitutionsSave):
+        if isinstance(step, SaveStep) and not isinstance(step.save, JMESPathSave | RegexSave | SubstitutionsSave):
             opaque_save_seen = True
 
 
