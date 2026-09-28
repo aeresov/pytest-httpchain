@@ -1,10 +1,12 @@
 import json
+import shlex
+from urllib.parse import quote
 
 import httpx
 import pytest
 
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
-from pytest_httpchain.report_formatter import format_request, format_response
+from pytest_httpchain.report_formatter import format_curl, format_request, format_response
 
 _UNDECODABLE = bytes(range(256))
 _BIG_JSON = {"data": ["x" * 50] * 200}
@@ -171,3 +173,239 @@ def test_redaction_covers_start_line_and_headers(redaction, expected_request, ex
     included."""
     assert format_request(_CREDENTIALED_REQUEST, redaction) == expected_request
     assert format_response(_CREDENTIALED_RESPONSE, redaction) == expected_response
+
+
+def _lines(*lines: str) -> str:
+    return "\n".join(lines)
+
+
+def _curl_arguments(command: str) -> list[str]:
+    """What a POSIX shell hands curl for ``command``, comment lines dropped."""
+    return shlex.split(command.replace(" \\\n", " "), comments=True)
+
+
+@pytest.mark.parametrize(
+    ("request_", "expected"),
+    [
+        pytest.param(
+            _CREDENTIALED_REQUEST,
+            # [REDACTED] in the URL would be a curl glob range: --globoff.
+            _lines(
+                "# [REDACTED] stands for a value this report hides: fill it in before running.",
+                "curl -X GET 'https://u:[REDACTED]@x.test/p?page=1&access_token=[REDACTED]' \\",
+                "  --globoff \\",
+                "  -H 'authorization: [REDACTED]' \\",
+                "  -H 'cookie: sid=[REDACTED]; theme=[REDACTED]' \\",
+                "  -H 'x-trace: t1'",
+            ),
+            id="redacted",
+        ),
+        pytest.param(
+            httpx.Request("GET", "https://x.test/p", headers={"x-trace": "t1"}),
+            _lines(
+                "curl -X GET 'https://x.test/p' \\",
+                "  -H 'x-trace: t1'",
+            ),
+            id="nothing-redacted-no-comment",
+        ),
+        pytest.param(
+            httpx.Request(
+                "DELETE",
+                "https://x.test/items?filter[id]=1",
+                headers=[("connection", "keep-alive"), ("accept-encoding", "gzip, deflate"), ("x-empty", ""), ("x-multi", "a"), ("x-multi", "b")],
+            ),
+            # curl writes Host and Connection itself, and httpx's own
+            # Accept-Encoding with --compressed; `Name;` sends an empty header
+            # where `Name:` would remove it; a repeated header stays two lines.
+            _lines(
+                "curl -X DELETE 'https://x.test/items?filter[id]=1' \\",
+                "  --globoff \\",
+                "  -H 'x-empty;' \\",
+                "  -H 'x-multi: a' \\",
+                "  -H 'x-multi: b' \\",
+                "  --compressed",
+            ),
+            id="header-filtering",
+        ),
+        pytest.param(
+            httpx.Request("GET", "https://x.test:8443/", headers={"host": "vhost.test"}),
+            # A Host the request set itself is not the URL's: sent as set.
+            _lines(
+                "curl -X GET 'https://x.test:8443/' \\",
+                "  -H 'host: vhost.test'",
+            ),
+            id="virtual-host",
+        ),
+        # -X HEAD makes curl wait for a body that never comes, but --head
+        # refuses to send one.
+        pytest.param(httpx.Request("HEAD", "https://x.test/"), "curl --head 'https://x.test/'", id="head"),
+        pytest.param(
+            httpx.Request("HEAD", "https://x.test/", headers={"content-type": "text/plain"}, content=b"x"),
+            _lines(
+                "curl -X HEAD 'https://x.test/' \\",
+                "  -H 'content-type: text/plain' \\",
+                "  --data-raw 'x'",
+            ),
+            id="head-with-body",
+        ),
+        pytest.param(
+            httpx.Request("POST", "https://x.test/api", headers={"content-type": "application/json"}, content=b'{"name": "Alice"}'),
+            # As sent, not pretty-printed as the request section shows it.
+            _lines(
+                "curl -X POST 'https://x.test/api' \\",
+                "  -H 'content-type: application/json' \\",
+                """  --data-raw '{"name": "Alice"}'""",
+            ),
+            id="json",
+        ),
+        pytest.param(
+            httpx.Request("POST", "https://x.test/login", data={"user": "alice", "password": "s3cret"}),
+            # Bodies are shown as sent, in the command too.
+            _lines(
+                "curl -X POST 'https://x.test/login' \\",
+                "  -H 'content-type: application/x-www-form-urlencoded' \\",
+                "  --data-raw 'user=alice&password=s3cret'",
+            ),
+            id="form",
+        ),
+        pytest.param(
+            httpx.Request("PUT", "https://x.test/raw", content=b"plain"),
+            # Given a body without a Content-Type, curl would label it a form.
+            _lines(
+                "curl -X PUT 'https://x.test/raw' \\",
+                "  -H 'Content-Type:' \\",
+                "  --data-raw 'plain'",
+            ),
+            id="no-content-type",
+        ),
+        pytest.param(
+            httpx.Request("POST", "https://x.test/upload", headers={"content-type": "application/octet-stream"}, content=_UNDECODABLE),
+            _lines(
+                "# The body is 256 bytes of binary data: save it as body.bin to send it.",
+                "curl -X POST 'https://x.test/upload' \\",
+                "  -H 'content-type: application/octet-stream' \\",
+                "  --data-binary @body.bin",
+            ),
+            id="binary",
+        ),
+        pytest.param(
+            # Valid UTF-8, but a NUL ends a C string, and so a shell argument.
+            httpx.Request("POST", "https://x.test/upload", headers={"content-type": "text/plain"}, content=b"a\x00b"),
+            _lines(
+                "# The body is 3 bytes of binary data: save it as body.bin to send it.",
+                "curl -X POST 'https://x.test/upload' \\",
+                "  -H 'content-type: text/plain' \\",
+                "  --data-binary @body.bin",
+            ),
+            id="nul-is-binary",
+        ),
+        pytest.param(
+            # Cut short like the request section's, it would send another body.
+            httpx.Request("POST", "https://x.test/bulk", headers={"content-type": "text/plain"}, content=b"x" * 10_001),
+            _lines(
+                "# The body, 10001 characters, is too long to show: save it as body.txt to send it.",
+                "curl -X POST 'https://x.test/bulk' \\",
+                "  -H 'content-type: text/plain' \\",
+                "  --data-binary @body.txt",
+            ),
+            id="too-long",
+        ),
+        pytest.param(
+            # Its Content-Type's boundary belongs to the uncaptured body: -F writes its own.
+            httpx.Request("POST", "https://x.test/upload", files={"file": ("a.txt", b"abc")}),
+            _lines(
+                "# The multipart body was not captured: add each part with -F 'name=@file'.",
+                "curl -X POST 'https://x.test/upload'",
+            ),
+            id="multipart",
+        ),
+        pytest.param(
+            httpx.Request("POST", "https://x.test/upload", content=iter([b"chunk"])),
+            _lines(
+                "# The streamed body was not captured: add it with --data-binary @file.",
+                "curl -X POST 'https://x.test/upload'",
+            ),
+            id="streaming",
+        ),
+        pytest.param(
+            httpx.Request("POST", "https://x.test/empty"),
+            # httpx sends a bodyless POST's Content-Length: 0, and curl, given
+            # no body, would send none: some servers answer that 411.
+            _lines(
+                "curl -X POST 'https://x.test/empty' \\",
+                "  -H 'content-length: 0'",
+            ),
+            id="empty-body",
+        ),
+        pytest.param(
+            httpx.Request("GET", "https://x.test/p", headers={"authorization": 'Digest username="u", nonce="n1", response="r1"', "x-trace": "t1"}),
+            # Computed from one challenge's nonce, it would not answer another:
+            # left out, not a [REDACTED] to fill in.
+            _lines(
+                "# The Digest Authorization answered one challenge and is left out: add --digest -u 'user:password' to answer a new one.",
+                "curl -X GET 'https://x.test/p' \\",
+                "  -H 'x-trace: t1'",
+            ),
+            id="digest-auth",
+        ),
+    ],
+)
+def test_format_curl(request_, expected):
+    assert format_curl(request_) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "kept"),
+    [
+        # httpx's own, whichever of br and zstd it lists: curl asks for what
+        # it decodes.
+        pytest.param("gzip, deflate", False, id="httpx-default"),
+        pytest.param("gzip, deflate, br, zstd", False, id="httpx-default-all-decoders"),
+        pytest.param("GZIP,deflate", False, id="default-spelled-otherwise"),
+        # Set on purpose: sent as set, which curl sends in place of its own.
+        pytest.param("identity", True, id="identity"),
+        pytest.param("br", True, id="one-coding"),
+        pytest.param("gzip", True, id="gzip-alone"),
+        pytest.param("", True, id="empty"),
+        pytest.param("gzip;q=1.0, identity; q=0.5", True, id="weighted"),
+        pytest.param("gzip, deflate, compress", True, id="coding-httpx-does-not-send"),
+        pytest.param("gzip, gzip, deflate", True, id="repeated-coding"),
+    ],
+)
+def test_format_curl_keeps_an_accept_encoding_the_request_set(value, kept):
+    """--compressed is there either way: httpx decodes the answer whatever it
+    asked for, curl only with it. Without a header of its own, curl asks for
+    every coding it decodes, which a request for ``identity`` refused."""
+    arguments = _curl_arguments(format_curl(httpx.Request("GET", "https://x.test/", headers={"accept-encoding": value})))
+    header = ["-H", f"accept-encoding: {value}" if value else "accept-encoding;"] if kept else []
+    assert arguments == ["curl", "-X", "GET", "https://x.test/", *header, "--compressed"]
+
+
+def test_format_curl_without_redaction_shows_the_values():
+    assert format_curl(_CREDENTIALED_REQUEST, NO_REDACTION) == _lines(
+        "curl -X GET 'https://u:pw@x.test/p?page=1&access_token=q-secret' \\",
+        "  -H 'authorization: Bearer h-secret' \\",
+        "  -H 'cookie: sid=c-secret; theme=dark' \\",
+        "  -H 'x-trace: t1'",
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("it's", id="single-quote"),
+        pytest.param('say "hi"', id="double-quotes"),
+        pytest.param("line 1\nline 2\r\n\ttabbed", id="newlines"),
+        pytest.param("Zoë 日本 🙂", id="unicode"),
+        pytest.param("$HOME `id` $(id) \\n !! *", id="shell-syntax"),
+        pytest.param("'", id="only-a-quote"),
+        pytest.param("-d", id="looks-like-an-option"),
+    ],
+)
+def test_format_curl_quotes_every_value_as_one_shell_word(text):
+    """A shell hands curl each value as it was sent: quotes, newlines, non-ASCII
+    text and shell syntax neither end the word nor run anything."""
+    # A header value as bytes: httpx takes str values as ASCII only.
+    request = httpx.Request("POST", "https://x.test/p?q=" + quote(text), headers={"content-type": "text/plain", "x-value": text.encode()}, content=text.encode())
+    arguments = _curl_arguments(format_curl(request, NO_REDACTION))
+    assert arguments == ["curl", "-X", "POST", str(request.url), "-H", "content-type: text/plain", "-H", f"x-value: {text}", "--data-raw", text]

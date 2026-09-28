@@ -46,17 +46,19 @@ from pytest_httpchain.models import (
     ParallelConfig,
     ParallelForeachConfig,
     ParallelRepeatConfig,
+    ResponseBody,
     SaveStep,
     Scenario,
     Stage,
     SubstitutionsSave,
+    Verify,
     VerifyStep,
     validate_rendered_scenario_auth,
     validate_rendered_verify,
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.request_builder import build_client_kwargs, build_request_kwargs
-from pytest_httpchain.response_steps import process_save, process_verify
+from pytest_httpchain.response_steps import RenderFailure, RenderOutcome, VerifyRender, process_save, process_verify
 from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     base_global_context,
@@ -66,7 +68,7 @@ from pytest_httpchain.scoping import (
     with_saves,
     with_stage_substitutions,
 )
-from pytest_httpchain.templates import TemplatesError, contains_template, walk
+from pytest_httpchain.templates import TemplatesError, contains_template, walk, walker
 from pytest_httpchain.utils import path_segment, process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
 
@@ -389,6 +391,14 @@ def _rendered_whole_away(declared: Any, rendered: Any, keys: _Keys = ()) -> Iter
                 yield from _rendered_whole_away(declared_value, rendered_value, (*keys, i))
 
 
+def _at(structure: Any, keys: _Keys) -> Any:
+    """What sits at ``keys`` in ``structure``: a model's field, a dict's value,
+    a list's item."""
+    for key in keys:
+        structure = getattr(structure, str(key)) if isinstance(structure, BaseModel) else structure[key]
+    return structure
+
+
 def _replaced(structure: Any, keys: _Keys, value: Any) -> Any:
     """``structure`` with ``value`` at ``keys``, copied along the way."""
     if not keys:
@@ -443,8 +453,16 @@ def _render_declared[M: BaseModel](
     # made every default look declared.
     if not contains_template(declared):
         return declared
+    return _validate_substituted(declared, walk(declared.model_dump(mode="python", exclude_unset=True), context), where, error, validate)
+
+
+def _validate_substituted[M: BaseModel](
+    declared: M, substituted: Any, where: str, error: type[StageExecutionError] = StageExecutionError, validate: Callable[[Any], M] | None = None
+) -> M:
+    """`_render_declared` from the substitution on: ``substituted`` is
+    ``declared`` dumped (its declared fields) with its templates rendered,
+    validated here, and refused where a template rendered a field to None."""
     validate = validate or type(declared).model_validate
-    substituted = walk(declared.model_dump(mode="python", exclude_unset=True), context)
     vanished = list(_rendered_away(declared, substituted))
     try:
         rendered = validate(substituted)
@@ -465,6 +483,145 @@ def _render_declared[M: BaseModel](
         first = vanished[0]
         raise error(_rendered_to_none(where, first) if first.compared else f"{_rendered_to_none(where, first)}, which would silently disable it")
     return rendered
+
+
+def _verify_renderer(declared: Verify, context: Mapping[str, Any]) -> VerifyRender:
+    """How `process_verify` renders a declared verify step: value by value, so
+    that a template that cannot be rendered is one failure of the step, listed
+    with the others. Rendered whole, the step ended at the first, before any
+    check had run.
+
+    Each value is substituted on its own, and every one with the evaluator
+    one `walker` builds from ``context`` for the step: a walk() per value
+    would rebuild it from the whole context, which gains a layer per stage and
+    per save step, once for each value. A template error is that value's
+    failure. A pytest outcome that a function a template calls raises is that
+    value's, and ends the rendering there, as it ended the whole step's. What
+    was substituted is then validated (`_validated_values`).
+    """
+
+    def render(values: list[tuple[_Keys, Any]]) -> dict[_Keys, Any]:
+        rendered: dict[_Keys, Any] = {}
+        substituted: dict[_Keys, Any] = {}
+        # Built for the first value holding a template: a step without one
+        # needs neither.
+        substitute: Callable[[Any], Any] | None = None
+        dumped: dict[str, Any] = {}
+        for at, value in values:
+            if not contains_template(value):
+                rendered[at] = value
+                continue
+            if substitute is None:
+                substitute, dumped = walker(context), declared.model_dump(mode="python", exclude_unset=True)
+            try:
+                substituted[at] = substitute(_at(dumped, at))
+            except TemplatesError as e:
+                error = VerificationError(str(e))
+                error.__cause__ = e
+                rendered[at] = RenderFailure(error)
+            except (pytest.skip.Exception, pytest.fail.Exception) as e:
+                rendered[at] = RenderOutcome(e)
+                break
+        if substituted:
+            rendered |= _validated_values(declared, dumped, substituted)
+        return rendered
+
+    return render
+
+
+def _validated_values(declared: Verify, dumped: dict[str, Any], substituted: dict[_Keys, Any]) -> dict[_Keys, Any]:
+    """Each value of ``substituted`` (by where it is declared, its templates
+    substituted) as its check takes it, or a `RenderFailure`. It goes through
+    the guard every declared model does (`_validate_substituted`), so a
+    template that rendered to None is refused, not read as undeclared, and a
+    ``verify.jmespath`` value stays a value, an object it rendered included
+    (`validate_rendered_verify`). Pydantic's report becomes the step's error
+    type, its message kept.
+
+    The step is validated whole first, the values put in ``dumped`` (its
+    declared fields, dumped for this rendering alone). When every value is
+    valid, the common case, that is all it costs, as when the step rendered
+    whole. Otherwise each value is validated in a model of it alone
+    (`_verify_part`), so that each that fails is a failure of its own: a
+    ``headers`` or ``jmespath`` entry alone in its map, a list item alone in
+    its list, so every item of a list costs the list once, not once per item.
+
+    A list item that fails is validated again with its list whole (the rest as
+    declared, which it validated as), for the messages to give its index as it
+    is in the step (``body.contains.1``, ``verify.user_functions[1]``) rather
+    than 0. Only a failure pays for that, and no value is rendered twice.
+    """
+    for at, value in substituted.items():
+        _at(dumped, at[:-1])[at[-1]] = value
+    try:
+        step = _validated_verify(declared, dumped)
+    except VerificationError:
+        pass
+    else:
+        return {at: _at(step, at) for at in substituted}
+    values: dict[_Keys, Any] = {}
+    for at, value in substituted.items():
+        part, in_part = _verify_part(declared, at)
+        try:
+            values[at] = _at(_validated_verify(part, _replaced(part.model_dump(mode="python", exclude_unset=True), in_part, value)), in_part)
+            continue
+        except VerificationError as e:
+            if in_part == at:
+                values[at] = RenderFailure(e)
+                continue
+        whole, _ = _verify_part(declared, at, whole_list=True)
+        try:
+            values[at] = _at(_validated_verify(whole, _replaced(whole.model_dump(mode="python", exclude_unset=True), at, value)), at)
+        except VerificationError as e:
+            values[at] = RenderFailure(e)
+    return values
+
+
+def _validated_verify(declared: Verify, substituted: Any) -> Verify:
+    """``substituted``, ``declared`` dumped with its templates substituted,
+    validated as it rendered (`_validate_substituted`), or the
+    `VerificationError` saying why it is not valid."""
+    try:
+        return _validate_substituted(declared, substituted, "verify", VerificationError, functools.partial(validate_rendered_verify, declared))
+    except ValidationError as e:
+        raise VerificationError(str(e)) from e
+
+
+# What `_verify_part` cuts a step down from: nothing set (``model_fields_set``
+# empty, so a copy's holds only the field it is given), and its defaults
+# resolved once. model_construct() resolves each default factory, inspecting
+# its signature every time: per value rendered, that was most of the cost.
+_NO_VERIFY = Verify.model_construct()
+_NO_BODY = ResponseBody.model_construct()
+
+
+def _verify_part(declared: Verify, at: _Keys, whole_list: bool = False) -> tuple[Verify, _Keys]:
+    """``declared`` cut down to the value at ``at`` (the body's field, for the
+    body's), and where the value sits in it: a map to the one entry, a list to
+    the one item, at index 0, or with ``whole_list`` kept whole."""
+    match at:
+        case ("body", str() as name, *rest):
+            values, in_part = _one_value(getattr(declared.body, name), name, rest, whole_list)
+            return _NO_VERIFY.model_copy(update={"body": _NO_BODY.model_copy(update=values)}), ("body", *in_part)
+        case (str() as name, *rest):
+            values, in_part = _one_value(getattr(declared, name), name, rest, whole_list)
+            return _NO_VERIFY.model_copy(update=values), in_part
+        case _:
+            raise RuntimeError(f"Unhandled verify location: {at!r}")
+
+
+def _one_value(whole: Any, name: str, rest: list[str | int], whole_list: bool) -> tuple[dict[str, Any], _Keys]:
+    """The field ``name`` holding only the value at ``rest`` within it (none:
+    the field's own value), and where the value is in the field so cut."""
+    match rest:
+        case [str() as key]:
+            return {name: {key: whole[key]}}, (name, key)
+        case [int() as i] if not whole_list:
+            return {name: [whole[i]]}, (name, 0)
+        case [int() as i]:
+            return {name: whole}, (name, i)
+        case _:
+            return {name: whole}, (name,)
 
 
 def _rendered_to_none(where: str, vanished: _Vanished) -> str:
@@ -1228,13 +1385,10 @@ class Carrier:
                         saved_context.update(step_saved)
 
                     case VerifyStep():
-                        # Through the guard, not a bare walk(): process_verify sees
-                        # the rendered model alone and cannot tell an absent
-                        # assertion from one a template rendered away.
-                        # Rendered as declared: a verify.jmespath value stays a
-                        # value, an object it rendered included.
-                        verify_model = _render_declared(step.verify, step_context, "verify", VerificationError, validate=functools.partial(validate_rendered_verify, step.verify))
-                        process_verify(verify_model, response, cls.scenario_dir, cls.redaction)
+                        # Each check's value is rendered on its own, all before the
+                        # first check, through the guard (`_verify_renderer`): a
+                        # template that fails is one failure among the step's.
+                        process_verify(step.verify, response, cls.scenario_dir, cls.redaction, render=_verify_renderer(step.verify, step_context))
 
                     case _:
                         raise RuntimeError(f"Unhandled response step: {type(step).__name__}")

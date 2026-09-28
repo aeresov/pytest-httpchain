@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from pyrate_limiter import Duration, Limiter, Rate
 
 import pytest_httpchain.carrier as carrier_module
+import pytest_httpchain.templates.substitution as substitution_module
 from pytest_httpchain.carrier import (
     Carrier,
     IterationResult,
@@ -714,6 +715,240 @@ class TestVerifyObjectsFromVars:
         with pytest.raises(StageExecutionError) as excinfo:
             _render_declared(Verify.model_validate({"headers": {"Location": "{{ matcher }}"}}), context, "verify")
         assert str(excinfo.value) == "'verify.headers.Location.contains' was declared as '{{ matcher }}' but rendered to None, which would silently disable it"
+
+
+class TestVerifyRenderedValueByValue:
+    """A verify step's templates render one value at a time, all before the
+    first check runs, and each value that fails is one failure in its check's
+    place: rendered whole, the first that failed (an expression raising
+    KeyError on a missing header, an operand rendered to None) was the stage's
+    one failure, and hid every other, the status's too."""
+
+    BODY = {"id": 1, "tags": ["a"]}
+
+    @classmethod
+    def _run(cls, verify: dict, context: dict) -> None:
+        stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"verify": verify}]})
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=cls.BODY)))
+        carrier = _make_carrier_subclass(client=client)
+        try:
+            carrier._execute_single_iteration(stage, ChainMap(context), {})
+        finally:
+            client.close()
+
+    @classmethod
+    def _failure(cls, verify: dict, context: dict) -> StageExecutionError:
+        with pytest.raises(StageExecutionError) as excinfo:
+            cls._run(verify, context)
+        assert type(excinfo.value) is VerificationError
+        return excinfo.value
+
+    def test_template_error_is_one_failure_among_the_others(self):
+        verify = {
+            "status": 201,
+            "jmespath": {"id": 2},
+            "expressions": ["{{ response.headers['x-missing'] == 'a' }}", "{{ 1 == 2 }}"],
+            "body": {"contains": ["nope"]},
+        }
+        assert str(self._failure(verify, {})).split("\n") == [
+            "5 verification checks failed:",
+            "  1. Status code doesn't match: expected 201, got 200",
+            "  2. JMESPath 'id' doesn't match: expected 2, got 1",
+            "  3. KeyError in expression '{{ response.headers['x-missing'] == 'a' }}': 'x-missing'",
+            "  4. Expression 1 failed: evaluated to False",
+            "  5. Body doesn't contain 'nope'",
+        ]
+
+    @pytest.mark.parametrize(
+        ("verify", "message"),
+        [
+            # An item keeps its index: rendered with its list whole, only it
+            # rendered.
+            pytest.param(
+                {"body": {"contains": ["a", "{{ gone }}"]}},
+                "1 validation error for Verify\nbody.contains.1\n  Input should be a valid string [type=string_type, input_value=None, input_type=NoneType]",
+                id="body-operand",
+            ),
+            pytest.param(
+                {"user_functions": ["tests.unit.response_steps_test_helpers:returns_true", "{{ gone }}"]},
+                "'verify.user_functions[1]' was declared as '{{ gone }}' but rendered to None",
+                id="function-name",
+            ),
+            pytest.param(
+                {"headers": {"Location": {"contains": "{{ gone }}", "not_contains": "e"}}},
+                "'verify.headers.Location.contains' was declared as '{{ gone }}' but rendered to None, which would silently disable it",
+                id="header-matcher-field",
+            ),
+            pytest.param(
+                {"jmespath": {"id": {"gt": "{{ gone }}"}}},
+                "'verify.jmespath.id.gt' was declared as '{{ gone }}' but rendered to None",
+                id="jmespath-matcher-key",
+            ),
+            pytest.param(
+                {"body": {"schema": "{{ gone }}"}},
+                "'verify.body.schema' was declared as '{{ gone }}' but rendered to None, which would silently disable it",
+                id="schema",
+            ),
+        ],
+    )
+    def test_value_rendered_to_none_is_one_failure_in_its_place(self, verify, message):
+        """The rendered-away guard's refusal, or pydantic's report, as it read
+        when it ended the step, now listed between the checks around it: the
+        status first, the body's not_matches last."""
+        verify = {"status": 201, **verify, "body": {**verify.get("body", {}), "not_matches": ["id"]}}
+        first, status, failure, *rest = str(self._failure(verify, {"gone": None})).split("\n")
+        assert (first, status) == ("3 verification checks failed:", "  1. Status code doesn't match: expected 201, got 200")
+        rendered_away, *report = message.split("\n")
+        assert failure == f"  2. {rendered_away}"
+        assert rest[: len(report)] == [f"     {line}" for line in report]
+        assert rest[-1] == "  3. Body matches 'id' while it shouldn't"
+
+    def test_lone_template_error_reads_as_before(self):
+        """Its message, as the stage's failure had it; a VerificationError now,
+        caused by the template error."""
+        error = self._failure({"expressions": ["{{ missing }}"]}, {})
+        assert str(error) == "Undefined variable in expression '{{ missing }}': 'missing' is not defined for expression 'missing'"
+        assert isinstance(error.__cause__, TemplatesError)
+
+    @pytest.mark.parametrize(
+        ("outcome", "listed"),
+        [
+            pytest.param(pytest.skip, [], id="skip"),
+            pytest.param(pytest.xfail, [], id="xfail"),
+            pytest.param(pytest.fail, ["The template at 'verify.expressions[0]' called pytest.fail(): no"], id="fail"),
+        ],
+    )
+    def test_outcome_a_template_raises_cannot_override_an_earlier_failure(self, outcome, listed):
+        """As a user function's: rendered after a check failed, a function the
+        template calls must not turn the failed stage into a skipped one."""
+        error = self._failure({"status": 201, "expressions": ["{{ end() }}"], "body": {"contains": ["nope"]}}, {"end": lambda: outcome("no")})
+        status_failure = "Status code doesn't match: expected 201, got 200"
+        expected = [status_failure] if not listed else ["2 verification checks failed:", f"  1. {status_failure}", f"  2. {listed[0]}"]
+        assert str(error).split("\n") == expected
+
+    def test_outcome_a_template_raises_ends_a_step_that_has_not_failed(self):
+        stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"verify": {"expressions": ["{{ end() }}"]}}]})
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+        carrier = _make_carrier_subclass(client=client)
+        try:
+            with pytest.raises(pytest.skip.Exception, match="^not here$"):
+                carrier._execute_single_iteration(stage, ChainMap({"end": lambda: pytest.skip("not here")}), {})
+        finally:
+            client.close()
+
+    def test_template_fail_after_a_function_skip_fails_the_stage(self):
+        """As when the step rendered whole before any check, and the fail() was
+        raised before the function ran: the skip must not hide it."""
+        verify = {"user_functions": ["tests.unit.response_steps_test_helpers:skips"], "body": {"contains": ["{{ end() }}"]}}
+        # Both caught, so a wrong outcome fails this test rather than skipping it.
+        with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
+            self._run(verify, {"end": lambda: pytest.fail("template failed")})
+        assert (excinfo.type, str(excinfo.value)) == (pytest.fail.Exception, "template failed")
+
+    def test_outcome_a_template_raises_ends_the_rendering_there(self):
+        """Nothing after it is rendered, as nothing after it was when the step
+        rendered whole."""
+        calls = []
+        verify = {"expressions": ["{{ end() }}", "{{ count() }}"], "body": {"contains": ["{{ count() }}"]}}
+        with pytest.raises(pytest.skip.Exception, match="^not here$"):
+            self._run(verify, {"end": lambda: pytest.skip("not here"), "count": lambda: calls.append(1)})
+        assert calls == []
+
+    def test_one_evaluator_renders_the_step(self, monkeypatch):
+        """Built from the whole context, which gains a layer per stage and per
+        save step: once per value, that cost the step its context's size again
+        for every templated value."""
+        built = []
+        real = substitution_module._build_evaluator
+        monkeypatch.setattr(substitution_module, "_build_evaluator", lambda context: built.append(1) or real(context))
+        verify = {
+            "status": "{{ 200 }}",
+            "headers": {"Content-Type": {"contains": "{{ 'json' }}"}},
+            "jmespath": {"id": "{{ 1 }}"},
+            "expressions": ["{{ missing }}", "{{ 1 == 2 }}"],
+            "body": {"contains": ["{{ 'tags' }}", "{{ gone }}"]},
+        }
+        lines = str(self._failure(verify, {"gone": None})).split("\n")
+        assert lines[0] == "3 verification checks failed:"
+        assert built == [1]
+
+    def test_each_template_renders_once(self):
+        """A list item renders alone: none is rendered again for another's
+        check, nor for its own failure's message."""
+        calls = []
+        count = lambda: calls.append(1) or len(calls)  # noqa: E731
+        verify = {
+            "expressions": ["{{ count() == 0 }}", "{{ count() == 0 }}", "{{ count() == 0 }}"],
+            "body": {"contains": ["{{ 'x' * count() }}", "{{ [count()][5] }}", "{{ gone(count()) }}"]},
+        }
+        lines = str(self._failure(verify, {"count": count, "gone": lambda _: None})).split("\n")
+        assert len(calls) == 6
+        assert lines[4] == "  4. Body doesn't contain 'xxxx'"
+        assert lines[5].startswith("  5. IndexError in expression ")
+        assert lines[6:8] == ["  6. 1 validation error for Verify", "     body.contains.2"]
+
+    def test_step_that_renders_valid_is_validated_once(self, monkeypatch):
+        """Whole, as when the step rendered whole: validating each value on its
+        own is what a failure pays for."""
+        validated = self._spy_validation(monkeypatch)
+        self._run({"status": "{{ 200 }}", "expressions": ["{{ true }}"] * 3, "body": {"contains": ["{{ 'id' }}", "{{ 'tags' }}"]}}, {})
+        assert validated == [{"status": 200, "expressions": [True] * 3, "body": {"contains": ["id", "tags"]}}]
+
+    def test_list_item_is_validated_alone(self, monkeypatch):
+        """Once the step fails validation whole. Validated with its list whole,
+        every item of a list of n templated ones cost the list: n² for the
+        step. Only an item that fails is validated again with its list, for its
+        index in the message."""
+        validated = self._spy_validation(monkeypatch)
+        items = ["{{ 'id' }}", "{{ 'tags' }}", "{{ gone }}"]
+        lines = str(self._failure({"expressions": ["{{ true }}"] * 3, "body": {"contains": items}}, {"gone": None})).split("\n")
+        assert lines[:2] == ["1 validation error for Verify", "body.contains.2"]
+        assert validated == [
+            {"expressions": [True] * 3, "body": {"contains": ["id", "tags", None]}},
+            *[{"expressions": [True]}] * 3,
+            {"body": {"contains": ["id"]}},
+            {"body": {"contains": ["tags"]}},
+            {"body": {"contains": [None]}},
+            {"body": {"contains": [*items[:2], None]}},
+        ]
+
+    @staticmethod
+    def _spy_validation(monkeypatch) -> list:
+        """What the renderer validates, each time it does, from now on."""
+        validated = []
+        real = carrier_module.validate_rendered_verify
+
+        def spy(declared, value):
+            validated.append(value)
+            return real(declared, value)
+
+        monkeypatch.setattr(carrier_module, "validate_rendered_verify", spy)
+        return validated
+
+    @pytest.mark.parametrize(
+        ("function", "verify", "message"),
+        [
+            pytest.param(
+                "skips",
+                {"body": {"contains": ["{{ response.headers['x-missing'] }}"]}},
+                "KeyError in expression '{{ response.headers['x-missing'] }}': 'x-missing'",
+                id="skip-before-template-error",
+            ),
+            pytest.param(
+                "xfails",
+                {"body": {"schema": "{{ gone }}"}},
+                "'verify.body.schema' was declared as '{{ gone }}' but rendered to None, which would silently disable it",
+                id="xfail-before-rendered-away-schema",
+            ),
+        ],
+    )
+    def test_function_outcome_cannot_hide_a_template_failure_after_it(self, function, verify, message):
+        """Every value renders before the first check runs: a template that
+        fails fails the stage wherever it is, as when the step rendered whole,
+        and a function's skip or xfail ending the step before its check does
+        not turn that into a skipped or xfailed stage."""
+        verify = {"status": 200, "user_functions": [f"tests.unit.response_steps_test_helpers:{function}"], **verify}
+        assert str(self._failure(verify, {"gone": None})) == message
 
 
 class TestVerifyStatusRendered:

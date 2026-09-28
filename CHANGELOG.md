@@ -144,14 +144,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conflict. A reference written at the expectation itself, `{"$merge": "common.json#/price", "lt":
   100}`, composes one matcher key by key, and an operand both sides give must agree whole: two `eq`
   arrays or objects conflict rather than concatenate or blend, as two `gt` numbers do.
+- A failing stage's report has an `HTTP Request (curl)` section: the request as a curl command, to
+  send it again from a shell. It is shown whenever the `HTTP Request` section is, for the same
+  request and under the same label (`(after 1 redirect)`, `(failing of 3 parallel iterations)`).
+  Every argument is single-quoted for a POSIX shell, so quotes, newlines, shell syntax and non-ASCII
+  text in a header or body reach curl as sent. The headers curl writes itself (`Host`,
+  `Content-Length`, `Transfer-Encoding`, `Connection`) are left out, except a `Host` the request
+  set itself and the `Content-Length: 0` of a bodyless `POST`, which curl would not send; the
+  `Accept-Encoding` httpx sends on its own becomes `--compressed`, and one the request set
+  (`identity`) is kept, with `--compressed` to decode what comes back as httpx does; an empty
+  header is sent empty (`-H 'X-Empty;'`), and a body without a `Content-Type` is not labelled a
+  form, as curl would. A textual body is given as sent (`--data-raw`); a binary one, or one over
+  10,000 characters, is read from a file a comment above the command names (`--data-binary
+  @body.bin`), and a multipart upload's, which is not captured, gets a comment saying to add its
+  parts with `-F`. The report's redaction applies: a hidden value stays `[REDACTED]`, and a comment
+  says to fill it in. A digest `Authorization`, which answered one challenge and cannot answer
+  another, is left out, and a comment says to add `--digest -u 'user:password'`. A URL holding
+  brackets or braces gets `--globoff`, so curl does not read them as ranges. The scenario's `ssl`
+  and `client.proxy` settings are not part of the request, and the command has none.
 
 ### Fixed
 
+- A header matcher's `matches` or `not_matches` that a template rendered to text `re` cannot
+  compile, such as `{{ ( }}` saved from a response (the field's template branch takes template
+  text as it is), escaped the stage as a raw `re.error` traceback, and one too big to compile
+  (`a{4294967296}`, or thousands of nested groups) as an `OverflowError` or `RecursionError`. It
+  now fails its check: `Header 'X-Request-Id' (value: '12345'): matches must resolve to a regular
+  expression, got '{{ ( }}' (missing ), unterminated subpattern at position 3)`.
+- A `verify.body.schema` file whose `pattern` is too big for `re` to compile, or which is nested
+  too deeply to check, escaped the stage as a raw `OverflowError` or `RecursionError` traceback
+  (an inline schema's is refused when the scenario loads). It now fails the check as any invalid
+  schema file does: `Invalid JSON Schema in file '...': the repetition number is too large`.
 - `verify.body.schema` against a body Python's `json` cannot read though it is not malformed, an
   integer longer than 4300 digits or an array nested some thousand levels deep, escaped the stage
   as a raw `ValueError` or `RecursionError` traceback, past the chain's abort handling and its
   request/response report. It now fails the stage: `Cannot validate schema, response is not valid
-  JSON: ...`, or `... response JSON is nested too deeply to parse: ...`.
+  JSON: ...`, or `... response JSON is nested too deeply to parse: ...`. So does a body `json`
+  reads but jsonschema cannot handle, nested some hundreds of levels deep: a violation found in it
+  is reported without the value pretty-printed, which recursed past Python's limit, and a schema
+  that recurses as deep as the body (`"items": {"$ref": "#"}`) fails the check with `Cannot
+  validate schema, response JSON is nested too deeply to validate`.
 - A `$merge`/`$include` sibling beside a fragment at a position that merges whole, an inline
   `verify.body.schema` or a `verify.status` list, was compared with Python's equality inside
   lists and objects, where `true == 1`: `{"const": true}` beside `{"const": 1}` kept one and
@@ -409,6 +441,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the new `client.proxy` accepts (see Added). httpx 0.27.0 also percent-encoded a `\` in a URL
   path, so `{{ server }}/a\b` reached the server as `/a%5Cb` there, not as written (see Fixed).
   Heads-up: an environment that pins httpx below 0.28 has to lift the pin to upgrade.
+- A verify step runs all its checks and reports every one that failed, where it stopped at the
+  first, so fixing a scenario took one run per wrong assertion. Each header, header matcher field,
+  `jmespath` entry and matcher key, expression, user function and `body` operand is a check of its
+  own. One failure reads exactly as before; several are counted, `3 verification checks failed:`,
+  above one numbered line each, in the order the checks ran, where a user function is named by its
+  import name and index (`Function 'checks:is_valid' (user_functions[1]) verification failed`). A
+  check that cannot run fails once: a body that is not JSON is one failure however many `jmespath`
+  entries and `body.schema` wanted it, and a `jmespath` expression that cannot be evaluated is one,
+  not one per key of its matcher. The step's templates still all render before its first check
+  runs, but each check's on its own, so one that fails to render, an expression raising `KeyError`
+  on a missing header or a value that rendered to `null`, is one failure in its check's place,
+  where it ended the step before any check ran. Steps still run in order, and a step that fails
+  still ends the stage, since a later one may depend on it; a `save` step still stops at its first
+  error. Heads-up: a verify user function now runs even when a check before it in the step failed,
+  so one that assumed they held (calling `response.json()` on what a failed `status` check let
+  through) adds its own error to the list. Its `pytest.skip()` or `pytest.xfail()` ends the step
+  without skipping the stage then, as a failure found before it stands, and so does a template of
+  the step that did not render or called `pytest.fail()`, wherever it is; a `pytest.fail()`
+  message is listed with the others. Heads-up too for a function a verify template calls that
+  skips or xfails (`"expressions": ["{{ skip_unless_ready() }}"]`): it skipped the stage whatever
+  the step's checks would have found, since the whole step rendered before any check ran. Its
+  outcome now takes effect when the checks reach that template, so a check before it that failed
+  fails the stage instead.
 
 ## [0.15.2] - 2026-09-26
 

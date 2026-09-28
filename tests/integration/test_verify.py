@@ -1,6 +1,6 @@
 import pytest
 
-from tests.integration.helpers import named
+from tests.integration.helpers import named, stage
 
 # Every row copies both: user-function and schema-file scenarios need them,
 # and an unused copy is harmless.
@@ -72,3 +72,55 @@ def test_stage_failure_message_is_not_duplicated(run_scenario):
     failures = result.stdout.str().split("=== FAILURES ===")[-1].split("short test summary")[0]
     assert failures.count("The above exception was the direct cause") == 0
     assert failures.count("During handling of the above exception") == 0
+
+
+def test_failure_report_lists_every_failed_check_and_a_curl_command(run_scenario):
+    """One run shows everything wrong with the response, a template that
+    fails to render among it, and a command that sends the request again: its
+    credentials stay hidden, with a note to fill them in. The step after the
+    failing one does not run."""
+    request = {
+        "method": "POST",
+        "params": {"access_token": "s3cret-query"},
+        "headers": {"Authorization": "Bearer s3cret-header"},
+        "body": {"json": {"note": "it's"}},
+    }
+    response = [
+        {
+            "verify": {
+                "status": 201,
+                "headers": {"Content-Type": {"contains": "json"}},
+                "jmespath": {"received.note": "its"},
+                "expressions": ["{{ response.headers['x-missing'] == 'a' }}"],
+                "body": {"contains": ["nope"]},
+            }
+        },
+        {"verify": {"status": 404}},
+    ]
+    result = run_scenario({"stages": [stage("create", "/echo/json", request=request, response=response)]})
+
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(
+        [
+            "4 verification checks failed:",
+            "  1. Status code doesn't match: expected 201, got 200",
+            """  2. JMESPath 'received.note' doesn't match: expected "its", got "it's\"""",
+            # Rendered with the step's other values, before any check ran, and
+            # listed in its check's place: the status failure is not hidden.
+            "  3. KeyError in expression '{{ response.headers[[]'x-missing'] == 'a' }}': 'x-missing'",
+            "  4. Body doesn't contain 'nope'",
+            "*HTTP Request (curl)*",
+            "# [[]REDACTED] stands for a value this report hides: fill it in before running.",
+            "curl -X POST 'http://*/echo/json?access_token=[[]REDACTED]' \\",
+            "  --globoff \\",
+            "  -H 'authorization: [[]REDACTED]' \\",
+            "  -H 'content-type: application/json' \\",
+            "  --compressed \\",
+            # httpx's JSON spacing differs across its supported versions.
+            """  --data-raw '{"note":*"it'"'"'s"}'""",
+            "*HTTP Response*",
+        ]
+    )
+    output = result.stdout.str()
+    assert "s3cret" not in output
+    assert "expected 404" not in output

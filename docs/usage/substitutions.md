@@ -292,9 +292,11 @@ An exact-match header string is a value in the `headers` map rather than a
 field, and fails validation when its template renders to `null`; so does an
 entry of a `verify.status` list (`["{{ created_status }}", 409]`).
 
-If something else in the same request, verify step or setting is invalid too,
-pydantic's report on it follows the message, so the `null` is never blamed for
-an error it did not cause.
+If something else in the same request or setting, or the same verify check
+(a header matcher, a `jmespath` entry), is invalid too, pydantic's report on it
+follows the message, so the `null` is never blamed for an error it did not
+cause. A verify step's other checks still run, and their failures are listed
+with it (see [Verify Steps](responses.md#verify-steps)).
 
 Where `null` is itself a value, it is passed on as one:
 

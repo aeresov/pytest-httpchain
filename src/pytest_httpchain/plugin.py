@@ -25,7 +25,7 @@ from pytest_httpchain.factory import create_test_class
 from pytest_httpchain.har_writer import write_har_file
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.redaction import DEFAULT_REDACT_HEADERS, DEFAULT_REDACT_QUERY_PARAMS, NO_REDACTION, Redaction
-from pytest_httpchain.report_formatter import format_request, format_response
+from pytest_httpchain.report_formatter import format_curl, format_request, format_response
 from pytest_httpchain.templates import get_max_comprehension_length, set_max_comprehension_length
 from pytest_httpchain.utils import make_marker, xdist_group_names
 from pytest_httpchain.validation import check_scenario, load_with_diagnostics
@@ -724,6 +724,7 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
             redaction = item.config.stash[_REDACTION]
             if (request := carrier_class.last_request) is not None:
                 report.sections.append((f"HTTP Request{suffix}", _format_section("request", functools.partial(format_request, redaction=redaction), request)))
+                report.sections.append((f"HTTP Request (curl){suffix}", _format_section("curl command", functools.partial(format_curl, redaction=redaction), request)))
             if (response := carrier_class.last_response) is not None:
                 report.sections.append((f"HTTP Response{suffix}", _format_section("response", functools.partial(format_response, redaction=redaction), response)))
 

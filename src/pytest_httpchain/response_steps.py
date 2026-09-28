@@ -1,7 +1,11 @@
 """What a stage's ``verify`` and ``save`` steps mean.
 
-Pure functions over ``(resolved model, response)`` — no chain state — raising
-`VerificationError` / `SaveError` on failure. The carrier owns the sequence.
+Pure functions over ``(model, response)`` — no chain state — raising
+`VerificationError` / `SaveError` on failure: a verify step once it has run
+every check, naming all that failed, a save step at its first error. A save
+step comes resolved; a verify step comes as declared, with the carrier's way
+to render each check's value (`VerifyRender`). The carrier owns the sequence,
+and a step that fails ends it.
 """
 
 import functools
@@ -9,15 +13,17 @@ import json
 import operator
 import re
 from collections import ChainMap
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 import jmespath
 import jmespath.exceptions
 import jmespath.functions
 import jsonschema
+import pytest
 import referencing.exceptions
 
 from pytest_httpchain.errors import SaveError, SchemaFileError, VerificationError
@@ -37,8 +43,8 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, Redaction
 from pytest_httpchain.templates import TemplatesError
-from pytest_httpchain.userfunc import UserFunctionError, call_user_function
-from pytest_httpchain.utils import optional_as_list, process_substitutions, read_json_schema_file, resolve_scenario_path
+from pytest_httpchain.userfunc import UserFunctionError, call_target, call_user_function
+from pytest_httpchain.utils import optional_as_list, path_segment, process_substitutions, read_json_schema_file, resolve_scenario_path
 
 
 def process_save(save_model: Save, response: httpx.Response, context: ChainMap[str, Any]) -> dict[str, Any]:
@@ -81,92 +87,365 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
     return step_saved
 
 
-def process_verify(verify_model: Verify, response: httpx.Response, scenario_dir: Path | None = None, redaction: Redaction = DEFAULT_REDACTION) -> None:
-    """Run one verify step's assertions, raising `VerificationError` on the first failure.
+# Where a value is declared in a verify step: ``("status",)``, ``("headers",
+# "Location")``, ``("body", "contains", 2)``.
+type VerifyWhere = tuple[str | int, ...]
 
-    The checks run in this order, the one docs/usage/responses.md documents:
+
+@dataclass(frozen=True, slots=True)
+class RenderFailure:
+    """A value of a verify step that did not render, and why: the
+    `VerificationError` that is its check's failure (its message, and what
+    caused it)."""
+
+    error: VerificationError
+
+
+@dataclass(frozen=True, slots=True)
+class RenderOutcome:
+    """A value of a verify step whose rendering raised a pytest outcome: a
+    function a template calls skipped, xfailed or failed."""
+
+    outcome: BaseException
+
+
+# How `process_verify` gets the values its checks run on: ``render(values)``
+# takes the step's values, each where it is declared, in the order their
+# checks run (`_declared_values`), and gives back, by where, what each
+# rendered to: the value with its templates rendered, or a `RenderFailure`. A
+# value whose rendering raised a pytest outcome is a `RenderOutcome`, and the
+# values after it are left out: the rendering ends there.
+type VerifyRender = Callable[[list[tuple[VerifyWhere, Any]]], dict[VerifyWhere, Any]]
+
+
+def process_verify(
+    verify_model: Verify,
+    response: httpx.Response,
+    scenario_dir: Path | None = None,
+    redaction: Redaction = DEFAULT_REDACTION,
+    render: VerifyRender | None = None,
+) -> None:
+    """Run one verify step's assertions, raising one `VerificationError` that
+    names every check that failed.
+
+    A failed check does not stop the step, where stopping cost one run per
+    wrong assertion to fix a scenario. The checks run in this order, the one
+    docs/usage/responses.md documents, and their failures are listed in it:
     status, headers, jmespath, expressions, user_functions, body.schema, then
-    the body's contains, not_contains, matches and not_matches. Each field's
-    own entries run in the order they are written. The body is parsed as JSON
-    at most once for the step, by the first check that reads it (`_JsonBody`).
+    the body's contains, not_contains, matches and not_matches. Headers,
+    jmespath entries, expressions, user functions and body operands run in the
+    order they are written, and each is a check of its own; so is each field
+    a header matcher sets, in the order contains, not_contains, matches,
+    not_matches, and each key a `JMESPathMatcher` sets, in the model's order.
+    One failure reads as it always has, several are listed under a count
+    (`_Failures`).
+
+    ``verify_model`` is the step as declared, and ``render`` renders its
+    values (the carrier's renders them in the response step's context);
+    without one, the model is taken as rendered already. Every value is
+    rendered once, before the first check runs (`_RenderedStep`). A value
+    whose templates cannot be rendered is one failure of the step, listed in
+    its check's place, and its check does not run: the others still do.
+
+    A check that cannot run fails once, not once per assertion it held: the
+    body is parsed as JSON at most once for the step, by the first check that
+    reads it, and one that is not JSON is one failure however many of the
+    step's checks wanted it, jmespath entries and body.schema (`_JsonBody`).
+
+    A user function's pytest.skip(), xfail() or fail() ends the step there, as
+    it ends the stage, and so does one that a function a template calls
+    raises, once the checks reach that template. If the step has failures by
+    then, those are what it raises: the checks before it that failed, and
+    every value of the step that did not render, the ones after it included,
+    as does a template after it that called pytest.fail(). The function ran
+    only because a failure no longer stops the step, and a template that fails
+    fails the stage wherever it sits, as it did when the step was rendered
+    whole before any check: neither may be turned into a skipped or xfailed
+    stage. A fail() is listed with them, in its place; a skip or an xfail is
+    dropped. A fail() that is the step's one failure is raised as itself, as
+    it always was.
 
     A header check's message shows the header's value through ``redaction``, as
     the report does, and so does an exact-match expected value: it is a whole
     value of that header. A matcher operand shows as written unless its failure
-    would echo what the redaction hides (`verify_text_matchers`).
+    would echo what the redaction hides (`text_matcher_failures`).
     """
-    body = _JsonBody(response)
+    failures = _Failures()
+    body = _JsonBody(response, failures)
+    step = _RenderedStep(verify_model, render)
+
+    def end_step(outcome: BaseException, raised_by: str, where: VerifyWhere) -> NoReturn:
+        """End the step at ``where`` on a pytest outcome ``raised_by`` a
+        function: the outcome itself, or the failures the step has by then.
+
+        Those past the checks that ran: the outcome, if a fail(), then each
+        value after ``where`` that did not render, or whose template called
+        pytest.fail() (nothing after that one was rendered)."""
+        ending: list[tuple[str, BaseException | None, BaseException | None]] = []
+        if _is_fail(outcome):
+            ending.append((f"{raised_by} called pytest.fail(): {outcome}", None, outcome))
+        for later_where, value in step.after(where):
+            match value:
+                case RenderFailure(error=error):
+                    ending.append((str(error), error.__cause__, None))
+                case RenderOutcome(outcome=later) if _is_fail(later):
+                    ending.append((f"{_template_at(later_where)} called pytest.fail(): {later}", None, later))
+        if not failures and not ending:
+            raise outcome
+        if not failures and len(ending) == 1 and (fail := ending[0][2]) is not None:
+            raise fail
+        for message, cause, _outcome in ending:
+            failures.add(message, cause=cause)
+        error = failures.error()
+        raise error from error.__cause__
+
+    def rendered(*where: str | int) -> Any:
+        """The value declared at ``where``, as its check runs on it, or
+        `_UNRENDERED` once the step has its failure to render."""
+        match value := step.value(where):
+            case RenderFailure(error=error):
+                failures.add(str(error), cause=error.__cause__)
+                return _UNRENDERED
+            case RenderOutcome(outcome=outcome):
+                end_step(outcome, _template_at(where), where)
+        return value
+
+    if verify_model.description is not None:
+        # No check reads it, but it is rendered as every template of the step
+        # is: the validator checks the names it uses, as it checks the others'.
+        rendered("description")
 
     # `is not None`, not truthiness: None means undeclared, and only that — the
-    # carrier refuses an assertion a template rendered to None before this runs.
-    if verify_model.status is not None:
-        _verify_status(verify_model.status, response.status_code)
+    # carrier refuses an assertion a template rendered to None.
+    if verify_model.status is not None and (status := rendered("status")) is not _UNRENDERED:
+        failures.add(_status_failure(status, response.status_code))
 
-    for header_name, expected_value in verify_model.headers.items():
+    for header_name in verify_model.headers:
+        expected_value = rendered("headers", header_name)
+        if expected_value is _UNRENDERED:
+            continue
         match expected_value:
             case HeaderMatcher():
                 # An absent header behaves as an empty string, as bodies do.
                 actual = response.headers.get(header_name) or ""
                 shown = redaction.header(header_name, actual)
-                verify_text_matchers(
-                    f"Header '{header_name}' (value: {shown!r})",
-                    actual,
-                    contains=optional_as_list(expected_value.contains),
-                    not_contains=optional_as_list(expected_value.not_contains),
-                    matches=optional_as_list(expected_value.matches),
-                    not_matches=optional_as_list(expected_value.not_matches),
-                    shown=shown,
+                failures.extend(
+                    text_matcher_failures(
+                        f"Header '{header_name}' (value: {shown!r})",
+                        actual,
+                        contains=optional_as_list(expected_value.contains),
+                        not_contains=optional_as_list(expected_value.not_contains),
+                        matches=optional_as_list(expected_value.matches),
+                        not_matches=optional_as_list(expected_value.not_matches),
+                        shown=shown,
+                    )
                 )
             case _:
                 actual = response.headers.get(header_name)
                 if actual != expected_value:
                     shown = redaction.header(header_name, actual) if actual is not None else None
-                    raise VerificationError(f"Header '{header_name}' doesn't match: expected {redaction.header(header_name, expected_value)}, got {shown}")
+                    failures.add(f"Header '{header_name}' doesn't match: expected {redaction.header(header_name, expected_value)}, got {shown}")
 
     # Before the expressions, where the save + expression it replaces checked
-    # the body: this is that check, without the save.
-    if verify_model.jmespath:
-        _verify_jmespath(verify_model.jmespath, body.parsed("check verify.jmespath"))
+    # the body: this is that check, without the save. The body is parsed by the
+    # first entry that renders.
+    for expression in verify_model.jmespath:
+        expected = rendered("jmespath", expression)
+        if expected is not _UNRENDERED and (parsed := body.parsed("check verify.jmespath")) is not _UNPARSABLE:
+            _verify_jmespath(expression, expected, parsed, failures)
 
-    for i, expression in enumerate(verify_model.expressions):
+    for i in range(len(verify_model.expressions)):
         # An expression is a predicate, not a value. Truthiness alone would pass a
         # stage on "{{ response.status }}" against a 500, and an entry that
         # rendered away to None needs nothing from the carrier's rendered-away
-        # guard (which watches model fields, not list items): the list keeps its
-        # declared length through substitution, so it is a non-bool and fails
-        # right below.
+        # guard (which watches model fields, not list items): it is a non-bool,
+        # and fails right below.
+        expression = rendered("expressions", i)
+        if expression is _UNRENDERED:
+            continue
         if not isinstance(expression, bool):
-            raise VerificationError(f"Verify expression {i} must evaluate to bool, got {type(expression).__name__} ({expression!r}), a value written where a condition belongs")
-        if not expression:
-            raise VerificationError(f"Expression {i} failed: evaluated to {expression}")
+            failures.add(f"Verify expression {i} must evaluate to bool, got {type(expression).__name__} ({expression!r}), a value written where a condition belongs")
+        elif not expression:
+            failures.add(f"Expression {i} failed: evaluated to {expression}")
 
-    for func_item in verify_model.user_functions:
+    for i in range(len(verify_model.user_functions)):
+        func_item = rendered("user_functions", i)
+        if func_item is _UNRENDERED:
+            continue
+        # How a function is named among several failures. A lone failure keeps
+        # the words it always had, which print the model.
+        named = f"'{call_target(func_item)[0]}' (user_functions[{i}])"
         try:
             result = call_user_function(func_item, response=response)
         except UserFunctionError as e:
-            raise VerificationError(f"Error calling user function '{func_item}': {e}") from e
+            failures.add(f"Error calling user function '{func_item}': {e}", cause=e, listed=f"Error calling user function {named}: {e}")
+            continue
+        except (pytest.skip.Exception, pytest.fail.Exception) as e:
+            end_step(e, f"Function {named}", ("user_functions", i))
 
         if not isinstance(result, bool):
-            raise VerificationError(f"Verify function must return bool, got {type(result).__name__}")
-        if not result:
-            raise VerificationError(f"Function '{func_item}' verification failed")
+            got = type(result).__name__
+            failures.add(f"Verify function must return bool, got {got}", listed=f"Function {named} must return bool, got {got}")
+        elif not result:
+            failures.add(f"Function '{func_item}' verification failed", listed=f"Function {named} verification failed")
 
-    if verify_model.body.schema is not None:
-        _verify_body_schema(verify_model.body.schema, body, scenario_dir)
+    if verify_model.body.schema is not None and (schema := rendered("body", "schema")) is not _UNRENDERED:
+        _verify_body_schema(schema, body, scenario_dir, failures)
 
-    verify_text_matchers(
-        "Body",
-        response.text,
-        contains=verify_model.body.contains,
-        not_contains=verify_model.body.not_contains,
-        matches=verify_model.body.matches,
-        not_matches=verify_model.body.not_matches,
+    def operands(field: str) -> Iterator[Any]:
+        """The body operands of ``field`` that rendered, a failure to render
+        listed in its place."""
+        for i in range(len(getattr(verify_model.body, field))):
+            if (operand := rendered("body", field, i)) is not _UNRENDERED:
+                yield operand
+
+    failures.extend(
+        text_matcher_failures(
+            "Body",
+            response.text,
+            contains=operands("contains"),
+            not_contains=operands("not_contains"),
+            matches=operands("matches"),
+            not_matches=operands("not_matches"),
+        )
     )
 
+    if failures:
+        raise failures.error()
 
-def _verify_status(expected: Any, actual: int) -> None:
+
+# What `process_verify` has for a value whose templates did not render: its
+# failure is recorded, and its check does not run.
+_UNRENDERED = object()
+
+# The body's operand lists, in the order their checks run.
+_BODY_OPERANDS = ("contains", "not_contains", "matches", "not_matches")
+
+
+def _is_fail(outcome: BaseException) -> bool:
+    """Whether a pytest outcome is a fail(): an XFailed is a Failed too."""
+    return isinstance(outcome, pytest.fail.Exception) and not isinstance(outcome, pytest.xfail.Exception)
+
+
+def _template_at(where: VerifyWhere) -> str:
+    """A template's value named for a failure: ``The template at
+    'verify.expressions[0]'``."""
+    return f"The template at 'verify{''.join(map(path_segment, where))}'"
+
+
+def _declared_values(verify_model: Verify) -> Iterator[tuple[VerifyWhere, Any]]:
+    """Each value of a verify step that is rendered (`_RenderedStep`), where
+    it is declared, in the order `process_verify` runs their checks: a
+    header's expectation and a jmespath entry's whole, a list item by item."""
+    if verify_model.description is not None:
+        yield ("description",), verify_model.description
+    if verify_model.status is not None:
+        yield ("status",), verify_model.status
+    for name, expected in verify_model.headers.items():
+        yield ("headers", name), expected
+    for expression, expected in verify_model.jmespath.items():
+        yield ("jmespath", expression), expected
+    for i, expression in enumerate(verify_model.expressions):
+        yield ("expressions", i), expression
+    for i, function in enumerate(verify_model.user_functions):
+        yield ("user_functions", i), function
+    if verify_model.body.schema is not None:
+        yield ("body", "schema"), verify_model.body.schema
+    for field in _BODY_OPERANDS:
+        for i, operand in enumerate(getattr(verify_model.body, field)):
+            yield ("body", field, i), operand
+
+
+class _RenderedStep:
+    """A verify step's values as its checks run on them: each rendered once,
+    all before the first check runs (`VerifyRender`), kept by where it is
+    declared, in check order.
+
+    Rendered check by check instead, a user function's skip or xfail ended the
+    step before the templates after it had been looked at, and a stage whose
+    template failed passed as skipped. Rendered up front, a value that did not
+    render is kept as its failure (`RenderFailure`), both for its check's
+    place in the list and for an outcome that ends the step before that place
+    (`after`). An outcome a template raises ends the rendering there
+    (`RenderOutcome`): the step ends when its checks reach it, so nothing
+    after it is rendered, as nothing after it was when the step rendered whole.
+    """
+
+    __slots__ = ("_values",)
+
+    def __init__(self, verify_model: Verify, render: VerifyRender | None) -> None:
+        declared = list(_declared_values(verify_model))
+        if render is None:
+            self._values: dict[VerifyWhere, Any] = dict(declared)
+        else:
+            rendered = render(declared)
+            self._values = {where: rendered[where] for where, _ in declared if where in rendered}
+
+    def value(self, where: VerifyWhere) -> Any:
+        """What the value declared at ``where`` rendered to, or why it did not."""
+        return self._values[where]
+
+    def after(self, where: VerifyWhere) -> list[tuple[VerifyWhere, Any]]:
+        """The values declared after ``where`` that were rendered, in order,
+        each where it is declared."""
+        items = list(self._values.items())
+        return items[list(self._values).index(where) + 1 :]
+
+
+class _Failures:
+    """The failed checks of one verify step, in the order they ran, raised as
+    one `VerificationError` when the step is done.
+
+    One failure is raised as its own message, as when a step stopped at its
+    first, so a single wrong assertion reads as it always has. Several are
+    counted on a first line (``3 verification checks failed:``), then listed
+    one numbered line each; a message of several lines (a schema error's)
+    keeps its later lines, indented under its first.
+    """
+
+    __slots__ = ("_items",)
+
+    def __init__(self) -> None:
+        self._items: list[tuple[str, BaseException | None, str]] = []
+
+    def __bool__(self) -> bool:
+        return bool(self._items)
+
+    def add(self, message: str | None, *, cause: BaseException | None = None, listed: str | None = None) -> None:
+        """Record a failed check's ``message``, if any: None is a check that passed.
+        ``cause`` is what the check caught, chained when the failure is the only one.
+        ``listed`` is how the failure reads among several, where it differs:
+        one that must say which of several like it failed (a user function)."""
+        if message is not None:
+            self._items.append((message, cause, message if listed is None else listed))
+
+    def extend(self, messages: Iterable[str]) -> None:
+        for message in messages:
+            self.add(message)
+
+    def error(self) -> VerificationError:
+        """The step's failure, for a step with at least one. Its message is
+        the whole report: nothing is chained to it but the cause of a lone
+        failure, and no exception being handled where it is raised."""
+        if len(self._items) == 1:
+            [(message, cause, _listed)] = self._items
+        else:
+            lines = [f"{len(self._items)} verification checks failed:"]
+            for number, (_message, _cause, item) in enumerate(self._items, start=1):
+                first, *rest = item.split("\n")
+                marker = f"  {number}. "
+                lines.append(f"{marker}{first}")
+                lines.extend(f"{' ' * len(marker)}{line}" if line else "" for line in rest)
+            message, cause = "\n".join(lines), None
+        error = VerificationError(message)
+        # Set even to None: that suppresses the context too.
+        error.__cause__ = cause
+        return error
+
+
+def _status_failure(expected: Any, actual: int) -> str | None:
     """``verify.status``: a code or a class (``"2xx"``), or a list of them, any
-    one of which passes.
+    one of which passes. Why ``actual`` fails it, or None.
 
     Every entry is checked before any is matched: a list must not pass on one
     entry while another could never have matched. Text other than a class is a
@@ -176,72 +455,79 @@ def _verify_status(expected: Any, actual: int) -> None:
     accepted = expected if isinstance(expected, list) else [expected]
     for entry in accepted:
         if isinstance(entry, str) and not is_status_class(entry):
-            raise VerificationError(f"verify.status must resolve to a status code or a class such as 2xx, got {entry!r}")
+            return f"verify.status must resolve to a status code or a class such as 2xx, got {entry!r}"
     if any(actual // 100 == int(entry[0]) if isinstance(entry, str) else actual == entry for entry in accepted):
-        return
+        return None
     shown = f"one of [{', '.join(map(str, accepted))}]" if isinstance(expected, list) else str(expected)
-    raise VerificationError(f"Status code doesn't match: expected {shown}, got {actual}")
+    return f"Status code doesn't match: expected {shown}, got {actual}"
 
 
 # A `_JsonBody` no check has read yet: None is a body, JSON's null.
 _UNPARSED = object()
+# A `_JsonBody` json could not read, which the step has a failure for.
+_UNPARSABLE = object()
 
 
 class _JsonBody:
     """A verify step's response body as JSON, parsed by the first check that
     reads it and kept for the next: jmespath and body.schema share one parse.
 
-    A body json cannot read fails the check that asked. That is a ValueError:
-    JSONDecodeError and UnicodeDecodeError are ones, and so is the error for an
-    integer past Python's digit limit, which json raises bare. Or it is a
-    RecursionError, for valid JSON nested deeper than json can parse
-    (``[[[...]]]`` some thousand levels deep).
+    A body json cannot read is one failure of the step, recorded by the check
+    that asked first; the checks after it that need the body do not run. That
+    is a ValueError: JSONDecodeError and UnicodeDecodeError are ones, and so
+    is the error for an integer past Python's digit limit, which json raises
+    bare. Or it is a RecursionError, for valid JSON nested deeper than json
+    can parse (``[[[...]]]`` some thousand levels deep).
     """
 
-    __slots__ = ("_response", "_value")
+    __slots__ = ("_failures", "_response", "_value")
 
-    def __init__(self, response: httpx.Response) -> None:
+    def __init__(self, response: httpx.Response, failures: _Failures) -> None:
         self._response = response
+        self._failures = failures
         self._value: Any = _UNPARSED
 
     def parsed(self, check: str) -> Any:
-        """The body as JSON, or a `VerificationError` saying ``check`` (``"check
+        """The body as JSON, or `_UNPARSABLE`. The first time, a body that is
+        not JSON is recorded as a failure saying ``check`` (``"check
         verify.jmespath"``) cannot be done on it."""
         if self._value is _UNPARSED:
             try:
                 self._value = self._response.json()
             except ValueError as e:
-                raise VerificationError(f"Cannot {check}, response is not valid JSON: {e}") from e
+                self._value = _UNPARSABLE
+                self._failures.add(f"Cannot {check}, response is not valid JSON: {e}", cause=e)
             except RecursionError as e:
-                raise VerificationError(f"Cannot {check}, response JSON is nested too deeply to parse: {e}") from e
+                self._value = _UNPARSABLE
+                self._failures.add(f"Cannot {check}, response JSON is nested too deeply to parse: {e}", cause=e)
         return self._value
 
 
-def _verify_jmespath(expectations: dict[str, Any], body: Any) -> None:
-    """``verify.jmespath``: each expression's value in the parsed ``body``
-    against its expectation, a value it must equal (JSON equality) or a
-    `JMESPathMatcher`.
+def _verify_jmespath(expression: str, expected: Any, body: Any, failures: _Failures) -> None:
+    """A ``verify.jmespath`` entry: the expression's value in the parsed
+    ``body`` against its expectation, a value it must equal (JSON equality) or
+    a `JMESPathMatcher`, each key of which is a check of its own.
 
     A missing path extracts null, as JMESPath has it, so ``null`` cannot tell a
     missing key from a null one.
     """
-    for expression, expected in expectations.items():
-        try:
-            actual = jmespath.search(expression, body)
-        except (ValueError, ArithmeticError, TypeError) as e:
-            # Compiled at validation, so this is evaluation against this body.
-            # jmespath's own errors (JMESPathError is a ValueError): a function
-            # given the wrong type, `length(id)` on a number, or an unknown
-            # function or wrong argument count, found only when it is called.
-            # And Python's, from what jmespath hands its functions unchecked:
-            # ceil() on 1e400, which json reads as inf (OverflowError), or on
-            # NaN (ValueError); contains() on a string, looking for a number
-            # (TypeError).
-            raise VerificationError(f"JMESPath {expression!r} cannot be evaluated against the response body: {_evaluation_error(e)}") from e
-        if isinstance(expected, JMESPathMatcher):
-            _verify_jmespath_matcher(expression, expected, actual)
-        elif not json_equal(actual, expected):
-            raise VerificationError(f"JMESPath {expression!r} doesn't match: expected {_shown(expected)}, got {_shown(actual)}")
+    try:
+        actual = jmespath.search(expression, body)
+    except (ValueError, ArithmeticError, TypeError) as e:
+        # Compiled at validation, so this is evaluation against this body.
+        # jmespath's own errors (JMESPathError is a ValueError): a function
+        # given the wrong type, `length(id)` on a number, or an unknown
+        # function or wrong argument count, found only when it is called.
+        # And Python's, from what jmespath hands its functions unchecked:
+        # ceil() on 1e400, which json reads as inf (OverflowError), or on
+        # NaN (ValueError); contains() on a string, looking for a number
+        # (TypeError). One failure: no key of a matcher can be judged.
+        failures.add(f"JMESPath {expression!r} cannot be evaluated against the response body: {_evaluation_error(e)}", cause=e)
+        return
+    if isinstance(expected, JMESPathMatcher):
+        failures.extend(_jmespath_matcher_failures(expression, expected, actual))
+    elif not json_equal(actual, expected):
+        failures.add(f"JMESPath {expression!r} doesn't match: expected {_shown(expected)}, got {_shown(actual)}")
 
 
 # JMESPath's names for its types, which its type error gives for an argument
@@ -290,8 +576,8 @@ def _evaluation_error(error: Exception) -> str:
 _ORDERINGS = {"gt": operator.gt, "ge": operator.ge, "lt": operator.lt, "le": operator.le}
 
 
-def _verify_jmespath_matcher(expression: str, matcher: JMESPathMatcher, actual: Any) -> None:
-    """Every key the matcher sets, in the model's order, against ``actual``.
+def _jmespath_matcher_failures(expression: str, matcher: JMESPathMatcher, actual: Any) -> Iterator[str]:
+    """Why ``actual`` fails each key the matcher sets, in the model's order.
 
     A key the matcher leaves out is not a check; a key it sets is, a null
     operand included (`JMESPathMatcher.NULL_OPERANDS`).
@@ -301,7 +587,7 @@ def _verify_jmespath_matcher(expression: str, matcher: JMESPathMatcher, actual: 
         if key in matcher.model_fields_set:
             failure = _matcher_failure(key, getattr(matcher, key), actual)
             if failure is not None:
-                raise VerificationError(f"{subject}{failure}")
+                yield f"{subject}{failure}"
 
 
 def _matcher_failure(key: str, operand: Any, actual: Any) -> str | None:
@@ -346,7 +632,10 @@ def _matcher_failure(key: str, operand: Any, actual: Any) -> str | None:
                 return cannot_judge("a string")
             try:
                 found = re.search(operand, actual) is not None
-            except re.error as e:
+            except (re.error, OverflowError, RecursionError) as e:
+                # And one re cannot compile for a repeat count or a nesting too
+                # big: raised out of the step, it would take the step's other
+                # failures with it.
                 return f": {key} must resolve to a regular expression, got {operand!r} ({e})"
             return None if found == (key == "matches") else mismatch()
         case "type":
@@ -420,20 +709,29 @@ def _shown(value: Any) -> str:
     return text if len(text) <= _SHOWN_MAX else f"{text[:_SHOWN_MAX]}... ({len(text)} characters)"
 
 
-def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None) -> None:
-    """Validate the response body against an inline or file-referenced JSON Schema."""
+def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None, failures: _Failures) -> None:
+    """Validate the response body against an inline or file-referenced JSON
+    Schema: one check, which fails once, for its first violation."""
     if isinstance(schema, str | Path):
         schema_path = resolve_scenario_path(scenario_dir, schema)
         try:
             schema = read_json_schema_file(schema_path)
         except SchemaFileError as e:
-            raise VerificationError(f"Error reading body schema file '{schema_path}': {e}") from e
+            failures.add(f"Error reading body schema file '{schema_path}': {e}", cause=e)
+            return
         try:
             check_json_schema(schema)
-        except jsonschema.SchemaError as e:
-            raise VerificationError(f"Invalid JSON Schema in file '{schema_path}': {e}") from e
+        except Exception as e:
+            # A SchemaError, or a crash checking the schema, as the inline
+            # schema's check and `validate --deep` catch it: ``re`` refusing a
+            # ``pattern`` too big to compile (OverflowError, RecursionError),
+            # which would take the step's other failures with it.
+            failures.add(f"Invalid JSON Schema in file '{schema_path}': {e}", cause=e)
+            return
 
     response_json = body.parsed("validate schema")
+    if response_json is _UNPARSABLE:
+        return
 
     try:
         # Already meta-checked (inline at model validation, files just above), so
@@ -443,13 +741,31 @@ def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None)
         validator_class = json_schema_validator_class(schema)
         validator_class(schema, format_checker=_format_checker(validator_class)).validate(response_json)
     except jsonschema.ValidationError as e:
-        raise VerificationError(f"Body schema validation failed: {e}") from e
+        failures.add(_schema_violation(e), cause=e)
+    except RecursionError as e:
+        # A schema that recurses as deep as the body (``"items": {"$ref": "#"}``)
+        # on one nested some hundreds of levels deep, which json parses.
+        failures.add(f"Cannot validate schema, response JSON is nested too deeply to validate: {e}", cause=e)
     except jsonschema.SchemaError as e:
-        raise VerificationError(f"Invalid body validation schema: {e}") from e
+        failures.add(f"Invalid body validation schema: {e}", cause=e)
     except referencing.exceptions.Unresolvable as e:
         # An unresolvable $ref inside the schema itself must fail the stage
         # cleanly, not escape as a raw traceback past the abort machinery.
-        raise VerificationError(f"Cannot resolve $ref in body schema: {e}") from e
+        failures.add(f"Cannot resolve $ref in body schema: {e}", cause=e)
+
+
+def _schema_violation(error: jsonschema.ValidationError) -> str:
+    """A schema violation as jsonschema words it: its message, then the
+    schema and the value that failed, pretty-printed.
+
+    Pretty-printing recurses, and stops short of a value nested some hundreds
+    of levels deep, which json parses: then the message is given with where
+    the value is, but not the value pretty-printed.
+    """
+    try:
+        return f"Body schema validation failed: {error}"
+    except RecursionError:
+        return f"Body schema validation failed: {error.message}\n\nFailed validating {error.validator!r} at {error.json_path}: the value is nested too deeply to show"
 
 
 @functools.cache
@@ -471,7 +787,7 @@ def _format_checker(validator_class: type[jsonschema.protocols.Validator]) -> js
     return checker
 
 
-def verify_text_matchers(
+def text_matcher_failures(
     subject: str,
     text: str,
     *,
@@ -480,32 +796,50 @@ def verify_text_matchers(
     matches: Iterable[Any],
     not_matches: Iterable[Any],
     shown: str | None = None,
-) -> None:
+) -> Iterator[str]:
     """The contains/matches semantics, shared by body and header checks
-    (patterns use ``re.search``).
+    (patterns use ``re.search``): why ``text`` fails each operand, one
+    failure per operand, in the order given.
 
     ``shown`` is ``text`` as ``subject`` shows it when a redaction hides part of
-    it (a Set-Cookie's value). A failed ``not_contains`` or ``not_matches``
-    found its operand in ``text``, so quoting it could echo the hidden part:
-    it is quoted only when ``shown`` already holds its text (a pattern's text,
-    not what it matched), and is ``[REDACTED]`` otherwise. A failed
-    ``contains``/``matches`` operand is not in ``text``, reveals nothing of it,
-    and is quoted as written.
+    it (a Set-Cookie's value); None, or ``text`` itself, hides nothing. A
+    failed ``not_contains`` or ``not_matches`` found its operand in ``text``,
+    so quoting it could echo the hidden part: it is quoted only when nothing is
+    hidden or ``shown`` already holds its text (a pattern's text, not what it
+    matched), and is ``[REDACTED]`` otherwise. A failed ``contains``/``matches``
+    operand is not in ``text``, reveals nothing of it, and is quoted as
+    written.
+
+    A pattern ``re`` refuses fails its check, in the words a `JMESPathMatcher`
+    key's does. A header matcher's can be template text a template rendered
+    (``{{ ( }}``, saved from a response), which the field's template branch
+    takes as it is: re.error, or OverflowError or RecursionError for a repeat
+    count or a nesting too big to compile. Raised out of the step, it would
+    take the step's other failures with it.
     """
+    # Nothing is hidden: a header the redaction leaves alone shows as it is.
+    hides = shown is not None and shown != text
+
     for substring in contains:
         if substring not in text:
-            raise VerificationError(f"{subject} doesn't contain '{substring}'")
+            yield f"{subject} doesn't contain '{substring}'"
 
     for substring in not_contains:
         if substring in text:
-            quoted = substring if shown is None or substring in shown else REDACTED
-            raise VerificationError(f"{subject} contains '{quoted}' while it shouldn't")
+            quoted = REDACTED if hides and substring not in shown else substring
+            yield f"{subject} contains '{quoted}' while it shouldn't"
 
-    for pattern in matches:
-        if not re.search(pattern, text):
-            raise VerificationError(f"{subject} doesn't match '{pattern}'")
-
-    for pattern in not_matches:
-        if re.search(pattern, text):
-            quoted = pattern if shown is None or str(pattern) in shown else REDACTED
-            raise VerificationError(f"{subject} matches '{quoted}' while it shouldn't")
+    for key, patterns in (("matches", matches), ("not_matches", not_matches)):
+        for pattern in patterns:
+            try:
+                found = re.search(pattern, text) is not None
+            except (re.error, OverflowError, RecursionError) as e:
+                # Quoted unless its text is in the hidden part.
+                quoted = REDACTED if hides and str(pattern) in text and str(pattern) not in shown else repr(pattern)
+                yield f"{subject}: {key} must resolve to a regular expression, got {quoted} ({e})"
+                continue
+            if key == "matches" and not found:
+                yield f"{subject} doesn't match '{pattern}'"
+            elif key == "not_matches" and found:
+                quoted = REDACTED if hides and str(pattern) not in shown else pattern
+                yield f"{subject} matches '{quoted}' while it shouldn't"

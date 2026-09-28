@@ -263,7 +263,7 @@ DEBUG - updates for global context: {"user_ids": [1, 2, 3]}
 pytest-httpchain is built for **full visibility while debugging**, and part of that visibility extends to secrets:
 
 - **Logs** (`--log-cli-level=DEBUG`, as shown above) print the entire context as JSON — fixture values, substitution variables, and saved values such as auth tokens. At DEBUG, httpcore's connection trace also lists every response header as received, `Set-Cookie` included.
-- **Report sections** attach the HTTP request and response of a failing stage. The values of credential headers (`Authorization`, `Cookie`, `Set-Cookie`, API-key headers) and query parameters (`access_token`, `token`, ...) are shown as `[REDACTED]`, but bodies are shown as sent — see [Secrets in reports](../getting-started.md#secrets-in-reports).
+- **Report sections** attach the HTTP request (also as a curl command) and response of a failing stage. The values of credential headers (`Authorization`, `Cookie`, `Set-Cookie`, API-key headers) and query parameters (`access_token`, `token`, ...) are shown as `[REDACTED]`, but bodies are shown as sent — see [Secrets in reports](../getting-started.md#secrets-in-reports).
 - **HAR export** (`--httpchain-output-dir`) writes complete requests and responses — headers, cookies, and bodies — to disk, unredacted unless `httpchain_har_redact` is on.
 
 Redaction covers the usual credential carriers, not every place a secret can travel: a token in a response body, a custom header you have not listed, or anything logged at DEBUG still shows as it is. Treat logs, JUnit/terminal reports, and `.har` files produced against real credentials as sensitive:

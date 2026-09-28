@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
-from pytest_httpchain.templates import TEMPLATE_BUILTINS, TemplatesError, contains_template, walk
+from pytest_httpchain.templates import TEMPLATE_BUILTINS, TemplatesError, contains_template, substitution, walk, walker
 
 
 class SampleModel(BaseModel):
@@ -332,3 +332,42 @@ class TestChainMapContextSemantics:
     def test_upper_layer_adds_without_hiding_lower_ones(self):
         context = ChainMap({"b": 2}, {"a": 1})
         assert walk("{{ a + b }}", context) == 3
+
+
+class TestWalker:
+    """``walker(context)`` is ``walk`` bound to one context, for many
+    structures each substituted on its own: one evaluator serves every call."""
+
+    def test_substitutes_as_walk_does(self):
+        substitute = walker({"a": 1, "items": [1, 2]})
+        assert substitute({"x": "{{ a }}", "y": ["{{ [i * 2 for i in items] }}", "n={{ a }}"]}) == {"x": 1, "y": [[2, 4], "n=1"]}
+
+    def test_builds_one_evaluator_for_every_call(self, monkeypatch):
+        built = []
+        real = substitution._build_evaluator
+        monkeypatch.setattr(substitution, "_build_evaluator", lambda context: built.append(context) or real(context))
+        substitute = walker({"a": 1})
+        assert [substitute("{{ a + 1 }}"), substitute("{{ a + 2 }}")] == [2, 3]
+        assert len(built) == 1
+
+    @pytest.mark.parametrize(
+        "failing",
+        [
+            pytest.param("{{ missing }}", id="undefined"),
+            pytest.param("{{ [boom() for i in items] }}", id="raised-in-a-comprehension"),
+            pytest.param("{{ [i for i in range(10 ** 9)] }}", id="comprehension-too-long"),
+        ],
+    )
+    def test_a_call_that_raises_leaves_the_next_unaffected(self, failing):
+        """simpleeval swaps its name lookup in for a comprehension and restores
+        it on the way out, whatever ended it; the next call sees the context
+        as the first did."""
+
+        def boom():
+            raise ValueError("boom")
+
+        substitute = walker({"items": [1, 2], "boom": boom, "i": "outer"})
+        with pytest.raises(TemplatesError):
+            substitute(failing)
+        assert substitute("{{ [i for i in items] }}") == [1, 2]
+        assert substitute("{{ i }}") == "outer"

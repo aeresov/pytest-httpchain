@@ -28,8 +28,9 @@ Or using dictionary format for organization:
 
 ## Verify Steps
 
-A verify step holds any mix of the checks below. They run in this order, and
-the first that fails fails the stage:
+A verify step holds any mix of the checks below. They all run, in this order,
+and the step fails with every one that failed, so that one run shows all that
+is wrong with a response:
 
 1. `status`
 2. `headers`
@@ -39,8 +40,51 @@ the first that fails fails the stage:
 6. `body.schema`
 7. `body.contains`, `body.not_contains`, `body.matches`, `body.not_matches`
 
-The entries of one check run in the order they are written. To run checks in
-another order, put them in separate verify steps: steps run in order too.
+Headers, `jmespath` entries, expressions, user functions and `body` operands
+run in the order they are written, and each is a check of its own. So is each
+field a header matcher sets, run as `contains`, `not_contains`, `matches`,
+`not_matches`, and each key a `jmespath` matcher sets, run in the order the
+[matcher table](#jmespath-assertions) lists them, whatever order they are
+written in. One failure reads as its own message. Several are counted, then
+numbered in the order the checks ran:
+
+```text
+3 verification checks failed:
+  1. Status code doesn't match: expected 201, got 200
+  2. JMESPath 'data.id' doesn't match: expected 42, got 43
+  3. Body doesn't contain 'created'
+```
+
+A check that cannot run fails once. A body that is not JSON is one failure
+for the step, however many `jmespath` entries and `body.schema` wanted it; a
+`jmespath` expression that cannot be evaluated against the body is one, not
+one per key of its matcher; and `body.schema` is one check, reporting the
+first violation it finds. A user function that raises is one failure, with
+its error; in a list of several, a function's failure names it with its index,
+so that two calls of one function can be told apart:
+`Function 'mymodule:check_with_args' (user_functions[1]) verification failed`.
+
+The step's templates all render before its first check runs, each check's on
+its own, so a template that fails is one failure, listed in its check's place,
+and only its own check does not run: an expression that raises (`KeyError` on
+`response.headers['x-missing']`), or a value that
+[renders to `null`](substitutions.md#templates-that-render-to-null). For a
+header or a `jmespath` entry, the check is the whole entry, matcher and all.
+
+A user function that calls `pytest.skip()`, `pytest.xfail()` or `pytest.fail()`
+ends the step there, as it ends the stage: the checks after it do not run. It
+cannot undo a failure, though: if a check before it failed, or a template of the
+step did not render or called `pytest.fail()`, the stage fails with those
+failures (a `pytest.fail()` message listed among them, in its place) rather
+than being skipped or xfailed. A function a template calls is taken the same
+way, except that the templates after that one are not rendered.
+
+**Steps run in order, and a step that fails ends the stage.** The steps after
+it do not run, since they may depend on it: a `save` a later `verify` uses, a
+check that assumes an earlier one held. A `save` step stops at its first
+error. So put checks in one verify step to see all their failures together,
+and in separate steps to stop at one, so that nothing after it runs once it
+fails.
 
 ### Status Code
 
@@ -254,7 +298,8 @@ JMESPath 'name': gt needs a number, got "Alice" (string)
 ```
 
 The body is parsed once per verify step, by the first check that reads it,
-`jmespath` or `body.schema`; one that is not JSON fails the stage
+`jmespath` or `body.schema`; one that is not JSON fails the stage, once for
+the step whatever else wanted it
 (`Cannot check verify.jmespath, response is not valid JSON: ...`), and so does
 one nested too deeply for Python's parser. So does an expression that cannot
 be evaluated against the body, naming why: a function given a value it does
@@ -552,6 +597,23 @@ def check_response(response: httpx.Response) -> bool:
 
 def check_with_args(response: httpx.Response, expected_value: str) -> bool:
     return response.json().get("value") == expected_value
+```
+
+A function returns `True` for a response that passes and `False` for one that
+does not; one that raises fails its check with its error. It runs whatever the
+checks before it in the step found, since a failed check no longer stops the
+step, so it must not assume they passed: against an HTML error page that
+failed `status`, `response.json()` above raises, and the step lists that error
+as a second failure beside the status mismatch. A function that only makes
+sense on a good response can check for one first and return `False`, or be
+put in a verify step of its own after the one checking `status`, which it then
+runs only once that step passed:
+
+```python
+def check_response(response: httpx.Response) -> bool:
+    if not response.is_success or "json" not in response.headers.get("content-type", ""):
+        return False
+    return response.json().get("status") == "ok"
 ```
 
 ## Save Steps

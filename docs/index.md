@@ -45,6 +45,7 @@ A key-value store persists throughout scenario execution. Variables, fixtures, a
 -   **JMESPath** — Assert on values in JSON responses directly (`"jmespath": {"data.id": 42, "items": {"length": 3}}`), or extract them for later stages
 -   **JSON Schema** — Validate response structure against a schema
 -   **User functions** — Call Python functions for custom extraction, verification, or authentication
+-   **Failure reports** — A failing verify step lists every check that failed, not only the first, and the report gives the request as a ready-to-run `curl` command beside the request and response it shows
 
 ### Authentication
 

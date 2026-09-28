@@ -500,11 +500,12 @@ class TestReportSectionsBuiltOnlyWhenShown:
         assert _sections_will_be_shown(config, MagicMock(failed=False))
 
     @staticmethod
-    def _run_hook(config, *, failed: bool) -> list[tuple[str, str]]:
+    def _run_hook(config, *, failed: bool, request: httpx.Request | None = None, history: list[httpx.Response] | None = None) -> list[tuple[str, str]]:
         """Drive the report hook over one recorded exchange, returning the
         sections it attached."""
-        request = httpx.Request("GET", "https://example.com/")
-        response = httpx.Response(200, json={"a": 1}, request=request)
+        if request is None:
+            request = httpx.Request("GET", "https://example.com/")
+        response = httpx.Response(200, json={"a": 1}, request=request, history=history)
 
         class _Scenario(Carrier):
             last_request = request
@@ -525,12 +526,28 @@ class TestReportSectionsBuiltOnlyWhenShown:
         ("args", "failed", "expected"),
         [
             pytest.param((), False, [], id="passed"),
-            pytest.param((), True, ["HTTP Request", "HTTP Response"], id="failed"),
-            pytest.param(("-rA",), False, ["HTTP Request", "HTTP Response"], id="passed-with-rA"),
+            pytest.param((), True, ["HTTP Request", "HTTP Request (curl)", "HTTP Response"], id="failed"),
+            pytest.param(("-rA",), False, ["HTTP Request", "HTTP Request (curl)", "HTTP Response"], id="passed-with-rA"),
         ],
     )
     def test_hook_formats_only_when_the_sections_will_be_read(self, pytester, args, failed, expected):
         assert [title for title, _ in self._run_hook(pytester.parseconfigure(*args), failed=failed)] == expected
+
+    @pytest.mark.parametrize(
+        ("args", "shown"),
+        [
+            pytest.param((), "[REDACTED]", id="redacted"),
+            pytest.param(("-o", "httpchain_redact_headers="), "Bearer s3cret", id="redaction-off"),
+        ],
+    )
+    def test_curl_section_follows_the_request_section(self, pytester, args, shown):
+        """The same request under the same label, through the same redaction."""
+        request = httpx.Request("GET", "https://example.com/final", headers={"authorization": "Bearer s3cret"})
+        hop = httpx.Response(302, headers={"location": "/final"}, request=httpx.Request("GET", "https://example.com/start"))
+        sections = dict(self._run_hook(pytester.parseconfigure(*args), failed=True, request=request, history=[hop]))
+        assert list(sections) == ["HTTP Request (after 1 redirect)", "HTTP Request (curl) (after 1 redirect)", "HTTP Response (after 1 redirect)"]
+        assert f"authorization: {shown}" in sections["HTTP Request (after 1 redirect)"]
+        assert sections["HTTP Request (curl) (after 1 redirect)"].endswith(f"curl -X GET 'https://example.com/final' \\\n  -H 'authorization: {shown}'")
 
     def test_har_write_failure_is_logged_not_raised(self, pytester, tmp_path, caplog):
         not_a_dir = tmp_path / "file"
@@ -540,5 +557,5 @@ class TestReportSectionsBuiltOnlyWhenShown:
         with caplog.at_level(logging.WARNING, logger="pytest_httpchain.plugin"):
             sections = self._run_hook(config, failed=True)
 
-        assert [title for title, _ in sections] == ["HTTP Request", "HTTP Response"]
+        assert [title for title, _ in sections] == ["HTTP Request", "HTTP Request (curl)", "HTTP Response"]
         assert [record.getMessage().split(": ", 1)[0] for record in caplog.records] == ["Failed to write HAR file for t::s"]

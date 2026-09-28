@@ -1,7 +1,8 @@
 import ast
+import functools
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -212,3 +213,17 @@ def walk(obj: Any, context: Mapping[str, Any]) -> Any:
     returned untouched when it holds no template at all.
     """
     return _walk(obj, _build_evaluator(context))
+
+
+def walker(context: Mapping[str, Any]) -> Callable[[Any], Any]:
+    """`walk` bound to ``context``, for substituting many structures against
+    one context each on its own: ``walker(context)(obj)`` is ``walk(obj,
+    context)``, and one evaluator, built here, serves every call.
+
+    For a caller that must catch each structure's `TemplatesError` apart, where
+    one ``walk()`` per structure would rebuild the evaluator from the whole
+    context every time. A call that raises leaves the evaluator as it found
+    it, so the next one is substituted as though it came first.
+    """
+    evaluator = _build_evaluator(context)
+    return functools.partial(_walk, evaluator=evaluator)

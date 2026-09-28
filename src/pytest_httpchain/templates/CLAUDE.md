@@ -14,6 +14,7 @@ This subpackage provides safe template expression evaluation with recursive subs
 ```python
 from pytest_httpchain.templates import (
     walk,
+    walker,
     contains_template,
     is_complete_template,
     extract_template_expression,
@@ -24,6 +25,14 @@ from pytest_httpchain.templates import (
 
 # Recursively substitute template expressions
 result = walk(obj, context)
+
+# The same, bound to one context, for many structures substituted each on its
+# own (each call raising its own TemplatesError): one evaluator, built here,
+# serves every call. walk() builds one per call from the whole context, which
+# at runtime is a ChainMap of a layer per stage and per save step — the carrier
+# renders a verify step's values this way, one failure per value.
+substitute = walker(context)
+first, second = substitute(obj1), substitute(obj2)
 
 # Check whether any {{ }} occurs anywhere in a nested structure
 # (str/dict/list/tuple/BaseModel/SimpleNamespace) — carrier uses this to decide

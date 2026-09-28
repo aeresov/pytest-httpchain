@@ -109,7 +109,7 @@ Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix config
    - Processes substitutions into context
    - Walks request model through template engine, then `request_builder.build_request_kwargs()`
    - Executes HTTP request via httpx
-   - Processes response steps via `response_steps.process_verify()` / `process_save()`
+   - Processes response steps via `response_steps.process_verify()` / `process_save()`; a verify step gets the declared model and the carrier's renderer (`_verify_renderer`), which renders the step's values one at a time with one evaluator (`templates.walker`), all before the first check runs, so a value that does not render is one failure, listed in its check's place among the step's
    - Updates global context with saved values
 
 Per-scenario mutable class state (client, abort flag, exchange bookkeeping) is defined once in `carrier.fresh_scenario_state()`; the factory seeds each generated subclass with it and `teardown_class` re-applies it.

@@ -17,7 +17,10 @@ from pytest_httpchain.errors import SaveError, VerificationError
 from pytest_httpchain.models import JSON_TYPE_NAMES, JMESPathSave, Verify
 from pytest_httpchain.models.entities import ResponseBody
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
-from pytest_httpchain.response_steps import is_json_type, process_save, process_verify
+from pytest_httpchain.response_steps import RenderFailure, RenderOutcome, is_json_type, process_save, process_verify
+from pytest_httpchain.templates import TemplatesError
+from pytest_httpchain.userfunc import UserFunctionError
+from tests.unit import response_steps_test_helpers
 
 NOT_JSON = httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
 
@@ -128,6 +131,28 @@ class TestBodySchema:
             process_verify(Verify(body=ResponseBody(schema=str(schema_path))), httpx.Response(200, json={}))
 
     @pytest.mark.parametrize(
+        ("pattern", "error"),
+        [
+            pytest.param("a{4294967296}", "the repetition number is too large", id="overflow"),
+            pytest.param("(" * 5000 + ")" * 5000, "maximum recursion depth exceeded", id="recursion"),
+        ],
+    )
+    def test_schema_file_pattern_re_cannot_compile_fails_its_check(self, tmp_path, pattern, error):
+        """Checking the file's schema compiles its patterns, and re raises
+        OverflowError or RecursionError, not a SchemaError, for one too big: it
+        escaped the step, and took the step's other failures with it. An
+        inline schema's is refused when the model is validated."""
+        schema_path = tmp_path / "schema.json"
+        schema_path.write_text(json.dumps({"type": "object", "properties": {"a": {"type": "string", "pattern": pattern}}}))
+        verify = {"status": 201, "body": {"schema": str(schema_path), "contains": ["zzz"]}}
+        assert str(_failure(verify, httpx.Response(200, json={"a": "x"}))).split("\n") == [
+            "3 verification checks failed:",
+            "  1. Status code doesn't match: expected 201, got 200",
+            f"  2. Invalid JSON Schema in file '{schema_path}': {error}",
+            "  3. Body doesn't contain 'zzz'",
+        ]
+
+    @pytest.mark.parametrize(
         ("response", "message"),
         [
             pytest.param(NOT_JSON, "response is not valid JSON", id="text"),
@@ -143,6 +168,26 @@ class TestBodySchema:
     def test_non_json_response_fails_cleanly(self, response, message):
         with pytest.raises(VerificationError, match=f"^Cannot validate schema, {message}: "):
             process_verify(Verify(body=ResponseBody(schema={"type": "object"})), response)
+
+    # json parses a body nested some thousands of levels deep, but jsonschema
+    # recurses on it, pretty-printing the value that failed or descending into
+    # it: a RecursionError escaped as a raw traceback, past the report. And
+    # once every check runs, past an unrelated status failure found first.
+    DEEP = httpx.Response(200, content=b"[" * 5000 + b"]" * 5000)
+
+    def test_violation_in_a_body_too_deep_to_show(self):
+        message = str(_failure({"status": 201, "body": {"schema": {"type": "object"}}}, self.DEEP))
+        first, status, schema, *rest = message.split("\n")
+        assert (first, status) == ("2 verification checks failed:", "  1. Status code doesn't match: expected 201, got 200")
+        assert schema.startswith("  2. Body schema validation failed: [[[[")
+        assert schema.endswith("]]]] is not of type 'object'")
+        assert rest == ["", "     Failed validating 'type' at $: the value is nested too deeply to show"]
+
+    def test_body_too_deep_to_validate(self):
+        """A schema recursing as deep as the body cannot be checked on it."""
+        schema = {"type": "array", "items": {"$ref": "#"}}
+        with pytest.raises(VerificationError, match="^Cannot validate schema, response JSON is nested too deeply to validate: maximum recursion depth exceeded"):
+            process_verify(Verify(body=ResponseBody(schema=schema)), self.DEEP)
 
     @pytest.mark.parametrize(
         ("fmt", "value"),
@@ -299,6 +344,15 @@ _COOKIE_RESPONSE = httpx.Response(200, headers=[("set-cookie", "sid=abc; Path=/"
             id="not-matches-shown-part",
         ),
         pytest.param({"X-Id": "8"}, DEFAULT_REDACTION, "Header 'X-Id' doesn't match: expected 8, got 7", id="unlisted-header"),
+        # Nothing of it is hidden, so a pattern that is not its literal text
+        # is still shown: it was once "[REDACTED]" for a value shown whole.
+        pytest.param({"X-Id": {"not_matches": "^[0-9]$"}}, DEFAULT_REDACTION, "Header 'X-Id' (value: '7') matches '^[0-9]$' while it shouldn't", id="unlisted-header-not-matches"),
+        pytest.param(
+            {"Set-Cookie": {"not_matches": "sid=a.c"}},
+            NO_REDACTION,
+            "Header 'Set-Cookie' (value: 'sid=abc; Path=/, csrf=def; Path=/') matches 'sid=a.c' while it shouldn't",
+            id="disabled-not-matches",
+        ),
         pytest.param(
             {"Set-Cookie": "sid=guess; Path=/"},
             NO_REDACTION,
@@ -319,6 +373,31 @@ def test_header_failure_message_redacts_the_value(headers, redaction, message):
     with pytest.raises(VerificationError) as excinfo:
         process_verify(Verify(headers=headers), _COOKIE_RESPONSE, redaction=redaction)
     assert str(excinfo.value) == message
+
+
+@pytest.mark.parametrize(
+    ("header", "pattern", "shown", "error"),
+    [
+        pytest.param("X-Id", "{{ ( }}", "'{{ ( }}'", "missing ), unterminated subpattern at position 3", id="re-error"),
+        pytest.param("X-Id", "a{4294967296}{{ x }}", "'a{4294967296}{{ x }}'", "the repetition number is too large", id="overflow"),
+        # Its text is in the part of the value the redaction hides.
+        pytest.param("Set-Cookie", "({{ x }}", "[REDACTED]", "missing ), unterminated subpattern at position 0", id="hidden-part"),
+    ],
+)
+@pytest.mark.parametrize("key", ["matches", "not_matches"])
+def test_header_pattern_re_refuses_fails_its_check(header, pattern, shown, error, key):
+    """Template text a template rendered passes a header matcher's template
+    branch, and ``re`` may refuse it (a pattern saved from a response): its
+    check fails, and the step's other failures are still reported."""
+    response = httpx.Response(200, headers=[("set-cookie", "sid=({{ x }}; Path=/"), ("x-id", "7")])
+    with pytest.raises(VerificationError) as excinfo:
+        process_verify(Verify.model_validate({"status": 201, "headers": {header: {key: pattern}}}), response)
+    value = "'sid=[REDACTED]; Path=/'" if header == "Set-Cookie" else "'7'"
+    assert str(excinfo.value).split("\n") == [
+        "2 verification checks failed:",
+        "  1. Status code doesn't match: expected 201, got 200",
+        f"  2. Header '{header}' (value: {value}): {key} must resolve to a regular expression, got {shown} ({error})",
+    ]
 
 
 BODY = {
@@ -407,10 +486,8 @@ class TestJmespath:
             pytest.param({"active": {"type": "number"}}, "JMESPath 'active' doesn't match: expected type number, got true (boolean)", id="type-bool-is-no-number"),
             pytest.param({"data.missing": {"type": "string"}}, "JMESPath 'data.missing' doesn't match: expected type string, got null (null)", id="type-missing"),
             pytest.param({"data.tags": {"length": 3}}, 'JMESPath \'data.tags\' doesn\'t match: expected length 3, got ["new", "sale"] (length 2)', id="length"),
-            # Every key must hold: the first that does not, in the matcher's order, fails.
+            # Every key must hold, each a check of its own: here gt alone fails.
             pytest.param({"count": {"lt": 10, "gt": 5}}, "JMESPath 'count' doesn't match: expected gt 5, got 3", id="all-keys-must-hold"),
-            # Expressions run in the order written; the first failure is reported.
-            pytest.param({"data.id": 42, "count": 4, "active": False}, "JMESPath 'count' doesn't match: expected 4, got 3", id="first-failing-expression"),
         ],
     )
     def test_mismatch_message(self, jmespath, message):
@@ -461,6 +538,26 @@ class TestJmespath:
         with pytest.raises(VerificationError) as excinfo:
             _verify_jmespath({"data.name": matcher})
         assert str(excinfo.value) == f"JMESPath 'data.name': {message}"
+
+    @pytest.mark.parametrize(
+        ("pattern", "error"),
+        [
+            pytest.param("a{4294967296}{{ x }}", "the repetition number is too large", id="overflow"),
+            pytest.param("(" * 5000 + "{{ x }}" + ")" * 5000, "maximum recursion depth exceeded", id="recursion"),
+        ],
+    )
+    @pytest.mark.parametrize("key", ["matches", "not_matches"])
+    def test_template_text_pattern_re_cannot_compile_fails_its_check(self, pattern, error, key):
+        """For a repeat count or a nesting too big, re raises OverflowError or
+        RecursionError, not re.error: raised out of the step, it took the step's
+        other failures with it."""
+        verify = {"status": 201, "jmespath": {"data.name": {key: pattern}}, "body": {"contains": ["zzz"]}}
+        assert str(_failure(verify)).split("\n") == [
+            "3 verification checks failed:",
+            "  1. Status code doesn't match: expected 201, got 200",
+            f"  2. JMESPath 'data.name': {key} must resolve to a regular expression, got {pattern!r} ({error})",
+            "  3. Body doesn't contain 'zzz'",
+        ]
 
     def test_null_operand_is_an_element(self):
         _verify_jmespath({"list": {"contains": None}}, httpx.Response(200, json={"list": [1, None]}))
@@ -617,20 +714,383 @@ class TestJmespath:
         assert re.search(r"\.\.\. \(\d+ characters\) \(length 1000\)$", message)
         assert len(message) < 300
 
+
+HELPERS = "tests.unit.response_steps_test_helpers"
+
+
+def _failure(verify: dict, response: httpx.Response = JSON_BODY) -> VerificationError:
+    with pytest.raises(VerificationError) as excinfo:
+        process_verify(Verify.model_validate(verify), response)
+    return excinfo.value
+
+
+class TestEveryFailureIsReported:
+    """A verify step runs all its checks and reports every one that failed,
+    where it stopped at the first: fixing a scenario took one run per wrong
+    assertion. One failure reads as it always has; several are counted, then
+    numbered in the order the checks ran."""
+
+    def test_one_failure_among_passing_checks_reads_as_before(self):
+        verify = {
+            "status": 200,
+            "headers": {"X-Id": "7", "Content-Type": {"contains": "json"}},
+            "jmespath": {"count": 3, "data.id": 43, "data.name": {"type": "string"}},
+            "expressions": [True],
+            "body": {"schema": {"type": "object"}, "contains": ["Alice"]},
+        }
+        response = httpx.Response(200, json=BODY, headers={"x-id": "7"})
+        assert str(_failure(verify, response)) == "JMESPath 'data.id' doesn't match: expected 43, got 42"
+
+    def test_failures_are_listed_in_the_order_the_checks_ran(self):
+        """status, headers, jmespath, expressions, user_functions, body.schema,
+        body text. Each header, jmespath entry, expression, user function and
+        body operand is a check of its own, run in the order written; so is
+        each field a header matcher sets and each key a jmespath matcher sets,
+        run in the order the model lists them, whatever the order written."""
+        verify = Verify.model_validate(
+            {
+                "status": 200,
+                "headers": {"X-Id": "8", "Content-Type": {"not_contains": "json", "contains": "xml"}},
+                "jmespath": {"data.id": 43, "count": {"type": "string", "lt": 10, "gt": 5}, "data.name": "Alice"},
+                "expressions": [True, False, "x"],
+                "user_functions": [f"{HELPERS}:returns_false", f"{HELPERS}:raises"],
+                "body": {"schema": {"type": "object", "required": ["missing"]}, "contains": ["Bob"], "not_matches": ["Alice"]},
+            }
+        )
+        response = httpx.Response(500, json=BODY, headers={"x-id": "7"})
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(verify, response)
+        lines = str(excinfo.value).split("\n")
+        # jsonschema's own lines under its first (the schema, the instance)
+        # are its to format: `test_later_lines_of_a_message_stay_under_its_number`.
+        schema_lines = slice(lines.index("  12. Body schema validation failed: 'missing' is a required property") + 1, -2)
+        del lines[schema_lines]
+        assert lines == [
+            "14 verification checks failed:",
+            "  1. Status code doesn't match: expected 200, got 500",
+            "  2. Header 'X-Id' doesn't match: expected 8, got 7",
+            "  3. Header 'Content-Type' (value: 'application/json') doesn't contain 'xml'",
+            "  4. Header 'Content-Type' (value: 'application/json') contains 'json' while it shouldn't",
+            "  5. JMESPath 'data.id' doesn't match: expected 43, got 42",
+            "  6. JMESPath 'count' doesn't match: expected gt 5, got 3",
+            "  7. JMESPath 'count' doesn't match: expected type string, got 3 (number)",
+            "  8. Expression 1 failed: evaluated to False",
+            "  9. Verify expression 2 must evaluate to bool, got str ('x'), a value written where a condition belongs",
+            # Among several, a function is named by its import name and index.
+            f"  10. Function '{HELPERS}:returns_false' (user_functions[0]) verification failed",
+            f"  11. Error calling user function '{HELPERS}:raises' (user_functions[1]): Error calling function '{HELPERS}:raises': boom",
+            "  12. Body schema validation failed: 'missing' is a required property",
+            "  13. Body doesn't contain 'Bob'",
+            "  14. Body matches 'Alice' while it shouldn't",
+        ]
+
+    def test_later_lines_of_a_message_stay_under_its_number(self):
+        """A message of several lines (jsonschema's) is indented under its own
+        first line, so the next number still starts a line of its own."""
+        message = str(_failure({"status": 201, "body": {"schema": {"type": "array"}}}))
+        first, second, *rest = message.split("\n")
+        assert (first, second) == ("2 verification checks failed:", "  1. Status code doesn't match: expected 201, got 200")
+        assert rest[0].startswith("  2. Body schema validation failed: ")
+        assert all(line == "" or line.startswith("     ") for line in rest[1:])
+
+    def test_numbers_past_nine_keep_their_lines_aligned(self):
+        """Numbering goes on unpadded, and a message's later lines sit under
+        its own first line's text: one space further in from 10 on."""
+        verify = {"expressions": [False] * 9, "body": {"schema": {"type": "array"}, "contains": ["j"]}}
+        lines = str(_failure(verify, httpx.Response(200, json={}))).split("\n")
+        assert lines[:2] == ["11 verification checks failed:", "  1. Expression 0 failed: evaluated to False"]
+        assert lines[9:11] == ["  9. Expression 8 failed: evaluated to False", "  10. Body schema validation failed: {} is not of type 'array'"]
+        assert lines[11:-1] == [
+            "",
+            "      Failed validating 'type' in schema:",
+            "          {'type': 'array'}",
+            "",
+            "      On instance:",
+            "          {}",
+        ]
+        assert lines[-1] == "  11. Body doesn't contain 'j'"
+
+    def test_functions_are_told_apart_among_several(self):
+        """A lone failure keeps the words it had, some of which name no
+        function; in a list, each names its function and its index, so two
+        calls of one function are two items that can be told apart."""
+        verify = {"user_functions": [f"{HELPERS}:returns_none", {"name": f"{HELPERS}:returns_none", "kwargs": {}}]}
+        assert str(_failure(verify)).split("\n") == [
+            "2 verification checks failed:",
+            f"  1. Function '{HELPERS}:returns_none' (user_functions[0]) must return bool, got NoneType",
+            f"  2. Function '{HELPERS}:returns_none' (user_functions[1]) must return bool, got NoneType",
+        ]
+        assert str(_failure({"user_functions": [f"{HELPERS}:returns_none"]})) == "Verify function must return bool, got NoneType"
+
     @pytest.mark.parametrize(
         ("verify", "message"),
         [
-            # status, headers, jmespath, expressions, user_functions, body.schema, body text.
-            pytest.param({"headers": {"X-Id": "8"}, "jmespath": {"count": 4}}, "Header 'X-Id' doesn't match", id="after-headers"),
-            pytest.param({"jmespath": {"count": 4}, "expressions": [False]}, "JMESPath 'count'", id="before-expressions"),
-            pytest.param({"jmespath": {"count": 4}, "body": {"schema": {"type": "array"}}}, "JMESPath 'count'", id="before-body-schema"),
-            pytest.param({"jmespath": {"count": 4}, "body": {"contains": ["nope"]}}, "JMESPath 'count'", id="before-body-text"),
+            # One failure however many entries, and in the words of the check
+            # that read the body first, as when it stopped the step.
+            pytest.param({"jmespath": {"a": 1, "b": {"gt": 0}, "c": None}}, "Cannot check verify.jmespath", id="jmespath-entries"),
+            pytest.param({"jmespath": {"a": 1}, "body": {"schema": {"type": "object"}}}, "Cannot check verify.jmespath", id="jmespath-and-schema"),
+            pytest.param({"body": {"schema": {"type": "object"}}}, "Cannot validate schema", id="schema"),
         ],
     )
-    def test_order_within_a_verify_step(self, verify, message):
-        response = httpx.Response(200, json=BODY, headers={"x-id": "7"})
-        with pytest.raises(VerificationError, match=f"^{re.escape(message)}"):
-            process_verify(Verify.model_validate(verify), response)
+    def test_body_that_is_not_json_fails_once(self, verify, message):
+        assert str(_failure(verify, NOT_JSON)).startswith(f"{message}, response is not valid JSON: ")
+
+    def test_checks_not_reading_the_json_still_run_beside_an_unparsable_body(self):
+        verify = {"status": 201, "jmespath": {"a": 1, "b": 2}, "body": {"schema": {"type": "object"}, "contains": ["nope"]}}
+        lines = str(_failure(verify, NOT_JSON)).split("\n")
+        assert lines[0] == "3 verification checks failed:"
+        assert lines[1] == "  1. Status code doesn't match: expected 201, got 200"
+        assert lines[2].startswith("  2. Cannot check verify.jmespath, response is not valid JSON: ")
+        assert lines[3:] == ["  3. Body doesn't contain 'nope'"]
+
+    def test_expression_that_cannot_be_evaluated_fails_once_for_its_matcher(self):
+        """No key of its matcher can be judged: one failure, not one per key.
+        The expressions after it still run."""
+        verify = {"jmespath": {"length(count)": {"gt": 1, "lt": 0, "type": "string"}, "data.id": 43}}
+        assert str(_failure(verify)).split("\n") == [
+            "2 verification checks failed:",
+            "  1. JMESPath 'length(count)' cannot be evaluated against the response body: length() needs string or array or object, got 3 (number)",
+            "  2. JMESPath 'data.id' doesn't match: expected 43, got 42",
+        ]
+
+    def test_lone_failure_keeps_its_cause(self):
+        error = _failure({"user_functions": [f"{HELPERS}:raises"]})
+        assert isinstance(error.__cause__, UserFunctionError)
+
+    @pytest.mark.parametrize(
+        ("function", "outcome"),
+        [
+            pytest.param("skips", pytest.skip.Exception, id="skip"),
+            pytest.param("xfails", pytest.xfail.Exception, id="xfail"),
+            pytest.param("fails", pytest.fail.Exception, id="fail"),
+        ],
+    )
+    def test_user_function_outcome_ends_a_step_that_has_not_failed(self, function, outcome):
+        """As before: the outcome is the stage's, and the checks after the
+        function (the body's) do not run."""
+        verify = Verify.model_validate({"user_functions": [f"{HELPERS}:{function}"], "body": {"contains": ["nope"]}})
+        # Both caught, so a wrong outcome fails this test rather than skipping it.
+        with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
+            process_verify(verify, JSON_BODY)
+        assert excinfo.type is outcome
+
+    @pytest.mark.parametrize(
+        ("function", "listed"),
+        [
+            # The function ran only because the status failure no longer
+            # stopped the step: its skip or xfail must not turn the failed
+            # stage into a skipped or xfailed one.
+            pytest.param("skips", [], id="skip"),
+            pytest.param("xfails", [], id="xfail"),
+            pytest.param("fails", [f"Function '{HELPERS}:fails' (user_functions[0]) called pytest.fail(): custom check failed"], id="fail"),
+        ],
+    )
+    def test_user_function_outcome_cannot_override_an_earlier_failure(self, function, listed):
+        """The outcome still ends the step: the body's check after it does not run."""
+        verify = {"status": 201, "user_functions": [f"{HELPERS}:{function}"], "body": {"contains": ["nope"]}}
+        status_failure = "Status code doesn't match: expected 201, got 200"
+        expected = [status_failure] if not listed else ["2 verification checks failed:", f"  1. {status_failure}", f"  2. {listed[0]}"]
+        assert str(_failure(verify)).split("\n") == expected
+
+
+def _renderer(rendered: dict | None = None, asked: list | None = None):
+    """A `VerifyRender` giving each value as declared, but ``rendered[where]``
+    where it has one (a `RenderFailure`, a `RenderOutcome`), and leaving out
+    the values after an outcome, as the carrier's does. ``asked`` notes each
+    call's values, by where."""
+
+    def render(values):
+        if asked is not None:
+            asked.append([where for where, _value in values])
+        result = {}
+        for where, value in values:
+            result[where] = (rendered or {}).get(where, value)
+            if isinstance(result[where], RenderOutcome):
+                break
+        return result
+
+    return render
+
+
+def _cannot_render(message: str) -> RenderFailure:
+    return RenderFailure(VerificationError(message))
+
+
+def _outcome(raise_it) -> RenderOutcome:
+    """The outcome ``raise_it()`` raises, as a template raised it."""
+    try:
+        raise_it()
+    except (pytest.skip.Exception, pytest.fail.Exception) as e:
+        return RenderOutcome(e)
+    raise AssertionError("raised no outcome")
+
+
+class TestRender:
+    """``render`` renders the step's values (the carrier renders templates),
+    once, before the first check runs, given each where it is declared: a
+    value that cannot be rendered is one failure in its check's place, and
+    that check does not run, where rendering the step whole ended it at the
+    first."""
+
+    def test_is_given_each_value_where_declared_in_check_order(self):
+        verify = Verify.model_validate(
+            {
+                "description": "d",
+                "status": 200,
+                "headers": {"A": "1", "B": {"contains": "x"}},
+                "jmespath": {"data.id": 42, "count": {"gt": 1}},
+                "expressions": [True, True],
+                "user_functions": [f"{HELPERS}:returns_true"],
+                "body": {"schema": {"type": "object"}, "contains": ["data"], "not_contains": ["zzz"], "matches": ["."], "not_matches": ["zzz"]},
+            }
+        )
+        asked = []
+        process_verify(verify, httpx.Response(200, json=BODY, headers={"a": "1", "b": "x"}), render=_renderer(asked=asked))
+        assert asked == [
+            [
+                ("description",),
+                ("status",),
+                ("headers", "A"),
+                ("headers", "B"),
+                ("jmespath", "data.id"),
+                ("jmespath", "count"),
+                ("expressions", 0),
+                ("expressions", 1),
+                ("user_functions", 0),
+                ("body", "schema"),
+                ("body", "contains", 0),
+                ("body", "not_contains", 0),
+                ("body", "matches", 0),
+                ("body", "not_matches", 0),
+            ]
+        ]
+
+    def test_value_that_does_not_render_is_one_failure_and_its_check_does_not_run(self):
+        unrenderable = [("headers", "A"), ("user_functions", 0), ("body", "contains", 1)]
+        render = _renderer({where: _cannot_render(f"cannot render {where}") for where in unrenderable})
+        # The function would raise: not called.
+        verify = Verify.model_validate({"status": 201, "headers": {"A": "1"}, "user_functions": [f"{HELPERS}:raises"], "body": {"contains": ["zzz", "yyy", "www"]}})
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(verify, JSON_BODY, render=render)
+        assert str(excinfo.value).split("\n") == [
+            "6 verification checks failed:",
+            "  1. Status code doesn't match: expected 201, got 200",
+            "  2. cannot render ('headers', 'A')",
+            "  3. cannot render ('user_functions', 0)",
+            "  4. Body doesn't contain 'zzz'",
+            "  5. cannot render ('body', 'contains', 1)",
+            "  6. Body doesn't contain 'www'",
+        ]
+
+    def test_jmespath_entry_that_does_not_render_leaves_the_body_to_the_next(self):
+        """The body is parsed by the first entry that renders: one that is not
+        JSON is still one failure, after the entries that did not render."""
+        render = _renderer({("jmespath", "a"): _cannot_render("cannot render a")})
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(Verify.model_validate({"jmespath": {"a": 1, "b": 2, "c": 3}}), NOT_JSON, render=render)
+        first, cannot_render, not_json = str(excinfo.value).split("\n")
+        assert (first, cannot_render) == ("2 verification checks failed:", "  1. cannot render a")
+        assert not_json.startswith("  2. Cannot check verify.jmespath, response is not valid JSON: ")
+
+    def test_every_value_renders_before_the_first_check(self, monkeypatch):
+        """In one call, before the function (a check) is called."""
+        events = []
+        monkeypatch.setattr(response_steps_test_helpers, "EVENTS", events)
+        verify = Verify.model_validate({"status": 200, "user_functions": [f"{HELPERS}:records"], "body": {"contains": ["data"]}})
+        process_verify(verify, JSON_BODY, render=_renderer(asked=events))
+        assert events == [[("status",), ("user_functions", 0), ("body", "contains", 0)], "called"]
+
+    @pytest.mark.parametrize(
+        ("function", "listed"),
+        [
+            pytest.param("skips", [], id="skip"),
+            pytest.param("xfails", [], id="xfail"),
+            pytest.param("fails", [f"Function '{HELPERS}:fails' (user_functions[0]) called pytest.fail(): custom check failed"], id="fail"),
+        ],
+    )
+    def test_function_outcome_cannot_hide_a_value_after_it_that_did_not_render(self, function, listed):
+        """The step still ends at the function: the body operand that did
+        render is not checked. The one that did not is a failure of the step
+        wherever it sits, and a skip or xfail must not make a stage whose
+        template failed pass as skipped."""
+        render = _renderer({("body", "contains", 1): _cannot_render("cannot render the operand")})
+        verify = Verify.model_validate({"user_functions": [f"{HELPERS}:{function}"], "body": {"contains": ["nope", "{{ x }}"]}})
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(verify, JSON_BODY, render=render)
+        expected = ["cannot render the operand"] if not listed else ["2 verification checks failed:", f"  1. {listed[0]}", "  2. cannot render the operand"]
+        assert str(excinfo.value).split("\n") == expected
+
+    TEMPLATE_FAILED = "The template at 'verify.body.contains[1]' called pytest.fail(): template failed"
+
+    @pytest.mark.parametrize(
+        ("function", "status", "expected"),
+        [
+            # The template's fail() is the step's one failure: raised as
+            # itself, as when the step rendered whole before any check.
+            pytest.param("skips", 200, None, id="skip"),
+            pytest.param("xfails", 200, None, id="xfail"),
+            pytest.param(
+                "fails",
+                200,
+                ["2 verification checks failed:", f"  1. Function '{HELPERS}:fails' (user_functions[0]) called pytest.fail(): custom check failed", f"  2. {TEMPLATE_FAILED}"],
+                id="fail",
+            ),
+            pytest.param(
+                "skips",
+                201,
+                ["2 verification checks failed:", "  1. Status code doesn't match: expected 201, got 200", f"  2. {TEMPLATE_FAILED}"],
+                id="skip-after-a-failure",
+            ),
+        ],
+    )
+    def test_function_outcome_cannot_hide_a_template_fail_after_it(self, function, status, expected):
+        """A template after the function that called pytest.fail() failed the
+        stage when the step rendered whole: a skip or xfail must not turn that
+        into a skipped or xfailed stage either."""
+        render = _renderer({("body", "contains", 1): _outcome(lambda: pytest.fail("template failed"))})
+        verify = Verify.model_validate({"status": status, "user_functions": [f"{HELPERS}:{function}"], "body": {"contains": ["nope", "{{ end() }}"]}})
+        # Both caught, so a wrong outcome fails this test rather than skipping it.
+        with pytest.raises((pytest.skip.Exception, pytest.fail.Exception, VerificationError)) as excinfo:
+            process_verify(verify, JSON_BODY, render=render)
+        if expected is None:
+            assert (excinfo.type, str(excinfo.value)) == (pytest.fail.Exception, "template failed")
+        else:
+            assert (excinfo.type, str(excinfo.value).split("\n")) == (VerificationError, expected)
+
+    @pytest.mark.parametrize("later", [pytest.skip, pytest.xfail], ids=["skip", "xfail"])
+    def test_template_skip_after_a_function_outcome_is_dropped(self, later):
+        """It is no failure: the function's own outcome ends the step."""
+        render = _renderer({("body", "contains", 0): _outcome(lambda: later("later"))})
+        verify = Verify.model_validate({"user_functions": [f"{HELPERS}:skips"], "body": {"contains": ["{{ end() }}"]}})
+        with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
+            process_verify(verify, JSON_BODY, render=render)
+        assert (excinfo.type, str(excinfo.value)) == (pytest.skip.Exception, "not on this server")
+
+    @pytest.mark.parametrize(
+        ("failing", "outcome"),
+        [
+            pytest.param({}, pytest.skip.Exception, id="ends-a-step-that-has-not-failed"),
+            pytest.param({("headers", "A"): _cannot_render("cannot render A")}, VerificationError, id="earlier-failure-wins"),
+        ],
+    )
+    def test_outcome_raised_while_rendering_ends_the_step_there(self, failing, outcome):
+        """When the checks reach it. The values after it, which the rendering
+        left out, are not asked for."""
+        render = _renderer({**failing, ("expressions", 0): _outcome(lambda: pytest.skip("not here"))})
+        verify = Verify.model_validate({"headers": {"A": "1"}, "expressions": ["{{ x }}", "{{ y }}"], "body": {"contains": ["{{ z }}"]}})
+        # Both caught, so a wrong outcome fails this test rather than skipping it.
+        with pytest.raises((pytest.skip.Exception, VerificationError)) as excinfo:
+            process_verify(verify, httpx.Response(200, headers={"a": "1"}), render=render)
+        assert excinfo.type is outcome
+
+    def test_lone_render_failure_keeps_its_message_and_cause(self):
+        cause = TemplatesError("KeyError in expression")
+        error = VerificationError("KeyError in expression")
+        error.__cause__ = cause
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(Verify(status=200), httpx.Response(200), render=_renderer({("status",): RenderFailure(error)}))
+        assert str(excinfo.value) == "KeyError in expression"
+        assert excinfo.value.__cause__ is cause
 
 
 @pytest.mark.parametrize(
