@@ -32,8 +32,8 @@ not free their numbers for reuse.
 | `HTTPCHAIN011` | error | Path is not a file |
 | `HTTPCHAIN012` | error | `$ref` resolution failed |
 | `HTTPCHAIN013` | warning | File extension is not `.json` |
-| `HTTPCHAIN014` | error | Invalid JSON syntax |
-| `HTTPCHAIN015` | error | Failed to parse JSON file |
+| `HTTPCHAIN014` | error | Invalid JSON: a syntax error, a duplicate object key, or a file that is not UTF-8 |
+| `HTTPCHAIN015` | error | Failed to parse JSON file (for example, nested too deeply to parse) |
 | `HTTPCHAIN016` | error | Fixture referenced in a scenario-level template |
 | `HTTPCHAIN017` | error | Scenario-level template references an undefined name |
 | `HTTPCHAIN018` | warning | Verify expression is not a template (`{{ }}`) — cannot evaluate to the required bool |

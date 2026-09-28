@@ -32,6 +32,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The HTTP report no longer renders a deeply nested JSON body in full only to cut it to 1,000
   characters. Indentation grows with depth, so the full rendering is quadratic in the body's size:
   a 10 kB body 5,000 levels deep rendered to 50 MB. Rendering now stops at the cap.
+- `resolve`, `show` and `graph` now print one `error:` line and exit 1 on a scenario file that
+  is not UTF-8 or is nested too deeply, instead of crashing with a traceback. The reference
+  resolver reported only `OSError` and `JSONDecodeError` as load failures. A non-UTF-8 file raises
+  `UnicodeDecodeError` instead. Deep nesting raises `RecursionError`, which is not even a
+  `ValueError`: from CPython's decoder, as above, and from the resolver's own walk at under a
+  thousand levels. The same applies to a file pulled in through `$include`, `$merge` or `$ref`.
+- `validate` and pytest collection report a non-UTF-8 scenario file as `HTTPCHAIN014` (invalid
+  JSON), like a syntax error, instead of `HTTPCHAIN015`: RFC 8259 requires JSON to be UTF-8. A
+  file nested too deeply stays `HTTPCHAIN015`, now worded "nested too deeply". The JSON is valid,
+  but deeper than the parser or the resolver can go.
+- A reference path containing a NUL character (`"$include": "a\u0000b.json"`) is now rejected as
+  a reference error (`HTTPCHAIN012`). Before, `resolve`, `show` and `graph` crashed on the bare
+  `ValueError` from the path lookup, and `validate` reported it as `HTTPCHAIN015`.
 
 ## [0.15.2] - 2026-09-26
 

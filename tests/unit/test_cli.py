@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from pytest_httpchain.cli import app
 from pytest_httpchain.schema import build_schema
+from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
 
 runner = CliRunner()
 # typer renders usage errors through rich, which colours them whenever
@@ -255,6 +256,28 @@ def test_inspection_of_unloadable_file_exits_one(tmp_path, command):
     assert result.exit_code == 1
     assert result.stdout == ""
     assert result.stderr.startswith(f"error: cannot load {missing}: ")
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        pytest.param(b'{"stages": [], "x": "\xff"}', "'utf-8' codec can't decode byte 0xff", id="not-utf-8"),
+        pytest.param(b'{"stages": ' + TOO_DEEP_TO_PARSE + b"}", "nested too deeply (", id="too-deep-to-parse"),
+        pytest.param(b'{"stages": ' + TOO_DEEP_TO_WALK + b"}", "nested too deeply (", id="too-deep-to-walk"),
+    ],
+)
+@pytest.mark.parametrize("command", ["resolve", "show", "graph"])
+def test_undecodable_file_exits_one_with_an_error_line(tmp_path, command, content, reason):
+    """One `error:` line, not a traceback: neither error is a JSONDecodeError,
+    and a RecursionError is not even a ValueError."""
+    scenario = tmp_path / "test_x.http.json"
+    scenario.write_bytes(content)
+    result = on_bounded_stack(runner.invoke, app, [command, str(scenario)])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    prefix = "error: " if command == "resolve" else f"error: cannot load {scenario}: "
+    assert result.stderr.startswith(f"{prefix}Failed to load JSON from {scenario}: {reason}")
+    assert result.stderr.count("\n") == 1
 
 
 def test_show_invalid_scenario_exits_one(tmp_path):

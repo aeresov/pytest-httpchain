@@ -109,6 +109,9 @@ DIAGNOSED = [
     # A duplicated organizational key is a JSON-content error at load, not
     # a silent last-wins, and not a $ref error.
     ("duplicate_json_key.json", [(C.INVALID_JSON, None, "Duplicate key 'check'")]),
+    # Saved as Latin-1. RFC 8259 requires UTF-8, so the file is invalid JSON,
+    # like a syntax error, and not an unexplained parse failure.
+    ("not_utf8.json", [(C.INVALID_JSON, None, "^Invalid JSON: file is not UTF-8: 'utf-8' codec can't decode byte 0xe9")]),
     ("schema_error.json", [(C.SCHEMA, "stages -> 0 -> request", "Field required")]),
     # Models forbid extra keys: a typo fails naming the key and its location.
     ("request_field_typo.json", [(C.SCHEMA, "stages -> 0 -> request -> headerz", "Extra inputs are not permitted")]),
@@ -255,6 +258,27 @@ def test_wrong_extension_warns(datadir):
 
 def test_directory_is_not_a_file(tmp_path):
     assert _codes(validate_scenario(tmp_path)) == [C.NOT_A_FILE]
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        # The decoder's RecursionError is not a ValueError.
+        pytest.param(TOO_DEEP_TO_PARSE, r"\(.*while decoding a JSON array", id="too-deep-to-parse"),
+        # Parses, but the resolver's own walk spends a frame per level.
+        pytest.param(TOO_DEEP_TO_WALK, r"\(maximum recursion depth exceeded\)$", id="too-deep-to-walk"),
+    ],
+)
+def test_file_nested_too_deeply_is_a_parse_error(tmp_path, content, reason):
+    """Valid JSON, but deeper than the parser or the resolver can go: PARSE_ERROR,
+    not INVALID_JSON. Generated, not a ``test_validation/`` fixture: the payloads
+    are too big to commit."""
+    path = tmp_path / "test_x.http.json"
+    path.write_bytes(b'{"stages": ' + content + b"}")
+    result = on_bounded_stack(validate_scenario, path)
+
+    assert [(d.code, d.location) for d in result.diagnostics] == [(C.PARSE_ERROR, None)]
+    assert re.search(f"^Failed to parse JSON file: nested too deeply {reason}", result.diagnostics[0].message)
 
 
 @pytest.mark.parametrize(

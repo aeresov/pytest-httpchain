@@ -25,6 +25,17 @@ from pytest_httpchain.jsonref import load_json, ReferenceResolverError
 data = load_json(path, max_parent_traversal_depth=3, root_path=None, opaque=None)
 ```
 
+### Load errors
+
+Every failure surfaces as `ReferenceResolverError`, so callers need one
+`except`. When a file cannot be loaded, the original error is chained as
+`__cause__`: `OSError`, `JSONDecodeError`, `UnicodeDecodeError` (not UTF-8),
+or `RecursionError` (nested deeper than the decoder or the resolver's own
+walk can go). The validator classifies on that cause. `DuplicateKeyError`, a
+subclass, is raised directly. jsonref sits below `utils` in the layering, so
+it keeps its own list of these errors (`_LOAD_ERRORS` in
+`plumbing/reference.py`) instead of importing the plugin's.
+
 ### Opaque subtrees
 
 `opaque` is an optional predicate over document positions (tuples of dict
