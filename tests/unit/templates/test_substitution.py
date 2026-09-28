@@ -1,5 +1,6 @@
 import uuid
 from collections import ChainMap
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 
@@ -90,6 +91,16 @@ class TestWalk:
         RecursionError traceback."""
         with pytest.raises(TemplatesError, match=r"^Value nested too deeply to substitute \(maximum recursion depth exceeded"):
             walk(nested("{{ x }}", BEYOND_RECURSION_LIMIT), {"x": 1})
+
+    def test_context_nested_past_the_stack_fails_as_templates_error(self):
+        """Building the evaluator reads the whole context, and a ChainMap
+        nested in ChainMaps resolves through one frame per level. Past the
+        limit that fails the same way as a value nested too deeply."""
+        context: Mapping[str, Any] = {"x": 1}
+        for _ in range(BEYOND_RECURSION_LIMIT):
+            context = ChainMap(context)
+        with pytest.raises(TemplatesError, match=r"^Value nested too deeply to substitute \(maximum recursion depth exceeded"):
+            walk("{{ x }}", context)
 
 
 class TestWalker:

@@ -29,6 +29,8 @@ result = walk(obj, context)
 # walk() bound to one context. It builds the simpleeval evaluator (a full
 # pass over the context) once, and every call reuses it. Use it to render
 # many values against the same context. walk() pays that pass once per call.
+# Not thread-safe (simpleeval mutates the evaluator mid-eval): one walker per
+# thread or parallel iteration, never a shared one.
 render = walker(context)
 first, second = render(obj_a), render(obj_b)
 
