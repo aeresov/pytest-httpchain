@@ -1,6 +1,6 @@
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -195,6 +195,26 @@ def _walk(obj: Any, evaluator: EvalWithCompoundTypes) -> Any:
             return obj
 
 
+def walker(context: Mapping[str, Any]) -> Callable[[Any], Any]:
+    """`walk` bound to one context: the evaluator is built once, here, and
+    serves every call.
+
+    For a caller that renders many values against the same context. Building
+    the evaluator is a full pass over the context, so calling `walk` per value
+    pays that pass once per value. The context is read now, so later changes to
+    the mapping are not seen.
+    """
+    evaluator = _build_evaluator(context)
+
+    def bound_walk(obj: Any) -> Any:
+        try:
+            return _walk(obj, evaluator)
+        except RecursionError as e:
+            raise TemplatesError(f"Value nested too deeply to substitute ({e})") from e
+
+    return bound_walk
+
+
 def walk(obj: Any, context: Mapping[str, Any]) -> Any:
     """Substitute every template in a structure, returning the same shape.
 
@@ -206,7 +226,4 @@ def walk(obj: Any, context: Mapping[str, Any]) -> Any:
     the stack allows fails as a `TemplatesError`, which callers already report,
     rather than as a bare RecursionError.
     """
-    try:
-        return _walk(obj, _build_evaluator(context))
-    except RecursionError as e:
-        raise TemplatesError(f"Value nested too deeply to substitute ({e})") from e
+    return walker(context)(obj)
