@@ -145,7 +145,8 @@ def process_substitutions(
         # value that holds a template (so `result` may already hold the step's
         # earlier names by then), and pays the evaluator's pass over the context
         # once per step rather than once per value. Template-free values skip
-        # the walk entirely.
+        # the walk entirely and are stored as they are: the scenario model's own
+        # objects, not copies, as template-free namespace values already were.
         current_context = {**(context or {}), **result}
         match step:
             case FunctionsSubstitution():

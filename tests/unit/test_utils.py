@@ -54,7 +54,8 @@ class TestProcessSubstitutions:
         pass over the context. The evaluator is built at the step's first
         template, so a step without templates builds none. Each build sees the
         context as it stood before the step, so `plain`, seeded before that
-        first template, is not in it."""
+        first template, is not in it. A template-free value is stored as it
+        is, even once the step's evaluator exists."""
         contexts: list[list[str]] = []
         build = substitution_module._build_evaluator
 
@@ -64,14 +65,15 @@ class TestProcessSubstitutions:
 
         monkeypatch.setattr(substitution_module, "_build_evaluator", counting_build)
         substitutions = [
-            VarsSubstitution(vars={"plain": 0, "a": "{{ x }}", "b": "{{ x + 1 }}", "c": ["{{ x + 2 }}"]}),
+            VarsSubstitution(vars={"plain": 0, "a": "{{ x }}", "b": "{{ x + 1 }}", "c": ["{{ x + 2 }}"], "fixed": [1, 2]}),
             VarsSubstitution(vars={"literal": "no template", "number": 5}),
             VarsSubstitution(vars={"total": "{{ a + b + c[0] }}", "label": "a={{ a }}"}),
         ]
         result = process_substitutions(substitutions, {"x": 1})
 
-        assert result == {"plain": 0, "a": 1, "b": 2, "c": [3], "literal": "no template", "number": 5, "total": 6, "label": "a=1"}
-        assert contexts == [["x"], ["a", "b", "c", "literal", "number", "plain", "x"]]
+        assert result == {"plain": 0, "a": 1, "b": 2, "c": [3], "fixed": [1, 2], "literal": "no template", "number": 5, "total": 6, "label": "a=1"}
+        assert result["fixed"] is substitutions[0].vars["fixed"]
+        assert contexts == [["x"], ["a", "b", "c", "fixed", "literal", "number", "plain", "x"]]
 
     @pytest.mark.parametrize(
         ("function", "args", "expected"),
