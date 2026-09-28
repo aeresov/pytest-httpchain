@@ -67,6 +67,14 @@ validator depend on them, so treat them as API, not internals):
   when a template renders to one uncalled. The validator's reference model
   (`scoping`) reads both. `call_form(name)` writes the call its advice names:
   `now()`, or `env(...)` for one that takes arguments.
+- `parse_expression(text)` — the `ast.expr` a template's text holds, parsed
+  exactly as the engine evaluates it, or a `TemplatesError` whose message is
+  the reason the engine gives for refusing it (the runtime prefixes
+  `Invalid expression '{{ ... }}': `). The validator's single source for
+  "does this template evaluate at all" and for the names it reads.
+  `template_form(text)` writes the template as those messages name it,
+  `{{ text }}`, a lone surrogate escaped (`\ud800`) so that any UTF-8 stream
+  can print it; the validator's HTTPCHAIN037/038 use it too.
 
 ## Key Behaviors
 
@@ -76,10 +84,11 @@ validator depend on them, so treat them as API, not internals):
 - Surrounding whitespace still counts as a single expression: `walk(" {{ 42 }} ", {})` returns `42` (int), not `" 42 "`. The whole-string check (`_sub_string`) uses the same whitespace-tolerant predicate (`extract_template_expression`) as `is_complete_template`, which the models use to type a field as `TemplateExpression` — so schema validation and runtime evaluation agree. The padding (spaces, tabs, newlines) is dropped.
 - Mixed content returns string: `walk("Value: {{ 42 }}", {})` returns `"Value: 42"`
 - Single-line only: the pattern is not compiled with `re.DOTALL`, so an expression spanning newlines is not recognised as a template. Keep each `{{ ... }}` on one line (move multi-line logic into a user function).
-- One expression per template: `walk("{{ a; b }}", ...)` raises `TemplatesError`. simpleeval parses in exec mode and would evaluate only `a` behind a `MultipleExpressions` warning, so `_eval_expr` parses first and hands simpleeval the single statement.
+- One expression per template: `walk("{{ a; b }}", ...)` raises `TemplatesError`, and so does an assignment (`{{ x = 1 }}`, `+=`, an annotated `x: int = 1`, `:=`) or any other statement. simpleeval parses in exec mode and would evaluate only `a` behind a `MultipleExpressions` warning, and an `=` or `+=` as its right-hand side behind an `AssignmentAttempted` one, so `_eval_expr` evaluates only what `parse_expression` returns: the one expression, or a `TemplatesError` saying why the text is none (a syntax error, empty, `a; b`, an assignment, a statement, too deeply nested to parse, a lone surrogate the parser cannot encode). The validator reads the same parse: such a template is its finding `HTTPCHAIN037` (`HTTPCHAIN038`, an error, where it renders before any stage runs: scenario level, a parametrize value), and names nothing to the reference checks (`scoping`).
+- What simpleeval refuses from the text alone is refused by `parse_expression` too, wherever in the tree it sits (an untaken branch included), so that `validate` sees it: an expression kind its evaluator does not dispatch (`_EVALUATED_KINDS`, read off an `EvalWithCompoundTypes` so it follows simpleeval's version: a lambda, a set comprehension, `yield`, `await`, `*` unpacking except as an element of a list literal, which `_eval_list` spreads itself), an attribute named with a `DISALLOW_PREFIXES` prefix (`_`, `func_`) or in `DISALLOW_METHODS` (`format`, `mro`, ...), and a call of anything but a name or an attribute (simpleeval's "Lambda Functions not implemented"). simpleeval still refuses each when it evaluates, so its guards do not come to rest on this parse alone (a test pins that it does). What it refuses for a value (a module, a function in `DISALLOW_FUNCTIONS`) is left to it.
 
 ### Trailing `}}` in dict/set literals (gotcha)
-The template delimiter is `}}`, and the matcher stops at the first `}}`. So a dict or set literal whose own closing brace sits immediately before the template's closing braces produces three consecutive `}` (`...}}}`), and the expression is truncated at the wrong place — the result is a broken or wrong evaluation, not an error you can easily spot.
+The template delimiter is `}}`, and the matcher stops at the first `}}`. So a dict or set literal whose own closing brace sits immediately before the template's closing braces produces three consecutive `}` (`...}}}`), and the expression is truncated at the wrong place — the result is a broken evaluation (`'{' was never closed`, which `validate` reports as `HTTPCHAIN037` before any request is sent), or, where the truncated text happens to parse, a wrong one.
 
 Always put a space between a literal's closing `}` and the template's closing `}}`:
 

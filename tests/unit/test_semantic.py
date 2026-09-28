@@ -323,6 +323,80 @@ def test_uncalled_builtin_says_what_fails(top, stage, location, message):
     assert [(d.location, d.message) for d in diags] == [(location, message)]
 
 
+@pytest.mark.parametrize(
+    ("top", "stage", "code", "location", "message"),
+    [
+        # `=` for `==`: its one finding. Read as a regex's identifiers, it had
+        # `True` reported undefined too (HTTPCHAIN003).
+        pytest.param(
+            {},
+            {"response": [{"verify": {"status": 200, "expressions": ["{{ ok = True }}"]}}]},
+            C.INVALID_EXPRESSION,
+            "stages[0].response",
+            "Stage 's': response has an invalid expression '{{ ok = True }}', and rendering it fails the stage: "
+            "a template holds one expression, not an assignment; to compare two values, write '=='",
+            id="stage",
+        ),
+        # Collection resolves parametrize values, so the whole scenario fails
+        # to collect: nothing runs, as at scenario level.
+        pytest.param(
+            {},
+            {"parametrize": [{"individual": {"n": ["{{ n + }}"]}}]},
+            C.SCENARIO_INVALID_EXPRESSION,
+            "stages[0].parametrize",
+            "Stage 's': parametrize has an invalid expression '{{ n + }}', and rendering it fails the scenario's collection: invalid syntax",
+            id="parametrize",
+        ),
+        # Python's reason ends in a `?`, and so does the message.
+        pytest.param(
+            {},
+            {"request": {"url": "https://x.test/", "params": {"ids": "{{ [1 2] }}"}}},
+            C.INVALID_EXPRESSION,
+            "stages[0].request",
+            "Stage 's': request has an invalid expression '{{ [1 2] }}', and rendering it fails the stage: invalid syntax. Perhaps you forgot a comma?",
+            id="reason-ending-in-a-question-mark",
+        ),
+        # Read as identifiers, `user` and `pw` were undefined: the error
+        # HTTPCHAIN017. Initialization fails, and every stage with it, so the
+        # finding is an error too, and `validate` exits 1 on it.
+        pytest.param(
+            {"auth": "{{ user; pw }}"},
+            {},
+            C.SCENARIO_INVALID_EXPRESSION,
+            "auth",
+            "Scenario-level 'auth' has an invalid expression '{{ user; pw }}', and rendering it crashes scenario initialization: "
+            "a template holds one expression, not 2 statements separated by ';'",
+            id="scenario-level",
+        ),
+    ],
+)
+def test_invalid_expression_is_its_one_finding(top, stage, code, location, message):
+    diags = [d for d in _check([{**_STAGE, **stage}], **top) if d.code != C.PARAMETRIZE_COLLECTION_RESOLUTION]
+    assert [(d.code, d.location, d.message) for d in diags] == [(code, location, message)]
+
+
+_DEAD_KWARGS = [{"functions": {"f": {"name": "os:getcwd", "kwargs": {"x": "{{ x = 1 }}"}}}}]
+
+
+@pytest.mark.parametrize(
+    ("top", "stage"),
+    [
+        pytest.param({}, {"substitutions": _DEAD_KWARGS}, id="function-kwargs"),
+        pytest.param({"substitutions": _DEAD_KWARGS}, {}, id="scenario-function-kwargs"),
+        pytest.param(
+            {},
+            {"response": [{"save": {"description": "{{ 1 + }}", "substitutions": [{"vars": {"a": 1}}]}}, {"verify": {"status": 200}}]},
+            id="substitutions-save-description",
+        ),
+        pytest.param({}, {"parametrize": [{"individual": {"n": [1]}, "ids": ["{{ n = 1 }}"]}]}, id="parametrize-ids"),
+    ],
+)
+def test_invalid_expression_in_text_never_rendered_is_not_reported(top, stage):
+    """Dead text cannot fail the stage it would say it fails."""
+    codes = {d.code for d in _check([{**_STAGE, **stage}], **top)}
+    assert not codes & {C.INVALID_EXPRESSION, C.SCENARIO_INVALID_EXPRESSION}
+
+
 def test_substitution_referencing_foreach_param_is_flagged():
     """Stage substitutions resolve before any foreach iteration variable exists,
     so referencing a foreach parameter there is undefined — even though the
@@ -574,6 +648,8 @@ def test_reserved_marker_name_is_diagnostic_not_crash():
             C.SCHEMA_SCENARIO_DIRECTIVE,
             id="schema-directive",
         ),
+        # A template that holds no expression (037), found at the bottom.
+        pytest.param({"request": {"url": "https://x.test/", "params": {"p": nested("{{ 1 + }}", BEYOND_RECURSION_LIMIT)}}}, C.INVALID_EXPRESSION, id="invalid-expression"),
         # contains_template decides that parametrize values resolve at collection (025).
         pytest.param({"parametrize": [{"individual": {"p": [nested("{{ 1 }}", BEYOND_RECURSION_LIMIT)]}}]}, C.PARAMETRIZE_COLLECTION_RESOLUTION, id="parametrize-template"),
     ],

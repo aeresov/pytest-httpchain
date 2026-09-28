@@ -208,6 +208,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `substitutions` when one stage fakes the clock with a `timestamp` function substitution, or
   `sorted(rows, key=len)` ahead of a save named `len`. The built-in runs in its place, which is
   never a failure, so it is a warning at every level, scenario level included.
+- `HTTPCHAIN037` (warning): a template in a stage that the engine refuses from its text alone, with
+  the reason the stage fails with: a syntax error, more than one statement, an assignment or
+  another statement, a kind of expression the engine does not evaluate (a lambda, a set
+  comprehension, `*` unpacking outside a list literal, `yield`, `await`), an attribute it does not
+  read (`doc._id`, `'{}'.format(x)`) or a call of anything but a name or an attribute. The stages
+  before it still run, so it is a warning, as an undefined name there is (`HTTPCHAIN003`).
+- `HTTPCHAIN038` (error): the same in a template resolved before any stage runs, where it leaves
+  nothing to run: a scenario-level one (`substitutions`, `auth`, `ssl`, `client`), which fails
+  scenario initialization and every stage with it, as an undefined name there does
+  (`HTTPCHAIN017`), or a stage's parametrize value, which fails the scenario's collection. It
+  fails collection and `validate`.
 - `verify.body.schema` checks a response against a schema inside a document you already have, an
   OpenAPI 3.1 component or a file of shared definitions:
   `"schema": "./openapi.json#/components/schemas/User"`. What follows the file's first `#` is an RFC
@@ -582,8 +593,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which evaluates templates, stops at the first `;` and merely warns about the rest, so that
   expression came out `True` and the stage passed on half of what it checks. It now fails with
   `Invalid expression '{{ ok == True; False }}': a template holds one expression, not 2 statements
-  separated by ';'`. A `;` inside a string literal is unaffected. Like any other syntax error in a
-  template, this is reported when the stage runs; `validate` does not parse expressions.
+  separated by ';'`. A `;` inside a string literal is unaffected, and `validate` reports the
+  template as `HTTPCHAIN037` (see below).
+- An assignment in a template, such as the verify expression `{{ user.active = True }}` written
+  for `==`, fails the stage instead of evaluating to its right-hand side. simpleeval evaluates `=`
+  and `+=` that way behind a mere warning, so that expression came out `True` and the stage passed
+  whatever `user.active` was. It now fails with `Invalid expression '{{ user.active = True }}': a
+  template holds one expression, not an assignment; to compare two values, write '=='`. An
+  augmented or annotated assignment, `:=` and any other statement in a template fail too, each
+  with a reason of its own instead of simpleeval's (`Sorry, AnnAssign is not available in this
+  evaluator`, `Sorry, 'import' is not allowed.`), and a syntax error with Python's reason alone
+  (`invalid syntax`, without `(<unknown>, line 1)`).
+- `validate` and pytest collection report a template the engine refuses from its text alone, with
+  the reason the stage fails with, as `HTTPCHAIN037` in a stage and `HTTPCHAIN038` at scenario
+  level or in a parametrize value (see Added), and that is its only finding. They reported nothing, or undefined names, for
+  what fails every run, such as `=` written for `==` or a dict literal whose `}` runs into the
+  template's closing `}}` (`{{ {'a': 1}}}`). An expression that did not parse was read for names as
+  a regex's identifiers, so `{{ response.status == 200 and True) }}` also had `and`, `status` and
+  `True` reported as undefined variables (`HTTPCHAIN003`), and one in a scenario-level template
+  the error `HTTPCHAIN017` over the words of its string literals; such a template still fails
+  `validate` and collection, as `HTTPCHAIN038`. A lambda's parameters are no longer read as names
+  a template defines. A template nested too deeply for Python's parser to read (a few thousand `-`
+  signs) crashed `validate` and collection with a `MemoryError`, and one holding a lone surrogate
+  (a `\ud800` escape in the JSON) with a `UnicodeEncodeError`. Both are reported the same way
+  now, and messages write the surrogate as its escape, which any terminal can print.
 - A value that cannot be turned into text fails the stage with a message naming where it was
   used: the template it is interpolated into, or the query parameter it is the value of.
   `"{{ server }}/items?n={{ 2 ** 100000 }}"`, a number past the 4300 digits Python converts to
@@ -745,7 +778,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   body's added, where it named none for the server to find the parts by; one naming an empty
   boundary, or one the parts cannot be delimited by as written (`boundary="a;b"`, which had them
   delimited by `a`), fails the stage.
-
+- A template is refused for anything in its text the engine does not evaluate, wherever in the
+  template it sits: a lambda, a set comprehension, `*` unpacking outside a list literal, `yield`,
+  `await`, an attribute named with a leading `_` or `func_` or one such as `format`, and a call of
+  anything but a name or an attribute (`fns[0]()`). simpleeval refused each only once evaluation
+  reached it, so `{{ a if ok else doc._id }}` rendered while `ok` held; it now fails the stage
+  with a reason of its own (`the template engine does not read an attribute named '_id'; for a key
+  of that name, write ['_id']`) instead of simpleeval's (`Sorry, access to __attributes ... is not
+  available. (_id)`), and `validate` reports it (`HTTPCHAIN037`).
 
 ## [0.15.2] - 2026-09-26
 

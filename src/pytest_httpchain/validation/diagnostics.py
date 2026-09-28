@@ -52,6 +52,8 @@ class DiagnosticCode(StrEnum):
     RELATIVE_URL_WITHOUT_BASE_URL = "HTTPCHAIN034"
     UNCALLED_BUILTIN = "HTTPCHAIN035"
     BUILTIN_STANDS_IN = "HTTPCHAIN036"
+    INVALID_EXPRESSION = "HTTPCHAIN037"
+    SCENARIO_INVALID_EXPRESSION = "HTTPCHAIN038"
 
 
 # A code's severity is a property of the code, not of the site that raises it:
@@ -98,6 +100,8 @@ SEVERITY: dict[DiagnosticCode, Severity] = {
     DiagnosticCode.RELATIVE_URL_WITHOUT_BASE_URL: "error",
     DiagnosticCode.UNCALLED_BUILTIN: "warning",
     DiagnosticCode.BUILTIN_STANDS_IN: "warning",
+    DiagnosticCode.INVALID_EXPRESSION: "warning",
+    DiagnosticCode.SCENARIO_INVALID_EXPRESSION: "error",
 }
 
 

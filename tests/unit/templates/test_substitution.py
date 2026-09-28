@@ -1,3 +1,5 @@
+import ast
+import re
 import uuid
 from collections import ChainMap
 from collections.abc import Mapping
@@ -6,8 +8,9 @@ from typing import Any
 
 import pytest
 from pydantic import BaseModel
+from simpleeval import InvalidExpression
 
-from pytest_httpchain.templates import CONTEXT_HELPERS, TEMPLATE_BUILTINS, TemplatesError, contains_template, substitution, walk, walker
+from pytest_httpchain.templates import CONTEXT_HELPERS, TEMPLATE_BUILTINS, TemplatesError, contains_template, parse_expression, substitution, walk, walker
 from tests.unit.helpers import BEYOND_RECURSION_LIMIT, LOADABLE_BUT_DEEP, nested
 
 
@@ -317,6 +320,149 @@ class TestWalkErrorMessages:
         True, and the stage passed on half of what it asserts."""
         with pytest.raises(TemplatesError, match=r"Invalid expression '\{\{ .*; False \}\}': a template holds one expression, not 2 statements"):
             walk(template, {"ok": True})
+
+    @pytest.mark.parametrize(
+        ("template", "reason"),
+        [
+            # `=` for `==`: simpleeval evaluated the right-hand side behind an
+            # AssignmentAttempted warning, so this verify expression came out
+            # True whatever `user.active` was.
+            pytest.param("{{ user.active = True }}", "not an assignment; to compare two values, write '=='", id="assign"),
+            pytest.param("n={{ count = 3 }}", "not an assignment; to compare two values, write '=='", id="assign-interpolated"),
+            pytest.param("{{ user['active'] = flag = True }}", "not an assignment; to compare two values, write '=='", id="assign-chained"),
+            # Evaluated to the right-hand side too: 1, not count + 1.
+            pytest.param("{{ count += 1 }}", "not an assignment", id="augmented"),
+            # simpleeval refused these two itself, but only at evaluation, as a
+            # feature it does not have: now the one reason, known to validate.
+            pytest.param("{{ count: int = 1 }}", "not an assignment", id="annotated"),
+            pytest.param("{{ [(n := x) for x in items] }}", r"a template cannot assign a name \(':='\)", id="walrus"),
+            pytest.param("{{ import os }}", "not a statement", id="import"),
+            pytest.param("{{ del count }}", "not a statement", id="del"),
+        ],
+    )
+    def test_assignments_and_statements_are_rejected(self, template, reason):
+        expr = template.partition("{{ ")[2].removesuffix(" }}")
+        with pytest.raises(TemplatesError, match=rf"^Invalid expression '{re.escape('{{ ' + expr + ' }}')}': (a template holds one expression, )?{reason}$"):
+            walk(template, {"user": SimpleNamespace(active=False), "flag": False, "count": 0, "items": [1]})
+
+    @pytest.mark.parametrize(
+        ("template", "reason"),
+        [
+            # Python's own reason, without its "(<unknown>, line 1)": a template is one line.
+            pytest.param("{{ 1 + }}", "invalid syntax", id="syntax"),
+            # The dict literal's `}` ran into the template's `}}`: the template ended a brace early.
+            pytest.param("{{ {'a': 1}}}", "'{' was never closed", id="brace-before-closing-braces"),
+            pytest.param("x {{ }} y", "a template holds one expression, and this one is empty", id="empty"),
+            # CPython's parser runs out of stack on these, as a MemoryError and a RecursionError.
+            pytest.param("{{ " + "-" * 100_000 + "1 }}", "the expression is too complex to parse", id="parser-stack"),
+            pytest.param("{{ a" + ".b" * 100_000 + " }}", "the expression is too complex to parse", id="ast-recursion"),
+            # A lone surrogate, one JSON \u escape away: the parser raised a
+            # UnicodeEncodeError, which escaped walk() as it was.
+            pytest.param("{{ 'a\ud800' }}", "the expression holds '\\ud800', which is not valid text (surrogates not allowed)", id="lone-surrogate"),
+        ],
+    )
+    def test_text_that_does_not_parse_says_why(self, template, reason):
+        with pytest.raises(TemplatesError, match=rf"^Invalid expression '.*': {re.escape(reason)}$"):
+            walk(template, {"a": SimpleNamespace(b=1)})
+
+    def test_a_lone_surrogate_is_written_escaped(self):
+        """As the scenario's JSON writes it: no UTF-8 stream can print the
+        character itself, and `validate` crashed printing it."""
+        with pytest.raises(TemplatesError) as excinfo:
+            walk("{{ 'a\ud800' }}", {})
+        assert str(excinfo.value).startswith("Invalid expression '{{ 'a\\ud800' }}': ")
+
+    # Each template the engine refuses from its text alone, and the reason.
+    # simpleeval refused each too ("Sorry, Lambda is not available in this
+    # evaluator"), but only once evaluation reached it, so `validate` never
+    # saw it.
+    _REFUSED_FROM_TEXT = [
+        pytest.param("{{ sorted(items, key=lambda row: row) }}", "does not evaluate a lambda", id="lambda"),
+        pytest.param("{{ {x for x in items} }}", "does not evaluate a set comprehension; write set(... for ...)", id="set-comprehension"),
+        pytest.param("{{ max(*items) }}", "does not evaluate '*' unpacking outside a list literal ([*a, *b])", id="starred-argument"),
+        pytest.param("{{ (*items, 1) }}", "does not evaluate '*' unpacking outside a list literal ([*a, *b])", id="starred-in-tuple"),
+        pytest.param("{{ [x for *x, y in pairs] }}", "does not evaluate '*' unpacking outside a list literal ([*a, *b])", id="starred-target"),
+        pytest.param("{{ (yield) }}", "does not evaluate 'yield'", id="yield"),
+        pytest.param("{{ (yield from items) }}", "does not evaluate 'yield from'", id="yield-from"),
+        pytest.param("{{ await items }}", "does not evaluate 'await'", id="await"),
+        # A key of JSON data read as an attribute: MongoDB's `_id`.
+        pytest.param("{{ doc._id }}", "does not read an attribute named '_id'; for a key of that name, write ['_id']", id="underscore-attribute"),
+        pytest.param("{{ doc.__class__ }}", "does not read an attribute named '__class__'", id="dunder-attribute"),
+        pytest.param("{{ items.func_name }}", "does not read an attribute named 'func_name'; for a key of that name, write ['func_name']", id="func-attribute"),
+        pytest.param("{{ 'id-{}'.format(1) }}", "does not read the attribute 'format'; build the text with an f-string or +", id="format"),
+        pytest.param("{{ items.mro }}", "does not read the attribute 'mro'", id="disallowed-attribute"),
+        # simpleeval took the function for a lambda: "Lambda Functions not implemented".
+        pytest.param("{{ fns[0]() }}", "calls only a name or an attribute (f(), obj.method())", id="call-of-a-subscript"),
+        pytest.param("{{ get('f')() }}", "calls only a name or an attribute (f(), obj.method())", id="call-of-a-call"),
+        pytest.param("{{ (lambda: 1)() }}", "does not evaluate a lambda", id="call-of-a-lambda"),
+    ]
+    _CONTEXT = {"items": [1, 2], "pairs": [[1, 2]], "doc": {"_id": 1}, "fns": [len], "f": len}
+
+    @pytest.mark.parametrize(("template", "reason"), _REFUSED_FROM_TEXT)
+    def test_what_the_engine_refuses_from_the_text_is_refused_up_front(self, template, reason):
+        with pytest.raises(TemplatesError, match=rf"^Invalid expression '.*': the template engine {re.escape(reason)}$"):
+            walk(template, self._CONTEXT)
+
+    @pytest.mark.parametrize(("template", "reason"), _REFUSED_FROM_TEXT)
+    def test_simpleeval_refuses_each_template_refused(self, template, reason):
+        """Never stricter than the engine where it evaluates the expression:
+        should simpleeval learn one of these (outside the lists read, as it
+        spreads a list's ``*`` outside its node map), this fails."""
+        expr = template.removeprefix("{{ ").removesuffix(" }}")
+        # FeatureNotAvailable ("Sorry, Lambda is not available ..."), or for a
+        # starred comprehension target an AttributeError of its own.
+        with pytest.raises((InvalidExpression, AttributeError)):
+            substitution._build_evaluator(self._CONTEXT).eval(expr)
+
+    def test_an_unevaluated_kind_is_refused_where_evaluation_would_not_reach_it(self):
+        """Refused from its text, as the validator refuses it, not only when
+        the branch holding it is taken."""
+        with pytest.raises(TemplatesError, match="does not evaluate a lambda"):
+            walk("{{ 1 if ok else (lambda: 2) }}", {"ok": True})
+
+    @pytest.mark.parametrize(
+        ("template", "expected"),
+        [
+            # The one `*` the engine takes, spread by the list itself.
+            pytest.param("{{ [*a, *b] }}", [1, 2, 3], id="list-spread"),
+            pytest.param("{{ {**d, 'k': 2} }}", {"k": 2}, id="dict-spread"),
+            pytest.param("{{ set(x for x in a) }}", {1, 2}, id="set-of-a-generator"),
+        ],
+    )
+    def test_spreads_and_generators_evaluate(self, template, expected):
+        assert walk(template, {"a": [1, 2], "b": [3], "d": {"k": 1}}) == expected
+
+    @pytest.mark.parametrize(
+        ("template", "expected"),
+        [
+            # The `=` of a keyword argument and a comparison assign nothing;
+            # nor does a `;` or an `=` inside a string.
+            pytest.param("{{ dict(a=count) }}", {"a": 0}, id="keyword-argument"),
+            pytest.param("{{ count == 0 }}", True, id="comparison"),
+            pytest.param("{{ 'a = b; c' }}", "a = b; c", id="string"),
+            # One statement: a trailing `;` ends it, and is no second one.
+            pytest.param("{{ count; }}", 0, id="trailing-semicolon"),
+        ],
+    )
+    def test_equals_signs_that_assign_nothing_evaluate(self, template, expected):
+        assert walk(template, {"count": 0}) == expected
+
+    @pytest.mark.parametrize("expr", ["user.active = True", "1 +", "a; b", "", "(n := 1)"])
+    def test_parse_expression_gives_the_reason_the_runtime_gives(self, expr):
+        """The validator reports the reason `parse_expression` gives
+        (HTTPCHAIN037); the stage fails with the same one."""
+        with pytest.raises(TemplatesError) as parsed:
+            parse_expression(expr)
+        with pytest.raises(TemplatesError) as rendered:
+            walk("x {{ " + expr + " }}", {})
+        assert str(rendered.value) == f"Invalid expression '{{{{ {expr} }}}}': {parsed.value}"
+
+    def test_parse_expression_returns_the_expression_evaluated(self):
+        """Not the statement around it: the validator walks this tree for the
+        names a template reads."""
+        tree = parse_expression("  sorted(rows, key=len)  ")
+        assert isinstance(tree, ast.Call)
+        assert ast.unparse(tree) == "sorted(rows, key=len)"
 
 
 @pytest.mark.parametrize("name", sorted(TEMPLATE_BUILTINS))

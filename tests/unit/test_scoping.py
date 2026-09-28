@@ -14,6 +14,7 @@ from pytest_httpchain.scoping import (
     base_global_context,
     defined_names,
     extract_builtin_stand_ins,
+    extract_invalid_expressions,
     extract_template_variables,
     extract_uncalled_builtins,
     iteration_context,
@@ -23,7 +24,7 @@ from pytest_httpchain.scoping import (
     with_saves,
     with_stage_substitutions,
 )
-from pytest_httpchain.templates import TEMPLATE_BUILTINS, walk
+from pytest_httpchain.templates import TEMPLATE_BUILTINS, TemplatesError, walk
 from tests.unit.helpers import BEYOND_RECURSION_LIMIT, nested
 
 NOTHING_DEFINED = DefinedNames(names=frozenset(), callables=frozenset())
@@ -182,14 +183,19 @@ class TestContextBuilders:
     ("template", "expected"),
     [
         pytest.param("{{ [y for y in items] }}", {"items"}, id="comprehension-targets-are-local"),
-        # `key=lambda row: ...` must not demand a `row` variable.
-        pytest.param("{{ sorted(items, key=lambda row: row.score) }}", {"items"}, id="lambda-parameter-is-local"),
-        # Positional-only, positional, *args, keyword-only and **kwargs alike:
-        # walking only `args.args` would leave the other four looking undefined.
-        pytest.param("{{ (lambda p, /, a, *rest, b=1, **kw: [p, a, rest, b, kw])(1, 2) }}", set(), id="every-lambda-parameter-kind-is-local"),
-        # A malformed expression still fails at runtime, but the validator must
-        # not go blind: the regex fallback keeps reporting the names it sees.
-        pytest.param("{{ items[ }}", {"items"}, id="unparseable-falls-back-to-identifiers"),
+        # Text the engine refuses to evaluate fails wherever it renders, which
+        # HTTPCHAIN037 reports; it names nothing. A regex fallback read every
+        # identifier in it, and had `True` and `status_code` reported undefined.
+        pytest.param("{{ items[ }}", set(), id="unparseable-names-nothing"),
+        pytest.param("{{ response.status_code == True and ok) }}", set(), id="unparseable-names-no-keyword-or-attribute"),
+        pytest.param("{{ ok = items }}", set(), id="assignment-names-nothing"),
+        # The engine evaluates no lambda: its parameters, and `items`, are
+        # never looked up.
+        pytest.param("{{ sorted(items, key=lambda row: row.score) }}", set(), id="lambda-names-nothing"),
+        # A list literal spreads a `*` itself, where the engine evaluates it.
+        pytest.param("{{ [*items, *more] }}", {"items", "more"}, id="list-spread-names-its-operands"),
+        # One statement, as the engine parses it: `x;` is `x`.
+        pytest.param("{{ items; }}", {"items"}, id="trailing-semicolon-is-one-expression"),
         pytest.param("{{ len(items) }}", {"items"}, id="builtins-are-not-references"),
     ],
 )
@@ -280,7 +286,7 @@ def test_runtime_resolves_builtin_names_as_the_reference_model_says():
         pytest.param("{{ 'at ' + now }}", {"now"}, id="operand"),
         # No built-in or method takes a function positionally: str() of one is its repr.
         pytest.param("{{ str(timestamp_ms) }}", {"timestamp_ms"}, id="argument-of-a-builtin"),
-        pytest.param("{{ '{}'.format(now) }}", {"now"}, id="argument-of-a-method"),
+        pytest.param("{{ ', '.join(now) }}", {"now"}, id="argument-of-a-method"),
         # A key= or a user function's argument may take one.
         pytest.param("{{ sorted(rows, key=sha256) }}", set(), id="key-of-a-builtin"),
         pytest.param("{{ rows.sort(key=sha256) }}", set(), id="key-of-a-method"),
@@ -289,7 +295,7 @@ def test_runtime_resolves_builtin_names_as_the_reference_model_says():
         # Any other keyword of a built-in or a method is a value: dict() is how
         # a mapping is built for urlencode() without the `}}` gotcha.
         pytest.param("{{ urlencode(dict(sort=timestamp_ms)) }}", {"timestamp_ms"}, id="keyword-argument-of-a-builtin"),
-        pytest.param("{{ '{at}'.format(at=now) }}", {"now"}, id="keyword-argument-of-a-method"),
+        pytest.param("{{ 'a,b'.split(sep=now) }}", {"now"}, id="keyword-argument-of-a-method"),
         pytest.param("{{ now() }}", set(), id="called"),
         # The older built-ins of no use as a value count too. env's repr was
         # os.environ's, every variable with its value.
@@ -337,6 +343,45 @@ def test_defined_callables_include_every_function_substitution():
     assert defined_names(scenario).callables == {"scenario_fn", "stage_fn", "save_fn"}
 
 
+def test_invalid_expressions_are_listed_once_each_in_document_order():
+    """What HTTPCHAIN037 reports: each template the engine refuses to
+    evaluate, as its message writes it, with the engine's reason; a valid one,
+    whatever `=` or `;` it holds in a keyword argument or a string, is none."""
+    fragment = {
+        "headers": {"X-A": "{{ a = 1 }}", "X-Ok": "{{ dict(k=v) }}-{{ ';' }}"},
+        "params": ["{{ 1 + }}", "x {{a = 1}} y", {"q": "{{ b; c }}"}],
+    }
+    assert extract_invalid_expressions(fragment) == {
+        "{{ a = 1 }}": "a template holds one expression, not an assignment; to compare two values, write '=='",
+        "{{ 1 + }}": "invalid syntax",
+        "{{ b; c }}": "a template holds one expression, not 2 statements separated by ';'",
+    }
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "{{ a = 1 }}",
+        "{{ 1 + }}",
+        "{{ b; c }}",
+        "x {{ }} y",
+        "{{ sorted(a, key=lambda r: r) }}",
+        # A lone surrogate (one JSON \u escape away) is no text to parse; each
+        # message escapes it, where printing it crashed `validate`.
+        "{{ 'a\ud800' }}",
+    ],
+)
+def test_every_invalid_expression_fails_to_render(template):
+    """The static and the runtime view agree: what the validator reports as
+    invalid is what the engine refuses, with the same reason."""
+    [(written, reason)] = extract_invalid_expressions(template).items()
+    with pytest.raises(TemplatesError) as excinfo:
+        walk(template, {"a": 1, "b": 1, "c": 1})
+    assert str(excinfo.value) == f"Invalid expression '{written}': {reason}"
+    # Printable on any UTF-8 stream.
+    str(excinfo.value).encode("utf-8")
+
+
 def test_template_references_found_at_any_depth():
     """Iterative: a recursive walk spent two frames per level of nesting, and
     crashed `validate`, collection, `show` and `graph` on a value a few hundred
@@ -344,6 +389,7 @@ def test_template_references_found_at_any_depth():
     assert extract_template_variables(nested("{{ token }}", BEYOND_RECURSION_LIMIT), defined=NOTHING_DEFINED) == {"token"}
     assert extract_uncalled_builtins(nested("{{ now }}", BEYOND_RECURSION_LIMIT), defined=NOTHING_DEFINED) == {"now"}
     assert extract_builtin_stand_ins(nested("{{ now() }}", BEYOND_RECURSION_LIMIT), defined=DefinedNames(names=frozenset({"now"}), callables=frozenset({"now"}))) == {"now"}
+    assert list(extract_invalid_expressions(nested("{{ 1 + }}", BEYOND_RECURSION_LIMIT))) == ["{{ 1 + }}"]
 
 
 def test_template_builtins_is_single_source():

@@ -44,6 +44,34 @@ def test_helper_without_parentheses_fails_the_stage(run_scenario):
     result.stdout.no_fnmatch_line("*Traceback*")
 
 
+def test_assignment_for_a_comparison_fails_the_stage(run_scenario):
+    """`=` for `==` against a 400: simpleeval evaluated the assignment to its
+    right-hand side behind a mere warning, so the expression came out True
+    and the stage passed. Collection warns of it (HTTPCHAIN037), and nothing
+    else of it (reading its identifiers had `True` undefined), and the stage
+    fails cleanly with the same reason."""
+    result = run_scenario(
+        {
+            "stages": [
+                stage(
+                    "checked",
+                    "/bad",
+                    response=[{"save": {"substitutions": [{"vars": {"passed": "{{ response.status == 200 }}"}}]}}, {"verify": {"expressions": ["{{ passed = True }}"]}}],
+                )
+            ]
+        }
+    )
+    result.assert_outcomes(failed=1, warnings=1)
+    reason = "a template holds one expression, not an assignment; to compare two values, write '=='"
+    result.stdout.fnmatch_lines(
+        [
+            f"*Invalid expression '{{{{ passed = True }}}}': {reason}",
+            f"*HTTPCHAIN037] Stage 'checked': response has an invalid expression '{{{{ passed = True }}}}', and rendering it fails the stage: {reason}*",
+        ]
+    )
+    result.stdout.no_fnmatch_line("*Traceback*")
+
+
 def test_builtin_called_where_a_stage_defines_its_own_warns_and_runs(run_scenario):
     """One stage fakes the clock with a function substitution named
     `timestamp` (frozen at 0); the scenario-level substitutions, which no

@@ -14,7 +14,9 @@ from pytest_httpchain.templates.substitution import (
     call_form,
     contains_template,
     get_max_comprehension_length,
+    parse_expression,
     set_max_comprehension_length,
+    template_form,
     walk,
     walker,
 )
@@ -24,6 +26,8 @@ __all__ = [
     "walker",
     "call_form",
     "contains_template",
+    "parse_expression",
+    "template_form",
     "get_max_comprehension_length",
     "set_max_comprehension_length",
     "is_complete_template",

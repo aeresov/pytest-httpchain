@@ -80,6 +80,19 @@ saved as `HTTPCHAIN004`, naming the stage *and* the phase it appears in.
 -   Template expressions use Python syntax inside `{{ }}`
 -   Check for typos in variable names
 -   Ensure quotes are balanced
+-   Compare with `==`: `{{ user.active = True }}` is an assignment, which
+    fails the stage
+-   Put a space between a dict literal's `}` and the template's `}}`:
+    `{{ {'a': 1}}}` ends the template one brace early; write `{{ {'a': 1} }}`
+
+`pytest-httpchain validate` reports a template that does not parse, or that
+holds something the engine does not evaluate (a lambda, `doc._id` for
+`doc['_id']`), before anything is sent: as [`HTTPCHAIN037`](diagnostics.md)
+in a stage, with the reason the stage would fail with, and as the error
+`HTTPCHAIN038` in a scenario-level template or a parametrize value, which
+fail every stage. See
+[Template Expressions](usage/substitutions.md#template-expressions) for what
+a template may hold.
 
 **Valid expressions:**
 

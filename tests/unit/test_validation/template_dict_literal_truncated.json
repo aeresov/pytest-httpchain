@@ -1,0 +1,10 @@
+{
+    "substitutions": [ { "vars": { "status": "open" } } ],
+    "stages": [
+        {
+            "name": "search",
+            "request": { "url": "https://x.test/search", "method": "POST", "body": { "json": { "filter": "{{ {'status': status}}}" } } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

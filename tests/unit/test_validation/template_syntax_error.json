@@ -1,0 +1,9 @@
+{
+    "stages": [
+        {
+            "name": "health",
+            "request": { "url": "https://x.test/health" },
+            "response": [ { "verify": { "expressions": ["{{ response.status == 200 and True) }}"] } } ]
+        }
+    ]
+}

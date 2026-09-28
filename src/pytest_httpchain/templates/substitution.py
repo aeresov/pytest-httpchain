@@ -11,6 +11,8 @@ import simpleeval
 from pydantic import BaseModel
 from simpleeval import (
     DEFAULT_FUNCTIONS,
+    DISALLOW_METHODS,
+    DISALLOW_PREFIXES,
     AttributeDoesNotExist,
     EvalWithCompoundTypes,
     FunctionNotDefined,
@@ -114,6 +116,126 @@ def call_form(name: str) -> str:
     return _CALL_FORMS[name]
 
 
+def template_form(expr: str) -> str:
+    """How a message writes the template that holds ``expr``: ``{{ expr }}``,
+    as the scenario writes it, with a lone surrogate (one JSON \\u escape
+    away) escaped as that escape, since no UTF-8 stream can print it. The
+    runtime's messages and the validator's (HTTPCHAIN037/038) name a
+    template this way."""
+    # Concatenated: an f-string would collapse the braces and show text that
+    # is not in the user's scenario.
+    return ("{{ " + expr + " }}").encode("utf-8", "backslashreplace").decode("utf-8")
+
+
+# The expression kinds the engine evaluates: those simpleeval's evaluator
+# dispatches, read off one so that they follow its version. It refuses any
+# other kind ("Sorry, Lambda is not available in this evaluator"), but only
+# once evaluation reaches it, so `parse_expression` refuses them up front.
+# (`nodes` is typed as optional: simpleeval's __del__ clears it.)
+_EVALUATED_KINDS = frozenset(EvalWithCompoundTypes().nodes or ())
+
+# How a refusal names an expression kind the engine does not evaluate. Any
+# other (one a later Python adds) goes by its node's name.
+_UNEVALUATED_KINDS: dict[type[ast.expr], str] = {
+    ast.Lambda: "a lambda",
+    ast.SetComp: "a set comprehension; write set(... for ...)",
+    ast.Starred: "'*' unpacking outside a list literal ([*a, *b])",
+    ast.Yield: "'yield'",
+    ast.YieldFrom: "'yield from'",
+    ast.Await: "'await'",
+}
+
+
+def _refusal(node: ast.AST, spread: set[int]) -> str | None:
+    """Why the engine refuses ``node`` from its text alone, if it does.
+
+    Each is a refusal simpleeval makes once evaluation reaches the node, read
+    off the same lists it reads (`simpleeval.DISALLOW_PREFIXES`,
+    ``DISALLOW_METHODS``): an attribute it never reads, a call of anything but
+    a name or an attribute (``fns[0]()``, which it takes for a lambda), a kind
+    of expression it does not evaluate. The one kind it takes without
+    dispatching it is a ``*`` element of a list literal, which the list spreads
+    itself (``[*a, *b]``): ``spread`` holds those.
+    """
+    match node:
+        case ast.NamedExpr():
+            return "a template cannot assign a name (':=')"
+        case ast.Attribute(attr=attr) if any(attr.startswith(prefix) for prefix in DISALLOW_PREFIXES):
+            # A key of data read as an attribute (``doc._id``) can be subscripted.
+            hint = "" if attr.startswith("__") else f"; for a key of that name, write [{attr!r}]"
+            return f"the template engine does not read an attribute named {attr!r}{hint}"
+        case ast.Attribute(attr=attr) if attr in DISALLOW_METHODS:
+            hint = "; build the text with an f-string or +" if attr.startswith("format") else ""
+            return f"the template engine does not read the attribute {attr!r}{hint}"
+        case ast.Call(func=ast.Name() | ast.Attribute()):
+            return None
+        case ast.Call(func=func) if type(func) in _EVALUATED_KINDS:
+            # A function of a kind not evaluated at all is refused as that.
+            return "the template engine calls only a name or an attribute (f(), obj.method())"
+        case ast.expr() if type(node) not in _EVALUATED_KINDS and id(node) not in spread:
+            return f"the template engine does not evaluate {_UNEVALUATED_KINDS.get(type(node), type(node).__name__)}"
+    return None
+
+
+def _refuse_unevaluated(expression: ast.expr) -> None:
+    """Raise the `TemplatesError` for the first part of ``expression`` the
+    engine refuses from its text alone (`_refusal`).
+
+    Anywhere in the tree, a branch evaluation may never take included, so
+    that the validator sees the same refusal: what the engine refuses only for
+    a value (an undefined name, a function it forbids) is left to it.
+    """
+    spread: set[int] = set()
+    # Breadth first, so a list literal comes before the elements it spreads.
+    for node in ast.walk(expression):
+        if isinstance(node, ast.List) and isinstance(node.ctx, ast.Load):
+            spread.update(id(element) for element in node.elts if isinstance(element, ast.Starred))
+        if (reason := _refusal(node, spread)) is not None:
+            raise TemplatesError(reason)
+
+
+def parse_expression(expr: str) -> ast.expr:
+    """The one expression the text of a template holds, parsed as the engine
+    evaluates it, or a `TemplatesError` saying why the text is none.
+
+    simpleeval parses in exec mode and evaluates part of what it should refuse
+    behind a mere warning: ``a; b`` as ``a``, and an assignment ``x = 1`` or
+    ``x += 1`` as its right-hand side, so ``{{ ok == True; False }}`` and
+    ``{{ user.active = True }}`` passed a verify. Here anything but one
+    expression that assigns no name, of kinds the engine evaluates, is
+    refused. `_eval_expr` evaluates only what this returns, and the validator
+    reads the same parse (HTTPCHAIN037/038, and `scoping`'s references), so
+    what ``validate`` flags is exactly what fails when rendered.
+    """
+    try:
+        statements = ast.parse(expr.strip()).body
+    except SyntaxError as e:
+        raise TemplatesError(e.msg) from e
+    except (MemoryError, RecursionError) as e:
+        # CPython's parser raises these for text nested past its own stack
+        # (``-`` a few thousand times over, or a long ``a.b.c...`` chain).
+        raise TemplatesError("the expression is too complex to parse") from e
+    except UnicodeEncodeError as e:
+        # The parser encodes the text as UTF-8, which a lone surrogate (one
+        # JSON \u escape away) cannot be: no SyntaxError, this.
+        raise TemplatesError(f"the expression holds {e.object[e.start : e.end]!r}, which is not valid text ({e.reason})") from e
+    if not statements:
+        raise TemplatesError("a template holds one expression, and this one is empty")
+    if len(statements) > 1:
+        raise TemplatesError(f"a template holds one expression, not {len(statements)} statements separated by ';'")
+    match statements[0]:
+        case ast.Expr(value=expression):
+            pass
+        case ast.Assign():
+            raise TemplatesError("a template holds one expression, not an assignment; to compare two values, write '=='")
+        case ast.AugAssign() | ast.AnnAssign():
+            raise TemplatesError("a template holds one expression, not an assignment")
+        case _:
+            raise TemplatesError("a template holds one expression, not a statement")
+    _refuse_unevaluated(expression)
+    return expression
+
+
 def _build_evaluator(context: Mapping[str, Any]) -> EvalWithCompoundTypes:
     """Build one evaluator for a ``walker()``, which every ``walk()`` binds.
 
@@ -173,18 +295,17 @@ def _eval_expr(evaluator: EvalWithCompoundTypes, expr: str, *, as_text: bool = F
     forgotten, or a save of that name that has not landed) is refused rather
     than rendered as its repr (`CALL_ONLY_BUILTINS`).
     """
-    # Rebuilt in its original {{ … }} form: an f-string would collapse the braces
-    # and show text that is not in the user's scenario.
-    display = "{{ " + expr + " }}"
+    display = template_form(expr)
     try:
-        # simpleeval parses in exec mode and, handed `a; b`, evaluates only `a`
-        # behind a mere warning — so `{{ ok == True; False }}` passed a verify.
-        # Parse here to refuse that, and hand simpleeval the one statement; an
-        # empty parse is left to simpleeval, which refuses it itself.
-        statements = ast.parse(expr.strip()).body
-        if len(statements) > 1:
-            raise InvalidExpression(f"a template holds one expression, not {len(statements)} statements separated by ';'")
-        value = evaluator.eval(expr, statements[0] if statements else None)
+        expression = parse_expression(expr)
+    except TemplatesError as e:
+        # Apart from the evaluation's handlers, whose catch-all would take this
+        # TemplatesError for a context callable's.
+        raise TemplatesError(f"Invalid expression '{display}': {e}") from e.__cause__
+    try:
+        # The expression parsed, never the text: simpleeval's own parse would
+        # evaluate part of what `parse_expression` refuses.
+        value = evaluator.eval(expr, expression)
         if (name := _CALL_ONLY.get(id(value))) is not None:
             raise _UncalledBuiltin(name)
         return str(value) if as_text else value
@@ -206,7 +327,7 @@ def _eval_expr(evaluator: EvalWithCompoundTypes, expr: str, *, as_text: bool = F
         raise TemplatesError(f"Operator not allowed in expression '{display}': {e}") from e
     except (NumberTooHigh, IterableTooLong) as e:
         raise TemplatesError(f"Expression too complex '{display}': {e}") from e
-    except (InvalidExpression, SyntaxError) as e:
+    except InvalidExpression as e:
         raise TemplatesError(f"Invalid expression '{display}': {e}") from e
     except Exception as e:
         # A context callable can raise anything, and everything out of here must

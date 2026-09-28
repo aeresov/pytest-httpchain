@@ -222,8 +222,10 @@ class TestClientWiring:
 
 
 def test_exhausted_rate_limit_blocks_for_the_delay_then_fails():
-    """The limiter really blocks, and times out into a stage failure (M2)."""
-    limiter = Limiter(Rate(1, Duration.SECOND))
+    """The limiter really blocks, and times out into a stage failure (M2).
+    Its window is a minute, so the slot taken cannot free up while the test
+    runs, however slowly: a one-second window did after a one-second stall."""
+    limiter = Limiter(Rate(1, Duration.MINUTE))
     try:
         assert limiter.try_acquire("api", blocking=True, timeout=2)  # consume the only slot
         start = time.monotonic()
@@ -1905,8 +1907,9 @@ class TestRetry:
         assert waited == []
 
     def test_rate_limit_exhausted_is_not_retryable(self):
-        """Another attempt would wait as long again for a slot."""
-        limiter = Limiter(Rate(1, Duration.SECOND))
+        """Another attempt would wait as long again for a slot. A minute's
+        window: the slot taken stays taken, however slowly the test runs."""
+        limiter = Limiter(Rate(1, Duration.MINUTE))
         try:
             assert limiter.try_acquire("api", blocking=False)
             with pytest.raises(RequestError, match="Rate limit exceeded") as excinfo:
@@ -3115,25 +3118,53 @@ class TestParallelCancellation:
     exception (KeyboardInterrupt, a plugin bug) reaches the executor exit,
     which runs every queued iteration to completion — an unstoppable load test."""
 
-    def test_unexpected_error_cancels_queued_iterations(self):
-        calls: list[int] = []
+    def test_unexpected_error_cancels_queued_iterations(self, monkeypatch):
+        """One worker: iteration 0 fails with a plugin bug, and the iteration
+        the worker takes next, if it gets to one before the stage's thread
+        reacts, is held until that thread has shut the pool down. So exactly
+        the iterations queued behind it are what the shutdown found, and none
+        of them ran: drained instead of cancelled, all 40 would have.
+
+        The hold is released by the shutdown itself, never by a clock: this
+        asserted fewer than 20 of the 40 ran, and on a loaded machine the
+        worker got through that many before the stage's thread was scheduled."""
+        started: list[int] = []
+        released: list[bool] = []
+        shut_down = threading.Event()
+
+        class Executor(carrier_module.ThreadPoolExecutor):
+            def shutdown(self, wait=True, *, cancel_futures=False):
+                if wait:
+                    # About to join the worker: let the held iteration end,
+                    # or a pool drained after all would hang, not fail.
+                    shut_down.set()
+                super().shutdown(wait=wait, cancel_futures=cancel_futures)
+                # After cancelling: released earlier, the worker could take
+                # another queued iteration before the shutdown dropped it.
+                shut_down.set()
 
         def fake_iteration(cls, stage, local_context, iter_vars, limiter=None, max_rate_limit_delay=60, cancel=None):
-            calls.append(1)
-            raise RuntimeError("plugin bug")
+            started.append(iter_vars["i"])
+            if iter_vars["i"] == 0:
+                raise RuntimeError("plugin bug")
+            released.append(shut_down.wait(timeout=5))
+            return IterationResult(saved_context={}, request=httpx.Request("GET", "http://mock/"), response=httpx.Response(200), started=datetime.now(UTC))
 
+        monkeypatch.setattr(carrier_module, "ThreadPoolExecutor", Executor)
         cls = _make_carrier_subclass(_execute_single_iteration=classmethod(fake_iteration))
         config = ParallelRepeatConfig.model_validate({"repeat": 40, "max_concurrency": 1})
 
         with pytest.raises(RuntimeError, match="plugin bug"):
-            cls._run_iterations(None, ChainMap(), [{} for _ in range(40)], config, [])
+            cls._run_iterations(None, ChainMap(), [{"i": i} for i in range(40)], config, [])
 
-        # The queued iterations were cancelled, not drained. A worker may have
-        # started one or two before the cancel landed; 40 means no cancellation.
-        assert len(calls) < 20, f"{len(calls)} iterations ran after the failure"
+        # Iteration 1 ran only where the worker took it before the shutdown.
+        assert started in ([0], [0, 1])
+        assert released == [True] * (len(started) - 1)
 
     def test_rate_slot_wait_interrupted_by_cancellation(self):
-        limiter = Limiter(Rate(1, Duration.SECOND))
+        # A minute's window: the drained bucket stays empty, however slowly
+        # the test runs, so only the cancellation can end the wait.
+        limiter = Limiter(Rate(1, Duration.MINUTE))
         try:
             assert limiter.try_acquire("api", blocking=False)  # drain the bucket
             cancel = threading.Event()

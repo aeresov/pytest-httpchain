@@ -64,7 +64,7 @@ from pytest_httpchain.models import (
     VarsSubstitution,
     normalize_list_input,
 )
-from pytest_httpchain.templates import CALL_ONLY_BUILTINS, CONTEXT_HELPERS, TEMPLATE_BUILTINS, TEMPLATE_PATTERN
+from pytest_httpchain.templates import CALL_ONLY_BUILTINS, CONTEXT_HELPERS, TEMPLATE_BUILTINS, TEMPLATE_PATTERN, TemplatesError, parse_expression, template_form
 
 # The name under which response metadata is injected into response-step contexts.
 RESPONSE_META_NAME = "response"
@@ -95,21 +95,26 @@ def _extract_names_from_expr(expr: str) -> _TemplateNames:
 
     A name is called where it is the function of a call (``now()``) and read
     anywhere else, ``sorted(rows, key=len)``'s ``len`` included; one used both
-    ways is in both sets. Comprehension targets and lambda parameters are local
-    bindings, not context references. Falls back to a permissive regex, every
-    identifier read, if the expression doesn't parse.
+    ways is in both sets. Comprehension targets are local bindings, not
+    context references.
+
+    Text that is no expression the engine evaluates (`parse_expression`: a
+    syntax error, ``a; b``, an assignment, a lambda) holds no name at all. It
+    fails wherever it renders, which is its one finding (HTTPCHAIN037/038,
+    `extract_invalid_expressions`); read as a regex's identifiers, it had
+    ``True``, keywords and attribute names reported undefined besides.
 
     A read is loose unless it is handed to a function that may take a function:
     any argument of a user's function (``sign(now)``, ``sign(clock=now)``), or
     the ``key=`` of a built-in or a method (``sorted``, ``min``, ``max``,
     ``list.sort``). Any other argument of a built-in or a method
-    (``str(now)``, ``dict(at=now)``, ``'{}'.format(now)``) is loose: none of
+    (``str(now)``, ``dict(at=now)``, ``', '.join(now)``) is loose: none of
     those takes a function, so each would work on its repr.
     """
     try:
-        tree = ast.parse(expr.strip(), mode="eval")
-    except SyntaxError:
-        return _TemplateNames(set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", expr)), set(), set())
+        tree = parse_expression(expr)
+    except TemplatesError:
+        return _TemplateNames(set(), set(), set())
 
     bound: set[str] = set()
     callees: set[int] = set()
@@ -117,17 +122,11 @@ def _extract_names_from_expr(expr: str) -> _TemplateNames:
     for node in ast.walk(tree):
         if isinstance(node, ast.comprehension):
             bound |= {n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)}
-        elif isinstance(node, ast.Lambda):
-            a = node.args
-            for arg in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg):
-                if arg is not None:
-                    bound.add(arg.arg)
         elif isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name):
                 callees.add(id(node.func))
             if isinstance(node.func, ast.Name) and node.func.id not in TEMPLATE_BUILTINS:
-                takes_functions = [argument.value if isinstance(argument, ast.Starred) else argument for argument in node.args]
-                takes_functions += [keyword.value for keyword in node.keywords]
+                takes_functions = [*node.args, *(keyword.value for keyword in node.keywords)]
             else:
                 takes_functions = [keyword.value for keyword in node.keywords if keyword.arg == "key"]
             arguments.update(id(argument) for argument in takes_functions)
@@ -144,28 +143,51 @@ def _extract_names_from_expr(expr: str) -> _TemplateNames:
     return names
 
 
-def _template_names(obj: Any) -> _TemplateNames:
-    """`_extract_names_from_expr` over every ``{{ expr }}`` in a structure.
+def _template_expressions(obj: Any) -> Iterator[str]:
+    """The text of every ``{{ expr }}`` in a structure, stripped as the engine
+    strips it, in document order.
 
     Iterative on purpose: a recursive walk spent two stack frames per level of
     nesting, so a value a few hundred levels deep, which loads fine, crashed
     validation with a RecursionError.
     """
-    names = _TemplateNames(set(), set(), set())
     pending = [obj]
     while pending:
         match pending.pop():
             case str() as text:
                 for match in re.finditer(TEMPLATE_PATTERN, text):
-                    expr_names = _extract_names_from_expr(match.group("expr"))
-                    names.read.update(expr_names.read)
-                    names.called.update(expr_names.called)
-                    names.loose.update(expr_names.loose)
+                    yield match.group("expr").strip()
             case dict() as mapping:
-                pending.extend(mapping.values())
+                pending.extend(reversed(mapping.values()))
             case list() as items:
-                pending.extend(items)
+                pending.extend(reversed(items))
+
+
+def _template_names(obj: Any) -> _TemplateNames:
+    """`_extract_names_from_expr` over every ``{{ expr }}`` in a structure."""
+    names = _TemplateNames(set(), set(), set())
+    for expr in _template_expressions(obj):
+        expr_names = _extract_names_from_expr(expr)
+        names.read.update(expr_names.read)
+        names.called.update(expr_names.called)
+        names.loose.update(expr_names.loose)
     return names
+
+
+def extract_invalid_expressions(obj: Any) -> dict[str, str]:
+    """The templates in ``obj`` that hold no expression the engine evaluates
+    (`parse_expression`), each once, in document order, written as the
+    runtime's message writes them (``{{ x = 1 }}``, `template_form`), with the
+    reason it gives: a syntax error, ``a; b``, an assignment, a kind of
+    expression the engine does not evaluate. One fails wherever it renders,
+    and names nothing (`_extract_names_from_expr`)."""
+    invalid: dict[str, str] = {}
+    for expr in _template_expressions(obj):
+        try:
+            parse_expression(expr)
+        except TemplatesError as e:
+            invalid.setdefault(template_form(expr), str(e))
+    return invalid
 
 
 @dataclass(frozen=True)

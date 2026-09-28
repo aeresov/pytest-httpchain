@@ -104,6 +104,10 @@ def _hide_ancestor_project_markers(monkeypatch):
         # reaches the built-in, and reading it after the save reads the save.
         "template_helpers_ok.json",
         "substitution_function_kwargs_literal_ok.json",  # only a template is dead text
+        # An `=` that assigns nothing (a keyword argument, a comparison, one in
+        # a string), a `;` in a string or ending the one statement, and a dict
+        # literal spaced from the closing braces: each template is one expression.
+        "template_equals_signs_ok.json",
         # client.base_url (templated from scenario substitutions) completes a
         # relative URL, literal or after a template; an absolute one ignores it.
         "relative_url_with_base_url.json",
@@ -326,6 +330,83 @@ DIAGNOSED = [
                 C.UNCALLED_BUILTIN,
                 "stages[0].request",
                 r"^Stage 'search': request uses the built-in functions \['now', 'timestamp_ms'\] without calling them: .* Write now\(\), timestamp_ms\(\)$",
+            )
+        ],
+    ),
+    # A template that holds no single expression fails wherever it renders,
+    # with the reason given here, and that is its one finding: read as a
+    # regex's identifiers, `True`, `and` and attribute names were reported
+    # undefined besides (HTTPCHAIN003, at scenario level the error 017).
+    (
+        "template_assignment.json",
+        [
+            (
+                C.INVALID_EXPRESSION,
+                "stages[0].response",
+                r"^Stage 'profile': response has an invalid expression '\{\{ active = True \}\}', and rendering it fails the stage: "
+                r"a template holds one expression, not an assignment; to compare two values, write '=='$",
+            )
+        ],
+    ),
+    (
+        "template_syntax_error.json",
+        [
+            (
+                C.INVALID_EXPRESSION,
+                "stages[0].response",
+                r"^Stage 'health': response has an invalid expression '\{\{ response\.status == 200 and True\) \}\}', and rendering it fails the stage: unmatched '\)'$",
+            )
+        ],
+    ),
+    # At scenario level it fails initialization, and every stage with it: an
+    # error, as the 017 it used to get was, so `validate` exits 1 on it.
+    (
+        "template_multiple_statements.json",
+        [
+            (
+                C.SCENARIO_INVALID_EXPRESSION,
+                "substitutions",
+                r"^Scenario-level 'substitutions' has an invalid expression '\{\{ env\('TOKEN', 'dev'\); 'fallback' \}\}', and rendering it crashes "
+                r"scenario initialization: a template holds one expression, not 2 statements separated by ';'$",
+            )
+        ],
+    ),
+    # The dict literal's `}` ran into the template's `}}`, which ended the
+    # template a brace early.
+    (
+        "template_dict_literal_truncated.json",
+        [
+            (
+                C.INVALID_EXPRESSION,
+                "stages[0].request",
+                r"^Stage 'search': request has an invalid expression '\{\{ \{'status': status \}\}', and rendering it fails the stage: '\{' was never closed$",
+            )
+        ],
+    ),
+    # The engine evaluates no lambda. simpleeval refused it only once
+    # evaluation reached it, so `validate` passed it, and its parameter was
+    # read as a local binding.
+    (
+        "template_lambda.json",
+        [
+            (
+                C.INVALID_EXPRESSION,
+                "stages[0].request",
+                r"^Stage 'sorted': request has an invalid expression '\{\{ sorted\(ids, key=lambda i: -i\) \}\}', and rendering it fails the stage: "
+                r"the template engine does not evaluate a lambda$",
+            )
+        ],
+    ),
+    # A lone surrogate, a JSON \u escape: written escaped, as the file writes
+    # it, where the parser's UnicodeEncodeError crashed validation.
+    (
+        "template_lone_surrogate.json",
+        [
+            (
+                C.INVALID_EXPRESSION,
+                "stages[0].request",
+                r"^Stage 'odd': request has an invalid expression '\{\{ 'a\\ud800' \}\}', and rendering it fails the stage: "
+                r"the expression holds '\\ud800', which is not valid text \(surrogates not allowed\)$",
             )
         ],
     ),

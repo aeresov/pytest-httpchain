@@ -127,6 +127,38 @@ def test_validate_warnings(warn_scenario, args, exit_code, status):
     )
 
 
+@pytest.mark.parametrize(
+    ("top", "stage_url", "exit_code", "line"),
+    [
+        # A stage's: the stages before it run, so a warning.
+        pytest.param(
+            {},
+            "https://x.test/{{ 'a\ud800' }}",
+            0,
+            "  warning [HTTPCHAIN037]: Stage 's': request has an invalid expression '{{ 'a\\ud800' }}', and rendering it fails the stage: "
+            "the expression holds '\\ud800', which is not valid text (surrogates not allowed) (at stages[0].request)\n",
+            id="stage-level-lone-surrogate",
+        ),
+        # A scenario-level one fails every stage, and fails the gate.
+        pytest.param(
+            {"substitutions": [{"vars": {"token": "{{ t = 'x' }}"}}]},
+            "https://x.test/",
+            1,
+            "  error [HTTPCHAIN038]: Scenario-level 'substitutions' has an invalid expression '{{ t = 'x' }}', and rendering it crashes scenario initialization: "
+            "a template holds one expression, not an assignment; to compare two values, write '=='\n",
+            id="scenario-level",
+        ),
+    ],
+)
+def test_validate_invalid_expression(tmp_path, top, stage_url, exit_code, line):
+    """A lone surrogate is printed escaped: the parser's UnicodeEncodeError
+    crashed validation, and the character itself crashed printing."""
+    scenario = _write(tmp_path / "x.json", {**top, "stages": [_stage("s", stage_url)]})
+    result = runner.invoke(app, ["validate", str(scenario)])
+    assert result.exit_code == exit_code, result.output
+    assert result.output.splitlines(keepends=True)[1:] == [line]
+
+
 def test_validate_multiple_files_one_bad_exits_one(ok_scenario, dup_scenario):
     result = runner.invoke(app, ["validate", str(ok_scenario), str(dup_scenario)])
     assert result.exit_code == 1, result.output

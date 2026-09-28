@@ -35,6 +35,7 @@ from pytest_httpchain.scoping import (
     defined_names,
     extract_builtin_stand_ins,
     extract_defined_variables,
+    extract_invalid_expressions,
     extract_saved_variables,
     extract_template_variables,
     extract_uncalled_builtins,
@@ -72,6 +73,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagno
     return [
         *_stage_name_diagnostics(scenario),
         *_fixture_diagnostics(scenario, vars_saved),
+        *_invalid_expression_diagnostics(scenario, test_data),
         *_scenario_template_diagnostics(test_data, set(fixtures), scenario_sub_names, defined),
         *_reserved_name_diagnostics(vars_defined | vars_saved | set(fixtures)),
         *_dataflow_diagnostics(scenario, test_data, defined),
@@ -183,6 +185,7 @@ def _builtin_fallback(names: set[str], *, fails: str = "fails the stage") -> str
 # (`_builtin_fallback`, HTTPCHAIN035).
 _FAILS_SCENARIO_INIT = "crashes scenario initialization"
 _FAILS_COLLECTION = "fails the scenario's collection"
+_FAILS_STAGE = "fails the stage"
 
 
 def _template_refs(templates: Any, defined: DefinedNames) -> tuple[set[str], set[str]]:
@@ -471,6 +474,55 @@ def _rendered_stage_field(stage: Stage, field: str, raw_value: Any) -> Any:
             return raw_value
 
 
+def _rendered_template_fields(scenario: Scenario, test_data: dict[str, Any]) -> Iterator[tuple[Any, str, str, str]]:
+    """``(text, where, location, fails)`` for each field a template renders in,
+    scenario-level and per stage: the part of it the runtime renders, as the
+    reference checks read it (`_rendered_stage_field`: a function's kwargs and
+    a substitutions-save's ``description`` are never rendered, so a template
+    there is dead text), how a message names the field, its location, and what
+    a template that fails there fails (collection for a parametrize value,
+    scenario initialization at scenario level)."""
+    for key in SCENARIO_TEMPLATE_FIELDS:
+        subtree = test_data.get(key)
+        if key == "substitutions":
+            subtree = [templates for templates, _ in substitution_step_templates(subtree)]
+        yield subtree, f"Scenario-level '{key}'", key, _FAILS_SCENARIO_INIT
+    raws = raw_stages(test_data)
+    for i, stage in enumerate(scenario.stages):
+        raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
+        for field in _STAGE_TEMPLATE_FIELDS:
+            fails = _FAILS_COLLECTION if field == "parametrize" else _FAILS_STAGE
+            yield _rendered_stage_field(stage, field, raw.get(field)), f"Stage '{stage.name}': {field}", f"stages[{i}].{field}", fails
+
+
+def _invalid_expression_diagnostics(scenario: Scenario, test_data: dict[str, Any]) -> Iterator[Diagnostic]:
+    """HTTPCHAIN037/038: a template that holds no expression the engine
+    evaluates (`templates.parse_expression`): a syntax error (``{{ 1 + }}``,
+    or a dict literal cut short by its ``}}}``), ``{{ a; b }}``, an assignment
+    (``{{ user.active = True }}``, ``+=``, ``:=``), another statement, or
+    anything else the engine refuses from its text alone (a lambda,
+    ``doc._id``, ``fns[0]()``).
+
+    The runtime refuses it with the same reason, wherever it renders. Such a
+    template names nothing, so this is its one finding, where reading its text
+    as a regex's identifiers had the reference checks report ``True`` and
+    attribute names as undefined too. Read where the reference checks read
+    (`_rendered_template_fields`); each template once per field.
+
+    The severity follows what it fails. Where it fails a stage (037, a
+    warning, as an undefined name there is), the stages before it still run.
+    Where it fails before any stage runs (038, an error, as 017 is), nothing
+    does: at scenario level it fails initialization, and with it every stage,
+    and in a stage's parametrize value the collection of the whole scenario,
+    which resolves the values. The reason ends the message, as it ends the
+    runtime's: Python's own often ends in a ``?``.
+    """
+    for subtree, where, location, fails in _rendered_template_fields(scenario, test_data):
+        code = DiagnosticCode.INVALID_EXPRESSION if fails == _FAILS_STAGE else DiagnosticCode.SCENARIO_INVALID_EXPRESSION
+        for template, reason in extract_invalid_expressions(subtree).items():
+            yield diag(code, f"{where} has an invalid expression '{template}', and rendering it {fails}: {reason}", location=location)
+
+
 def _uncalled_builtin_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined: DefinedNames) -> Iterator[Diagnostic]:
     """HTTPCHAIN035: a call-only built-in written without its parentheses
     (``{{ now }}``, ``{{ env }}``).
@@ -485,11 +537,9 @@ def _uncalled_builtin_diagnostics(scenario: Scenario, test_data: dict[str, Any],
     function that may take one (a ``key=``, a user
     function's argument) and a name the scenario defines itself, which the
     reference checks (003/004) cover. Only text the runtime renders is read, as
-    the reference checks read it: a function's kwargs and a substitutions-save's
-    ``description`` are never rendered, so a template there is dead text.
+    the reference checks read it (`_rendered_template_fields`).
     """
-
-    def found(subtree: Any, where: str, location: str, fails: str = "fails the stage") -> Iterator[Diagnostic]:
+    for subtree, where, location, fails in _rendered_template_fields(scenario, test_data):
         names = sorted(extract_uncalled_builtins(subtree, defined=defined))
         if names:
             what = f"the built-in function '{names[0]}' without calling it" if len(names) == 1 else f"the built-in functions {names} without calling them"
@@ -499,19 +549,6 @@ def _uncalled_builtin_diagnostics(scenario: Scenario, test_data: dict[str, Any],
                 f"Write {', '.join(call_form(name) for name in names)}",
                 location=location,
             )
-
-    for key in SCENARIO_TEMPLATE_FIELDS:
-        subtree = test_data.get(key)
-        if key == "substitutions":
-            subtree = [templates for templates, _ in substitution_step_templates(subtree)]
-        yield from found(subtree, f"Scenario-level '{key}'", key, _FAILS_SCENARIO_INIT)
-    raws = raw_stages(test_data)
-    for i, stage in enumerate(scenario.stages):
-        raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
-        for field in _STAGE_TEMPLATE_FIELDS:
-            subtree = _rendered_stage_field(stage, field, raw.get(field))
-            fails = _FAILS_COLLECTION if field == "parametrize" else "fails the stage"
-            yield from found(subtree, f"Stage '{stage.name}': {field}", f"stages[{i}].{field}", fails)
 
 
 def _relative_url_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:

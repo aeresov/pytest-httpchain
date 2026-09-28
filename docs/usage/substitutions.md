@@ -161,9 +161,33 @@ returns a dict is accessed with subscript (`config()['environment']`).
 Use `{{ expression }}` syntax in any request value. Expressions support Python syntax via simpleeval.
 
 Each template holds exactly one expression: `{{ a; b }}` fails the stage
-rather than evaluating only `a` (a `;` inside a string literal is fine). Any
-error while evaluating a template, including turning an interpolated value into
-text, fails the stage with a message naming the template. A template that is the
+rather than evaluating only `a` (a `;` inside a string literal is fine), and so
+does an assignment: `{{ user.active = True }}` fails with
+`Invalid expression '{{ user.active = True }}': a template holds one
+expression, not an assignment; to compare two values, write '=='`, rather than
+evaluating to its right-hand side, which would pass that verify expression
+whatever `user.active` is. `+=`, an annotated `x: int = 1`, `:=` and any other
+statement fail too, each with a reason of its own.
+
+The engine does not evaluate every Python expression either. A template fails
+the stage, wherever in it the part sits, if it holds a lambda, a set
+comprehension (write `set(x for x in items)`), `*` unpacking anywhere but in a
+list literal (`[*a, *b]` works), `yield` or `await`; an attribute whose name
+starts with `_` or `func_` (a JSON key such as `_id` is read as
+`doc['_id']`, not `doc._id`), or a few others such as `format` (build text
+with an f-string, `f'id-{n}'`, or `+`); or a call of anything but a name or an attribute
+(`fns[0]()`).
+
+`validate` and collection report each of these, and any syntax error, before
+anything is sent, with the reason the stage would fail with: in a stage as the
+warning `HTTPCHAIN037`, and as the error `HTTPCHAIN038` where nothing would run,
+in a scenario-level template, which fails every stage, or a parametrize value,
+which fails the scenario's collection. A common syntax error is a dict literal
+whose closing `}` runs into the template's `}}`: `{{ {'a': 1}}}` ends the
+template one brace early, so write `{{ {'a': 1} }}`.
+
+Any error while evaluating a template, including turning an interpolated value
+into text, fails the stage with a message naming the template. A template that is the
 whole value keeps the value as it is; a query parameter's value is turned into
 text only when the request is built, and a failure there names the parameter
 (see [Requests](requests.md)).

@@ -8,8 +8,9 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from simpleeval import FeatureNotAvailable
 
-from pytest_httpchain.templates import CALL_ONLY_BUILTINS, TEMPLATE_BUILTINS, TemplatesError, call_form, functions, walk
+from pytest_httpchain.templates import CALL_ONLY_BUILTINS, TEMPLATE_BUILTINS, TemplatesError, call_form, functions, substitution, walk
 from tests.unit.helpers import TOO_DEEP_TO_PARSE, on_bounded_stack
 
 # RFC 4231 test case 2.
@@ -289,11 +290,14 @@ class TestHashing:
 @pytest.mark.parametrize("name", sorted({*functions.HELPER_FUNCTIONS, "env"}))
 @pytest.mark.parametrize("attribute", ["__globals__", "__code__", "__module__"])
 def test_helper_attributes_stay_out_of_reach(name, attribute):
-    """A helper is reachable as a name, like every built-in, but simpleeval
-    still refuses its dunder attributes: through ``__globals__`` it would
-    hand out the modules the helpers import."""
-    with pytest.raises(TemplatesError, match=r"access to __attributes"):
+    """A helper is reachable as a name, like every built-in, but its dunder
+    attributes are not: through ``__globals__`` it would hand out the modules
+    the helpers import. The parse refuses them from the text (HTTPCHAIN037),
+    and simpleeval, which evaluates, still does as well."""
+    with pytest.raises(TemplatesError, match=rf"does not read an attribute named '{attribute}'$"):
         walk("{{ " + name + "." + attribute + " }}", {})
+    with pytest.raises(FeatureNotAvailable, match=r"access to __attributes"):
+        substitution._build_evaluator({}).eval(f"{name}.{attribute}")
 
 
 @pytest.mark.parametrize(
