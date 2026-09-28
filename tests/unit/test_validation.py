@@ -77,6 +77,10 @@ def _hide_ancestor_project_markers(monkeypatch):
         # foreach values resolve at execution against the full local context,
         # unlike parametrize values, so a stage substitution is in scope.
         "foreach_value_stage_scope.json",
+        # collect_saves resolves with the rest of the parallel config (a stage
+        # substitution is in scope), and a collecting stage saves its names as
+        # any stage does: a later stage's foreach iterates over them.
+        "parallel_collect_saves_ok.json",
         # `ids` are never substituted: no collection-resolution info, no
         # undefined-variable warning for display-only text.
         "parametrize_ids_template_no_info.json",
@@ -358,6 +362,12 @@ DIAGNOSED = [
     # the stage's own response.
     ("skip_if_out_of_scope.json", [(C.UNDEFINED_VAR, "stages[0].skip_if", r"^Stage 'fan_out': skip_if references potentially undefined variable\(s\): \['item'\]$")]),
     ("skip_if_forward_ref.json", [(C.FORWARD_REF, "stages[0].skip_if", r"^Stage 'create': skip_if references 'sid', which is only saved in this stage's response$")]),
+    # So does the parallel config, collect_saves included: one list shape for
+    # the whole stage, decided before its iterations exist.
+    (
+        "parallel_collect_saves_out_of_scope.json",
+        [(C.UNDEFINED_VAR, "stages[0].parallel", r"^Stage 'create': parallel references potentially undefined variable\(s\): \['name'\]$")],
+    ),
     # A skipped stage saves nothing and the chain goes on: a later stage then
     # reads a name only it saves, and fails.
     (

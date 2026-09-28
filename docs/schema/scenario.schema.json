@@ -1626,6 +1626,31 @@
               "title": "Max Rate Limit Delay",
               "description": "Maximum seconds to wait when rate-limited before giving up. Defaults to 60 seconds."
             },
+            "collect_saves": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        true,
+                        false
+                      ],
+                      "type": "boolean"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    }
+                  ],
+                  "default": false
+                }
+              ],
+              "title": "Collect Saves",
+              "description": "Keep every iteration's saves: each name any iteration saves becomes a list with one entry per iteration, in iteration order, null where an iteration did not save it. False: the iterations' saves merge, and of those that save the same name the highest iteration index wins."
+            },
             "foreach": {
               "anyOf": [
                 {
@@ -1735,6 +1760,31 @@
               ],
               "title": "Max Rate Limit Delay",
               "description": "Maximum seconds to wait when rate-limited before giving up. Defaults to 60 seconds."
+            },
+            "collect_saves": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        true,
+                        false
+                      ],
+                      "type": "boolean"
+                    },
+                    {
+                      "pattern": "^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$",
+                      "type": "string"
+                    }
+                  ],
+                  "default": false
+                }
+              ],
+              "title": "Collect Saves",
+              "description": "Keep every iteration's saves: each name any iteration saves becomes a list with one entry per iteration, in iteration order, null where an iteration did not save it. False: the iterations' saves merge, and of those that save the same name the highest iteration index wins."
             },
             "repeat": {
               "anyOf": [

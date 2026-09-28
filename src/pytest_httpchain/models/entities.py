@@ -1164,6 +1164,14 @@ class ParallelConfigBase(StrictModel):
         default=60,
         description="Maximum seconds to wait when rate-limited before giving up. Defaults to 60 seconds.",
     )
+    collect_saves: Literal[True, False] | TemplateExpressionOnly = Field(
+        default=False,
+        description=(
+            "Keep every iteration's saves: each name any iteration saves becomes a list with one entry per iteration, "
+            "in iteration order, null where an iteration did not save it. False: the iterations' saves merge, "
+            "and of those that save the same name the highest iteration index wins."
+        ),
+    )
 
 
 class ParallelRepeatConfig(ParallelConfigBase):

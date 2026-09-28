@@ -292,6 +292,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   edges out of such a stage dotted. A name re-saved by a stage with a `skip_if` comes from the
   stage before that saved it when it skips, so both list every stage such a name may come from,
   back to one without a `skip_if`: `token (from #2 refresh, else #1 login)`.
+- `parallel.collect_saves: true` keeps every iteration's saves. They merged into one value per
+  name, the highest iteration index winning, so a stage creating several resources kept the id
+  of one of them, and "create N, then clean them all up" could not be written. Now each name any
+  iteration saves becomes a list with one entry per iteration, in iteration order whichever
+  finished first (entry `i` lines up with iteration `i`'s `foreach` parameters), and `null` where
+  an iteration did not save the name. A later stage goes through them with `"foreach":
+  [{"individual": {"id": "{{ created_ids }}"}}]`, such as an `always_run` cleanup. It works with
+  `repeat` and `foreach` alike, a single iteration's lists included, and inside the stage an
+  iteration's later response steps still read the value it saved itself. Saves stay all or
+  nothing: a stage with a failed iteration commits no list at all. It can be a template, rendered
+  with the rest of the `parallel` config before any request is sent, against what the stage's
+  `skip_if` sees: a `foreach` parameter there is undefined, and `validate` reports it
+  (`HTTPCHAIN003`) as in any `parallel` setting. It must render to a boolean, the numbers `1` and
+  `0` counting as `true` and `false` as in `client.http2`; any other value, `null` included, fails
+  the stage before its iterations send anything. The default, `false`, merges as before, and the
+  validator, `show` and `graph` count the names as the stage's saves either way.
 
 ### Fixed
 

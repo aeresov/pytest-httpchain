@@ -49,6 +49,7 @@ def _edges(flow) -> list[dict]:
             id="foreach-param-vs-substitutions",
         ),
         pytest.param({"parallel": {"foreach": [{"individual": {"x": [1, 2]}}], "max_concurrency": "{{ x }}"}}, ["x"], id="foreach-param-vs-parallel-config"),
+        pytest.param({"parallel": {"repeat": 2, "collect_saves": "{{ x }}"}}, ["x"], id="parallel-collect-saves"),
         # Substitution steps resolve in order: a PRIOR step's name shadows the
         # save for later steps, a LATER step's does not.
         pytest.param({"substitutions": [{"vars": {"x": "local"}}, {"vars": {"z": "{{ x }}"}}]}, [], id="prior-substitution-step-shadows"),
@@ -99,6 +100,17 @@ def test_regex_save_names_are_saves_and_feed_edges():
     flow = analyze_dataflow(*_scenario([producer, _stage("submit", request={"url": "https://x.test/", "headers": {"X-CSRF": "{{ csrf }}"}})]))
     assert flow.stages[0].saves == ["csrf", "ids"]
     assert _edges(flow) == [{"producer": 0, "consumer": 1, "vars": ["csrf"]}]
+
+
+def test_collected_saves_are_the_stage_saves_and_feed_edges():
+    """A stage with ``parallel.collect_saves`` saves the same names, each a
+    list once it has run: ``show`` and ``graph`` list them as the stage's, and
+    draw the edge to a later stage whose foreach goes through one."""
+    create = _producer("create", created_ids="id") | {"parallel": {"repeat": 3, "collect_saves": True}}
+    delete = _stage("delete", parallel={"foreach": [{"individual": {"id": "{{ created_ids }}"}}]}, request={"url": "https://x.test/{{ id }}", "method": "DELETE"})
+    flow = analyze_dataflow(*_scenario([create, delete]))
+    assert flow.stages[0].saves == ["created_ids"]
+    assert _edges(flow) == [{"producer": 0, "consumer": 1, "vars": ["created_ids"]}]
 
 
 @pytest.mark.parametrize(

@@ -84,6 +84,7 @@ Execute a request for each parameter combination in parallel:
 | `max_concurrency` | integer | 10 | Maximum concurrent requests (and HTTP/1.1 connections, unless `client.max_connections` is lower); at most 100 run at once over HTTP/2 |
 | `calls_per_sec` | integer | null | Rate limit (requests per second) |
 | `max_rate_limit_delay` | integer | 60 | Max seconds a request waits for a rate-limit slot before failing |
+| `collect_saves` | boolean | false | Keep every iteration's saves: each saved name becomes a list, one entry per iteration (see [Collecting every iteration's saves](#collecting-every-iterations-saves)) |
 
 > The total number of iterations a single stage may run (`repeat`, or the
 > product of its `foreach` parameter sets) is capped by the `httpchain_max_parallel_iterations`
@@ -187,6 +188,88 @@ runs.
 
 > The request renders once per iteration, when the iteration starts, so each call's `now()` reads the clock then. With `calls_per_sec`, that is before the iteration waits for its rate-limit slot: the request goes out up to `max_rate_limit_delay` seconds (60 by default) after its `now()` or `timestamp()` was read, which a signature with a freshness window has to allow for. For one timestamp shared by every call, bind it in the stage's `substitutions`, which render once, before the iterations start: `{"vars": {"started": "{{ now() }}"}}`.
 
+## Collecting every iteration's saves
+
+By default the iterations' saves merge into one value per name, so a stage that
+creates several resources keeps the id of only one of them. With
+`"collect_saves": true`, every name any iteration saves becomes a list with one
+entry per iteration, which is what a later stage needs to clean them all up:
+
+```json
+{
+    "client": {"base_url": "https://api.example.com"},
+    "stages": [
+        {
+            "name": "create_resources",
+            "parallel": {
+                "foreach": [{"individual": {"name": ["alpha", "beta", "gamma"]}}],
+                "collect_saves": true
+            },
+            "request": {
+                "method": "POST",
+                "url": "/resources",
+                "body": {"json": {"name": "{{ name }}"}}
+            },
+            "response": [
+                {"verify": {"status": 201}},
+                {"save": {"jmespath": {"created_ids": "id"}}}
+            ]
+        },
+        {
+            "name": "list_resources",
+            "request": {"url": "/resources"},
+            "response": [
+                {"verify": {"status": 200, "expressions": ["{{ len(created_ids) == 3 }}"]}}
+            ]
+        },
+        {
+            "name": "delete_resources",
+            "always_run": "{{ exists('created_ids') }}",
+            "parallel": {
+                "foreach": [{"individual": {"id": "{{ created_ids }}"}}]
+            },
+            "request": {"method": "DELETE", "url": "/resources/{{ id }}"},
+            "response": [
+                {"verify": {"status": 204}}
+            ]
+        }
+    ]
+}
+```
+
+`created_ids` is a list of the three ids, and `delete_resources` sends one
+`DELETE` for each, in parallel. Its `always_run` lets it run after a later stage
+fails too, as long as `create_resources` passed. If `create_resources` itself fails,
+it saves nothing (see the notes below), so `created_ids` does not exist, and
+`exists()` skips the cleanup instead of failing it on an undefined name, as
+`"always_run": true` would.
+
+- **One entry per iteration, in iteration order**: entry `i` is iteration `i`'s,
+  whichever iteration finished first, so it lines up with the iteration's
+  parameters (above, `created_ids[0]` is `alpha`'s id). A `repeat` counts its
+  iterations from 0. A `foreach` crosses its steps with the first step's values
+  going fastest: `[{"individual": {"a": [1, 2]}}, {"individual": {"b": ["x", "y"]}}]`
+  runs `(1, x)`, `(2, x)`, `(1, y)`, `(2, y)`.
+- **`null` where an iteration saved nothing under a name** that another one
+  saved, as a user function's save may return different names each time. A
+  saved `null` (a JMESPath save of a missing key) looks the same.
+- **A list even for one iteration**, such as a `foreach` over a list with one
+  item: the shape does not depend on how many items there are.
+- **Inside the stage nothing changes**: an iteration's later response steps read
+  the value it saved itself, not the list. The stages after it read the lists,
+  and `pytest-httpchain show` and `graph` list the names as this stage's saves,
+  as for any stage.
+- `collect_saves` can be a template, rendered with the rest of the `parallel`
+  config, before any request. It sees what the stage's `skip_if` sees, the
+  stage's own substitutions included, but not its `foreach` parameters: the
+  whole stage collects or none of it does, and `validate` reports a `foreach`
+  parameter there as undefined (`HTTPCHAIN003`). It must render to `true` or
+  `false`, and the numbers `1` and `0` count as `true` and `false`, as they do
+  in `client.http2` and the other boolean settings (a `skip_if` template is
+  stricter: it is a condition, and must evaluate to a boolean itself). Any other
+  value, `null` or text such as `"true"` included, fails the stage before any
+  request is sent.
+
 ## Load Testing Example
 
 ```json
@@ -245,9 +328,14 @@ runs.
 - Response verification applies to all parallel requests
 - Saves merge in **iteration order**, not completion order: when several
   iterations save the same key, the highest iteration index wins, whichever
-  iteration finished first
+  iteration finished first. With `collect_saves: true` each key is a list
+  instead, one entry per iteration (see
+  [Collecting every iteration's saves](#collecting-every-iterations-saves))
 - Saves are **all or nothing**: if any iteration fails, the stage commits no
-  saves at all, so the context never carries a timing-dependent subset
+  saves at all, so the context never carries a timing-dependent subset. That
+  holds with `collect_saves` too: when one iteration of a stage creating
+  resources fails, the ids the others saved are dropped with the rest, and no
+  later stage can delete those resources by them
 - The first failing iteration cancels the rest: iterations not sent yet are
   never sent (those already in flight run to their end), and the stage fails
   with `Parallel execution failed at iteration N: ...`

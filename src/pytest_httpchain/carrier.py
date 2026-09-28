@@ -20,7 +20,7 @@ import threading
 import time
 import warnings
 from collections import ChainMap
-from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 from contextvars import ContextVar
@@ -288,6 +288,44 @@ def _parallel_values(field: str, value: Any) -> list[Any]:
     if not isinstance(value, list):
         raise StageExecutionError(f"parallel.foreach {field} must resolve to a list, got {value!r}")
     return value
+
+
+def _parallel_flag(field: str, value: Any) -> bool:
+    """A walk()-resolved ``parallel`` switch, or a stage failure.
+
+    Its template branch accepts any complete template, so one that rendered
+    to another template arrives here as text, which is truthy: read as it is,
+    it would turn the switch on. Any other value that is not a bool the
+    model's own validation refused on re-validating what was rendered, but a
+    1 or a 0, which it took as true or false, as it does in every bool
+    setting (``client.http2``, a regex save's ``all``).
+    """
+    if not isinstance(value, bool):
+        raise StageExecutionError(f"parallel.{field} must resolve to true or false, got {value!r}")
+    return value
+
+
+def _merged_saves(saved: Sequence[Mapping[str, Any]], collect: bool) -> dict[str, Any]:
+    """What a stage whose iterations all succeeded commits, from each one's
+    saves (``saved[i]`` is iteration i's): in iteration order, never in the
+    order the iterations completed in, so what a stage commits does not depend
+    on timing.
+
+    By default they merge, and of the iterations that save the same name the
+    one with the highest index wins. With ``collect`` (``parallel.collect_saves``)
+    every name any iteration saved becomes a list of one entry per iteration,
+    entry i iteration i's, and None where iteration i did not save the name
+    (a user function's save can return different names each time): creating
+    N resources and deleting them all later needs every id, and the index
+    keeps each entry beside its iteration's ``foreach`` parameters.
+    """
+    if not collect:
+        merged: dict[str, Any] = {}
+        for iteration in saved:
+            merged.update(iteration)
+        return merged
+    names = dict.fromkeys(name for iteration in saved for name in iteration)
+    return {name: [iteration.get(name) for iteration in saved] for name in names}
 
 
 def _none_is_a_value(model: BaseModel, field: str) -> bool:
@@ -963,7 +1001,8 @@ class Carrier:
 
         Gates on the abort/``always_run`` flow, layers the stage context, skips
         the stage when its ``skip_if`` holds, runs the iteration matrix, and on
-        full success commits the collected saves as a new global-context layer.
+        full success commits the iterations' saves (`_merged_saves`) as a new
+        global-context layer.
         A failure is reported via ``pytest.fail`` and commits no saves, so the
         context never carries a timing-dependent subset; nor does a skip. The
         report hook owns chain-abort classification because only pytest's final
@@ -1030,15 +1069,19 @@ class Carrier:
                 # The models reject the static empty cases, but a template- or
                 # $ref-sourced config can still resolve to empty at runtime.
                 raise StageExecutionError("Parallel configuration produced zero iterations; foreach/repeat must yield at least one item")
+            # Before any request: a switch the stage cannot read must fail it
+            # before its iterations send anything, not once they all have.
+            collect_saves = _parallel_flag("collect_saves", parallel_config.collect_saves) if parallel_config is not None else False
 
             results, first_error = cls._run_iterations(stage, local_context, iteration_substitutions, parallel_config, iteration_exit_errors)
             completed = [iter_result for iter_result in results if iter_result is not None]
 
             if first_error is None:
                 cls._record_exchanges(completed, failed=None, attempted=total)
-                saves = {}
-                for iter_result in completed:
-                    saves.update(iter_result.saved_context)
+                # Every iteration succeeded, so `completed` is `results` whole:
+                # entry i of a collected list is iteration i's.
+                assert len(completed) == total, "a stage whose iterations all succeeded has every one's result"
+                saves = _merged_saves([iter_result.saved_context for iter_result in completed], collect_saves)
             else:
                 idx, exc = first_error
                 cls._record_exchanges(completed, failed=exc, attempted=total)

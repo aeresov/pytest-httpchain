@@ -13,7 +13,7 @@ from pytest_httpchain.models.entities import (
 from tests.unit.models.helpers import assert_error_types, stage_dict
 
 
-@pytest.mark.parametrize(("attr", "default"), [("max_concurrency", 10), ("calls_per_sec", None), ("max_rate_limit_delay", 60)])
+@pytest.mark.parametrize(("attr", "default"), [("max_concurrency", 10), ("calls_per_sec", None), ("max_rate_limit_delay", 60), ("collect_saves", False)])
 def test_base_field_default(attr, default):
     assert getattr(ParallelRepeatConfig(repeat=5), attr) == default
 
@@ -27,6 +27,8 @@ def test_base_field_default(attr, default):
         pytest.param("max_concurrency", "{{ max_workers }}", id="max_concurrency-template"),
         pytest.param("calls_per_sec", 10, id="calls_per_sec"),
         pytest.param("calls_per_sec", "{{ rate_limit }}", id="calls_per_sec-template"),
+        pytest.param("collect_saves", True, id="collect_saves"),
+        pytest.param("collect_saves", "{{ keep_all }}", id="collect_saves-template"),
     ],
 )
 def test_repeat_field_round_trip(field, value):
@@ -45,6 +47,31 @@ def test_counts_must_be_positive(kwargs, field):
     with pytest.raises(ValidationError) as exc_info:
         ParallelRepeatConfig(**kwargs)
     assert_error_types(exc_info, "greater_than", at=field)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # Not set is false; an explicit null is no setting at all.
+        pytest.param(None, id="null"),
+        pytest.param("yes", id="text"),
+        # Template text that is not one complete template.
+        pytest.param("keep {{ all }}", id="partial-template"),
+        # Of the numbers, only 1 and 0 are a bool.
+        pytest.param(2, id="other-number"),
+    ],
+)
+def test_collect_saves_is_a_bool_or_one_template(value):
+    with pytest.raises(ValidationError) as exc_info:
+        ParallelForeachConfig.model_validate({"foreach": [{"individual": {"n": [1]}}], "collect_saves": value})
+    assert_error_types(exc_info, "literal_error", at="collect_saves")
+
+
+@pytest.mark.parametrize(("value", "flag"), [(1, True), (0, False)])
+def test_collect_saves_takes_1_and_0_as_a_bool(value, flag):
+    """As every bool setting does (``client.http2``), and as the docs say."""
+    config = ParallelForeachConfig.model_validate({"foreach": [{"individual": {"n": [1]}}], "collect_saves": value})
+    assert config.collect_saves is flag
 
 
 def test_foreach_takes_raw_parameter_steps():

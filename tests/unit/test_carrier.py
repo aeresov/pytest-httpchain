@@ -31,6 +31,7 @@ from pytest_httpchain.carrier import (
     Carrier,
     IterationResult,
     _context_dump,
+    _merged_saves,
     _parallel_int,
     _parallel_number,
     _render_declared,
@@ -1480,6 +1481,161 @@ class TestParallelIterationCap:
         with pytest.raises(pytest.fail.Exception) as excinfo:
             carrier.execute_stage(stage, {})
         assert "exceeds maximum" not in str(excinfo.value)
+
+
+class TestCollectSaves:
+    """What a parallel stage commits: its iterations' saves in iteration order,
+    merged (the highest index wins a name) or, with ``collect_saves``, each
+    name a list of one entry per iteration. Only a stage whose iterations all
+    succeeded commits anything."""
+
+    @pytest.mark.parametrize(
+        ("saved", "collect", "merged"),
+        [
+            pytest.param([{"a": 1, "b": 1}, {"a": 2}, {"b": 3}], False, {"a": 2, "b": 3}, id="merged-highest-index-wins"),
+            # A name an iteration did not save is None in its place, whichever
+            # iteration saved it first.
+            pytest.param([{"a": 1, "b": 1}, {"a": 2}, {"c": 3}], True, {"a": [1, 2, None], "b": [1, None, None], "c": [None, None, 3]}, id="collected-missing-names"),
+            # Indistinguishable from not saving it, as documented.
+            pytest.param([{"a": None}, {}], True, {"a": [None, None]}, id="collected-saved-none"),
+            pytest.param([{"a": 1}], True, {"a": [1]}, id="collected-one-iteration"),
+            pytest.param([{}, {}], True, {}, id="collected-nothing-saved"),
+        ],
+    )
+    def test_merge(self, saved, collect, merged):
+        assert _merged_saves(saved, collect) == merged
+
+    # Each iteration saves the id the server gave it, and its own foreach parameter.
+    _SAVES = ({"save": {"jmespath": {"ids": "id"}}}, {"save": {"substitutions": [{"vars": {"ns": "{{ n }}"}}]}})
+
+    @staticmethod
+    def _item(request: httpx.Request) -> httpx.Response:
+        """The mock server's answer to ``/item/<n>``: ``{"id": "id-<n>"}``."""
+        return httpx.Response(200, json={"id": f"id-{request.url.path.rsplit('/', 1)[-1]}"})
+
+    @classmethod
+    def _run(
+        cls, parallel: dict, response: tuple | list = _SAVES, carrier: type[Carrier] | None = None, respond: Callable[[httpx.Request], httpx.Response] | None = None
+    ) -> type[Carrier]:
+        """Run a stage fetching ``/item/{{ n }}`` in parallel from ``respond``
+        (`_item` by default), on ``carrier`` (a fresh one by default)."""
+        carrier = carrier if carrier is not None else _make_carrier_subclass()
+        carrier.client = httpx.Client(transport=httpx.MockTransport(respond or cls._item))
+        stage = Stage.model_validate({"name": "s", "parallel": parallel, "request": {"url": "http://mock/item/{{ n }}"}, "response": list(response)})
+        try:
+            carrier.execute_stage(stage, {})
+        finally:
+            carrier.client.close()
+        return carrier
+
+    @pytest.mark.parametrize(
+        ("collect", "ids", "ns"),
+        [
+            # Iteration 0 completes last, yet the last writer is iteration 2.
+            pytest.param(False, "id-2", 2, id="merged"),
+            pytest.param(True, ["id-0", "id-1", "id-2"], [0, 1, 2], id="collected"),
+        ],
+    )
+    def test_iteration_order_not_completion_order(self, collect, ids, ns):
+        """The server answers iteration 0 only once it has answered the
+        others, so it completes last."""
+        answered: list[str] = []
+        lock = threading.Lock()
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/item/0":
+                _wait_until(lambda: len(answered) == 2)
+            with lock:
+                answered.append(request.url.path)
+            return self._item(request)
+
+        cls = self._run({"foreach": [{"individual": {"n": [0, 1, 2]}}], "max_concurrency": 3, "collect_saves": collect}, respond=respond)
+        assert answered[-1] == "/item/0"
+        assert (cls.global_context["ids"], cls.global_context["ns"]) == (ids, ns)
+
+    def test_foreach_steps_in_iteration_order(self):
+        """Entry i is the iteration with the foreach parameters of index i: the
+        first step's values go fastest."""
+        cls = self._run(
+            {"foreach": [{"individual": {"n": [1, 2]}}, {"individual": {"tag": ["x", "y"]}}], "collect_saves": True},
+            response=[{"save": {"substitutions": [{"vars": {"pair": "{{ [n, tag] }}"}}]}}],
+        )
+        assert cls.global_context["pair"] == [[1, "x"], [2, "x"], [1, "y"], [2, "y"]]
+
+    def test_repeat(self):
+        cls = self._run({"repeat": 3, "collect_saves": True}, carrier=_make_carrier_subclass(global_context=ChainMap({"n": 7})))
+        assert cls.global_context["ids"] == ["id-7", "id-7", "id-7"]
+
+    def test_an_iteration_sees_its_own_value(self):
+        """The lists are what the stage commits: inside it, an iteration's
+        later steps read the value it saved itself."""
+        cls = self._run(
+            {"foreach": [{"individual": {"n": [0, 1]}}], "collect_saves": True},
+            response=[{"save": {"jmespath": {"ids": "id"}}}, {"verify": {"expressions": ["{{ ids == 'id-' + str(n) }}"]}}],
+        )
+        assert cls.global_context["ids"] == ["id-0", "id-1"]
+
+    def test_a_failed_iteration_commits_nothing(self):
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500) if request.url.path == "/item/1" else self._item(request)
+
+        cls = _make_carrier_subclass()
+        with pytest.raises(pytest.fail.Exception, match=r"^Parallel execution failed at iteration 1: Status code doesn't match: expected 200, got 500$"):
+            self._run(
+                {"foreach": [{"individual": {"n": [0, 1, 2]}}], "collect_saves": True},
+                response=[{"verify": {"status": 200}}, *self._SAVES],
+                carrier=cls,
+                respond=respond,
+            )
+        assert "ids" not in cls.global_context
+
+    @pytest.mark.parametrize(
+        ("value", "ids"),
+        [
+            pytest.param(True, ["id-0", "id-1"], id="true"),
+            pytest.param(False, "id-1", id="false"),
+            # The numbers 1 and 0 are true and false, as in every bool
+            # setting the model re-validates once rendered (client.http2).
+            pytest.param(1, ["id-0", "id-1"], id="one"),
+            pytest.param(0, "id-1", id="zero"),
+        ],
+    )
+    def test_templated(self, value, ids):
+        """Rendered with the rest of the parallel config, against the stage-local context."""
+        carrier = _make_carrier_subclass(global_context=ChainMap({"keep_all": value}))
+        cls = self._run({"foreach": [{"individual": {"n": [0, 1]}}], "collect_saves": "{{ keep_all }}"}, carrier=carrier)
+        assert cls.global_context["ids"] == ids
+
+    @pytest.mark.parametrize(
+        ("value", "message"),
+        [
+            # Truthy as text: read as it is, it would collect.
+            pytest.param("{{ x }}", r"^parallel\.collect_saves must resolve to true or false, got '\{\{ x \}\}'$", id="template-text"),
+            # Invalid for the field, as any value but a bool is: refused
+            # with the template named, not pydantic's literal error.
+            pytest.param(None, r"^'parallel\.collect_saves' was declared as '\{\{ flag \}\}' but rendered to None$", id="none"),
+            # Text is no bool, even the text of one.
+            pytest.param("true", r"(?s)^\d+ validation errors for ParallelRepeatConfig\ncollect_saves\.literal\[True,False\]\n  Input should be True or False", id="text"),
+            # Only 1 and 0 of the numbers count as a bool.
+            pytest.param(2, r"(?s)^\d+ validation errors for ParallelRepeatConfig\ncollect_saves\.literal\[True,False\]\n  Input should be True or False", id="other-number"),
+        ],
+    )
+    def test_unusable_value_fails_before_any_request(self, value, message):
+        sent: list[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return self._item(request)
+
+        with pytest.raises(pytest.fail.Exception, match=message):
+            self._run({"repeat": 2, "collect_saves": "{{ flag }}"}, carrier=_make_carrier_subclass(global_context=ChainMap({"flag": value})), respond=respond)
+        assert sent == []
+
+    def test_foreach_parameter_is_out_of_scope(self):
+        """One list shape for the whole stage, decided before its iterations
+        exist, as the validator's HTTPCHAIN003 at ``stages[i].parallel`` says."""
+        with pytest.raises(pytest.fail.Exception, match=r"Undefined variable in expression .*'n' is not defined"):
+            self._run({"foreach": [{"individual": {"n": [0, 1]}}], "collect_saves": "{{ n == 0 }}"})
 
 
 # What iteration 1's context manager raises on exit in the parallel stages of

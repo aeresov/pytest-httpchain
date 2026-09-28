@@ -38,6 +38,18 @@ def test_parallel_no_partial_save(run_scenario):
     result.assert_outcomes(failed=1, passed=1)
 
 
+def test_collect_saves_cleans_up_every_iteration(run_scenario):
+    """With parallel.collect_saves, the stage creating four resources commits
+    every iteration's id and name, as lists in iteration order, which a later
+    stage checks against the server. Once a stage has failed the chain, the
+    always_run stage whose foreach goes through the ids deletes every one, and
+    none is left. Merged, only the last iteration's id would survive: the
+    foreach would have no list to go through."""
+    result = run_scenario("parallel/test_collect_saves.http.json")
+    result.assert_outcomes(passed=4, failed=1)
+    result.stdout.fnmatch_lines(["FAILED *::test 2 - fails*"])
+
+
 @pytest.mark.slow
 def test_rate_limiter_threads_not_leaked(run_scenario):
     """Each rate-limited stage execution used to construct a pyrate-limiter

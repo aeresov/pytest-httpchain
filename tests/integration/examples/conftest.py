@@ -40,13 +40,23 @@ _counter = 0
 _barrier = threading.Condition()
 _arrived = 0
 
+# What POST /resources created, by id, and the last id it gave. Module-level
+# like the counter: a scenario creating resources in one stage and deleting
+# them in another is served by one `api_root` server for all its stages.
+_resources_lock = threading.Lock()
+_resources: dict[int, dict] = {}
+_last_resource_id = 0
 
-def reset_counter():
-    global _counter, _arrived
+
+def reset_server_state():
+    global _counter, _arrived, _last_resource_id
     with _counter_lock:
         _counter = 0
     with _barrier:
         _arrived = 0
+    with _resources_lock:
+        _resources.clear()
+        _last_resource_id = 0
 
 
 @auth.verify_password
@@ -266,6 +276,36 @@ def increment_counter():
         return {"count": _counter}, HTTPStatus.OK
 
 
+# ============ Resource Endpoints (for parallel.collect_saves tests) ============
+
+
+@app.post("/resources")
+def create_resource():
+    """Create a resource from the JSON body: 201 with it and the id it was given."""
+    global _last_resource_id
+    data = request.get_json(force=True, silent=True) or {}
+    with _resources_lock:
+        _last_resource_id += 1
+        resource = {**data, "id": _last_resource_id}
+        _resources[_last_resource_id] = resource
+    return resource, HTTPStatus.CREATED
+
+
+@app.get("/resources")
+def list_resources():
+    """Every resource created and not deleted yet, in the order they were created."""
+    with _resources_lock:
+        return {"resources": list(_resources.values())}, HTTPStatus.OK
+
+
+@app.delete("/resources/<int:resource_id>")
+def delete_resource(resource_id: int):
+    with _resources_lock:
+        if _resources.pop(resource_id, None) is None:
+            return {"error": "Resource not found"}, HTTPStatus.NOT_FOUND
+    return "", HTTPStatus.NO_CONTENT
+
+
 # ============ Redirect Endpoints ============
 
 
@@ -446,7 +486,7 @@ def _run_app(ssl_context: ssl.SSLContext | None = None):
 
 @pytest.fixture
 def server():
-    reset_counter()  # Reset counter before each test
+    reset_server_state()  # Before each test
     with _run_app() as url:
         yield url
 
@@ -483,7 +523,7 @@ def api_root():
     variable up before its first stage builds the client; class scope serves
     all its stages from the one server.
     """
-    reset_counter()
+    reset_server_state()
     with _run_app() as url, _exported(API_ROOT_ENV, url):
         yield url
 
