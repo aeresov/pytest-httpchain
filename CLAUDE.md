@@ -84,6 +84,7 @@ src/pytest_httpchain/
 ├── carrier.py                 # Runtime execution engine (Carrier class): chain state, iteration matrix, retry attempts, threading, reporting
 ├── request_builder.py         # Resolved models -> httpx kwargs (build_client_kwargs, build_request_kwargs), multipart bodies encoded to bytes, and auth flows (build_auth: basic, digest, bearer, user functions)
 ├── response_steps.py          # Meaning of a single verify/save step (process_verify, process_save) — pure, no chain state
+├── parallel_stats.py          # A parallel stage's stats (counts, wall time, throughput, nearest-rank latency percentiles) from how its iterations ended, the Parallel Summary report section, the stats_as object, and parallel.thresholds checks and failure message — pure; the carrier times and classifies the iterations
 ├── body_schema.py             # verify.body.schema made ready to validate (BodySchema): file + JSON pointer, one referencing registry resolving $refs across the document and into local files held to the `$include` path rules (relative, traversal depth, reference root; never remote), a `$ref`'s target validated in its document's dialect, dialect choice, per-file parse and registry caches; shared by the runtime and `validate --deep`
 ├── utils.py                   # Marker construction, substitution processing, scenario-relative path resolution, location path segments
 ├── report_formatter.py        # HTTP request/response formatting for test reports
@@ -113,7 +114,8 @@ Test scenarios are discovered by pattern: `test_<name>.http.json` or `test_<name
    - Executes HTTP request via httpx
    - Processes response steps via `response_steps.process_verify()` / `process_save()`; a verify step gets the declared model and the carrier's renderer (`_verify_renderer`), which renders the step's values one at a time with one evaluator (`templates.walker`), all before the first check runs, so a value that does not render is one failure, listed in its check's place among the step's
    - With a stage `retry`, makes each iteration's attempts (`Carrier._execute_attempts`): a failure `retry.on` names and another attempt may change (`StageExecutionError.retryable`) waits and attempts again, the request rendered anew and the response steps run in a fresh context
-   - Updates global context with saved values
+   - For a parallel stage, records how each iteration ended and how long its requests spent in the HTTP client (`_ParallelRun`), then holds the stats (`parallel_stats`) to `parallel.thresholds`; a `min_success_ratio` below 1 lets the iterations run on after failures instead of cancelling the pool
+   - Updates global context with saved values (and a parallel stage's `stats_as` object)
 
 Per-scenario mutable class state (client, abort flag, exchange bookkeeping) is defined once in `carrier.fresh_scenario_state()`; the factory seeds each generated subclass with it and `teardown_class` re-applies it.
 

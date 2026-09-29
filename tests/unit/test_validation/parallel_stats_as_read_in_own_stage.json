@@ -1,0 +1,18 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "load",
+            "parallel": { "repeat": 3, "stats_as": "load_stats" },
+            "request": { "url": "{{ server }}/ok" },
+            "response": [{ "verify": { "status": 200, "expressions": ["{{ load_stats.passed == 3 }}"] } }]
+        },
+        {
+            "name": "cleanup",
+            "always_run": "{{ cleanup_stats.failed == 0 }}",
+            "parallel": { "repeat": 3, "stats_as": "cleanup_stats" },
+            "request": { "url": "{{ server }}/ok" },
+            "response": [{ "verify": { "status": 200 } }]
+        }
+    ]
+}

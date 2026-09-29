@@ -89,3 +89,9 @@ def fails(response):
 def records(response):
     EVENTS.append("called")
     return True
+
+
+def saves_item_id(response):
+    """Save the item's id under a name only this function knows: no save
+    step declares it, so `validate` cannot see it."""
+    return {"item_id": response.json()["id"]}

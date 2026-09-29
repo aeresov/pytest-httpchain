@@ -624,7 +624,10 @@ fails, naming the field and the template as written:
 
 This covers every optional field that takes a template: `verify.status`,
 `verify.body.schema`, the header matcher fields (`contains`, `not_contains`,
-`matches`, `not_matches`), `parallel.calls_per_sec`, `retry.max_delay`, `request.auth`, and
+`matches`, `not_matches`), `parallel.calls_per_sec`, each of
+[`parallel.thresholds`](../advanced/parallel.md#thresholds) (`min_success_ratio`,
+`max_mean_ms`, `max_p50_ms`, `max_p95_ms`, `max_p99_ms`, `min_rps`),
+`retry.max_delay`, `request.auth`, and
 scenario-level `ssl.cert` and `client.base_url`, `client.proxy`,
 `client.max_connections` and `client.max_keepalive_connections` (which fail
 scenario initialization: the first stage fails, and every later stage skips). A header matcher written as one template

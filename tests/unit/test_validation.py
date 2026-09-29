@@ -98,6 +98,11 @@ def _hide_ancestor_project_markers(monkeypatch):
         # stage's substitutions and parametrize parameters, the scenario's
         # and an earlier stage's saves.
         "retry_refs_ok.json",
+        # thresholds resolve with the rest of the parallel config (a stage
+        # substitution, a parametrize parameter, an earlier save and a
+        # scenario variable are in scope), and stats_as is a save of its
+        # stage that the stages after it read, by attribute or by key.
+        "parallel_stats_refs_ok.json",
         # `ids` are never substituted: no collection-resolution info, no
         # undefined-variable warning for display-only text.
         "parametrize_ids_template_no_info.json",
@@ -331,6 +336,9 @@ DIAGNOSED = [
     ("verify_nontemplate_expression.json", [(C.NONTEMPLATE_EXPRESSION, "stages[0].response[0].verify", "is not a template")]),
     # Scenario fixtures sit above the global context: the save is unreadable.
     ("scenario_fixture_shadows_save.json", [(C.FIXTURE_SHADOWS_SAVE, None, r"\['token'\]")]),
+    # stats_as is a save: the same name checks apply to it.
+    ("parallel_stats_as_fixture_shadow.json", [(C.FIXTURE_SHADOWS_SAVE, None, r"\['load_stats'\]")]),
+    ("parallel_stats_as_reserved_name.json", [(C.RESERVED_NAME, None, r"^Name\(s\) \['response'\] are shadowed by the reserved response metadata namespace")]),
     # Saved later is an ordering bug, reported as such rather than as undefined.
     ("forward_reference.json", [(C.FORWARD_REF, "stages[0].request", "'token' is referenced before it is saved")]),
     # A save named like a built-in helper: reading it ahead of the save gets
@@ -497,6 +505,40 @@ DIAGNOSED = [
     # resolved before the first attempt and its response exist.
     ("retry_out_of_scope.json", [(C.UNDEFINED_VAR, "stages[0].retry", r"^Stage 'fan_out': retry references potentially undefined variable\(s\): \['polls'\]$")]),
     ("retry_forward_ref.json", [(C.FORWARD_REF, "stages[0].retry", r"^Stage 'poll': retry references 'retry_after', which is only saved in this stage's response$")]),
+    # thresholds render with the parallel config, before any iteration.
+    (
+        "parallel_thresholds_out_of_scope.json",
+        [(C.UNDEFINED_VAR, "stages[0].parallel", r"^Stage 'fan_out': parallel references potentially undefined variable\(s\): \['budget'\]$")],
+    ),
+    # A stage's stats exist once every iteration has ended: none of its own
+    # phases reads them, its response steps and always_run included.
+    (
+        "parallel_stats_as_read_in_own_stage.json",
+        [
+            (
+                C.FORWARD_REF,
+                "stages[0].response",
+                r"^Stage 'load': response step references 'load_stats', which is only saved as this stage's parallel\.stats_as, once every iteration has ended$",
+            ),
+            (
+                C.FORWARD_REF,
+                "stages[1].always_run",
+                r"^Stage 'cleanup': always_run references 'cleanup_stats', which is only saved as this stage's parallel\.stats_as — always_run is evaluated before the stage runs$",
+            ),
+        ],
+    ),
+    # Saved after the response steps' saves, the stats replace one of the same name.
+    (
+        "parallel_stats_as_replaces_save.json",
+        [
+            (
+                C.STATS_REPLACE_SAVE,
+                "stages[0].parallel.stats_as",
+                r"^Stage 'load': parallel\.stats_as 'result' is also a name its response saves: the stats are saved after the response steps' saves "
+                r"and replace that one, which no later stage can read\. Rename one of them\.$",
+            )
+        ],
+    ),
     # A skipped stage saves nothing and the chain goes on: a later stage then
     # reads a name only it saves, and fails.
     (

@@ -12,10 +12,11 @@ import re
 import ssl
 import threading
 import time
+import warnings
 from collections import ChainMap
 from collections.abc import Callable
 from concurrent.futures import Future
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -66,7 +67,8 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
 from pytest_httpchain.request_builder import build_client_kwargs
-from pytest_httpchain.templates import TemplatesError
+from pytest_httpchain.templates import TemplatesError, walk
+from pytest_httpchain.warnings import ScenarioValidationWarning
 from tests.unit.models.helpers import make_stage
 
 
@@ -1626,6 +1628,23 @@ class TestCollectSaves:
     def test_merge(self, saved, collect, merged):
         assert _merged_saves(saved, collect) == merged
 
+    @pytest.mark.parametrize(
+        ("saved", "collect", "merged"),
+        [
+            # No iteration passed (a min_success_ratio of 0): every name the
+            # stage's steps save as written is committed all the same.
+            pytest.param([{}, {}, {}], False, {"a": None}, id="merged-none-passed"),
+            pytest.param([{}, {}, {}], True, {"a": [None, None, None]}, id="collected-none-passed"),
+            # One that passed saved it: nothing changes.
+            pytest.param([{}, {"a": 2}, {}], False, {"a": 2}, id="merged-one-passed"),
+            pytest.param([{}, {"a": 2}, {}], True, {"a": [None, 2, None]}, id="collected-one-passed"),
+            # Beside a name only a user function's save returned.
+            pytest.param([{"u": 1}, {}], True, {"u": [1, None], "a": [None, None]}, id="collected-beside-a-returned-name"),
+        ],
+    )
+    def test_declared_names_are_committed_when_none_saved_them(self, saved, collect, merged):
+        assert _merged_saves(saved, collect, ["a"]) == merged
+
     # Each iteration saves the id the server gave it, and its own foreach parameter.
     _SAVES = ({"save": {"jmespath": {"ids": "id"}}}, {"save": {"substitutions": [{"vars": {"ns": "{{ n }}"}}]}})
 
@@ -1757,6 +1776,490 @@ class TestCollectSaves:
         exist, as the validator's HTTPCHAIN003 at ``stages[i].parallel`` says."""
         with pytest.raises(pytest.fail.Exception, match=r"Undefined variable in expression .*'n' is not defined"):
             self._run({"foreach": [{"individual": {"n": [0, 1]}}], "collect_saves": "{{ n == 0 }}"})
+
+
+class TestParallelStats:
+    """A parallel stage's stats as the carrier measures them, the thresholds
+    it holds them to, the failures a ``min_success_ratio`` below 1 lets it run
+    on after, and what it saves under ``stats_as``. The computation itself is
+    pinned in test_parallel_stats.py."""
+
+    # Each iteration saves the id the server gave it.
+    _SAVES = ({"verify": {"status": 200}}, {"save": {"jmespath": {"ids": "id"}}})
+
+    @staticmethod
+    def _failing(*failing: int, sent: list[str] | None = None) -> Callable[[httpx.Request], httpx.Response]:
+        """The mock server's answer to ``/item/<n>``: 500 for each n in
+        ``failing``, else ``{"id": "id-<n>"}``, each request's path noted on ``sent``."""
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if sent is not None:
+                sent.append(request.url.path)
+            n = int(request.url.path.rsplit("/", 1)[-1])
+            return httpx.Response(500) if n in failing else httpx.Response(200, json={"id": f"id-{n}"})
+
+        return respond
+
+    @classmethod
+    def _run(
+        cls,
+        parallel: dict,
+        respond: Callable[[httpx.Request], httpx.Response] | None = None,
+        response: tuple | list = _SAVES,
+        carrier: type[Carrier] | None = None,
+        fixtures: dict | None = None,
+        **stage_fields,
+    ) -> type[Carrier]:
+        """Run a stage fetching ``/item/{{ n }}`` in parallel from ``respond``
+        (every item answering by default), on ``carrier`` (a fresh one by default)."""
+        carrier = carrier if carrier is not None else _make_carrier_subclass()
+        carrier.client = httpx.Client(transport=httpx.MockTransport(respond or cls._failing()), follow_redirects=True)
+        stage = Stage.model_validate({"name": "s", "parallel": parallel, "request": {"url": "http://mock/item/{{ n }}"}, "response": list(response), **stage_fields})
+        try:
+            carrier.execute_stage(stage, fixtures or {})
+        finally:
+            carrier.client.close()
+        return carrier
+
+    @staticmethod
+    def _foreach(count: int, **settings) -> dict:
+        return {"foreach": [{"individual": {"n": list(range(count))}}], **settings}
+
+    def test_recorded_for_a_parallel_stage(self):
+        stats = self._run(self._foreach(3)).last_parallel_stats
+        assert stats is not None
+        assert (stats.iterations, stats.passed, stats.failed, stats.cancelled, stats.skipped, stats.checks) == (3, 3, 0, 0, 0, ())
+        assert stats.latency is not None
+        assert stats.wall_ms > 0
+
+    def test_none_for_a_stage_without_parallel(self):
+        """Nothing new for a stage without ``parallel``, and nothing left of
+        the stage before it."""
+        cls = self._run(self._foreach(2))
+        assert cls.last_parallel_stats is not None
+        cls.client = httpx.Client(transport=httpx.MockTransport(self._failing()))
+        try:
+            cls.execute_stage(Stage.model_validate({"name": "plain", "request": {"url": "http://mock/item/1"}}), {})
+        finally:
+            cls.client.close()
+        assert cls.last_parallel_stats is None
+
+    def test_duration_is_the_time_in_the_http_client(self, monkeypatch):
+        """On a clock that moves only when something happens: an exchange (a
+        hop) takes 10 ms, a rate-limit slot 5 s, the wait to retry 7 s. Each
+        iteration's first attempt fails, and its second is redirected once:
+        its duration is its three hops, 30 ms, neither wait; the wall time
+        has everything."""
+        clock = [0.0]
+
+        def advance(seconds: float) -> bool:
+            clock[0] += seconds
+            return True
+
+        attempts: dict[str, int] = {}
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            advance(0.010)
+            path = request.url.path
+            if path.endswith("/done"):
+                return httpx.Response(200, json={"id": path})
+            attempts[path] = attempts.get(path, 0) + 1
+            return httpx.Response(500) if attempts[path] == 1 else httpx.Response(302, headers={"location": f"{path}/done"})
+
+        monkeypatch.setattr(carrier_module, "time", SimpleNamespace(perf_counter=lambda: clock[0], monotonic=time.monotonic, sleep=time.sleep))
+        monkeypatch.setattr(carrier_module, "_wait_to_retry", lambda seconds, cancel: advance(7))
+        cls = _make_carrier_subclass(_acquire_rate_slot=staticmethod(lambda limiter, timeout, cancel: advance(5)))
+        # One at a time: the one clock is every iteration's.
+        stats = self._run(self._foreach(2, max_concurrency=1, calls_per_sec=1000), respond, carrier=cls, retry={"attempts": 2, "delay": 0}).last_parallel_stats
+
+        assert stats is not None
+        assert stats.latency is not None
+        assert (stats.latency.min_ms, stats.latency.max_ms) == pytest.approx((30.0, 30.0))
+        assert stats.wall_ms == pytest.approx(2 * (5 + 0.010 + 7 + 5 + 0.020) * 1000)
+        assert stats.rps == pytest.approx(2 / (2 * (5 + 0.010 + 7 + 5 + 0.020)))
+
+    @pytest.mark.parametrize(
+        ("collect", "ids"),
+        [
+            # Of the passed iterations, the highest index wins.
+            pytest.param(False, "id-3", id="merged"),
+            # None where an iteration failed: entry i stays iteration i's.
+            pytest.param(True, ["id-0", None, "id-2", "id-3", None], id="collected"),
+        ],
+    )
+    def test_failures_within_the_ratio_run_on(self, collect, ids):
+        """One worker, so the stage's own thread reads each iteration's end
+        before the next starts: with the first cancelling, only 0 and 1
+        would have been sent. The stage passes, and saves what the passed
+        iterations saved."""
+        sent: list[str] = []
+        cls = self._run(self._foreach(5, max_concurrency=1, collect_saves=collect, thresholds={"min_success_ratio": 0.6}), self._failing(1, 4, sent=sent))
+        assert sorted(sent) == [f"/item/{n}" for n in range(5)]
+        assert cls.global_context["ids"] == ids
+        stats = cls.last_parallel_stats
+        assert stats is not None
+        assert (stats.passed, stats.failed, stats.cancelled) == (3, 2, 0)
+        assert [check.status() for check in stats.checks] == ["min_success_ratio 0.6: met, 0.6 (3 of 5 iterations passed)"]
+
+    def test_too_few_passed_fails_the_stage_listing_the_failures(self):
+        """Lowest index first, whichever failed first. The report shows the
+        first failure, and nothing is committed: the stats neither."""
+        cls = _make_carrier_subclass()
+        with pytest.raises(pytest.fail.Exception) as excinfo:
+            self._run(self._foreach(10, max_concurrency=4, thresholds={"min_success_ratio": 0.8}, stats_as="load"), self._failing(7, 2, 5), carrier=cls)
+        assert str(excinfo.value) == (
+            "Parallel threshold not met: min_success_ratio: 0.7 (7 of 10 iterations passed), below the limit 0.8\n"
+            "3 failed iterations:\n"
+            "  iteration 2: Status code doesn't match: expected 200, got 500\n"
+            "  iteration 5: Status code doesn't match: expected 200, got 500\n"
+            "  iteration 7: Status code doesn't match: expected 200, got 500"
+        )
+        assert "ids" not in cls.global_context
+        assert "load" not in cls.global_context
+        assert cls.last_shown_exchange_is_failed
+        assert cls.last_request is not None
+        assert cls.last_request.url.path == "/item/2"
+
+    def test_latency_violated_with_failures_within_the_ratio(self, monkeypatch):
+        """Every violated threshold listed, the tolerated failures after them.
+        The ratio holds, so the report shows the last completed iteration."""
+        clock = [0.0]
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            clock[0] += 0.020
+            return self._failing(1)(request)
+
+        monkeypatch.setattr(carrier_module, "time", SimpleNamespace(perf_counter=lambda: clock[0], monotonic=time.monotonic, sleep=time.sleep))
+        cls = _make_carrier_subclass()
+        with pytest.raises(pytest.fail.Exception) as excinfo:
+            self._run(self._foreach(4, max_concurrency=1, thresholds={"min_success_ratio": 0.5, "max_p95_ms": 15, "min_rps": 100}), respond, carrier=cls)
+        assert str(excinfo.value) == (
+            "2 parallel thresholds not met:\n"
+            "  1. max_p95_ms: 20 ms, above the limit 15 ms\n"
+            "  2. min_rps: 37.5 passed iterations/s, below the limit 100\n"
+            "Failed iteration:\n"
+            "  iteration 1: Status code doesn't match: expected 200, got 500"
+        )
+        assert not cls.last_shown_exchange_is_failed
+
+    def test_a_ratio_of_one_is_as_without_one(self):
+        """The first failure cancels the rest and fails the stage: one worker,
+        so iteration 1's failure is read before 2 starts."""
+        sent: list[str] = []
+        cls = _make_carrier_subclass()
+        with pytest.raises(pytest.fail.Exception, match=r"^Parallel execution failed at iteration 1: Status code doesn't match: expected 200, got 500$"):
+            self._run(self._foreach(5, max_concurrency=1, thresholds={"min_success_ratio": 1}), self._failing(1, sent=sent), carrier=cls)
+        assert sent == ["/item/0", "/item/1"]
+        stats = cls.last_parallel_stats
+        assert stats is not None
+        # Ended at an iteration: no threshold is checked.
+        assert (stats.passed, stats.failed, stats.cancelled, stats.checks) == (1, 1, 3, ())
+
+    @pytest.mark.parametrize(
+        ("collect", "ids"),
+        [
+            # What validate says the stage saves is there for a later stage to
+            # read: null, as no iteration saved it...
+            pytest.param(False, None, id="merged"),
+            # ...or null in each iteration's place.
+            pytest.param(True, [None, None, None], id="collected"),
+        ],
+    )
+    def test_a_ratio_of_zero_passes_whatever_fails(self, collect, ids):
+        cls = self._run(self._foreach(3, collect_saves=collect, thresholds={"min_success_ratio": 0}, stats_as="load"), self._failing(0, 1, 2))
+        assert cls.global_context["ids"] == ids
+        load = cls.global_context["load"]
+        assert load == {
+            "iterations": 3,
+            "passed": 0,
+            "failed": 3,
+            "success_ratio": 0.0,
+            "wall_ms": pytest.approx(load["wall_ms"]),
+            "rps": 0.0,
+            # The failed iterations completed: only a cancelled one did not.
+            "completed_rps": pytest.approx(3000 / load["wall_ms"]),
+            **dict.fromkeys(("min_ms", "mean_ms", "p50_ms", "p95_ms", "p99_ms", "max_ms")),
+        }
+
+    @pytest.mark.parametrize(
+        ("count", "thresholds", "fails"),
+        [
+            # Nothing passed, and the stage passes: its report still shows an exchange.
+            pytest.param(3, {"min_success_ratio": 0}, None, id="none-passed-stage-passes"),
+            # The ratio is met, a latency is not, and nothing passed to show.
+            pytest.param(
+                3,
+                {"min_success_ratio": 0, "max_p95_ms": 500},
+                r"^Parallel threshold not met: max_p95_ms: not measured, no iteration passed \(limit 500 ms\)\n",
+                id="none-passed-latency-not-met",
+            ),
+            # Too few passed: a failure is shown, not the passed iteration 3.
+            pytest.param(
+                4,
+                {"min_success_ratio": 0.9},
+                r"^Parallel threshold not met: min_success_ratio: 0\.25 \(1 of 4 iterations passed\), below the limit 0\.9\n",
+                id="too-few-passed",
+            ),
+        ],
+    )
+    def test_the_report_shows_the_first_failure_that_sent_a_request(self, count, thresholds, fails):
+        """Iteration n fetches ``/item/<10 // n>``: iteration 0's URL does not
+        render, so it sent nothing to show, and iteration 1's ``/item/10`` is
+        the first failure that did; 2's ``/item/5`` fails too, 3's passes."""
+        cls = _make_carrier_subclass()
+        with pytest.raises(pytest.fail.Exception, match=fails) if fails is not None else nullcontext():
+            self._run(self._foreach(count, thresholds=thresholds), self._failing(10, 5), carrier=cls, request={"url": "http://mock/item/{{ 10 // n }}"})
+        assert cls.last_shown_exchange_is_failed
+        assert cls.last_request is not None
+        assert cls.last_request.url.path == "/item/10"
+
+    def test_one_iteration_runs_inline_and_counts_as_one(self):
+        """A repeat of 1 runs inline, and its failure is run on after too."""
+        cls = self._run({"repeat": 1, "thresholds": {"min_success_ratio": 0}}, self._failing(0), carrier=_make_carrier_subclass(global_context=ChainMap({"n": 0})))
+        stats = cls.last_parallel_stats
+        assert stats is not None
+        assert (stats.iterations, stats.passed, stats.failed) == (1, 0, 1)
+
+    def test_one_iteration_that_failed_is_too_few(self):
+        with pytest.raises(pytest.fail.Exception) as excinfo:
+            self._run({"repeat": 1, "thresholds": {"min_success_ratio": 0.5}}, self._failing(0), carrier=_make_carrier_subclass(global_context=ChainMap({"n": 0})))
+        assert str(excinfo.value) == (
+            "Parallel threshold not met: min_success_ratio: 0 (0 of 1 iterations passed), below the limit 0.5\n"
+            "Failed iteration:\n"
+            "  iteration 0: Status code doesn't match: expected 200, got 500"
+        )
+
+    def test_a_user_functions_skip_still_ends_the_stage(self):
+        """A pytest outcome is no failure to run on after: it ends the stage
+        at once, as without thresholds, and the summary counts it."""
+
+        def maybe_skip(n):
+            if n == 1:
+                pytest.skip("not this one")
+            return n
+
+        cls = _make_carrier_subclass()
+        with pytest.raises(pytest.skip.Exception, match="^not this one$"):
+            self._run(
+                self._foreach(3, max_concurrency=1, thresholds={"min_success_ratio": 0.1}),
+                request={"url": "http://mock/item/{{ maybe_skip(n) }}"},
+                carrier=cls,
+                fixtures={"maybe_skip": maybe_skip},
+            )
+        stats = cls.last_parallel_stats
+        assert stats is not None
+        assert (stats.passed, stats.skipped, stats.cancelled) == (1, 1, 1)
+
+    def test_an_error_on_exit_is_never_tolerated(self):
+        """What an iteration's exits did must be heard of: it fails the stage
+        at that iteration, cancelling the rest, whatever the ratio. The
+        failures tolerated before are listed after it: the summary counts
+        them, and nothing else would say what they were."""
+
+        @contextmanager
+        def rollback(n):
+            yield n
+            if n == 2:
+                raise RuntimeError("rollback failed")
+
+        sent: list[str] = []
+        with pytest.raises(pytest.fail.Exception) as excinfo:
+            self._run(
+                self._foreach(5, max_concurrency=1, thresholds={"min_success_ratio": 0}),
+                self._failing(0, 1, sent=sent),
+                request={"url": "http://mock/item/{{ rollback(n) }}"},
+                fixtures={"rollback": rollback},
+            )
+        assert str(excinfo.value) == (
+            "Parallel execution failed at iteration 2: Exiting the context manager from fixture 'rollback' failed: RuntimeError: rollback failed\n"
+            "2 failed iterations tolerated by min_success_ratio:\n"
+            "  iteration 0: Status code doesn't match: expected 200, got 500\n"
+            "  iteration 1: Status code doesn't match: expected 200, got 500"
+        )
+        assert sent == ["/item/0", "/item/1", "/item/2"]
+
+    def test_a_failure_read_after_the_stage_ended_is_tolerated_too(self, monkeypatch):
+        """Iteration 0's answer is held until iteration 1's error on exit has
+        ended the stage and its thread has shut the pool down: iteration 0's
+        own failure is taken in once the loop is left, and it is listed and
+        recorded as tolerated all the same, not dropped as a straggler's. What
+        an iteration's own failure counts as does not depend on when the
+        stage's thread reads it. Released by the shutdown, never by a clock."""
+        shut_down = threading.Event()
+
+        class Executor(carrier_module.ThreadPoolExecutor):
+            def shutdown(self, wait=True, *, cancel_futures=False):
+                shut_down.set()
+                super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/item/0":
+                assert shut_down.wait(timeout=5)
+                return httpx.Response(500)
+            return httpx.Response(200, json={"id": "id-1"})
+
+        @contextmanager
+        def rollback(n):
+            yield n
+            if n == 1:
+                raise RuntimeError("rollback failed")
+
+        monkeypatch.setattr(carrier_module, "ThreadPoolExecutor", Executor)
+        cls = _make_carrier_subclass(record_all_exchanges=True)
+        with pytest.raises(pytest.fail.Exception) as excinfo:
+            self._run(
+                self._foreach(2, max_concurrency=2, thresholds={"min_success_ratio": 0}),
+                respond,
+                request={"url": "http://mock/item/{{ rollback(n) }}"},
+                carrier=cls,
+                fixtures={"rollback": rollback},
+            )
+        assert str(excinfo.value) == (
+            "Parallel execution failed at iteration 1: Exiting the context manager from fixture 'rollback' failed: RuntimeError: rollback failed\n"
+            "Failed iteration tolerated by min_success_ratio:\n"
+            "  iteration 0: Status code doesn't match: expected 200, got 500"
+        )
+        assert sorted(request.url.path for request, _response, _started in cls.last_exchanges) == ["/item/0", "/item/1"]
+
+    @pytest.mark.parametrize("ending", ["exit-error", "skip"])
+    def test_tolerated_failures_reach_the_har_however_the_stage_ends(self, ending):
+        """Iteration 0 fails and is tolerated, then iteration 1 ends the stage
+        at once: its context manager raising on exit, or a user function
+        skipping it. Iteration 0's request went on the wire all the same, so
+        the HAR file records it, as it does where the stage runs to its end
+        (`test_every_exchange_is_recorded_for_the_har`)."""
+
+        @contextmanager
+        def rollback(n):
+            yield n
+            if n == 1:
+                raise RuntimeError("rollback failed")
+
+        def maybe_skip(n):
+            if n == 1:
+                pytest.skip("not this one")
+            return n
+
+        cls = _make_carrier_subclass(record_all_exchanges=True)
+        with pytest.raises(pytest.fail.Exception if ending == "exit-error" else pytest.skip.Exception):
+            self._run(
+                self._foreach(4, max_concurrency=1, thresholds={"min_success_ratio": 0}),
+                self._failing(0),
+                request={"url": "http://mock/item/{{ end(n) }}"},
+                carrier=cls,
+                fixtures={"end": rollback if ending == "exit-error" else maybe_skip},
+            )
+        # A skip in the request's template sends nothing for iteration 1.
+        assert sorted(request.url.path for request, _response, _started in cls.last_exchanges) == (["/item/0", "/item/1"] if ending == "exit-error" else ["/item/0"])
+        stats = cls.last_parallel_stats
+        assert stats is not None
+        assert (stats.failed, stats.skipped) == ((2, 0) if ending == "exit-error" else (1, 1))
+
+    @pytest.mark.parametrize("ratio", [pytest.param(0.5, id="passes"), pytest.param(0.9, id="fails")])
+    def test_every_exchange_is_recorded_for_the_har(self, ratio):
+        cls = _make_carrier_subclass(record_all_exchanges=True)
+        try:
+            self._run(self._foreach(4, thresholds={"min_success_ratio": ratio}), self._failing(1, 2), carrier=cls)
+        except pytest.fail.Exception:
+            assert ratio == 0.9
+        assert sorted(request.url.path for request, _response, _started in cls.last_exchanges) == [f"/item/{n}" for n in range(4)]
+
+    def test_thresholds_render_in_the_stage_scope(self):
+        """Against the stage's substitutions and the context, as the rest of
+        the parallel config is."""
+        cls = _make_carrier_subclass(global_context=ChainMap({"ratio": 0.5}))
+        cls = self._run(
+            self._foreach(4, thresholds={"min_success_ratio": "{{ ratio }}", "max_p99_ms": "{{ budget * 1000 }}"}),
+            self._failing(0, 3),
+            carrier=cls,
+            substitutions=[{"vars": {"budget": 60}}],
+        )
+        stats = cls.last_parallel_stats
+        assert stats is not None
+        assert [(check.name, check.limit, check.met) for check in stats.checks] == [("min_success_ratio", 0.5, True), ("max_p99_ms", 60000, True)]
+
+    @pytest.mark.parametrize(
+        ("thresholds", "value", "message"),
+        [
+            pytest.param(
+                {"max_p95_ms": "{{ limit }}"},
+                None,
+                r"^'parallel\.thresholds\.max_p95_ms' was declared as '\{\{ limit \}\}' but rendered to None, which would silently disable it$",
+                id="none",
+            ),
+            pytest.param({"max_p95_ms": "{{ limit }}"}, "{{ x }}", r"^parallel\.thresholds\.max_p95_ms must be a positive number, got '\{\{ x \}\}'$", id="template-text"),
+            pytest.param(
+                {"min_success_ratio": "{{ limit }}"},
+                "{{ x }}",
+                r"^parallel\.thresholds\.min_success_ratio must be a number from 0 to 1, got '\{\{ x \}\}'$",
+                id="ratio-template-text",
+            ),
+            pytest.param(
+                {"min_success_ratio": "{{ limit }}"},
+                1.5,
+                r"(?s)validation errors? for ParallelForeachConfig\nthresholds\.min_success_ratio\.constrained-float\n  Input should be less than or equal to 1",
+                id="ratio-above-one",
+            ),
+            pytest.param(
+                {"min_rps": "{{ limit }}"},
+                True,
+                r"validation error for ParallelForeachConfig\nthresholds\.min_rps\n  Value error, A threshold is a number or a template, got true",
+                id="bool",
+            ),
+        ],
+    )
+    def test_unusable_threshold_fails_before_any_request(self, thresholds, value, message):
+        sent: list[str] = []
+        cls = _make_carrier_subclass(global_context=ChainMap({"limit": value}))
+        with pytest.raises(pytest.fail.Exception, match=message):
+            self._run(self._foreach(2, thresholds=thresholds), self._failing(sent=sent), carrier=cls)
+        assert sent == []
+        assert cls.last_parallel_stats is None
+
+    def test_foreach_parameter_is_out_of_scope(self):
+        """Every iteration is held to one limit, resolved before any exists,
+        as the validator's HTTPCHAIN003 at ``stages[i].parallel`` says."""
+        with pytest.raises(pytest.fail.Exception, match=r"Undefined variable in expression .*'n' is not defined"):
+            self._run(self._foreach(2, thresholds={"max_p95_ms": "{{ n + 100 }}"}))
+
+    def test_stats_saved_for_the_stages_after(self):
+        cls = self._run(self._foreach(3, stats_as="load"))
+        load = cls.global_context["load"]
+        stats = cls.last_parallel_stats
+        assert stats is not None
+        assert load == stats.saved()
+        assert (load["iterations"], load["passed"], load["failed"], load["success_ratio"]) == (3, 3, 0, 1.0)
+        assert walk("{{ load.p95_ms == load['p95_ms'] }}", cls.global_context) is True
+
+    # A save only a user function makes: no step declares its name.
+    _FUNCTION_SAVES = ({"verify": {"status": 200}}, {"save": {"user_functions": ["tests.unit.response_steps_test_helpers:saves_item_id"]}})
+
+    def test_stats_replace_a_name_only_a_user_function_saved(self):
+        """Saved after the response steps' saves, they replace one of the
+        same name: the validator's HTTPCHAIN040 warns where a step declares
+        it, and the stage where it cannot see it, a name only a user
+        function's save returned. Once, whichever iterations returned it."""
+        replaced = r"^parallel\.stats_as 'item_id' is also a name the stage's response saves: the stats replace what it saved \(HTTPCHAIN040\)$"
+        with pytest.warns(ScenarioValidationWarning, match=replaced) as caught:
+            cls = self._run(self._foreach(2, stats_as="item_id"), response=self._FUNCTION_SAVES)
+        assert len([warning for warning in caught if "HTTPCHAIN040" in str(warning.message)]) == 1
+        assert cls.global_context["item_id"]["passed"] == 2
+
+    def test_stats_replacing_a_declared_save_warn_only_at_collection(self):
+        """The jmespath save declares ``ids``, which HTTPCHAIN040 reports at
+        collection: warned at runtime too, one collision would warn twice."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ScenarioValidationWarning)
+            cls = self._run(self._foreach(2, stats_as="ids"))
+        assert cls.global_context["ids"]["passed"] == 2
+
+    def test_stats_replacing_a_save_fails_the_stage_when_promoted(self):
+        cls = _make_carrier_subclass()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ScenarioValidationWarning)
+            with pytest.raises(pytest.fail.Exception, match=r"HTTPCHAIN040"):
+                self._run(self._foreach(2, stats_as="item_id"), response=self._FUNCTION_SAVES, carrier=cls)
+        assert "item_id" not in cls.global_context
 
 
 # A response of the mock job the retry tests poll: pending until its
@@ -3260,7 +3763,7 @@ class TestParallelCancellation:
                 # another queued iteration before the shutdown dropped it.
                 shut_down.set()
 
-        def fake_iteration(cls, stage, local_context, iter_vars, limiter=None, max_rate_limit_delay=60, cancel=None):
+        def fake_iteration(cls, stage, local_context, iter_vars, limiter=None, max_rate_limit_delay=60, cancel=None, exchange_seconds=None):
             started.append(iter_vars["i"])
             if iter_vars["i"] == 0:
                 raise RuntimeError("plugin bug")

@@ -41,8 +41,10 @@ from pytest_httpchain.scoping import (
     extract_uncalled_builtins,
     raw_stages,
     response_step_templates,
+    saved_in_response,
     saved_in_stage,
     stage_scopes,
+    stats_name,
     substitution_names,
     substitution_step_templates,
 )
@@ -76,6 +78,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagno
         *_invalid_expression_diagnostics(scenario, test_data),
         *_scenario_template_diagnostics(scenario, test_data, set(fixtures), scenario_sub_names, defined),
         *_reserved_name_diagnostics(vars_defined | vars_saved | set(fixtures)),
+        *_stats_as_diagnostics(scenario),
         *_dataflow_diagnostics(scenario, test_data, defined),
         *_uncalled_builtin_diagnostics(scenario, test_data, defined),
         *_relative_url_diagnostics(scenario),
@@ -310,6 +313,30 @@ def _reserved_name_diagnostics(user_names: set[str]) -> Iterator[Diagnostic]:
         )
 
 
+def _stats_as_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
+    """HTTPCHAIN040: a parallel stage's ``stats_as`` naming a variable its own
+    response saves too. The stats are saved with the iterations' saves, after
+    them, so they replace that save, which no later stage can read. The
+    carrier warns the same where this cannot see the name: a user function's
+    save returns any."""
+    for i, stage in enumerate(scenario.stages):
+        name = stats_name(stage)
+        if name is not None and name in saved_in_response(stage):
+            yield diag(
+                DiagnosticCode.STATS_REPLACE_SAVE,
+                f"Stage '{stage.name}': parallel.stats_as '{name}' is also a name its response saves: the stats are saved after the "
+                f"response steps' saves and replace that one, which no later stage can read. Rename one of them.",
+                location=f"stages[{i}].parallel.stats_as",
+            )
+
+
+def _only_stats(stage: Stage, name: str) -> bool:
+    """Whether ``stage`` saves ``name`` only as its ``parallel.stats_as``,
+    which none of its own phases can read: the stats exist once every
+    iteration has ended."""
+    return name == stats_name(stage) and name not in saved_in_response(stage)
+
+
 def _parametrize_rendered_values(raw_parametrize: Any) -> Any:
     """The parametrize subtree minus each step's ``ids``, which pytest uses
     verbatim for display and never renders (the same carve-out
@@ -393,7 +420,8 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
             if name in all_saved:
                 j = first_save_stage[name]
                 if j == i:
-                    msg = f"Stage '{stage.name}': always_run references '{name}', which is only saved in this stage's response — always_run is evaluated before the stage runs"
+                    saved = "as this stage's parallel.stats_as" if _only_stats(stage, name) else "in this stage's response"
+                    msg = f"Stage '{stage.name}': always_run references '{name}', which is only saved {saved} — always_run is evaluated before the stage runs"
                 else:
                     msg = f"Stage '{stage.name}': always_run references '{name}' before it is saved (saved in stage '{scenario.stages[j].name}')"
                 yield diag(DiagnosticCode.FORWARD_REF, msg + _builtin_fallback({name}), location=f"stages[{i}].always_run")
@@ -453,6 +481,9 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
                     j = first_save_stage[name]
                     if j != i:
                         msg = f"Stage '{stage.name}': variable '{name}' is referenced before it is saved (saved in stage '{scenario.stages[j].name}')"
+                    elif _only_stats(stage, name):
+                        where = "response step" if phase == "response" else phase
+                        msg = f"Stage '{stage.name}': {where} references '{name}', which is only saved as this stage's parallel.stats_as, once every iteration has ended"
                     elif phase == "response":
                         msg = f"Stage '{stage.name}': response step references '{name}' before the save that produces it — steps resolve in order"
                     else:

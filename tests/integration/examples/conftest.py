@@ -36,6 +36,10 @@ _tokens: set[str] = set()
 _counter_lock = threading.Lock()
 _counter = 0
 
+# Requests that reached /flaky (see there).
+_flaky_lock = threading.Lock()
+_flaky_calls = 0
+
 # Requests that reached /barrier (see there).
 _barrier = threading.Condition()
 _arrived = 0
@@ -54,9 +58,11 @@ _jobs: dict[int, dict] = {}
 
 
 def reset_server_state():
-    global _counter, _arrived, _last_resource_id
+    global _counter, _flaky_calls, _arrived, _last_resource_id
     with _counter_lock:
         _counter = 0
+    with _flaky_lock:
+        _flaky_calls = 0
     with _barrier:
         _arrived = 0
     with _resources_lock:
@@ -281,6 +287,18 @@ def increment_counter():
     with _counter_lock:
         _counter += 1
         return {"count": _counter}, HTTPStatus.OK
+
+
+@app.get("/flaky/<int:every>")
+def flaky(every: int):
+    """500 for every ``every``-th request since the server state was reset,
+    200 for the others: an endpoint failing a known share of a parallel
+    stage's requests, in whatever order they arrive."""
+    global _flaky_calls
+    with _flaky_lock:
+        _flaky_calls += 1
+        call = _flaky_calls
+    return {"call": call}, HTTPStatus.INTERNAL_SERVER_ERROR if call % every == 0 else HTTPStatus.OK
 
 
 # ============ Resource Endpoints (for parallel.collect_saves tests) ============

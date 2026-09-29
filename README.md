@@ -42,6 +42,10 @@ Each scenario contains 1+ stages executed in order. One stage failure stops the 
 
 A stage's `retry` attempts it again while it fails, after a wait that can grow each time: poll an asynchronous job until it reports `done`, or ride out eventual consistency and a flaky network (`"retry": {"attempts": 10, "delay": 0.5, "backoff": 2}`). Each attempt sends a freshly rendered request and runs every response step; only the attempt that passes saves anything.
 
+### Parallel stages and load checks
+
+A stage's `parallel` sends its request many times at once (`repeat`) or once per parameter set (`foreach`), with a concurrency cap and a rate limit. Its report sums the run up: iterations passed, failed and cancelled, wall time, throughput and p50/p95/p99 latency. `thresholds` fail the stage below a success ratio or above a latency (`"thresholds": {"min_success_ratio": 0.99, "max_p95_ms": 300}`), letting it run on after failed requests as long as enough pass, and `stats_as` saves the numbers for a later stage.
+
 ### Common data context
 
 A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use template expressions (`{{ var }}`) in any request **value** — substitution happens dynamically before each stage. (Dict keys are not substituted; `HTTPCHAIN029` flags a template in a key.) Built-in functions give the values tests keep needing without a fixture: the time (`now()`, `timestamp()`), base64, JSON and URL encoding, and SHA-256, MD5 and HMAC-SHA256 digests for signing a request.

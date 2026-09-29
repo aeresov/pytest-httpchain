@@ -85,6 +85,8 @@ Execute a request for each parameter combination in parallel:
 | `calls_per_sec` | integer | null | Rate limit (requests per second) |
 | `max_rate_limit_delay` | integer | 60 | Max seconds a request waits for a rate-limit slot before failing |
 | `collect_saves` | boolean | false | Keep every iteration's saves: each saved name becomes a list, one entry per iteration (see [Collecting every iteration's saves](#collecting-every-iterations-saves)) |
+| `thresholds` | object | null | Limits on the stage's success ratio, latency and throughput, checked once every iteration has ended (see [Thresholds](#thresholds)) |
+| `stats_as` | string | null | Save the stage's stats as an object under this name, for the stages after it (see [Saving the stats](#saving-the-stats)) |
 
 > The total number of iterations a single stage may run (`repeat`, or the
 > product of its `foreach` parameter sets) is capped by the `httpchain_max_parallel_iterations`
@@ -252,7 +254,9 @@ it saves nothing (see the notes below), so `created_ids` does not exist, and
   runs `(1, x)`, `(2, x)`, `(1, y)`, `(2, y)`.
 - **`null` where an iteration saved nothing under a name** that another one
   saved, as a user function's save may return different names each time. A
-  saved `null` (a JMESPath save of a missing key) looks the same.
+  saved `null` (a JMESPath save of a missing key) looks the same, and so does
+  an iteration that failed in a stage a `min_success_ratio` below 1 lets pass
+  (see [Thresholds](#thresholds)).
 - **A list even for one iteration**, such as a `foreach` over a list with one
   item: the shape does not depend on how many items there are.
 - **Inside the stage nothing changes**: an iteration's later response steps read
@@ -269,6 +273,213 @@ it saves nothing (see the notes below), so `created_ids` does not exist, and
   stricter: it is a condition, and must evaluate to a boolean itself). Any other
   value, `null` or text such as `"true"` included, fails the stage before any
   request is sent.
+
+## Stats and thresholds
+
+A parallel stage is often a small load test, where passing is not all there
+is to know. Every parallel stage measures its iterations, sums them up in its
+report, and can be held to limits on the numbers.
+
+### The Parallel Summary
+
+The stage's report gets a `Parallel Summary` section, shown where its
+`HTTP Request` and `HTTP Response` sections are: in a failed stage's report,
+and in a passed one's with `-rP` or `-rA`, under pytest-xdist too. A stage
+without `parallel` has none.
+
+```text
+------------------------------- Parallel Summary -------------------------------
+Iterations:     9 (6 passed, 3 failed, 0 cancelled)
+Success ratio:  0.6667
+Wall time:      34.25 ms
+Throughput:     262.79 completed iterations/s, 175.19 passed iterations/s
+Latency (ms):   min 6.01, mean 8.94, p50 7.75, p95 12.85, p99 12.85, max 12.85
+Thresholds:     min_success_ratio 0.6: met, 0.666667 (6 of 9 iterations passed)
+                max_p95_ms 60000: met, 12.8483 ms
+```
+
+What it counts and measures:
+
+- **Iterations**, by how each ended: *passed*, its response steps all
+  passed; *failed*; *cancelled*, stopped by another iteration that had ended
+  the stage, before it sent its request or while it waited for a
+  rate-limit slot or to retry; and *skipped*, listed only when a user
+  function skipped or xfailed one.
+- An iteration's **duration** is the time its requests spent in the HTTP
+  client: from handing one to it to having its whole response, redirects and
+  an auth flow's round trips included, summed over the attempts a
+  [`retry`](retry.md) makes. It leaves out the wait for a `calls_per_sec`
+  slot, which would otherwise make a rate-limited server read as a slow one,
+  the wait between attempts, rendering the request, and the response steps.
+- The client's own waits count in the duration too, though the server
+  causes none of them: opening a connection (TCP, TLS, a proxy's tunnel),
+  and waiting for one, which an iteration does when
+  [`client.max_connections`](../usage/scenarios.md#client-configuration) is
+  below `max_concurrency`, or for an HTTP/2 stream, past 100 at a time (see
+  [Repeat Mode](#repeat-mode)). For a latency that is the server's alone,
+  leave `max_connections` unset or at least `max_concurrency`, set
+  `max_keepalive_connections` at least as high, so that connections are
+  reused rather than opened anew, and keep an HTTP/2 stage within 100 at a
+  time or set `client.http2` to `false`.
+- **Latency** is the durations of the iterations that passed. A failure's
+  duration, a timeout's whole wait or a refused connection's next to nothing,
+  says nothing of how fast the server answers. Its percentiles are
+  *nearest-rank*: the p-th percentile is the smallest duration that at least
+  p % of them are at most, always one that was measured, never an
+  interpolation. So with fewer than 20 passed iterations p95 is the maximum,
+  and with fewer than 100 p99 is.
+- **Wall time** runs from the first iteration's start to the last one's end,
+  every wait included.
+- **Throughput** is the iterations per second of wall time: the completed
+  ones, every iteration that ran to its end, passed, failed or skipped, all
+  but the cancelled; and the passed ones, which `min_rps` holds, as a failed
+  iteration adds no latency either.
+- **Success ratio** is the passed iterations' share of all the stage's
+  iterations.
+
+### Thresholds
+
+`thresholds` fails a stage whose numbers do not reach its limits, checked
+once every iteration has ended:
+
+```json
+{
+    "client": {"base_url": "https://api.example.com"},
+    "stages": [
+        {
+            "name": "sustained_load",
+            "parallel": {
+                "repeat": 500,
+                "max_concurrency": 25,
+                "thresholds": {
+                    "min_success_ratio": 0.99,
+                    "max_p95_ms": 300,
+                    "max_p99_ms": 800,
+                    "min_rps": 50
+                }
+            },
+            "request": {"url": "/health"},
+            "response": [{"verify": {"status": 200}}]
+        }
+    ]
+}
+```
+
+| Threshold | Limit | Met when |
+|-----------|-------|----------|
+| `min_success_ratio` | a number from 0 to 1 | at least this share of the iterations passed |
+| `max_mean_ms` | milliseconds, above 0 | the passed iterations' mean latency is at most this |
+| `max_p50_ms` | milliseconds, above 0 | their median latency is at most this |
+| `max_p95_ms` | milliseconds, above 0 | their 95th percentile latency is at most this |
+| `max_p99_ms` | milliseconds, above 0 | their 99th percentile latency is at most this |
+| `min_rps` | iterations per second, above 0 | the passed iterations' throughput is at least this |
+
+Each is optional, and a limit is met at equality. A latency limit with no
+passed iteration to measure it over is not met. A stage that misses any
+fails naming every one it missed, with the value measured and the limit,
+as a verify step lists its failed checks:
+
+```text
+2 parallel thresholds not met:
+  1. min_success_ratio: 0.666667 (6 of 9 iterations passed), below the limit 0.9
+  2. max_p95_ms: 19.2544 ms, above the limit 0.001 ms
+3 failed iterations:
+  iteration 3: Status code doesn't match: expected 200, got 500
+  iteration 5: Status code doesn't match: expected 200, got 500
+  iteration 8: Status code doesn't match: expected 200, got 500
+```
+
+**Failed iterations.** Without `min_success_ratio`, or with it at 1, a
+failing iteration fails the stage as it always has: it cancels the rest, the
+stage fails with `Parallel execution failed at iteration N: ...`, and no
+threshold is checked. Below 1 the stage runs on after failures instead:
+
+- No iteration is cancelled for another's failure: every one runs.
+- Once all have ended, the stage fails if fewer passed than the ratio asks,
+  listing the first five failed iterations, lowest index first, after the
+  thresholds, and the report shows the exchange of the first one that sent
+  a request. Otherwise it passes, counting the failures in its summary (each
+  is also logged at `INFO` as it happens). With no iteration passed, the
+  report shows that failure's exchange however the stage ends.
+- It saves what the passed iterations saved. Merged, the highest *passed*
+  iteration index wins a name; with `collect_saves` the lists keep an entry
+  per iteration, `null` where one failed, so entry `i` stays iteration `i`'s.
+- `0` passes a stage whose every iteration failed: for a run whose numbers
+  are all it is for. The names its `jmespath`, `regex` and `substitutions`
+  saves declare are saved all the same, `null` merged and a list of `null`s
+  with `collect_saves`, so a later stage reading one finds it, as `validate`
+  says it will. A name only a `user_functions` save returns is saved only
+  if a passed iteration returned it.
+- Two things still end the stage at once, as without it: a user function's
+  `pytest.skip()`, `xfail()` or `fail()`, and a context manager a factory
+  fixture returned raising on exit, since what a failed rollback left
+  behind must not pass unnoticed. The failure an exit error ends it with
+  lists, after its own message, the iterations that failed on their own,
+  the first five, lowest index first (`2 failed iterations tolerated by
+  min_success_ratio:`). The [HAR file](../getting-started.md#har-export)
+  has every request they sent, however the stage ends.
+
+Each threshold is a number or a template, part of the `parallel` config: it
+renders with the rest of it before any request is sent, against what the
+stage's `skip_if` sees, so a `foreach` parameter there is undefined, which
+`validate` reports (`HTTPCHAIN003`). A limit that renders to `null` (see
+[Templates that render to `null`](../usage/substitutions.md#templates-that-render-to-null)),
+to text, to `true` or `false`, or out of its range fails the stage before
+its iterations send anything, as a limit written so fails validation.
+
+### Saving the stats
+
+`stats_as` saves the stage's stats under a name, as an object the stages
+after it read like any saved object:
+
+```json
+{
+    "client": {"base_url": "https://api.example.com"},
+    "stages": [
+        {
+            "name": "search_load",
+            "parallel": {
+                "repeat": 200,
+                "max_concurrency": 20,
+                "thresholds": {"min_success_ratio": 0.95},
+                "stats_as": "search"
+            },
+            "request": {"url": "/search?q=widgets"},
+            "response": [{"verify": {"status": 200}}]
+        },
+        {
+            "name": "publish_results",
+            "request": {
+                "method": "POST",
+                "url": "/metrics",
+                "body": {"json": {"p95_ms": "{{ search.p95_ms }}", "rps": "{{ search.rps }}", "failed": "{{ search.failed }}"}}
+            },
+            "response": [{"verify": {"status": 204}}]
+        }
+    ]
+}
+```
+
+| Key | Value |
+|-----|-------|
+| `iterations`, `passed`, `failed` | how many iterations the stage ran, passed and failed |
+| `success_ratio` | from 0 to 1 |
+| `wall_ms` | the wall time, in milliseconds |
+| `rps` | the throughput of passed iterations, per second, which `min_rps` holds |
+| `completed_rps` | the throughput of completed iterations, passed or failed, per second |
+| `min_ms`, `mean_ms`, `p50_ms`, `p95_ms`, `p99_ms`, `max_ms` | the latency, in milliseconds; `null` when no iteration passed |
+
+The values are not rounded. The stats are saved as the stage's other saves
+are: only when it passes, so a stage that fails, a threshold not met
+included, saves none, and none of its iterations was cancelled or skipped.
+They are one object, never a list, `collect_saves` or not. None of the
+stage's own steps can read them, as they exist once every iteration has
+ended: `validate` reports a reference to the name there (`HTTPCHAIN004`),
+and `show` and `graph` list it among the stage's saves, for the stages after
+it. The name is a variable name as written, never a template. Saved after
+the response steps' saves, the stats replace a save of the same name, which
+`validate` warns of (`HTTPCHAIN040`), and so does the stage, once, when
+only a user function's save returned the name, which `validate` cannot see.
 
 ## Load Testing Example
 
@@ -301,7 +512,8 @@ it saves nothing (see the notes below), so `created_ids` does not exist, and
             "parallel": {
                 "repeat": "{{ total_requests }}",
                 "max_concurrency": "{{ concurrent }}",
-                "calls_per_sec": "{{ rate }}"
+                "calls_per_sec": "{{ rate }}",
+                "thresholds": {"min_success_ratio": 0.99, "max_p95_ms": 500}
             },
             "request": {
                 "url": "{{ base_url }}/api/endpoint",
@@ -335,10 +547,14 @@ it saves nothing (see the notes below), so `created_ids` does not exist, and
   saves at all, so the context never carries a timing-dependent subset. That
   holds with `collect_saves` too: when one iteration of a stage creating
   resources fails, the ids the others saved are dropped with the rest, and no
-  later stage can delete those resources by them
+  later stage can delete those resources by them. A
+  [`min_success_ratio`](#thresholds) below 1 is the exception: a stage it
+  lets pass saves what its passed iterations saved
 - The first failing iteration cancels the rest: iterations not sent yet are
   never sent (those already in flight run to their end), and the stage fails
-  with `Parallel execution failed at iteration N: ...`
+  with `Parallel execution failed at iteration N: ...`. A `min_success_ratio`
+  below 1 runs every iteration instead, and fails the stage once they have
+  all ended if too few passed
 - Iterations do not see one another's saves; each resolves against the stage
   context plus its own parameters
 - With a stage [`retry`](retry.md#with-parallel), each iteration makes its own

@@ -70,7 +70,7 @@ Run stages with different parameter values, similar to pytest's `@pytest.mark.pa
 
 ### Parallel Execution
 
-Execute multiple requests concurrently for load testing, stress testing, or bulk operations. With [`collect_saves`](advanced/parallel.md#collecting-every-iterations-saves), every request's saved values are kept as lists, so a later stage can delete every resource a parallel stage created.
+Execute multiple requests concurrently for load testing, stress testing, or bulk operations. With [`collect_saves`](advanced/parallel.md#collecting-every-iterations-saves), every request's saved values are kept as lists, so a later stage can delete every resource a parallel stage created. The report sums a parallel stage up (iterations passed and failed, throughput, p50/p95/p99 latency), and [`thresholds`](advanced/parallel.md#thresholds) fail it below a success ratio or above a latency.
 
 ### Full pytest Integration
 

@@ -8,6 +8,7 @@ from pytest_httpchain.models.entities import (
     IndividualParameter,
     ParallelForeachConfig,
     ParallelRepeatConfig,
+    ParallelThresholds,
     Stage,
 )
 from tests.unit.models.helpers import assert_error_types, stage_dict
@@ -101,3 +102,77 @@ def test_empty_foreach_rejected():
 )
 def test_raw_parallel_dict_selects_model(parallel, expected):
     assert type(Stage.model_validate(stage_dict(parallel=parallel)).parallel) is expected
+
+
+@pytest.mark.parametrize(("attr", "default"), [("thresholds", None), ("stats_as", None)])
+def test_stats_fields_default_to_none(attr, default):
+    assert getattr(ParallelRepeatConfig(repeat=5), attr) == default
+
+
+@pytest.mark.parametrize(
+    "thresholds",
+    [
+        pytest.param({"min_success_ratio": 0}, id="ratio-zero"),
+        pytest.param({"min_success_ratio": 1}, id="ratio-one"),
+        pytest.param({"min_success_ratio": 0.95, "max_mean_ms": 120, "max_p50_ms": 100, "max_p95_ms": 250.5, "max_p99_ms": 400, "min_rps": 50}, id="all"),
+        pytest.param({"min_success_ratio": "{{ ratio }}", "max_p95_ms": "{{ budget }}", "min_rps": "{{ rps }}"}, id="templates"),
+        # An explicit null sets no limit, as a retry's max_delay does.
+        pytest.param({"max_p95_ms": None}, id="null"),
+        pytest.param({}, id="none"),
+    ],
+)
+def test_thresholds_round_trip(thresholds):
+    config = ParallelRepeatConfig.model_validate({"repeat": 5, "thresholds": thresholds})
+    assert config.thresholds == ParallelThresholds.model_validate(thresholds)
+    assert {name: getattr(config.thresholds, name) for name in thresholds} == thresholds
+
+
+@pytest.mark.parametrize(
+    ("thresholds", "field", "error"),
+    [
+        pytest.param({"min_success_ratio": 1.5}, "min_success_ratio", "less_than_equal", id="ratio-above-one"),
+        pytest.param({"min_success_ratio": -0.1}, "min_success_ratio", "greater_than_equal", id="ratio-negative"),
+        # A limit no iteration meets, or an infinite one, is not a limit.
+        pytest.param({"max_p95_ms": 0}, "max_p95_ms", "greater_than", id="latency-zero"),
+        pytest.param({"max_mean_ms": -5}, "max_mean_ms", "greater_than", id="latency-negative"),
+        pytest.param({"min_rps": 0}, "min_rps", "greater_than", id="rps-zero"),
+        pytest.param({"max_p99_ms": float("inf")}, "max_p99_ms", "finite_number", id="latency-infinite"),
+        # Template text that is not one complete template.
+        pytest.param({"max_p50_ms": "under {{ budget }}"}, "max_p50_ms", "value_error", id="partial-template"),
+        pytest.param({"max_p95": 100}, "max_p95", "extra_forbidden", id="typo"),
+    ],
+)
+def test_thresholds_refused(thresholds, field, error):
+    with pytest.raises(ValidationError) as exc_info:
+        ParallelRepeatConfig.model_validate({"repeat": 5, "thresholds": thresholds})
+    assert_error_types(exc_info, error, at=field)
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_threshold_refuses_a_bool(value):
+    """The number branch reads one as 1 or 0: `true` would demand every
+    iteration pass, `false` let a stage whose iterations all failed pass."""
+    with pytest.raises(ValidationError) as exc_info:
+        ParallelThresholds.model_validate({"min_success_ratio": value})
+    assert [(error["loc"], error["msg"]) for error in exc_info.value.errors()] == [
+        (("min_success_ratio",), f"Value error, A threshold is a number or a template, got {str(value).lower()}")
+    ]
+
+
+def test_stats_as_is_a_variable_name():
+    assert ParallelForeachConfig.model_validate({"foreach": [{"individual": {"n": [1]}}], "stats_as": "load"}).stats_as == "load"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # A save's name is never rendered, as a jmespath save's is not.
+        pytest.param("{{ name }}", id="template"),
+        pytest.param("p95-ms", id="not-an-identifier"),
+        pytest.param("class", id="keyword"),
+    ],
+)
+def test_stats_as_refuses_what_is_no_variable_name(name):
+    with pytest.raises(ValidationError) as exc_info:
+        ParallelRepeatConfig.model_validate({"repeat": 5, "stats_as": name})
+    assert_error_types(exc_info, "value_error", at="stats_as")

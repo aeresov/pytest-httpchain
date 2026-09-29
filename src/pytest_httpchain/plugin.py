@@ -3,7 +3,8 @@
 Registers the ini options and ``--httpchain-output-dir``, collects
 ``test_<name>.<suffix>.json`` and ``.jsonc`` files into `JsonModule`, keeps
 each scenario's stages contiguous and ordered, and attaches the HTTP exchange
-(plus an optional HAR file) to test reports, credentials redacted.
+(plus an optional HAR file, and a parallel stage's stats) to test reports,
+credentials redacted.
 """
 
 import functools
@@ -25,6 +26,7 @@ from pytest_httpchain.constants import DEFAULT_SUFFIX, ConfigOptions, check_suff
 from pytest_httpchain.factory import create_test_class
 from pytest_httpchain.har_writer import write_har_file
 from pytest_httpchain.models import Scenario
+from pytest_httpchain.parallel_stats import ParallelStats
 from pytest_httpchain.redaction import DEFAULT_REDACT_HEADERS, DEFAULT_REDACT_QUERY_PARAMS, NO_REDACTION, Redaction
 from pytest_httpchain.report_formatter import format_curl, format_request, format_response
 from pytest_httpchain.templates import get_max_comprehension_length, set_max_comprehension_length
@@ -750,6 +752,9 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
 
         if _sections_will_be_shown(item.config, report):
             redaction = item.config.stash[_REDACTION]
+            # A parallel stage's stats first: the one exchange below is one of many.
+            if (stats := carrier_class.last_parallel_stats) is not None:
+                report.sections.append(("Parallel Summary", _format_section("parallel summary", ParallelStats.summary, stats)))
             if (request := carrier_class.last_request) is not None:
                 report.sections.append((f"HTTP Request{suffix}", _format_section("request", functools.partial(format_request, redaction=redaction), request)))
                 report.sections.append((f"HTTP Request (curl){suffix}", _format_section("curl command", functools.partial(format_curl, redaction=redaction), request)))

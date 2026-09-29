@@ -23,6 +23,9 @@ response (per iteration)  the above plus the ``response`` metadata namespace,
                           plus PRIOR steps' saves (steps resolve in order)
 ========================  ====================================================
 
+A stage's ``parallel.stats_as`` is saved with its response steps' saves, once
+every iteration has ended: the stages after it see it, none of its own phases.
+
 Stage ``parametrize`` *values* are the exception: they resolve at collection
 time against scenario substitutions only, which is why `StageScopes` exposes
 ``scenario_substitutions`` separately.
@@ -361,11 +364,27 @@ def saved_in_step(response_step: ResponseStep) -> set[str]:
             return set()
 
 
-def saved_in_stage(stage: Stage) -> set[str]:
+def saved_in_response(stage: Stage) -> set[str]:
     """Names one stage's response steps save."""
     saved: set[str] = set()
     for response_step in stage.response:
         saved |= saved_in_step(response_step)
+    return saved
+
+
+def stats_name(stage: Stage) -> str | None:
+    """The name a parallel stage saves its stats under (``parallel.stats_as``), if any."""
+    return stage.parallel.stats_as if stage.parallel is not None else None
+
+
+def saved_in_stage(stage: Stage) -> set[str]:
+    """Names one stage saves: its response steps', and its stats' name
+    (`stats_name`), which it saves with them. The stats exist only once every
+    iteration has ended, so none of the stage's own templates can read them:
+    `response_step_templates` goes by `saved_in_response`."""
+    saved = saved_in_response(stage)
+    if (name := stats_name(stage)) is not None:
+        saved.add(name)
     return saved
 
 
@@ -532,7 +551,7 @@ def response_step_templates(stage: Stage, raw_response: Any) -> Iterator[tuple[A
     # saves anywhere may already exist, so the whole-stage set is restored rather
     # than report a forward reference the runtime would satisfy.
     opaque_save_seen = False
-    all_stage_saves = frozenset(saved_in_stage(stage))
+    all_stage_saves = frozenset(saved_in_response(stage))
     raw_steps = raw_list_entries(raw_response)
     for k, step in enumerate(stage.response):
         step_raw = raw_steps[k] if k < len(raw_steps) else None
@@ -561,7 +580,8 @@ class StageScopes:
     contexts, and each names its runtime twin.
 
     ``saves`` is the exception: no phase unions it, because a stage's own saves
-    become visible step by step, which `response_step_templates` tracks. It remains a
+    become visible step by step, which `response_step_templates` tracks, and
+    its ``parallel.stats_as`` only to the stages after it. It remains a
     reporting input (`cli show`, `dataflow.StageFlow`, the first-save index) —
     reading it as in-stage visibility is what produced the bug that split it out.
     """

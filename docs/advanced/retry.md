@@ -195,8 +195,10 @@ In a [`parallel`](parallel.md) stage each iteration makes its own attempts, with
 schedule, and the stage passes once every iteration has passed: an iteration whose job is done
 at the first poll does not wait for the others to be done. The first iteration to fail, out of
 attempts or on a failure never retried, fails the stage and cancels the others, as a failing
-iteration always does: an iteration waiting to retry stops waiting at once, and sends nothing
-more.
+iteration does: an iteration waiting to retry stops waiting at once, and sends nothing more.
+A [`thresholds.min_success_ratio`](parallel.md#thresholds) below 1 tolerates such a failure
+instead: nothing is cancelled, every iteration makes its attempts, and once they have all ended
+the stage fails only if fewer passed than the ratio asks.
 
 An iteration waiting to retry keeps its worker: with more iterations than `max_concurrency`, the
 iterations still queued start as the ones before them end, not while those wait. With

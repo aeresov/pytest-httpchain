@@ -117,6 +117,23 @@ def test_collected_saves_are_the_stage_saves_and_feed_edges():
     assert _edges(flow) == [{"producer": 0, "consumer": 1, "vars": ["created_ids"]}]
 
 
+def test_stats_as_is_a_save_of_its_stage_and_feeds_edges():
+    """``show`` and ``graph`` list a stage's ``parallel.stats_as`` among its
+    saves, and draw the edge to a later stage reading it. The stage's own
+    templates cannot read its stats, which exist only once every iteration
+    has ended: a reference there consumes an earlier stage's save of the name."""
+    load = _stage(
+        "load",
+        parallel={"repeat": 3, "stats_as": "stats"},
+        response=[{"verify": {"expressions": ["{{ stats.passed > 0 }}"]}}, {"save": {"jmespath": {"id": "id"}}}],
+    )
+    report = _stage("report", request={"url": "https://x.test/?p95={{ stats.p95_ms }}"})
+    flow = analyze_dataflow(*_scenario([_producer(stats="s"), load, report]))
+    assert flow.stages[1].saves == ["id", "stats"]
+    assert flow.stages[1].consumes == ["stats"]
+    assert _edges(flow) == [{"producer": 0, "consumer": 1, "vars": ["stats"]}, {"producer": 1, "consumer": 2, "vars": ["stats"]}]
+
+
 @pytest.mark.parametrize(
     ("url", "expected"),
     [

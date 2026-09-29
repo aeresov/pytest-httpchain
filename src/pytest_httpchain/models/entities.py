@@ -1156,6 +1156,51 @@ def parametrize_values_contain_template(parametrize: Parameters | None) -> bool:
     return False
 
 
+def _refuse_bool(setting: str) -> Callable[[Any], Any]:
+    """A numeric ``setting`` written or rendered as true or false, refused
+    ahead of its union. The number branches take a bool as 1 (pydantic's lax
+    mode), so a retry's `"attempts": true`, or `"{{ poll }}"` rendering a
+    flag, would attempt once and turn retry off without a word, `"delay":
+    true` wait a second, and a threshold's `"min_success_ratio": true` have
+    every iteration pass. The JSON Schema's integer and number refuse a
+    boolean already."""
+
+    def refuse(v: Any) -> Any:
+        if isinstance(v, bool):
+            raise ValueError(f"{setting} is a number or a template, got {str(v).lower()}")
+        return v
+
+    return refuse
+
+
+# A parallel stage's limits: a success ratio from 0 to 1, and a positive
+# number of milliseconds or iterations per second, each finite, as the carrier
+# resolves them (`_threshold_limits`). None takes a bool (`_refuse_bool`).
+_SuccessRatio = Annotated[Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A threshold"))]
+_PositiveLimit = Annotated[Annotated[float, Field(gt=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A threshold"))]
+
+
+class ParallelThresholds(StrictModel):
+    """What a parallel stage's stats must reach, checked once every iteration
+    has ended: each limit is optional, and a stage fails naming every one it
+    did not meet. Latencies are over the iterations that passed."""
+
+    min_success_ratio: _SuccessRatio | None = Field(
+        default=None,
+        description=(
+            "The share of the iterations that must pass, from 0 to 1. Below 1 a failing iteration neither cancels the others nor fails "
+            "the stage by itself: the stage fails once they have all ended if fewer passed, and saves what the passed ones saved. "
+            "Without it (or at 1) the first failing iteration cancels the rest and fails the stage."
+        ),
+        examples=[0.95, "{{ min_ratio }}"],
+    )
+    max_mean_ms: _PositiveLimit | None = Field(default=None, description="The passed iterations' mean latency, in milliseconds, at most.")
+    max_p50_ms: _PositiveLimit | None = Field(default=None, description="The passed iterations' median (p50) latency, in milliseconds, at most.")
+    max_p95_ms: _PositiveLimit | None = Field(default=None, description="The passed iterations' 95th percentile latency, in milliseconds, at most.")
+    max_p99_ms: _PositiveLimit | None = Field(default=None, description="The passed iterations' 99th percentile latency, in milliseconds, at most.")
+    min_rps: _PositiveLimit | None = Field(default=None, description="Passed iterations per second of the stage's wall time, at least.")
+
+
 class ParallelConfigBase(StrictModel):
     """Base configuration for parallel HTTP request execution."""
 
@@ -1182,6 +1227,18 @@ class ParallelConfigBase(StrictModel):
             "in iteration order, null where an iteration did not save it. False: the iterations' saves merge, "
             "and of those that save the same name the highest iteration index wins."
         ),
+    )
+    thresholds: ParallelThresholds | None = Field(
+        default=None,
+        description="Limits the stage's stats must meet once every iteration has ended: a success ratio, latencies and a throughput.",
+    )
+    stats_as: VariableName | None = Field(
+        default=None,
+        description=(
+            "Save the stage's stats under this name, as an object (iterations, passed, failed, success_ratio, wall_ms, rps, completed_rps, "
+            "min_ms, mean_ms, p50_ms, p95_ms, p99_ms, max_ms), for the stages after it: saved, as every save is, only when the stage passes."
+        ),
+        examples=["load"],
     )
 
 
@@ -1221,24 +1278,13 @@ RetryOn = Literal["verify", "save", "request"]
 RETRY_ON: tuple[RetryOn, ...] = ("verify", "save", "request")
 
 
-def _refuse_bool(v: Any) -> Any:
-    """A retry setting written or rendered as true or false, refused ahead of
-    its union. The number branches take a bool as 1 (pydantic's lax mode), so
-    `"attempts": true`, or `"{{ poll }}"` rendering a flag, would attempt once
-    and turn retry off without a word, and `"delay": true` wait a second. The
-    JSON Schema's integer and number refuse a boolean already."""
-    if isinstance(v, bool):
-        raise ValueError(f"A retry setting is a number or a template, got {str(v).lower()}")
-    return v
-
-
 # A retry's attempts, seconds and backoff factor. The seconds and the factor
 # are finite, as the carrier resolves them (`_setting_number`), so what it
 # refuses the model refuses at load: JSON's 1e999 reads as inf, which float
 # takes by default. None of them takes a bool (`_refuse_bool`).
-_RetryAttempts = Annotated[PositiveInt | NumberOrTemplate, BeforeValidator(_refuse_bool)]
-_RetrySeconds = Annotated[Annotated[float, Field(ge=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool)]
-_RetryFactor = Annotated[Annotated[float, Field(ge=1, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool)]
+_RetryAttempts = Annotated[PositiveInt | NumberOrTemplate, BeforeValidator(_refuse_bool("A retry setting"))]
+_RetrySeconds = Annotated[Annotated[float, Field(ge=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A retry setting"))]
+_RetryFactor = Annotated[Annotated[float, Field(ge=1, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A retry setting"))]
 
 
 class RetryConfig(StrictModel):

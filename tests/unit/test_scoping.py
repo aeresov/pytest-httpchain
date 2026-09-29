@@ -19,8 +19,12 @@ from pytest_httpchain.scoping import (
     extract_uncalled_builtins,
     iteration_context,
     response_step_context,
+    response_step_templates,
+    saved_in_response,
+    saved_in_stage,
     stage_scopes,
     stage_start_context,
+    stats_name,
     with_saves,
     with_stage_substitutions,
 )
@@ -114,6 +118,33 @@ class TestStageScopes:
         assert last.when_skipped.earlier_saves == {"both", "kept"}
         assert last.request - last.when_skipped.request == {"token", "gone"}
         assert last.when_skipped.skippable_saves == set()
+
+    def test_stats_as_is_a_save_no_phase_of_its_stage_sees(self):
+        """A stage's stats exist once every iteration has ended: the stages
+        after it read them, none of its own response steps does, even after
+        a save whose names are unknown (a user function's), which makes every
+        name the steps save visible."""
+        scenario = Scenario.model_validate(
+            {
+                "stages": [
+                    {
+                        "name": "load",
+                        "parallel": {"repeat": 2, "stats_as": "stats"},
+                        "request": {"url": "http://server/"},
+                        "response": [{"save": {"user_functions": ["mod:fn"]}}, {"save": {"jmespath": {"id": "a"}}}, {"verify": {"status": 200}}],
+                    },
+                    {"name": "after", "request": {"url": "http://server/"}},
+                ]
+            }
+        )
+        load, after = scenario.stages
+        assert (saved_in_response(load), stats_name(load), saved_in_stage(load)) == ({"id"}, "stats", {"id", "stats"})
+        assert (saved_in_response(after), stats_name(after), saved_in_stage(after)) == (set(), None, set())
+        assert [prior for _, prior in response_step_templates(load, None)] == [set(), {"id"}, {"id"}]
+        scopes = stage_scopes(scenario)
+        assert scopes[0].saves == {"id", "stats"}
+        assert "stats" not in scopes[0].response
+        assert "stats" in scopes[1].request
 
 
 class TestContextBuilders:

@@ -11,6 +11,7 @@ import pytest
 from pytest_httpchain.carrier import Carrier
 from pytest_httpchain.constants import ConfigOptions
 from pytest_httpchain.models import Scenario
+from pytest_httpchain.parallel_stats import ParallelStats, parallel_stats
 from pytest_httpchain.plugin import (
     _CHAIN_KEY,
     _HAR_REDACTION,
@@ -509,9 +510,11 @@ class TestReportSectionsBuiltOnlyWhenShown:
         assert _sections_will_be_shown(config, MagicMock(failed=False))
 
     @staticmethod
-    def _run_hook(config, *, failed: bool, request: httpx.Request | None = None, history: list[httpx.Response] | None = None) -> list[tuple[str, str]]:
-        """Drive the report hook over one recorded exchange, returning the
-        sections it attached."""
+    def _run_hook(
+        config, *, failed: bool, request: httpx.Request | None = None, history: list[httpx.Response] | None = None, stats: ParallelStats | None = None
+    ) -> list[tuple[str, str]]:
+        """Drive the report hook over one recorded exchange, and a parallel
+        stage's ``stats`` when given, returning the sections it attached."""
         if request is None:
             request = httpx.Request("GET", "https://example.com/")
         response = httpx.Response(200, json={"a": 1}, request=request, history=history)
@@ -520,6 +523,7 @@ class TestReportSectionsBuiltOnlyWhenShown:
             last_request = request
             last_response = response
             last_exchanges = [(request, response, None)]
+            last_parallel_stats = stats
 
         report = MagicMock(failed=failed, skipped=False, sections=[])
         # `cls` is reserved by Mock's own constructor, so it is set afterwards.
@@ -557,6 +561,21 @@ class TestReportSectionsBuiltOnlyWhenShown:
         assert list(sections) == ["HTTP Request (after 1 redirect)", "HTTP Request (curl) (after 1 redirect)", "HTTP Response (after 1 redirect)"]
         assert f"authorization: {shown}" in sections["HTTP Request (after 1 redirect)"]
         assert sections["HTTP Request (curl) (after 1 redirect)"].endswith(f"curl -X GET 'https://example.com/final' \\\n  -H 'authorization: {shown}'")
+
+    @pytest.mark.parametrize(
+        ("args", "failed", "expected"),
+        [
+            pytest.param((), False, [], id="passed"),
+            pytest.param((), True, ["Parallel Summary", "HTTP Request", "HTTP Request (curl)", "HTTP Response"], id="failed"),
+            pytest.param(("-rA",), False, ["Parallel Summary", "HTTP Request", "HTTP Request (curl)", "HTTP Response"], id="passed-with-rA"),
+        ],
+    )
+    def test_parallel_summary_comes_first_when_the_sections_will_be_read(self, pytester, args, failed, expected):
+        stats = parallel_stats(["passed", "failed"], [0.01, 0.02], 0.1)
+        sections = self._run_hook(pytester.parseconfigure(*args), failed=failed, stats=stats)
+        assert [title for title, _ in sections] == expected
+        if sections:
+            assert sections[0][1] == stats.summary()
 
     def test_har_write_failure_is_logged_not_raised(self, pytester, tmp_path, caplog):
         not_a_dir = tmp_path / "file"

@@ -20,7 +20,7 @@ import threading
 import time
 import warnings
 from collections import ChainMap
-from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Hashable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 from contextvars import ContextVar
@@ -48,6 +48,7 @@ from pytest_httpchain.models import (
     ParallelConfig,
     ParallelForeachConfig,
     ParallelRepeatConfig,
+    ParallelThresholds,
     RegexCapture,
     ResponseBody,
     RetryConfig,
@@ -62,6 +63,7 @@ from pytest_httpchain.models import (
     validate_rendered_scenario_auth,
     validate_rendered_verify,
 )
+from pytest_httpchain.parallel_stats import IterationEnd, ParallelStats, failed_iterations, parallel_stats, threshold_failure
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.request_builder import build_client_kwargs, build_request_kwargs
 from pytest_httpchain.response_steps import RenderFailure, RenderOutcome, VerifyRender, process_save, process_verify
@@ -70,6 +72,7 @@ from pytest_httpchain.scoping import (
     base_global_context,
     iteration_context,
     response_step_context,
+    saved_in_response,
     stage_start_context,
     with_saves,
     with_stage_substitutions,
@@ -335,7 +338,29 @@ def _parallel_flag(field: str, value: Any) -> bool:
     return value
 
 
-def _merged_saves(saved: Sequence[Mapping[str, Any]], collect: bool) -> dict[str, Any]:
+def _threshold_limits(thresholds: ParallelThresholds | None) -> dict[str, float]:
+    """A walk()-resolved ``parallel.thresholds`` as the limits the stage's
+    stats are held to, by threshold, or a stage failure naming one it cannot
+    use: resolved before any request, as the rest of the ``parallel`` config
+    is, so a limit a template rendered to template text fails the stage then,
+    not once every iteration has run. None is "never declared" here:
+    `_render_declared` already refused a template that rendered to None."""
+    if thresholds is None:
+        return {}
+    limits: dict[str, float] = {}
+    for name in type(thresholds).model_fields:
+        value = getattr(thresholds, name)
+        if value is None:
+            continue
+        setting = f"parallel.thresholds.{name}"
+        if name == "min_success_ratio":
+            limits[name] = _setting_number(setting, value, "a number from 0 to 1", lambda number: 0 <= number <= 1)
+        else:
+            limits[name] = _setting_number(setting, value)
+    return limits
+
+
+def _merged_saves(saved: Sequence[Mapping[str, Any]], collect: bool, declared: Iterable[str] = ()) -> dict[str, Any]:
     """What a stage whose iterations all succeeded commits, from each one's
     saves (``saved[i]`` is iteration i's): in iteration order, never in the
     order the iterations completed in, so what a stage commits does not depend
@@ -348,14 +373,46 @@ def _merged_saves(saved: Sequence[Mapping[str, Any]], collect: bool) -> dict[str
     (a user function's save can return different names each time): creating
     N resources and deleting them all later needs every id, and the index
     keeps each entry beside its iteration's ``foreach`` parameters.
+
+    An iteration that failed, which only a ``min_success_ratio`` below 1 lets
+    the stage run on after, saved nothing: ``saved[i]`` is empty, so its
+    entry is None, and a merge takes its names from the others. Every name in
+    ``declared``, those the stage's response steps save as written (which
+    every iteration that passes saves), is committed all the same: None
+    merged, a list of None collected, when no iteration saved it, which is
+    when none passed (a ``min_success_ratio`` of 0). A later stage reading it
+    finds it, as `validate` says it will, where it would find no such name.
     """
     if not collect:
         merged: dict[str, Any] = {}
         for iteration in saved:
             merged.update(iteration)
+        for name in declared:
+            merged.setdefault(name, None)
         return merged
-    names = dict.fromkeys(name for iteration in saved for name in iteration)
+    names = dict.fromkeys([*(name for iteration in saved for name in iteration), *declared])
     return {name: [iteration.get(name) for iteration in saved] for name in names}
+
+
+def _with_stats(saves: dict[str, Any], name: str, stats: ParallelStats, declared: Collection[str] = ()) -> dict[str, Any]:
+    """``saves`` with a parallel stage's stats under ``name``
+    (``parallel.stats_as``). Committed with the iterations' saves, after the
+    response steps', they replace a response save of the same name. The
+    validator reports that as HTTPCHAIN040 where a step declares the name
+    (``declared``, `saved_in_response`); this warns the same where it cannot
+    see it, a name only a user function's save returned, so that one
+    collision is warned of once."""
+    if name in saves and name not in declared:
+        try:
+            warnings.warn(
+                ScenarioValidationWarning(f"parallel.stats_as '{name}' is also a name the stage's response saves: the stats replace what it saved (HTTPCHAIN040)"),
+                stacklevel=3,
+            )
+        except ScenarioValidationWarning as promoted:
+            # Promoted by filterwarnings=error: a stage failure, so that
+            # reporting and the abort engage.
+            raise StageExecutionError(str(promoted)) from None
+    return {**saves, name: stats.saved()}
 
 
 # The error each kind a stage's ``retry.on`` names is a failure of: a verify
@@ -969,6 +1026,7 @@ def fresh_chain_state() -> dict[str, Any]:
         "last_iterations_attempted": 0,
         "last_shown_exchange_is_failed": False,
         "last_shown_attempt": None,
+        "last_parallel_stats": None,
         "active_context_managers": [],
     }
 
@@ -998,7 +1056,9 @@ class IterationResult:
     when the request went on the wire, which is what HAR waterfalls are built
     from. ``attempt`` is which attempt of the stage's ``retry`` it is, and
     ``earlier_exchanges`` the exchanges of those before it, when the HAR file
-    records them (`Carrier._execute_attempts`)."""
+    records them (`Carrier._execute_attempts`). ``duration`` is the seconds
+    its attempts' requests spent in the HTTP client, the iteration's latency
+    in a parallel stage's stats (see `parallel_stats`)."""
 
     saved_context: dict[str, Any]
     request: httpx.Request
@@ -1006,6 +1066,103 @@ class IterationResult:
     started: datetime
     attempt: int = 1
     earlier_exchanges: tuple[Exchange, ...] = ()
+    duration: float = 0.0
+
+
+class _Cancelled(RequestError):
+    """An iteration that another one ending the stage stopped: before it sent
+    its request, or while it waited for a rate-limit slot or to retry. A
+    parallel stage's stats count it as cancelled, not failed."""
+
+
+def _iteration_end(outcome: BaseException | None) -> IterationEnd:
+    """How an iteration that ended in ``outcome`` (None: in success, its exits
+    too) counts in its stage's stats. One whose context managers raised on
+    exit (`_IterationExitError`) counts as it ended itself, but for a success,
+    which its exits failed."""
+    if isinstance(outcome, _IterationExitError):
+        if outcome.own_failure is None:
+            return "failed"
+        outcome = outcome.own_failure
+    if outcome is None:
+        return "passed"
+    if isinstance(outcome, _Cancelled):
+        return "cancelled"
+    if isinstance(outcome, (pytest.skip.Exception, pytest.xfail.Exception)):
+        return "skipped"
+    return "failed"
+
+
+class _ParallelRun:
+    """A parallel stage's iterations as they end, for its stats and its
+    thresholds: how each ended and, when it passed, how long its exchanges
+    took, which its own thread records (`Carrier._run_iteration`); the stage's
+    wall time, from the first iteration's start (`begin`) to the last one's
+    end (`end`); and, where ``tolerate`` (a ``min_success_ratio`` below 1),
+    the failures it tolerated, by iteration (`tolerates`). An iteration with
+    no end recorded never started: the pool was cancelled first.
+
+    Each thread writes its own iteration's entries, and the stage's thread
+    reads them only once the pool has shut down, so they need no lock; the
+    stage's thread alone writes the failures tolerated.
+    """
+
+    def __init__(self, stage: str, total: int, tolerate: bool = False) -> None:
+        self.stage = stage
+        self.tolerate = tolerate
+        self.ends: list[IterationEnd | None] = [None] * total
+        self.durations: list[float | None] = [None] * total
+        self.tolerated: dict[int, Exception] = {}
+        self._began: float | None = None
+        self.wall_seconds = 0.0
+
+    @property
+    def began(self) -> bool:
+        """Whether any iteration started: a stage that failed before its
+        iterations did has no stats to report."""
+        return self._began is not None
+
+    def begin(self) -> None:
+        self._began = time.perf_counter()
+
+    def end(self) -> None:
+        if self._began is not None:
+            self.wall_seconds = time.perf_counter() - self._began
+
+    def record(self, idx: int, outcome: BaseException | None, result: IterationResult | None = None) -> None:
+        """Iteration ``idx`` ended in ``outcome`` (None: it succeeded with ``result``)."""
+        self.ends[idx] = _iteration_end(outcome)
+        if result is not None:
+            self.durations[idx] = result.duration
+
+    def tolerates(self, outcome: BaseException) -> TypeGuard[Exception]:
+        """Whether ``outcome``, how an iteration ended, is a failure the stage
+        tolerates: where ``tolerate``, an iteration's own failure, however
+        the stage ends. Never a cancellation, which another iteration ending
+        the stage caused, nor an error on exit (`_IterationExitError`), nor a
+        user function's pytest outcome: each ends the stage, or is secondary
+        to what did (`_fold_in_secondary`)."""
+        return self.tolerate and isinstance(outcome, _STAGE_FAILURE_EXCEPTIONS) and not isinstance(outcome, (_Cancelled, _IterationExitError))
+
+    def run_on(self, idx: int, failure: Exception) -> None:
+        """Iteration ``idx`` failed, and the stage tolerates it (`tolerates`):
+        the failure counts once every iteration has ended."""
+        self.tolerated[idx] = failure
+        logger.info("Stage '%s': iteration %d failed, tolerated (min_success_ratio): %s", self.stage, idx, str(failure).partition("\n")[0])
+
+    def failures(self) -> list[tuple[int, Exception]]:
+        """The failures the stage tolerated, lowest index first."""
+        return sorted(self.tolerated.items())
+
+    def failure_exchanges(self, but: Exception | None = None) -> list[Exchange]:
+        """What the failures the stage tolerated sent, lowest index first,
+        but ``but``'s: real traffic, which the HAR file records however the
+        stage ends (`Carrier._run_iterations`)."""
+        return [exchange for _, failure in self.failures() if failure is not but for exchange in _failure_exchanges(failure)]
+
+    def stats(self, limits: Mapping[str, float] | None = None) -> ParallelStats:
+        """The stage's stats, checked against ``limits`` when given."""
+        return parallel_stats(self.ends, self.durations, self.wall_seconds, limits)
 
 
 class _PoolCancel(threading.Event):
@@ -1071,15 +1228,24 @@ class _IterationExitError(StageExecutionError):
         self.result = result
 
 
-def _parallel_failure(idx: int, exc: Exception) -> str:
+def _parallel_failure(idx: int, exc: Exception, tolerated: Sequence[tuple[int, Exception]] = ()) -> str:
     """How a parallel stage reports the iteration ``idx`` that failed it.
 
     What its context managers raised on exit, below the first line, is
     labelled with the iteration, as a straggler's is (`_fold_in_secondary`):
-    the lines left unlabelled are the stage's own.
+    the lines left unlabelled are the stage's own. Then the iterations' own
+    failures a ``min_success_ratio`` below 1 tolerated (``tolerated``, lowest
+    index first), which only a stage an error on exit ended has: counted in
+    its summary, they would otherwise go unexplained.
     """
     first, *rest = exc.failures if isinstance(exc, _IterationExitError) else [str(exc)]
-    return "\n".join([f"Parallel execution failed at iteration {idx}: {first}", *(f"Iteration {idx}: {line}" for line in rest)])
+    return "\n".join(
+        [
+            f"Parallel execution failed at iteration {idx}: {first}",
+            *(f"Iteration {idx}: {line}" for line in rest),
+            *failed_iterations([(i, str(failure)) for i, failure in tolerated], " tolerated by min_success_ratio"),
+        ]
+    )
 
 
 def _result_exchanges(result: IterationResult) -> list[Exchange]:
@@ -1099,6 +1265,13 @@ def _failure_exchanges(failure: BaseException) -> list[Exchange]:
     if failure.request is not None:
         exchanges.extend(_wire_exchanges(failure.request, failure.response, failure.started))
     return exchanges
+
+
+def _first_sent(failures: Iterable[Exception]) -> StageExecutionError | None:
+    """The first of ``failures`` whose last attempt sent a request, the one a
+    report can show (`Carrier._record_exchanges`); None when none did (a
+    template that did not render, a rate-limit slot that did not come)."""
+    return next((failure for failure in failures if isinstance(failure, StageExecutionError) and failure.request is not None), None)
 
 
 def _fold_in_secondary(idx: int, e: BaseException, results: list[IterationResult | None], exit_errors: list[str], exchanges: list[Exchange] | None = None) -> None:
@@ -1146,6 +1319,8 @@ class Carrier:
     # (attempt, attempts) of the stage's retry the shown exchange came from,
     # when that was not its first attempt.
     last_shown_attempt: ClassVar[tuple[int, int] | None] = None
+    # A parallel stage's stats, for its report's Parallel Summary section.
+    last_parallel_stats: ClassVar[ParallelStats | None] = None
     record_all_exchanges: ClassVar[bool] = False
     # The report's rules (httpchain_redact_*), for failure messages that echo a
     # header's value: they are printed next to the report sections.
@@ -1269,9 +1444,11 @@ class Carrier:
 
         Gates on the abort/``always_run`` flow, layers the stage context, skips
         the stage when its ``skip_if`` holds, runs the iteration matrix, each
-        iteration making the attempts its ``retry`` allows, and on full success
-        commits the iterations' saves (`_merged_saves`) as a new
-        global-context layer.
+        iteration making the attempts its ``retry`` allows, holds a parallel
+        stage's stats to its ``thresholds``, and on success commits the
+        iterations' saves (`_merged_saves`), and the stats under
+        ``stats_as``, as a new global-context layer. A ``min_success_ratio``
+        below 1 lets it run on after failed iterations, whose saves are none.
         A failure is reported via ``pytest.fail`` and commits no saves, so the
         context never carries a timing-dependent subset; nor does a skip. The
         report hook owns chain-abort classification because only pytest's final
@@ -1289,6 +1466,7 @@ class Carrier:
         cls.last_iterations_attempted = 0
         cls.last_shown_exchange_is_failed = False
         cls.last_shown_attempt = None
+        cls.last_parallel_stats = None
 
         # Ahead of the always_run machinery: a failed initialization leaves no
         # context and no client, so every stage skips.
@@ -1302,6 +1480,8 @@ class Carrier:
         iteration_exit_errors: list[str] = []
         # And what they sent, for the HAR file when it records every exchange.
         secondary_exchanges: list[Exchange] = []
+        # A parallel stage's iterations as they end, once they start.
+        run: _ParallelRun | None = None
         try:
             stage_fixtures = cls._build_stage_fixtures(fixture_kwargs)
 
@@ -1344,31 +1524,65 @@ class Carrier:
             # Before any request: a switch the stage cannot read must fail it
             # before its iterations send anything, not once they all have.
             collect_saves = _parallel_flag("collect_saves", parallel_config.collect_saves) if parallel_config is not None else False
+            limits = _threshold_limits(parallel_config.thresholds) if parallel_config is not None else {}
             # Against the same context as the parallel config, and before any
             # request too: a setting the stage cannot use fails it now.
             retry = _retry_policy(_render_declared(stage.retry, local_context, "retry")) if stage.retry is not None else _NO_RETRY
 
-            results, first_error = cls._run_iterations(stage, local_context, iteration_substitutions, parallel_config, iteration_exit_errors, retry, secondary_exchanges)
+            if parallel_config is not None:
+                run = _ParallelRun(stage.name, total, tolerate=limits.get("min_success_ratio", 1) < 1)
+            results, first_error = cls._run_iterations(stage, local_context, iteration_substitutions, parallel_config, iteration_exit_errors, retry, secondary_exchanges, run)
             completed = [iter_result for iter_result in results if iter_result is not None]
 
             if first_error is None:
-                cls._record_exchanges(completed, failed=None, attempted=total, attempts=retry.attempts, secondary=secondary_exchanges)
-                # Every iteration succeeded, so `completed` is `results` whole:
-                # entry i of a collected list is iteration i's.
-                assert len(completed) == total, "a stage whose iterations all succeeded has every one's result"
-                saves = _merged_saves([iter_result.saved_context for iter_result in completed], collect_saves)
+                # No iteration ended the stage: every one ran to its end, and
+                # the thresholds are checked against what they measured. One
+                # not met fails the stage, listing the failures it ran on after.
+                stats = cls.last_parallel_stats = run.stats(limits) if run is not None else None
+                violated = stats.violated if stats is not None else ()
+                tolerated = run.failures() if run is not None else []
+                # The report shows the first failure that sent a request when
+                # too few passed, as a stage failing at an iteration shows
+                # that one's, and when none passed, which leaves no passed
+                # exchange to show. The others' exchanges went on the wire too.
+                shown = _first_sent(failure for _, failure in tolerated) if not completed or any(check.name == "min_success_ratio" for check in violated) else None
+                if cls.record_all_exchanges and run is not None:
+                    secondary_exchanges.extend(run.failure_exchanges(but=shown))
+                cls._record_exchanges(completed, failed=shown, attempted=total, attempts=retry.attempts, secondary=secondary_exchanges)
+                if violated:
+                    raise StageExecutionError(threshold_failure(violated, [(idx, str(failure)) for idx, failure in tolerated]))
+                # Every iteration passed, or failed and was tolerated, so
+                # `results` holds a result for each that passed, None for the
+                # others: entry i of a collected list is iteration i's.
+                assert len(completed) + len(tolerated) == total, "a stage whose iterations all ended has every one's result or failure"
+                saves = _merged_saves(
+                    [iter_result.saved_context if iter_result is not None else {} for iter_result in results],
+                    collect_saves,
+                    # Sorted: the order a stage commits in never depends on a set's.
+                    sorted(saved_in_response(stage)) if tolerated else (),
+                )
+                if parallel_config is not None and parallel_config.stats_as is not None:
+                    assert stats is not None, "a parallel stage has stats"
+                    saves = _with_stats(saves, parallel_config.stats_as, stats, saved_in_response(stage))
             else:
                 idx, exc = first_error
+                if run is not None:
+                    # Ended at an iteration: no threshold is checked.
+                    cls.last_parallel_stats = run.stats()
                 cls._record_exchanges(completed, failed=exc, attempted=total, attempts=retry.attempts, secondary=secondary_exchanges)
                 # Label the failure as parallel only when the user asked for
                 # parallel, else a plain stage failure would be misreported.
                 if parallel_config is not None:
-                    raise StageExecutionError(_parallel_failure(idx, exc)) from exc
+                    raise StageExecutionError(_parallel_failure(idx, exc, run.failures() if run is not None else ())) from exc
                 raise exc
 
         except _STAGE_OUTCOMES as e:
             # Held back, a skip or an xfail too: exiting the context managers may fail the stage.
             outcome = e
+            if run is not None and run.began and cls.last_parallel_stats is None:
+                # A user function's skip, xfail or fail() ended the stage at
+                # an iteration: the summary says how the others ended.
+                cls.last_parallel_stats = run.stats()
             if not isinstance(e, _STAGE_FAILURE_EXCEPTIONS) and (exchanges := _outcome_exchanges(e)):
                 # A user function's outcome, once requests had gone on the
                 # wire, its iteration's and a parallel stage's other
@@ -1515,6 +1729,7 @@ class Carrier:
         exit_errors: list[str],
         retry: _RetryPolicy = _NO_RETRY,
         secondary_exchanges: list[Exchange] | None = None,
+        run: _ParallelRun | None = None,
     ) -> tuple[list[IterationResult | None], tuple[int, Exception] | None]:
         """Run the iterations and return ``(results_by_index, first_error)``.
 
@@ -1524,11 +1739,19 @@ class Carrier:
         iteration to end in anything but success cancels the pool, and its
         outcome is the stage's whenever it is read (`_PoolCancel`), unless
         another iteration raises an interrupt (or, read first, a plugin bug).
+        Where ``run`` tolerates failures (a ``min_success_ratio`` below 1), an
+        iteration's own failure goes on ``run.tolerated`` instead, whenever it
+        is read, and the others run on; a pytest outcome, an exit error and an
+        interrupt still end the stage. ``run`` records how each iteration
+        ended, and the wall time.
         What the context managers of the iterations it cancelled or that were
         still running then raise on exit goes on ``exit_errors``, however this
         returns or raises, and what those that failed sent goes on
         ``secondary_exchanges`` when the HAR file records every exchange (see
-        `_fold_in_secondary`).
+        `_fold_in_secondary`). So does what the failures ``run`` tolerated
+        sent when an exit error or a pytest outcome ends the stage: when
+        every iteration ended, the stage takes those in itself, once it knows
+        which one its report shows.
         """
         total = len(iteration_substitutions)
         # Only for the HAR file: an ordinary run keeps one exchange per stage.
@@ -1551,10 +1774,15 @@ class Carrier:
                 limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec is not None else None
 
             if total == 1:
+                if run is not None:
+                    run.begin()
                 try:
-                    results[0] = cls._run_iteration(stage, local_context, iteration_substitutions[0], limiter, max_rate_limit_delay, retry=retry)
+                    results[0] = cls._run_iteration(stage, local_context, iteration_substitutions[0], limiter, max_rate_limit_delay, retry=retry, run=run)
                 except _STAGE_FAILURE_EXCEPTIONS as e:
-                    first_error = (0, e)
+                    if run is not None and run.tolerates(e):
+                        run.run_on(0, e)
+                    else:
+                        first_error = (0, e)
             else:
                 # Only a parallel config can yield more than one iteration:
                 # `_build_iteration_substitutions(None, ...)` returns exactly one.
@@ -1565,10 +1793,12 @@ class Carrier:
                 cancel = _PoolCancel()
                 futures: dict[Future[IterationResult], int] = {}
                 read: set[int] = set()
+                if run is not None:
+                    run.begin()
                 try:
                     with ThreadPoolExecutor(max_workers=workers) as executor:
                         for idx, iter_vars in enumerate(iteration_substitutions):
-                            future = executor.submit(cls._run_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel, idx, retry)
+                            future = executor.submit(cls._run_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel, idx, retry, run)
                             futures[future] = idx
 
                         try:
@@ -1578,6 +1808,13 @@ class Carrier:
                                 try:
                                     results[idx] = future.result()
                                 except _STAGE_OUTCOMES as e:
+                                    if run is not None and run.tolerates(e):
+                                        # An iteration's own failure, which its
+                                        # worker did not cancel the pool for
+                                        # (`_run_iteration`): the stage runs on,
+                                        # and counts it at the end.
+                                        run.run_on(idx, e)
+                                        continue
                                     # Its worker claimed the pool already; this
                                     # only asks whether it was the first to.
                                     if not cancel.claim(idx):
@@ -1602,19 +1839,28 @@ class Carrier:
                             raise
                 finally:
                     # Leaving the pool waited for the iterations still running.
-                    cls._fold_in_unread(futures, read, results, exit_errors, secondary)
+                    cls._fold_in_unread(futures, read, results, exit_errors, secondary, run)
         except (pytest.skip.Exception, pytest.fail.Exception) as outcome:
             # A user function's outcome that ended the stage, once the
             # iterations still running were taken in: what the others sent
-            # went on the wire too, and the stage records the outcome's.
+            # went on the wire too, the failures tolerated included, and the
+            # stage records the outcome's.
             if secondary is not None:
-                _note_outcome_exchanges(outcome, [*(exchange for r in results if r is not None for exchange in _result_exchanges(r)), *secondary])
+                tolerated = run.failure_exchanges() if run is not None else []
+                _note_outcome_exchanges(outcome, [*(exchange for r in results if r is not None for exchange in _result_exchanges(r)), *secondary, *tolerated])
             raise
         finally:
+            if run is not None:
+                run.end()
             # Every Limiter owns a daemon thread that lives until closed.
             if limiter is not None:
                 limiter.close()
 
+        if first_error is not None and secondary is not None and run is not None:
+            # An iteration's exits ended the stage: what the failures it
+            # tolerated sent went on the wire too. When every iteration ended,
+            # the stage takes them in itself, once it knows which the report shows.
+            secondary.extend(run.failure_exchanges())
         return results, first_error
 
     @staticmethod
@@ -1624,6 +1870,7 @@ class Carrier:
         results: list[IterationResult | None],
         exit_errors: list[str],
         exchanges: list[Exchange] | None = None,
+        run: _ParallelRun | None = None,
     ) -> None:
         """Take in the iterations whose results the pool's loop did not read:
         those still running when one failed the stage (or skipped it, or the
@@ -1631,7 +1878,8 @@ class Carrier:
 
         Their requests hit the wire, so each success is folded into
         ``results`` for the HAR; each failure is secondary (`_fold_in_secondary`),
-        what it sent going on ``exchanges``.
+        what it sent going on ``exchanges``, but one ``run`` tolerates
+        (`_ParallelRun.tolerates`), which goes with the others it tolerated.
         An interrupt one of them raised on exit still stops the run, once
         every other one is taken in: pytest.exit()'s, an Exception, was taken
         for a failure and dropped, and a KeyboardInterrupt left the rest's
@@ -1647,7 +1895,10 @@ class Carrier:
                 if interrupt is None:
                     interrupt = e
             except (Exception, pytest.skip.Exception, pytest.fail.Exception) as e:
-                _fold_in_secondary(idx, e, results, exit_errors, exchanges)
+                if run is not None and run.tolerates(e):
+                    run.run_on(idx, e)
+                else:
+                    _fold_in_secondary(idx, e, results, exit_errors, exchanges)
         if interrupt is not None:
             raise interrupt
 
@@ -1705,9 +1956,11 @@ class Carrier:
         cancel: _PoolCancel | None = None,
         idx: int = 0,
         retry: _RetryPolicy = _NO_RETRY,
+        run: _ParallelRun | None = None,
     ) -> IterationResult:
         """Execute one iteration, its every attempt (`_execute_attempts`), then
-        exit the context managers it entered, in the thread that ran it.
+        exit the context managers it entered, in the thread that ran it, and
+        record how it ended on ``run``, a parallel stage's.
 
         A parallel stage's iteration runs in a pool worker, and a thread-bound
         context manager (a ``sqlite3`` connection) can only be exited there;
@@ -1727,7 +1980,9 @@ class Carrier:
         rest of the pool itself (`_PoolCancel.claim`), and before its exits
         when it failed on its own: the stage's thread only learns of the
         failure once they are done, and an exit can take a while (a rollback),
-        during which the queued iterations would go on sending.
+        during which the queued iterations would go on sending. Where ``run``
+        tolerates failures, a failure of its own (`_ParallelRun.tolerates`) does
+        not cancel the pool, but a pytest outcome and an exit error still do.
         """
         entered = _IterationContextManagers()
         token = _ITERATION_CONTEXT_MANAGERS.set(entered)
@@ -1735,7 +1990,7 @@ class Carrier:
             try:
                 result = cls._execute_attempts(stage, local_context, iter_vars, retry, limiter, max_rate_limit_delay, cancel)
             except BaseException as e:
-                if cancel is not None:
+                if cancel is not None and not (run is not None and run.tolerates(e)):
                     cancel.claim(idx)
                 if not isinstance(e, _STAGE_OUTCOMES):
                     # An interrupt or a plugin bug is what gets reported.
@@ -1743,13 +1998,26 @@ class Carrier:
                     raise
                 exit_errors = _exit_context_managers(entered.close())
                 if not exit_errors:
+                    if run is not None:
+                        run.record(idx, e)
                     raise
-                raise _IterationExitError(exit_errors, own_failure=e) from e
+                if cancel is not None:
+                    # Never tolerated: the stage must fail for what its exits did.
+                    cancel.claim(idx)
+                exit_failure = _IterationExitError(exit_errors, own_failure=e)
+                if run is not None:
+                    run.record(idx, exit_failure)
+                raise exit_failure from e
             exit_errors = _exit_context_managers(entered.close())
             if exit_errors:
                 if cancel is not None:
                     cancel.claim(idx)
-                raise _IterationExitError(exit_errors, result=result)
+                exit_failure = _IterationExitError(exit_errors, result=result)
+                if run is not None:
+                    run.record(idx, exit_failure)
+                raise exit_failure
+            if run is not None:
+                run.record(idx, None, result)
             return result
         finally:
             _ITERATION_CONTEXT_MANAGERS.reset(token)
@@ -1786,11 +2054,14 @@ class Carrier:
         must not hold a response per attempt.
         """
         earlier: list[Exchange] = []
+        # Each attempt's time in the HTTP client, which the iteration's
+        # duration sums: waits for a rate-limit slot and to retry left out.
+        spent: list[float] = []
         waits = retry.waits()
         attempt = 1
         while True:
             try:
-                result = cls._execute_single_iteration(stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel)
+                result = cls._execute_single_iteration(stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel, exchange_seconds=spent)
             except _STAGE_FAILURE_EXCEPTIONS as e:
                 failure = e
             except (pytest.skip.Exception, pytest.fail.Exception) as e:
@@ -1799,7 +2070,7 @@ class Carrier:
                     _outcome_after_attempts(e, attempt, tuple(earlier))
                 raise
             else:
-                return replace(result, attempt=attempt, earlier_exchanges=tuple(earlier)) if attempt > 1 else result
+                return replace(result, attempt=attempt, earlier_exchanges=tuple(earlier), duration=math.fsum(spent))
             # Outside the handler: the failure raised is the attempt's own, with
             # nothing handled behind it.
             if not (retry.retries(failure) and (wait := next(waits, None)) is not None):
@@ -1811,7 +2082,7 @@ class Carrier:
                 # Secondary to the stage's failure, whose message is the one
                 # shown, but with the attempts made, which went on the wire:
                 # the stage folds them into the HAR file (`_fold_in_secondary`).
-                cancelled = RequestError("Iteration cancelled while waiting to retry: the stage already failed")
+                cancelled = _Cancelled("Iteration cancelled while waiting to retry: the stage already failed")
                 cancelled.earlier_exchanges = tuple(earlier)
                 raise cancelled
             attempt += 1
@@ -1825,6 +2096,7 @@ class Carrier:
         limiter: Limiter | None = None,
         max_rate_limit_delay: float = 60,
         cancel: threading.Event | None = None,
+        exchange_seconds: list[float] | None = None,
     ) -> IterationResult:
         """One attempt of an iteration: resolve the request against the
         iteration context, take a rate-limit slot, send it, and run the
@@ -1833,9 +2105,11 @@ class Carrier:
         ``cancel`` is the pool-wide cancellation signal: once another iteration
         fails (or the run is interrupted), in-flight iterations stop before
         sending rather than adding side-effecting traffic to a failed stage.
+        The time the request spends in the HTTP client, sent or failed, is
+        appended to ``exchange_seconds``.
         """
         if cancel is not None and cancel.is_set():
-            raise RequestError("Iteration cancelled: the stage already failed")
+            raise _Cancelled("Iteration cancelled: the stage already failed")
 
         iter_context = iteration_context(local_context, iter_vars)
 
@@ -1846,20 +2120,24 @@ class Carrier:
 
         if limiter is not None and not cls._acquire_rate_slot(limiter, max_rate_limit_delay, cancel):
             if cancel is not None and cancel.is_set():
-                raise RequestError("Iteration cancelled while waiting for a rate-limit slot: the stage already failed")
+                raise _Cancelled("Iteration cancelled while waiting for a rate-limit slot: the stage already failed")
             raise RequestError(f"Rate limit exceeded: could not acquire a request slot within {max_rate_limit_delay}s")
 
         if cancel is not None and cancel.is_set():
-            raise RequestError("Iteration cancelled: the stage already failed")
+            raise _Cancelled("Iteration cancelled: the stage already failed")
 
         # Stamped after the acquire, so it reflects when the request went on the
         # wire; this feeds the HAR entry's startedDateTime.
         started = datetime.now(UTC)
+        sending = time.perf_counter()
         try:
             response = cls._execute_http_request(request_kwargs)
         except StageExecutionError as e:
             e.started = started
             raise
+        finally:
+            if exchange_seconds is not None:
+                exchange_seconds.append(time.perf_counter() - sending)
 
         try:
             saved_context: dict[str, Any] = {}

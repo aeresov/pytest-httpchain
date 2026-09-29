@@ -55,6 +55,7 @@ class DiagnosticCode(StrEnum):
     INVALID_EXPRESSION = "HTTPCHAIN037"
     SCENARIO_INVALID_EXPRESSION = "HTTPCHAIN038"
     NO_SCENARIO_FILES = "HTTPCHAIN039"
+    STATS_REPLACE_SAVE = "HTTPCHAIN040"
 
 
 # A code's severity is a property of the code, not of the site that raises it:
@@ -104,6 +105,7 @@ SEVERITY: dict[DiagnosticCode, Severity] = {
     DiagnosticCode.INVALID_EXPRESSION: "warning",
     DiagnosticCode.SCENARIO_INVALID_EXPRESSION: "error",
     DiagnosticCode.NO_SCENARIO_FILES: "error",
+    DiagnosticCode.STATS_REPLACE_SAVE: "warning",
 }
 
 

@@ -1651,6 +1651,41 @@
               "title": "Collect Saves",
               "description": "Keep every iteration's saves: each name any iteration saves becomes a list with one entry per iteration, in iteration order, null where an iteration did not save it. False: the iterations' saves merge, and of those that save the same name the highest iteration index wins."
             },
+            "thresholds": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ParallelThresholds"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Limits the stage's stats must meet once every iteration has ended: a success ratio, latencies and a throughput."
+            },
+            "stats_as": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "examples": [
+                    "load"
+                  ]
+                }
+              ],
+              "title": "Stats As",
+              "description": "Save the stage's stats under this name, as an object (iterations, passed, failed, success_ratio, wall_ms, rps, completed_rps, min_ms, mean_ms, p50_ms, p95_ms, p99_ms, max_ms), for the stages after it: saved, as every save is, only when the stage passes."
+            },
             "foreach": {
               "anyOf": [
                 {
@@ -1786,6 +1821,41 @@
               "title": "Collect Saves",
               "description": "Keep every iteration's saves: each name any iteration saves becomes a list with one entry per iteration, in iteration order, null where an iteration did not save it. False: the iterations' saves merge, and of those that save the same name the highest iteration index wins."
             },
+            "thresholds": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ParallelThresholds"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Limits the stage's stats must meet once every iteration has ended: a success ratio, latencies and a throughput."
+            },
+            "stats_as": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "examples": [
+                    "load"
+                  ]
+                }
+              ],
+              "title": "Stats As",
+              "description": "Save the stage's stats under this name, as an object (iterations, passed, failed, success_ratio, wall_ms, rps, completed_rps, min_ms, mean_ms, p50_ms, p95_ms, p99_ms, max_ms), for the stages after it: saved, as every save is, only when the stage passes."
+            },
             "repeat": {
               "anyOf": [
                 {
@@ -1816,6 +1886,176 @@
       ],
       "title": "ParallelRepeatConfig",
       "description": "Execute the same request N times in parallel."
+    },
+    "ParallelThresholds": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "min_success_ratio": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "maximum": 1,
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "examples": [
+                    0.95,
+                    "{{ min_ratio }}"
+                  ]
+                }
+              ],
+              "title": "Min Success Ratio",
+              "description": "The share of the iterations that must pass, from 0 to 1. Below 1 a failing iteration neither cancels the others nor fails the stage by itself: the stage fails once they have all ended if fewer passed, and saves what the passed ones saved. Without it (or at 1) the first failing iteration cancels the rest and fails the stage."
+            },
+            "max_mean_ms": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Max Mean Ms",
+              "description": "The passed iterations' mean latency, in milliseconds, at most."
+            },
+            "max_p50_ms": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Max P50 Ms",
+              "description": "The passed iterations' median (p50) latency, in milliseconds, at most."
+            },
+            "max_p95_ms": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Max P95 Ms",
+              "description": "The passed iterations' 95th percentile latency, in milliseconds, at most."
+            },
+            "max_p99_ms": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Max P99 Ms",
+              "description": "The passed iterations' 99th percentile latency, in milliseconds, at most."
+            },
+            "min_rps": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Min Rps",
+              "description": "Passed iterations per second of the stage's wall time, at least."
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "title": "ParallelThresholds",
+      "description": "What a parallel stage's stats must reach, checked once every iteration\nhas ended: each limit is optional, and a stage fails naming every one it\ndid not meet. Latencies are over the iterations that passed."
     },
     "RegexCapture": {
       "anyOf": [

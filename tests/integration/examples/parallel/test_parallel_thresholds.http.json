@@ -1,0 +1,62 @@
+{
+    "description": "A mini load test against an endpoint failing every 3rd request: a stage tolerating the failures passes and saves its stats, a stage only measuring passes though every request fails, a later stage reads what both saved, and a stage with stricter thresholds fails naming them.",
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "tolerant",
+            "parallel": {
+                "repeat": 9,
+                "max_concurrency": 3,
+                "collect_saves": true,
+                "thresholds": { "min_success_ratio": 0.6, "max_p95_ms": 60000 },
+                "stats_as": "load"
+            },
+            "request": { "url": "{{ server }}/flaky/3" },
+            "response": [
+                { "verify": { "status": 200 } },
+                { "save": { "jmespath": { "calls": "call" } } }
+            ]
+        },
+        {
+            "name": "measure_only",
+            "parallel": {
+                "repeat": 2,
+                "collect_saves": true,
+                "thresholds": { "min_success_ratio": 0 }
+            },
+            "request": { "url": "{{ server }}/bad" },
+            "response": [
+                { "verify": { "status": 200 } },
+                { "save": { "jmespath": { "bad_ids": "id" } } }
+            ]
+        },
+        {
+            "name": "read_stats",
+            "request": { "url": "{{ server }}/ok" },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ load.iterations == 9 and load.passed == 6 and load.failed == 3 }}",
+                            "{{ load.success_ratio == 6 / 9 and load.min_ms <= load.p50_ms <= load.p95_ms <= load.max_ms }}",
+                            "{{ 0 < load.rps < load.completed_rps }}",
+                            "{{ len(calls) == 9 and len([call for call in calls if call is None]) == 3 }}",
+                            "{{ bad_ids == [None, None] }}"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "thresholds_not_met",
+            "parallel": {
+                "repeat": 9,
+                "max_concurrency": 3,
+                "thresholds": { "min_success_ratio": 0.9, "max_p95_ms": 0.001 }
+            },
+            "request": { "url": "{{ server }}/flaky/3" },
+            "response": [{ "verify": { "status": 200 } }]
+        }
+    ]
+}

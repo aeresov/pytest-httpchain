@@ -438,6 +438,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backslash as written, and `validate` warns of an escape there (`HTTPCHAIN029`, `HTTPCHAIN030`):
   it does nothing, and the braces need none. The expression form `{{ '{{' }}` renders `{{` too, as
   it did. See [Literal braces](docs/usage/substitutions.md#literal-braces).
+- A parallel stage measures its iterations and can be held to limits on the numbers: used as a small
+  load test, it reported only whether it passed. Its report has a `Parallel Summary` section, shown
+  where the `HTTP Request` and `HTTP Response` sections are (a failed stage's report, a passed one's
+  with `-rP` or `-rA`, under pytest-xdist too): how many iterations passed, failed and were
+  cancelled (and were skipped, when a user function skipped one), the success ratio, the wall time,
+  the throughput (completed and passed iterations per second of wall time) and the passed
+  iterations' latency, min, mean, p50, p95, p99 and max in milliseconds, the percentiles
+  nearest-rank. An iteration's duration is the time its requests spent in the HTTP client,
+  redirects, every attempt of a `retry` and the client's own wait for a pooled connection included,
+  but not the wait for a `calls_per_sec` slot or between attempts, so that a rate limit does not
+  read as a slow server. `parallel.thresholds` fails the stage once every iteration has ended below
+  a `min_success_ratio` or a `min_rps`, or above a `max_mean_ms`, `max_p50_ms`, `max_p95_ms` or
+  `max_p99_ms`, naming every limit missed with the value measured (`2 parallel thresholds not
+  met: 1. min_success_ratio: 0.666667 (6 of 9 iterations passed), below the limit 0.9 ...`). A
+  `min_success_ratio` below 1 lets the stage run on after failures: no iteration is cancelled, the
+  stage fails at the end only if too few passed, listing the first five failed iterations, and it
+  saves what the passed ones saved (with `collect_saves`, `null` in a failed iteration's place; at a
+  ratio of 0 with none passed, `null` for each name its steps declare, which a later stage can still
+  read). Without one, or at 1, the first failure cancels the rest and fails the stage as before, and
+  a user function's `pytest.skip()`, `xfail()` or `fail()`, or a factory fixture's context manager
+  raising on exit, still ends the stage at once, the exit error's failure listing the iterations
+  that failed on their own; the HAR file has what every one of them sent, however the stage ends.
+  `parallel.stats_as` saves the stats as an object (`iterations`, `passed`, `failed`,
+  `success_ratio`, `wall_ms`, `rps`, `completed_rps`, `min_ms`, `mean_ms`, `p50_ms`, `p95_ms`,
+  `p99_ms`, `max_ms`) for the stages after it to read (`{{ load.p95_ms }}`), only when the stage
+  passes; `show` and `graph` list the name among the stage's saves, `validate` reports a reference
+  to it from the stage's own steps (`HTTPCHAIN004`), and the new `HTTPCHAIN040` (warning) a name the
+  stage's response saves too, which the stats replace. The thresholds are numbers or templates,
+  rendered with the rest of the `parallel` config before any request: one that renders `null`, text,
+  `true` or `false`, or a value out of its range fails the stage before its iterations send
+  anything. See [Stats and thresholds](docs/advanced/parallel.md#stats-and-thresholds).
 
 ### Fixed
 

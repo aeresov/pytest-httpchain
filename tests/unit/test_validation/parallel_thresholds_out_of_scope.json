@@ -1,0 +1,14 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "fan_out",
+            "parallel": {
+                "foreach": [{ "individual": { "budget": [100, 200] } }],
+                "thresholds": { "max_p95_ms": "{{ budget }}" }
+            },
+            "request": { "url": "{{ server }}/ok?budget={{ budget }}" },
+            "response": [{ "verify": { "status": 200 } }]
+        }
+    ]
+}
