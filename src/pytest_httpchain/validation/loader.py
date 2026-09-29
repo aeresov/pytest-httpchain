@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from pytest_httpchain.jsonref import InvalidJSONError, ReferenceResolverError, load_json
+from pytest_httpchain.jsonref import FileLoadError, InvalidJSONError, ReferenceResolverError, load_json
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, diag
 from pytest_httpchain.warnings import AmbiguousReferenceWarning
@@ -211,13 +211,19 @@ def load_with_diagnostics(
             # duplicate key, ...) and a plain syntax error the resolver wrapped
             # are JSON content problems — no reference is involved in either.
             # Deep nesting is not: the text is valid, but deeper than the
-            # parser or the resolver can go.
+            # parser or the resolver can go. Either one in a file the scenario
+            # pulls in names that file: the diagnostic is the scenario's, so a
+            # line and column would read as the scenario's own. (An
+            # InvalidJSONError's message names its file already.)
+            other = e.path if isinstance(e, FileLoadError) and e.path not in (None, path) else None
             if isinstance(e, InvalidJSONError):
                 diagnostics.append(diag(DiagnosticCode.INVALID_JSON, f"Invalid JSON: {e}"))
             elif isinstance(e.__cause__, json.JSONDecodeError):
-                diagnostics.append(diag(DiagnosticCode.INVALID_JSON, f"Invalid JSON syntax: {e.__cause__}"))
+                where = f" in {other}" if other else ""
+                diagnostics.append(diag(DiagnosticCode.INVALID_JSON, f"Invalid JSON syntax{where}: {e.__cause__}"))
             elif isinstance(e.__cause__, RecursionError):
-                diagnostics.append(diag(DiagnosticCode.PARSE_ERROR, f"Failed to parse JSON file: nested too deeply ({e.__cause__})"))
+                where = f" {other}" if other else ""
+                diagnostics.append(diag(DiagnosticCode.PARSE_ERROR, f"Failed to parse JSON file{where}: nested too deeply ({e.__cause__})"))
             else:
                 diagnostics.append(diag(DiagnosticCode.REF_ERROR, f"JSON reference resolution error: {e}"))
         except json.JSONDecodeError as e:

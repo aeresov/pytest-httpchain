@@ -10,7 +10,8 @@ from typing import Any, Self
 from deepmerge import STRATEGY_END, Merger
 
 from pytest_httpchain.jsonref.equality import json_equal
-from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, InvalidJSONError, ReferenceResolverError
+from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, FileLoadError, InvalidJSONError, ReferenceResolverError
+from pytest_httpchain.jsonref.jsonc import loads_jsonc
 from pytest_httpchain.jsonref.plumbing.circular import CircularDependencyTracker
 from pytest_httpchain.jsonref.plumbing.path import parse_json_pointer, validate_ref_path
 
@@ -23,12 +24,13 @@ REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 REF_KEYS = ("$include", "$merge", "$ref")
 
 # What loading a file can raise besides the resolver's own errors, wrapped into
-# `ReferenceResolverError` with the original as ``__cause__``, which consumers
-# classify on. Content the reader itself rejects (bytes that are not UTF-8, an
-# integer too long to parse) is already an `InvalidJSONError` naming the file,
-# see `_parse_json_rejecting_duplicates`. Deep nesting raises RecursionError,
-# which is not a ValueError: from CPython's decoder at thousands of levels, and
-# from the resolver's own walk, one frame per level, at under a thousand.
+# a `FileLoadError` holding the file's path, the original as ``__cause__``,
+# which consumers classify on. Content the reader itself rejects (bytes that
+# are not UTF-8, an integer too long to parse) is already an `InvalidJSONError`
+# naming the file, see `_parse_json_rejecting_duplicates`. Deep nesting raises
+# RecursionError, which is not a ValueError: from CPython's decoder at
+# thousands of levels, and from the resolver's own walk, one frame per level,
+# at under a thousand.
 _LOAD_ERRORS = (OSError, json.JSONDecodeError, RecursionError)
 
 
@@ -89,10 +91,12 @@ def _build_atomic_aware_merger(atomic: PositionPredicate, base_path: tuple[str |
 
 
 def _parse_json_rejecting_duplicates(path: Path) -> Any:
-    """Parse a JSON file, rejecting duplicate object keys.
+    """Parse a JSON file, comments and trailing commas allowed (`loads_jsonc`),
+    rejecting duplicate object keys.
 
     ``json.loads`` keeps the last one, which in a scenario silently drops a step
-    and weakens the test.
+    and weakens the test. A ``/*`` never closed is a syntax error, a
+    ``JSONDecodeError`` at its position, as any other is.
 
     ``utf-8-sig`` accepts the byte-order mark Windows editors write. Any other
     content failure short of a syntax error is an `InvalidJSONError` naming
@@ -115,7 +119,7 @@ def _parse_json_rejecting_duplicates(path: Path) -> Any:
     except UnicodeDecodeError as e:
         raise InvalidJSONError(f"{path} is not valid UTF-8: {e}") from e
     try:
-        return json.loads(text, object_pairs_hook=pairs_hook)
+        return loads_jsonc(text, object_pairs_hook=pairs_hook)
     except json.JSONDecodeError:
         raise
     except ValueError as e:
@@ -168,7 +172,7 @@ class ReferenceResolver:
             return self.resolve_document(data, path.parent, root_path)
 
         except _LOAD_ERRORS as e:
-            raise ReferenceResolverError(f"Failed to load JSON from {path}: {_load_error_text(e)}") from e
+            raise FileLoadError(f"Failed to load JSON from {path}: {_load_error_text(e)}", path) from e
 
     def _resolve_refs(
         self,
@@ -246,7 +250,7 @@ class ReferenceResolver:
             return child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data, root_path=root_path, doc_path=doc_path)
 
         except _LOAD_ERRORS as e:
-            raise ReferenceResolverError(f"Failed to load external reference {file_path}: {_load_error_text(e)}") from e
+            raise FileLoadError(f"Failed to load external reference {file_path}: {_load_error_text(e)}", resolved_path) from e
         finally:
             self.tracker.clear_external_ref(resolved_path, pointer)
 

@@ -2,7 +2,7 @@
 
 ## Test Files Not Discovered
 
-Ensure your test files follow the naming pattern `test_<name>.<suffix>.json` where the suffix (`httpchain_suffix` ini option) defaults to `http`.
+Ensure your test files follow the naming pattern `test_<name>.<suffix>.json` (or `.jsonc`) where the suffix (`httpchain_suffix` ini option) defaults to `http`.
 
 **Checklist:**
 

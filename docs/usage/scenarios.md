@@ -32,6 +32,51 @@ Field names are validated strictly at every level: an unknown or misspelled key 
 
 Scenario files, and every file they pull in (`$include`/`$merge`/`$ref` targets, `verify.body.schema` files), are read as UTF-8. A leading byte-order mark, which some editors on Windows write, is accepted. A scenario, or a file it `$include`s, `$merge`s or `$ref`s, in another encoding such as Latin-1 fails to load with `HTTPCHAIN014`, naming the file that is not UTF-8. A `verify.body.schema` file in another encoding is read only when its stage runs, and fails that stage; `validate --deep` reports it ahead of time as `HTTPCHAIN021`.
 
+## Comments and trailing commas
+
+Every JSON file the plugin reads from disk is JSON with comments (JSONC): `//` line comments, `/* ... */` block comments, and a trailing comma before a closing `]` or `}`. That holds for scenario files, the files they `$include`, `$merge` or `$ref`, `verify.body.schema` files and the files their `$ref`s reach, at collection, at runtime and in every [command](../cli.md). Name a scenario `test_<name>.http.jsonc` and it is collected exactly as `test_<name>.http.json` is; the extension only tells your editor to expect comments. A `.json` file may carry them too:
+
+```json
+// Log in, then read the profile with the token the login returned.
+{
+    "stages": [
+        {
+            "name": "login",
+            "request": {
+                "url": "https://api.example.com/login",
+                "method": "POST",
+                "body": { "json": { "user": "alice", "password": "secret" } }, // test credentials
+            },
+            "response": [
+                { "verify": { "status": 200 } },
+                { "save": { "jmespath": { "token": "access_token" } } },
+            ],
+        },
+        {
+            "name": "profile",
+            /* The token saved above authorizes this request. */
+            "request": {
+                "url": "https://api.example.com/me",
+                "auth": { "bearer": "{{ token }}" },
+            },
+            "response": [{ "verify": { "status": 200 } }],
+        },
+    ],
+}
+```
+
+- **Strictly valid JSON reads as before.** There is no switch: comments and trailing commas are simply also accepted, in `.json` and `.jsonc` files alike.
+- **One trailing comma.** A comma directly before `]` or `}` (whitespace and comments may sit between them) is dropped. A leading comma (`[,1]`), a doubled one (`[1,,]`) or one after a key's colon is still an error.
+- **Nothing inside a string is touched.** `"https://example.com/a//b"` and `"/* not a comment */"` are values.
+- **Block comments do not nest.** A block comment ends at its first `*/`. One that is never closed is a syntax error at the line and column of its `/*`, and fails like any other (next point).
+- **Error positions are the file's.** Comments are read as whitespace, so the line and column of any JSON syntax error point into the file as you wrote it. In a scenario, or a file it `$include`s, `$merge`s or `$ref`s, the error fails the load with `HTTPCHAIN014`, which names the file when it is not the scenario itself. A `verify.body.schema` file is read only when its stage runs, so an error there fails that stage; `validate --deep` reports it ahead of time as `HTTPCHAIN021`.
+- **Only files.** A response body, and anything else received over HTTP, is parsed as strict JSON. A file a request sends (a `binary` body, a `files` or `multipart` upload) is sent byte for byte, comments and all.
+- **`resolve` prints strict JSON.** It shows the scenario collection sees, with the comments and trailing commas gone (see [`resolve`](../cli.md#resolve)).
+
+A `test_login.http.json` and a `test_login.http.jsonc` in one directory are two scenarios: both are collected, and the extension in each node id (`test_login.http.json::login::...`, `test_login.http.jsonc::login::...`) keeps their tests, HAR files and xdist groups apart; a warning about one of them names it by its node id (`test_login.http.jsonc::login`). Rename rather than copy when converting a file.
+
+Editors know `.jsonc` as JSON with comments (VS Code opens it in its *JSON with Comments* mode, which accepts comments and warns on trailing commas). To keep schema autocompletion for those files, add their pattern to the schema mapping (see [IDE Support](../getting-started.md#ide-support)).
+
 ## Stage Structure
 
 Each stage represents a single HTTP request:

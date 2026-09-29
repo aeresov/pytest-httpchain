@@ -31,8 +31,8 @@ not free their numbers for reuse.
 | `HTTPCHAIN010` | error | File not found |
 | `HTTPCHAIN011` | error | Path is not a file |
 | `HTTPCHAIN012` | error | `$ref` resolution failed |
-| `HTTPCHAIN013` | warning | File extension is not `.json` |
-| `HTTPCHAIN014` | error | Invalid JSON in the scenario or a file it includes: a syntax error, a duplicate object key, bytes that are not UTF-8, or an integer too long to parse |
+| `HTTPCHAIN013` | warning | File extension is neither `.json` nor `.jsonc` |
+| `HTTPCHAIN014` | error | Invalid JSON in the scenario or a file it includes, which the message then names: a syntax error (a `/*` comment never closed is one, reported at its opening; see [Comments and trailing commas](usage/scenarios.md#comments-and-trailing-commas)), a duplicate object key, bytes that are not UTF-8, or an integer too long to parse |
 | `HTTPCHAIN015` | error | Failed to parse JSON file (for example, nested too deeply to parse) |
 | `HTTPCHAIN016` | error | Fixture referenced in a scenario-level template |
 | `HTTPCHAIN017` | error | Scenario-level template references an undefined name |

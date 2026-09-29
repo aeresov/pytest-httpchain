@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from pytest_httpchain.body_schema import ReferenceBounds
+from pytest_httpchain.constants import SCENARIO_FILE_EXTENSIONS
 from pytest_httpchain.validation.deep import check_scenario_deep
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ValidateResult, diag, result
 from pytest_httpchain.validation.loader import load_with_diagnostics, resolve_root_path
@@ -26,11 +27,11 @@ def validate_scenario(
     if not path.is_file():
         return result([diag(DiagnosticCode.NOT_A_FILE, f"Path is not a file: {path}")])
 
-    if path.suffix.lower() != ".json":
+    if path.suffix.lower() not in SCENARIO_FILE_EXTENSIONS:
         diagnostics.append(
             diag(
                 DiagnosticCode.WRONG_EXTENSION,
-                f"File has extension '{path.suffix}' but expected '.json'. Consider renaming to use .json extension.",
+                f"File has extension '{path.suffix}' but expected '.json' or '.jsonc'. Consider renaming to use one of these extensions.",
                 location=str(path),
             )
         )

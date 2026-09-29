@@ -189,6 +189,9 @@ def _collect_parent(suffix: str) -> MagicMock:
         ("http", "test_example.http.json", "example"),
         ("http", "test_my_api_test.http.json", "my_api_test"),
         ("api", "test_endpoint.api.json", "endpoint"),
+        # JSON with comments, by the extension editors know it by.
+        ("http", "test_example.http.jsonc", "example"),
+        ("api", "test_endpoint.api.jsonc", "endpoint"),
         ("my-test", "test_example.my-test.json", "example"),
         # The suffix is matched literally, regex metacharacters included.
         ("v1.2", "test_example.v1.2.json", "example"),
@@ -208,7 +211,10 @@ def test_collect_file_matches(suffix, filename, expected_name):
         ("http", "test_example.api.json"),
         ("http", "example.http.json"),
         ("http", "test_example.http.yaml"),
+        ("http", "test_example.http.jsonx"),
+        ("http", "test_example.http.jsonc.bak"),
         ("http", "test_example.json"),
+        ("http", "test_example.jsonc"),
         ("http", "test_example.py"),
         ("http", "test_.http.json"),
         # Unescaped, the '.' in the suffix would match any character.
@@ -352,13 +358,14 @@ def test_warns_when_fixture_params_vary_across_stages(requesting, params, warns)
     ]
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        _warn_on_params_varying_across_stages(cls, items, _chain_args(items)[cls])
+        _warn_on_params_varying_across_stages(cls, items, _chain_args(items)[cls], "test_x.http.json::x")
     messages = [str(w.message) for w in caught]
     if not warns:
         assert messages == []
         return
     assert len(messages) == 1
-    assert "the class-scoped fixture 'tenant' has params and is requested by stages ['create', 'read'] but not by every stage" in messages[0]
+    assert messages[0].startswith("Scenario 'test_x.http.json::x': the class-scoped fixture 'tenant' has params")
+    assert "is requested by stages ['create', 'read'] but not by every stage" in messages[0]
     assert "'read' for the first param sees what 'create' saved for the last" in messages[0]
     assert "Request 'tenant' from every stage" in messages[0]
 

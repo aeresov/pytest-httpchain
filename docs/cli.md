@@ -5,7 +5,9 @@ of it runs your tests or makes an HTTP request — the commands read scenario
 files and report on them. The one exception to "reads only" is
 `validate --deep`, which imports the modules your `module:func` references name,
 and therefore executes their top-level code; that is why it is opt-in and never
-runs at pytest collection time.
+runs at pytest collection time. Every command reads a file as collection does,
+[comments and trailing commas](usage/scenarios.md#comments-and-trailing-commas)
+included, whether it is named `.json` or `.jsonc`.
 
 If you only want to try one, `uvx pytest-httpchain --help` needs no install:
 
@@ -33,12 +35,28 @@ resolves fine.
 ## `validate`
 
 Check one or more scenario files and exit non-zero if any is invalid. This is
-the CI gate.
+the CI gate. A file named anything but `.json` or `.jsonc` is still validated,
+with an `HTTPCHAIN013` warning: pytest would not collect it.
 
 ```bash
 pytest-httpchain validate tests/test_login.http.json
-pytest-httpchain validate tests/**/*.http.json
+pytest-httpchain validate tests/test_login.http.json tests/test_orders.http.jsonc
 ```
+
+To gate every scenario pytest collects, name both extensions. `find` reaches
+any depth, runs `validate` only when a file matched, and exits non-zero when
+`validate` does:
+
+```bash
+find tests \( -name 'test_*.http.json' -o -name 'test_*.http.jsonc' \) \
+    -exec pytest-httpchain validate {} +
+```
+
+A shell glob works too, but `tests/**/*.http.json` alone skips the `.jsonc`
+files, `**` spans directories in bash only after `shopt -s globstar`, and bash
+passes a glob that matches nothing through as-is, which `validate` reports as a
+missing file (`HTTPCHAIN010`). If you use a custom `httpchain_suffix`, put it in
+place of `http`.
 
 Findings carry a stable `HTTPCHAINxxx` code and a severity — see
 [Validation diagnostics](diagnostics.md) for the full table.
@@ -120,7 +138,10 @@ GitHub Markdown.
 
 Print the scenario with every `$include`/`$merge`/`$ref` inlined and
 deep-merged — what collection actually sees. Useful when a merge is not
-producing what you expected.
+producing what you expected. The output is strict JSON: the
+[comments and trailing commas](usage/scenarios.md#comments-and-trailing-commas)
+a scenario or an included file may hold are not in it, so it is also a way to
+turn a `.jsonc` scenario into plain JSON.
 
 ```bash
 pytest-httpchain resolve tests/test_login.http.json

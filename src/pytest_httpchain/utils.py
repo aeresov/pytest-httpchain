@@ -19,6 +19,7 @@ import httpx
 import pytest
 
 from pytest_httpchain.errors import SchemaFileError, StageExecutionError
+from pytest_httpchain.jsonref import loads_jsonc
 from pytest_httpchain.models import FunctionsSubstitution, Substitution, VarsSubstitution
 from pytest_httpchain.templates import contains_template, walk, walker
 from pytest_httpchain.userfunc import call_target, wrap_function
@@ -95,12 +96,12 @@ def read_json_schema_file(path: Path) -> Any:
     The catch is the load-bearing part and must not be re-derived per caller:
     `JSON_PARSE_ERRORS` makes a non-UTF-8 or too deeply nested schema file fail
     cleanly instead of escaping the abort machinery as a raw traceback.
-    ``utf-8-sig`` accepts a byte-order mark, as the scenario loader does. The
-    meta-check stays with the callers, which report an unparseable file and an
-    invalid schema differently.
+    ``utf-8-sig`` accepts a byte-order mark, and `loads_jsonc` comments and
+    trailing commas, as the scenario loader does. The meta-check stays with the
+    callers, which report an unparseable file and an invalid schema differently.
     """
     try:
-        return json.loads(path.read_text(encoding="utf-8-sig"))
+        return loads_jsonc(path.read_text(encoding="utf-8-sig"))
     except (OSError, *JSON_PARSE_ERRORS) as e:
         raise SchemaFileError(str(e)) from e
 

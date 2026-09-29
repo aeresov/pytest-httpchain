@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, InvalidJSONError, ReferenceResolverError
+from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, FileLoadError, InvalidJSONError, ReferenceResolverError
 from pytest_httpchain.jsonref.loader import load_json
 from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
 
@@ -25,6 +25,10 @@ def test_nul_in_reference_path(create_json_file):
     ("content", "cause", "reason"),
     [
         pytest.param(b'{"invalid": json}', json.JSONDecodeError, "Expecting value", id="malformed"),
+        # A syntax error, at the comment's opening: the file's line and column.
+        pytest.param(b'{\n  "a": 1 /* never closed', json.JSONDecodeError, r"Unterminated comment: line 2 column 10 \(char 11\)$", id="unterminated-comment"),
+        # Comments are blanked, not removed, so what follows is where it was.
+        pytest.param(b'/* one\n two */ // three\n{"a": }', json.JSONDecodeError, r"Expecting value: line 3 column 7 \(char 30\)$", id="error-after-comments"),
         # Not a ValueError at all.
         pytest.param(TOO_DEEP_TO_PARSE, RecursionError, r"nested too deeply \(.*while decoding a JSON array", id="too-deep-to-parse"),
         # Parses, but the resolver's own walk spends a frame per level.
@@ -36,18 +40,25 @@ def test_nul_in_reference_path(create_json_file):
     [
         pytest.param("bad.json", "Failed to load JSON from", id="main-file"),
         pytest.param("main.json", "Failed to load external reference bad.json", id="referenced-file"),
+        # The innermost file's error passes through the files that reference it.
+        pytest.param("outer.json", "Failed to load external reference bad.json", id="nested-reference"),
     ],
 )
 def test_unloadable_json_chains_the_cause(tmp_path, entry, match, content, cause, reason):
     """One exception type for every consumer; the validator classifies on the
-    chained cause (INVALID_JSON for syntax, PARSE_ERROR for depth). Content the
-    reader rejects itself, bytes that are not UTF-8 included, is an
-    InvalidJSONError instead (`test_unreadable_content_names_its_file`)."""
+    chained cause (INVALID_JSON for syntax, PARSE_ERROR for depth), and names
+    the file that failed when it is not the scenario: a line and column alone
+    do not say which file they are in. Content the reader rejects itself,
+    bytes that are not UTF-8 included, is an InvalidJSONError instead
+    (`test_unreadable_content_names_its_file`)."""
     (tmp_path / "bad.json").write_bytes(content)
     (tmp_path / "main.json").write_text('{"data": {"$ref": "bad.json"}}')
-    with pytest.raises(ReferenceResolverError, match=f"^{match}.*: {reason}") as excinfo:
+    (tmp_path / "outer.json").write_text('{"data": {"$include": "main.json"}}')
+    with pytest.raises(FileLoadError, match=f"^{match}.*: {reason}") as excinfo:
         on_bounded_stack(load_json, tmp_path / entry)
     assert isinstance(excinfo.value.__cause__, cause)
+    assert excinfo.value.path is not None
+    assert excinfo.value.path.resolve() == (tmp_path / "bad.json").resolve()
 
 
 @pytest.mark.parametrize("entry", ["dup.json", "main.json"], ids=["main-file", "referenced-file"])

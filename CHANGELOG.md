@@ -358,9 +358,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `1e999`) is refused at load, by `validate` too, and so is a `true` or `false` in any of the four,
   written or rendered, which would have been read as `1`: `"attempts": "{{ poll }}"` with a flag for
   `poll` attempted once.
+- Comments and trailing commas in scenario files. Every JSON file the plugin reads from disk, a
+  scenario, a file it `$include`s, `$merge`s or `$ref`s, a `verify.body.schema` file and the files
+  its `$ref`s reach, may hold `//` line comments, `/* */` block comments and one trailing comma
+  before a `]` or `}`, at collection, at runtime and in `validate` (`--deep` too), `resolve`, `show`
+  and `graph`. Strictly valid JSON reads as it did, so there is nothing to switch on. pytest also
+  collects `test_<name>.<suffix>.jsonc`, the extension editors open as JSON with comments, and
+  `validate` takes it without `HTTPCHAIN013`; a `.json` and a `.jsonc` of the same name are two
+  scenarios, their node ids told apart by the extension. Nothing inside a string is touched, and a
+  syntax error's line and column still point into the file as written, as comments are read as
+  whitespace. A `/*` never closed is a syntax error at its opening, and a leading or doubled comma
+  stays one: `HTTPCHAIN014` in a scenario or a file it includes, and in a `verify.body.schema` file
+  a failed stage, which `validate --deep` reports ahead of time as `HTTPCHAIN021`. A response body
+  stays strict JSON, and a file a request uploads is sent as it is. `resolve` prints strict JSON,
+  the comments gone.
 
 ### Fixed
 
+- A JSON syntax error in a file a scenario `$include`s, `$merge`s or `$ref`s was reported by
+  `validate` and at collection as `HTTPCHAIN014` with a line and column but no file name, which
+  read as a position in the scenario itself; `HTTPCHAIN015` for such a file nested too deeply named
+  no file either. Both now name the file: `Invalid JSON syntax in .../common.json: Expecting value:
+  line 2 column 8 (char 9)`.
+- The warnings that a scenario's earlier stages were deselected, or that a fixture's params vary
+  across its stages, and the error that `--dist loadscope` would split it, named the scenario by
+  its name alone, which scenarios of one name in different directories share, as do the
+  `test_<name>.http.json` and `test_<name>.http.jsonc` now collected side by side. They now give
+  its node id, `test_login.http.jsonc::login`.
 - `{{ env }}`, the `env` built-in written without its parentheses, rendered the repr of
   `os.environ`'s `get`, which lists every environment variable with its value, into the request,
   and so into the HAR file and the report, and `validate` said nothing. A template that renders to

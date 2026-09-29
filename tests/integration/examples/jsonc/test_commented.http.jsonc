@@ -1,0 +1,25 @@
+// A scenario in JSON with comments: collected like a .json file, and the files
+// it pulls in (a request fragment, a body schema) may have comments too.
+{
+    "stages": [
+        {
+            "name": "user",
+            "fixtures": ["server"],
+            /* The request comes from a fragment file. */
+            "request": { "$include": "fragments.jsonc#/user_request" },
+            "response": [
+                { "verify": { "status": 200, "body": { "schema": "user.schema.jsonc" } } },
+                { "save": { "jmespath": { "name": "name" } } }, // the user's name
+            ],
+        },
+        {
+            "name": "check",
+            "fixtures": ["server"],
+            "request": { "url": "{{ server }}/ok" },
+            "response": [
+                // What the first stage saved reaches the second.
+                { "verify": { "expressions": ["{{ name == 'Alice' }}"] } },
+            ],
+        },
+    ],
+}

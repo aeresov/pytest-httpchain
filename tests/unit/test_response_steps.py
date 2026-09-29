@@ -34,6 +34,10 @@ TOO_DEEP_JSON = httpx.Response(200, content=TOO_DEEP_TO_PARSE, headers={"content
 # Past the int-to-str digit limit (4300 by default) json.loads raises a bare
 # ValueError, not a JSONDecodeError.
 INT_TOO_LONG = httpx.Response(200, content=b'{"a": ' + b"1" * 5000 + b"}")
+# A scenario file may hold comments and trailing commas (jsonref/jsonc.py), but
+# what comes over HTTP stays strict JSON: the server sent a broken body.
+COMMENTED_JSON = httpx.Response(200, content=b'{"a": 1 // c\n}', headers={"content-type": "application/json"})
+TRAILING_COMMA_JSON = httpx.Response(200, content=b'{"a": [1,]}', headers={"content-type": "application/json"})
 
 
 @pytest.mark.parametrize(
@@ -42,6 +46,8 @@ INT_TOO_LONG = httpx.Response(200, content=b'{"a": ' + b"1" * 5000 + b"}")
         pytest.param(NOT_JSON, "response is not valid JSON", id="not-json"),
         pytest.param(TOO_DEEP_JSON, "response JSON is nested too deeply to parse", id="too-deep"),
         pytest.param(INT_TOO_LONG, "response is not valid JSON", id="int-too-long"),
+        pytest.param(COMMENTED_JSON, "response is not valid JSON", id="comment"),
+        pytest.param(TRAILING_COMMA_JSON, "response is not valid JSON", id="trailing-comma"),
     ],
 )
 def test_jmespath_save_rejects_non_json_response(response, message):
@@ -1001,6 +1007,8 @@ class TestJmespath:
             pytest.param(httpx.Response(200, content=b"\xff\xfe{"), id="not-utf8"),
             # json raises a bare ValueError for an int past Python's digit limit.
             pytest.param(httpx.Response(200, content=b'{"a": ' + b"1" * 5000 + b"}"), id="int-too-long"),
+            pytest.param(COMMENTED_JSON, id="comment"),
+            pytest.param(TRAILING_COMMA_JSON, id="trailing-comma"),
         ],
     )
     def test_non_json_body_fails_cleanly(self, response):

@@ -28,7 +28,7 @@ Testing HTTP APIs with plain pytest often leads to these pain points:
 
 ### Declarative JSON format
 
-Test scenarios are JSON documents that describe _what_ to test, not _how_. No setup code to scroll through — the request and assertions are right there.
+Test scenarios are JSON documents that describe _what_ to test, not _how_. No setup code to scroll through — the request and assertions are right there. Comments (`//`, `/* */`) and trailing commas are welcome in every scenario and every file it pulls in; name a file `test_<name>.http.jsonc` and editors treat it as JSON with comments.
 
 ### `$include` / `$merge` with deep merging
 
@@ -174,7 +174,7 @@ pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
 
 ## Configuration
 
--   Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`.
+-   Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`, or `test_<name>.<suffix>.jsonc`.
     The suffix is configurable via the `httpchain_suffix` pytest ini option, default value is **http**.
 -   `$include`/`$merge` instructions (and their legacy alias `$ref`) can point to other files using relative paths; absolute paths are rejected for security, and every reference must resolve inside the root path (pytest's `rootdir` when collecting; `--root-path` for the CLI).
     You can limit the depth of relative path traversal using the `httpchain_ref_parent_traversal_depth` ini option, default value is **3**.
@@ -247,7 +247,7 @@ uvx pytest-httpchain schema > scenario.schema.json
 More read-only commands help author and debug scenarios offline — no network, no test run:
 
 ```bash
-# Print a scenario with all $ref/$include/$merge inlined and deep-merged
+# Print a scenario with all $ref/$include/$merge inlined and deep-merged, as strict JSON (comments dropped)
 uvx pytest-httpchain resolve tests/test_login.http.json
 
 # Summarize stages and the variable data-flow (which stage saves what, who consumes it)

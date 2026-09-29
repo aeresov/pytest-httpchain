@@ -1,9 +1,9 @@
 """pytest plugin entry point (the ``pytest11`` hook module).
 
 Registers the ini options and ``--httpchain-output-dir``, collects
-``test_<name>.<suffix>.json`` files into `JsonModule`, keeps each scenario's
-stages contiguous and ordered, and attaches the HTTP exchange (plus an optional
-HAR file) to test reports, credentials redacted.
+``test_<name>.<suffix>.json`` and ``.jsonc`` files into `JsonModule`, keeps
+each scenario's stages contiguous and ordered, and attaches the HTTP exchange
+(plus an optional HAR file) to test reports, credentials redacted.
 """
 
 import functools
@@ -21,7 +21,7 @@ import pytest
 
 from pytest_httpchain.body_schema import ReferenceBounds
 from pytest_httpchain.carrier import Carrier
-from pytest_httpchain.constants import ConfigOptions
+from pytest_httpchain.constants import SCENARIO_FILE_EXTENSIONS, ConfigOptions
 from pytest_httpchain.factory import create_test_class
 from pytest_httpchain.har_writer import write_har_file
 from pytest_httpchain.models import Scenario
@@ -46,9 +46,9 @@ class JsonModule(pytest.Module):
         """Return the in-memory module built in ``collect``.
 
         ``Module._getobj`` defaults to importing ``self.path`` as a Python
-        module — a .json file — so it is overridden (the extension point
-        ``_pytest.python.PyobjMixin`` documents) to hand pytest a generated
-        module that already carries the test class.
+        module — a .json or .jsonc file — so it is overridden (the extension
+        point ``_pytest.python.PyobjMixin`` documents) to hand pytest a
+        generated module that already carries the test class.
         """
         return self._generated_module
 
@@ -171,6 +171,15 @@ def _carrier_class(item: pytest.Item) -> type[Carrier] | None:
     return cls if isinstance(cls, type) and issubclass(cls, Carrier) else None
 
 
+def _scenario_nodeid(item: pytest.Item) -> str:
+    """How a message names the scenario ``item`` belongs to: its class's node
+    id, ``path::name``. The class name alone is the same for a
+    ``test_x.http.json`` and a ``test_x.http.jsonc`` side by side, and for
+    scenarios of one name in different directories."""
+    cls_node = item.getparent(pytest.Class)
+    return cls_node.nodeid if cls_node is not None else item.nodeid
+
+
 def _stage_index(item: pytest.Item) -> int:
     """The stage position `factory.create_test_class` stamped on the item's method."""
     return getattr(getattr(item, "function", None), "_httpchain_stage_index", 0)
@@ -218,10 +227,11 @@ def _chain_args(items: Iterable[pytest.Item]) -> dict[type[Carrier], frozenset[s
     return shared
 
 
-def _warn_on_params_varying_across_stages(cls: type[Carrier], items: list[pytest.Item], chain_args: frozenset[str]) -> None:
+def _warn_on_params_varying_across_stages(cls: type[Carrier], items: list[pytest.Item], chain_args: frozenset[str], scenario_id: str) -> None:
     """Warn when a fixture parametrized above function scope that not every
     stage requests is requested by two or more, and so varies in place across
-    them (`_chain_args`).
+    them (`_chain_args`). ``scenario_id`` is the class's node id, which names
+    the scenario in the message.
 
     Stage order then runs each of those stages for every param before the next
     one: with ``tenant`` over [a, b] on ``create`` and ``read`` only,
@@ -250,7 +260,7 @@ def _warn_on_params_varying_across_stages(cls: type[Carrier], items: list[pytest
         names = [scenario.stages[j].name for j in sorted(indices) if j < len(scenario.stages)]
         warnings.warn(
             ScenarioValidationWarning(
-                f"Scenario '{cls.__name__}': the {scopes[name]}-scoped fixture '{name}' has params and is requested by stages {names} "
+                f"Scenario '{scenario_id}': the {scopes[name]}-scoped fixture '{name}' has params and is requested by stages {names} "
                 f"but not by every stage, so the scenario does not run once per param: each of those stages runs for every param "
                 f"before the next one does, '{names[1]}' for the first param sees what '{names[0]}' saved for the last, and '{name}' "
                 f"is set up again each time its param changes. Request '{name}' from every stage (e.g. in the scenario's fixtures) "
@@ -278,7 +288,7 @@ def _reject_ids_splitting_loadscope(items: list[pytest.Item]) -> None:
     if cls is None or cls.scenario is None or len(cls.scenario.stages) <= 1:
         return
     raise pytest.Collector.CollectError(
-        f"pytest-xdist --dist loadscope would run {[item.name for item in split]} apart from the rest of scenario '{cls.__name__}': "
+        f"pytest-xdist --dist loadscope would run {[item.name for item in split]} apart from the rest of scenario '{_scenario_nodeid(split[0])}': "
         f"loadscope groups tests by node id up to the last '::', and these test ids contain '::' "
         f"(from a stage's parametrize step, or from a fixture's params). "
         f"Give that parametrize step or fixture explicit ids without '::', or use --dist loadfile or loadgroup."
@@ -304,7 +314,7 @@ class JsonClass(pytest.Class):
         chain_args = _chain_args(items)
         self.config.stash.setdefault(_SCENARIO_CHAIN_ARGS, {}).update(chain_args)
         for cls, names in chain_args.items():
-            _warn_on_params_varying_across_stages(cls, items, names)
+            _warn_on_params_varying_across_stages(cls, items, names, self.nodeid)
         return collected
 
 
@@ -445,11 +455,12 @@ def _warn_on_split_chains(items: list[pytest.Item]) -> None:
         missing = set(range(max(indices))) - indices
         if missing:
             names = [scenario.stages[j].name for j in sorted(missing) if j < len(scenario.stages)]
-            chain = _describe_chain(first_items[(cls, chain_key)], chain_key)
+            first = first_items[(cls, chain_key)]
+            chain = _describe_chain(first, chain_key)
             try:
                 warnings.warn(
                     ScenarioValidationWarning(
-                        f"Scenario '{cls.__name__}': earlier stage(s) {names} were deselected (e.g. by --lf, -k, or --deselect) "
+                        f"Scenario '{_scenario_nodeid(first)}': earlier stage(s) {names} were deselected (e.g. by --lf, -k, or --deselect) "
                         f"while later stages of the chain{chain} remain selected; the surviving stages will run without their saved context"
                     ),
                     stacklevel=2,
@@ -645,8 +656,16 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 
 def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> pytest.Collector | None:
+    """Collect ``test_<name>.<suffix>.json`` and ``.jsonc`` files.
+
+    A ``.json`` and a ``.jsonc`` file of the same name in one directory are two
+    scenarios, both collected: the node id holds the file name, extension and
+    all, so their tests, xdist groups and HAR files stay apart, and a message
+    naming one names it by its class's node id (`_scenario_nodeid`).
+    """
     suffix: str = parent.config.getini(ConfigOptions.SUFFIX)
-    if file_match := re.fullmatch(rf"test_(?P<name>.+)\.{re.escape(suffix)}\.json", file_path.name):
+    extensions = "|".join(re.escape(extension) for extension in SCENARIO_FILE_EXTENSIONS)
+    if file_match := re.fullmatch(rf"test_(?P<name>.+)\.{re.escape(suffix)}(?:{extensions})", file_path.name):
         return JsonModule.from_parent(parent, path=file_path, name=file_match["name"])
     return None
 

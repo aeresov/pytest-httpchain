@@ -1,0 +1,13 @@
+// A .json scenario with comments whose body schema file has them too: the
+// deep checks read it as the runtime does, so it is no HTTPCHAIN021.
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                { "verify": { "status": 200, "body": { "schema": "schema_refs/commented.jsonc#/$defs/User" } } }, /* one step */
+            ]
+        }
+    ]
+}

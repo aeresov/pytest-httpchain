@@ -1,4 +1,4 @@
-"""Ini option names and the user-function name grammar."""
+"""Ini option names, scenario file extensions and the user-function name grammar."""
 
 import re
 from enum import StrEnum
@@ -28,6 +28,13 @@ def parse_user_function_name(name: str) -> tuple[str, str]:
     if _BARE_NAME_PATTERN.fullmatch(name):
         raise ValueError(f"Module path is required: use 'module:{name}' format instead of '{name}'")
     raise ValueError(f"Invalid function name format: {name}")
+
+
+# What a scenario file's name ends with, after ``test_<name>.<suffix>``: pytest
+# collects both, and ``validate`` takes both without a warning. The reader is the
+# same for both (``jsonref.loads_jsonc``, comments and trailing commas allowed in
+# any file), so ``.jsonc`` only tells editors to expect JSON with comments.
+SCENARIO_FILE_EXTENSIONS = (".json", ".jsonc")
 
 
 class ConfigOptions(StrEnum):

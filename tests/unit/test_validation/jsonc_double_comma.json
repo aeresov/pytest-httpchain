@@ -1,0 +1,7 @@
+/* One trailing comma is accepted, but
+   never a second one. */
+{
+    "stages": [
+        { "name": "s", "request": { "url": "http://server/x" }, "response": [{ "verify": { "status": 200 } }] },,
+    ]
+}

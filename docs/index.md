@@ -26,7 +26,7 @@ Testing HTTP APIs with plain pytest often leads to these pain points:
 
 ### Declarative JSON Format
 
-Test scenarios are JSON documents that describe _what_ to test, not _how_. No setup code to scroll through — the request and assertions are right there.
+Test scenarios are JSON documents that describe _what_ to test, not _how_. No setup code to scroll through — the request and assertions are right there. [Comments and trailing commas](usage/scenarios.md#comments-and-trailing-commas) are welcome in every scenario and every file it pulls in; name a file `test_<name>.http.jsonc` and editors treat it as JSON with comments.
 
 ### `$include` / `$merge` / `$ref` with Deep Merging
 

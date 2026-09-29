@@ -1,8 +1,22 @@
+from pathlib import Path
+
 from pytest_httpchain.errors import HttpChainError
 
 
 class ReferenceResolverError(HttpChainError):
     """Exception for reference resolution errors."""
+
+
+class FileLoadError(ReferenceResolverError):
+    """A file could not be read or parsed: the ``OSError``, ``JSONDecodeError``
+    or ``RecursionError`` is the ``__cause__``. ``path`` is that file, the
+    document itself or one a reference named (the innermost, when references
+    nest), so a consumer can say which file a syntax error's line and column
+    are in: the message names it, the cause alone does not."""
+
+    def __init__(self, message: str, path: Path | None = None):
+        super().__init__(message)
+        self.path = path
 
 
 class InvalidJSONError(ReferenceResolverError):

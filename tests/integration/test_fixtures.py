@@ -216,7 +216,7 @@ def test_fixture_params_several_stages_request_warn(run_scenario):
     assert re.findall(r"tenant setup: (\w+)", result.stdout.str()) == ["alpha", "beta", "alpha", "beta"]
     result.stdout.fnmatch_lines(
         [
-            "*Scenario 'inline': the class-scoped fixture 'tenant' has params and is requested by stages [[]'create', 'read'[]] "
+            "*Scenario 'test_inline.http.json::inline': the class-scoped fixture 'tenant' has params and is requested by stages [[]'create', 'read'[]] "
             "but not by every stage, so the scenario does not run once per param*Request 'tenant' from every stage*"
         ]
     )

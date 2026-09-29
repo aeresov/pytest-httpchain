@@ -858,6 +858,26 @@ class TestReading:
         with pytest.raises(SchemaFileError, match=error):
             _file(name, tmp_path)
 
+    def test_comments_and_trailing_commas(self, tmp_path):
+        """A schema file is read as a scenario is, as JSON with comments: the
+        file named, and a file a reference in it reaches."""
+        (tmp_path / "user.jsonc").write_text(
+            '// The user\n{\n  "type": "object",\n  "properties": {"id": {"$ref": "common.json#/$defs/Id"}}, /* its id */\n  "required": ["id",],\n}',
+            encoding="utf-8",
+        )
+        (tmp_path / "common.json").write_text('{"$defs": {"Id": {"type": "integer"}, // positive\n},}', encoding="utf-8")
+        schema = _file("user.jsonc", tmp_path)
+        schema.check()
+        schema.validate({"id": 1})
+        with pytest.raises(jsonschema.ValidationError, match="'x' is not of type 'integer'"):
+            schema.validate({"id": "x"})
+
+    def test_unterminated_comment(self, tmp_path):
+        """A syntax error at the comment's opening, in the file as written."""
+        (tmp_path / "s.json").write_text('{"type": "integer"}\n/* never closed', encoding="utf-8")
+        with pytest.raises(SchemaFileError, match=r"^Unterminated comment: line 2 column 1 \(char 20\)$"):
+            _file("s.json", tmp_path)
+
     def test_a_registry_is_built_once_while_unchanged(self, api, monkeypatch):
         """A schema file's crawled registry is kept with its parse, across
         verify steps (every iteration of a parallel stage), where it was

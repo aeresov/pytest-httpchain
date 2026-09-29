@@ -20,7 +20,7 @@ Configuration options can be set in `pytest.ini` or `pyproject.toml` under `[too
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `httpchain_suffix` | `http` | File suffix for test discovery. Files must match `test_<name>.<suffix>.json` |
+| `httpchain_suffix` | `http` | File suffix for test discovery. Files must match `test_<name>.<suffix>.json` or `test_<name>.<suffix>.jsonc` |
 | `httpchain_ref_parent_traversal_depth` | `3` | Maximum parent directory traversals allowed in `$include`/`$merge`/`$ref` paths, and in a `verify.body.schema`'s JSON Schema `$ref`s to files |
 | `httpchain_max_comprehension_length` | `50000` | Maximum length for list/dict comprehensions in template expressions |
 | `httpchain_max_parallel_iterations` | `10000` | Maximum number of parallel iterations (`repeat`/`foreach`) allowed per stage |
@@ -108,12 +108,24 @@ Add to your `.vscode/settings.json`:
 {
     "json.schemas": [
         {
-            "fileMatch": ["**/test_*.http.json"],
+            "fileMatch": ["**/test_*.http.json", "**/test_*.http.jsonc"],
             "url": "https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json"
         }
     ]
 }
 ```
+
+The `**/test_*.http.jsonc` pattern covers scenarios written as [JSON with comments](usage/scenarios.md#comments-and-trailing-commas): VS Code opens `.jsonc` files in its *JSON with Comments* mode, and a `json.schemas` mapping applies there too. To use comments in `.http.json` files as well, have VS Code open those in that mode:
+
+```json
+{
+    "files.associations": {
+        "**/test_*.http.json": "jsonc"
+    }
+}
+```
+
+To work offline or pin the schema to your installed version, point `url` at a local copy instead, written by `pytest-httpchain schema > scenario.schema.json` (a path relative to the workspace, such as `"./scenario.schema.json"`).
 
 Or reference the schema directly in your test files:
 
@@ -128,7 +140,7 @@ The `$schema` key is editor metadata — the plugin discards it during validatio
 
 ### JetBrains IDEs
 
-Go to **Settings → Languages & Frameworks → Schemas and DTDs → JSON Schema Mappings** and add a mapping for `**/test_*.http.json` files, pointing to `https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json`.
+Go to **Settings → Languages & Frameworks → Schemas and DTDs → JSON Schema Mappings** and add a mapping for `**/test_*.http.json` files (and `**/test_*.http.jsonc`, if you use it), pointing to `https://aeresov.github.io/pytest-httpchain/schema/scenario.schema.json`.
 
 ## Your First Test
 

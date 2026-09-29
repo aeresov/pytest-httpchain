@@ -169,6 +169,10 @@ class TestJson:
             pytest.param("{{ json_dumps(raw) }}", {"raw": b"x"}, r"json_dumps\(\) cannot encode bytes as JSON$", id="bytes"),
             pytest.param("{{ json_dumps(loop) }}", {"loop": _self_containing()}, r"^ValueError .*: Circular reference detected$", id="circular"),
             pytest.param("{{ json_loads('{') }}", {}, r"^ValueError .*: json_loads\(\) got text that is not JSON: Expecting property name", id="not-json"),
+            # Strict JSON, as a response body is: comments and trailing commas
+            # are for files read from disk.
+            pytest.param("{{ json_loads('[1,]') }}", {}, r"got text that is not JSON: Illegal trailing comma before end of array: line 1 column 3", id="trailing-comma"),
+            pytest.param("{{ json_loads('[1] // c') }}", {}, r"got text that is not JSON: Extra data: line 1 column 5", id="comment"),
             pytest.param("{{ json_loads(raw) }}", {"raw": b"\x80"}, r"json_loads\(\) got bytes that are not JSON text: 'utf-8' codec", id="undecodable-bytes"),
             pytest.param("{{ json_loads(1) }}", {}, r"^TypeError .*: json_loads\(\) takes text or bytes, not int$", id="number"),
         ],

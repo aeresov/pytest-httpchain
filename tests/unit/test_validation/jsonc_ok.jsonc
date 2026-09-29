@@ -1,0 +1,14 @@
+// A scenario with comments and trailing commas, in a .jsonc file: no
+// HTTPCHAIN013, and its $include target is read the same way.
+{
+    /* The one stage. */
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "http://server/x", }, // trailing comma in an object
+            "response": [
+                { "$include": "jsonc_parts/verify.jsonc" },
+            ],
+        },
+    ],
+}

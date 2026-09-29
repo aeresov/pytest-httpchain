@@ -60,6 +60,11 @@ def _hide_ancestor_project_markers(monkeypatch):
         # jmespath alone asserts something (no HTTPCHAIN006), and its values
         # see the response namespace and a prior step's save.
         "verify_jmespath_ok.json",
+        # Comments and trailing commas, in a .jsonc file (no HTTPCHAIN013) and
+        # the file it includes, and in a .json file whose body schema file the
+        # deep checks read as the runtime does.
+        "jsonc_ok.jsonc",
+        "deep_jsonc_schema_ok.json",
         "schema_key_tolerated.json",  # the editor-integration "$schema" key is stripped by the loader
         # Names a template may reference without being flagged undefined:
         "parametrize_individual.json",
@@ -177,6 +182,11 @@ DIAGNOSED = [
     # Saved as Latin-1. RFC 8259 requires UTF-8, so the file is invalid JSON,
     # like a syntax error, and not an unexplained parse failure.
     ("not_utf8.json", [(C.INVALID_JSON, None, r"^Invalid JSON: .*not_utf8\.json is not valid UTF-8: 'utf-8' codec can't decode byte 0xe9")]),
+    # A comment never closed is a syntax error at its opening, and one after
+    # comments is at its line and column in the file as written. Only one
+    # trailing comma is accepted: the second is where the error is.
+    ("jsonc_unterminated_comment.json", [(C.INVALID_JSON, None, r"^Invalid JSON syntax: Unterminated comment: line 6 column 1 \(char \d+\)$")]),
+    ("jsonc_double_comma.json", [(C.INVALID_JSON, None, r"^Invalid JSON syntax: Expecting value: line 5 column 113 \(char \d+\)$")]),
     ("schema_error.json", [(C.SCHEMA, "stages -> 0 -> request", "Field required")]),
     # Models forbid extra keys: a typo fails naming the key and its location.
     ("request_field_typo.json", [(C.SCHEMA, "stages -> 0 -> request -> headerz", "Extra inputs are not permitted")]),
@@ -734,8 +744,10 @@ def test_deep_schema_reference_depth_is_the_load_s(datadir):
 
 
 def test_wrong_extension_warns(datadir):
+    """A .jsonc file does not (`jsonc_ok.jsonc`): pytest collects both."""
     result = validate_scenario(datadir / "wrong_extension.txt")
     assert _codes(result) == [C.WRONG_EXTENSION]
+    assert result.warnings == ["File has extension '.txt' but expected '.json' or '.jsonc'. Consider renaming to use one of these extensions."]
     assert result.valid is True
 
 
@@ -1086,6 +1098,31 @@ class TestFileContent:
 
         assert _codes(result) == [C.INVALID_JSON]
         assert f"{bad.name} {message}" in result.errors[0]
+
+    @pytest.mark.parametrize("include", [False, True], ids=["scenario", "included-file"])
+    @pytest.mark.parametrize(
+        ("content", "code", "message"),
+        [
+            # A comment never closed, at its opening: line 3 of the file it is in.
+            pytest.param(b'{\n  "a": 1,\n  /* never closed\n', C.INVALID_JSON, "Invalid JSON syntax{in_file}: Unterminated comment: line 3 column 3 (char 14)", id="syntax"),
+            pytest.param(b'{"a": ' + TOO_DEEP_TO_PARSE + b"}", C.PARSE_ERROR, "Failed to parse JSON file{file}: nested too deeply (", id="too-deep"),
+        ],
+    )
+    def test_error_in_an_included_file_names_it(self, tmp_path, include, content, code, message):
+        """The diagnostic is the scenario's, so a line and column in a file it
+        pulls in read as the scenario's own: it said `Invalid JSON syntax:
+        Unterminated comment: line 3 column 3 (char 14)`, with no file name.
+        The scenario's own error needs none."""
+        bad = tmp_path / ("part.jsonc" if include else "test_x.http.json")
+        bad.write_bytes(content)
+        scenario = _write(tmp_path, [{"$include": "part.jsonc"}]) if include else bad
+
+        result = on_bounded_stack(validate_scenario, scenario)
+
+        assert _codes(result) == [code]
+        named = str(bad.resolve()) if include else None
+        expected = message.format(in_file=f" in {named}" if named else "", file=f" {named}" if named else "")
+        assert result.diagnostics[0].message.startswith(expected), result.diagnostics[0].message
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Windows' non-strict realpath passes such a path through, so it is reported as not found")
     def test_reference_path_the_os_rejects_is_a_ref_error(self, tmp_path):

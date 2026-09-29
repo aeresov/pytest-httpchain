@@ -15,11 +15,12 @@ Features:
 - JSON pointer references (`"$include": "#/definitions/foo"`)
 - Combined references (`"$include": "other.json#/definitions/foo"`)
 - Deep merging of sibling properties with referenced content
+- JSONC: every file may hold `//` and `/* */` comments and trailing commas (`jsonc.py`)
 
 ## Public API
 
 ```python
-from pytest_httpchain.jsonref import load_json, json_equal, ReferenceResolverError, InvalidJSONError
+from pytest_httpchain.jsonref import load_json, json_equal, loads_jsonc, strip_jsonc, ReferenceResolverError, InvalidJSONError, FileLoadError
 
 # Load JSON with $ref resolution
 data = load_json(path, max_parent_traversal_depth=3, root_path=None, opaque=None, atomic=None)
@@ -27,6 +28,9 @@ data = load_json(path, max_parent_traversal_depth=3, root_path=None, opaque=None
 # Equality as JSON means it: True is not 1, 1 is 1.0, containers compared member by member
 json_equal([True, {"a": 1}], [True, {"a": 1.0}])  # True
 json_equal([True], [1])  # False
+
+# JSON with comments: comments and trailing commas blanked out, then json.loads
+loads_jsonc('{"a": [1, 2,], /* note */}')  # {"a": [1, 2]}
 ```
 
 `json_equal` is the one definition of JSON equality in the plugin: the sibling
@@ -34,18 +38,42 @@ merge uses it (an equal value keeps, a different one conflicts), and so do
 `verify.jmespath` (`response_steps`) and the validator's contradiction checks
 on it. It lives here, the lowest layer that needs it, so all three agree.
 
+### JSONC
+
+`jsonc.py` is the one parser of JSON files read from disk, for this package
+(`_parse_json_rejecting_duplicates`) and for the plugin's body schema files
+(`utils.read_json_schema_file`), so every reader agrees on what a file may
+hold. `strip_jsonc` turns JSONC into strict JSON of the same length: each
+comment becomes spaces (every `\r` and `\n` in it kept) and each trailing comma
+a space, so a `JSONDecodeError`'s line and column are the file's. It is one
+possessive regex scan (`_SCAN`), linear: every match is a run the scan skips
+(strings whole, so nothing inside one is touched) followed by a comment, a
+trailing comma or the end of the text, so the matches tile the text and no
+match is ever attempted again from a later position. A comma is trailing only
+when a value is before it (the last significant character is not `[`, `{`, `,`
+or `:`): a leading or doubled comma is left for `json.loads` to refuse, at its
+position. A `/*` never closed raises `JSONDecodeError("Unterminated comment")`
+at its opening, a syntax error like any other; a lone `/` is left in place.
+Text with no `/` and no `,` before a closing bracket (whitespace between) is
+returned unchanged without the scan. Strictly valid JSON is never changed,
+which is why there is no opt-in. What arrives over HTTP never comes here: a
+response body is strict JSON.
+
 ### Load errors
 
 Every failure surfaces as `ReferenceResolverError`, so callers need one
 `except`. Content the reader rejects — bytes that are not UTF-8 (a UTF-8
 byte-order mark is accepted), an integer too long to parse, a duplicate object
 key — is an `InvalidJSONError` naming the file, raised directly (`DuplicateKeyError`
-is one). Any other load failure is chained as `__cause__`: `OSError`,
-`JSONDecodeError`, or `RecursionError` (nested deeper than the decoder or the
-resolver's own walk can go). The validator classifies on the type and that
-cause. jsonref sits below `utils` in the layering, so it keeps its own list of
-these errors (`_LOAD_ERRORS` in `plumbing/reference.py`) instead of importing
-the plugin's.
+is one). Any other load failure is a `FileLoadError`, its `path` the file that
+failed (the document itself, or the innermost file a reference named), with
+the original chained as `__cause__`: `OSError`, `JSONDecodeError`, or
+`RecursionError` (nested deeper than the decoder or the resolver's own walk can
+go). The validator classifies on the type and that cause, and names `path` when
+it is not the scenario, since a `JSONDecodeError`'s line and column say nothing
+of which file they are in. jsonref sits below `utils` in the layering, so it
+keeps its own list of these errors (`_LOAD_ERRORS` in `plumbing/reference.py`)
+instead of importing the plugin's.
 
 ### Opaque subtrees
 
@@ -107,7 +135,7 @@ When `$include` (or `$ref`) has sibling properties, they are merged **additively
 ```
 
 ### File Content
-Every file is read as UTF-8, with an optional byte-order mark (`utf-8-sig`). Content the one reader (`_parse_json_rejecting_duplicates`) cannot parse, short of a syntax error, raises `InvalidJSONError` (a `ReferenceResolverError`) naming that file — the referenced one when that is where it failed: bytes that are not UTF-8, a duplicate key (`DuplicateKeyError`, a subclass), an integer past Python's int-string conversion limit. The validator dispatches on `InvalidJSONError` to report `HTTPCHAIN014`, like a syntax error, rather than `HTTPCHAIN012`. A syntax error still propagates as `json.JSONDecodeError`, which the callers wrap. A reference path the OS path call rejects with `ValueError` (a NUL, or on POSIX a lone surrogate) is a plain `ReferenceResolverError` from `validate_ref_path`.
+Every file is read as UTF-8, with an optional byte-order mark (`utf-8-sig`), and parsed as JSONC (`loads_jsonc`), whatever its extension (`.json`, `.jsonc`). Content the one reader (`_parse_json_rejecting_duplicates`) cannot parse, short of a syntax error, raises `InvalidJSONError` (a `ReferenceResolverError`) naming that file — the referenced one when that is where it failed: bytes that are not UTF-8, a duplicate key (`DuplicateKeyError`, a subclass), an integer past Python's int-string conversion limit. The validator dispatches on `InvalidJSONError` to report `HTTPCHAIN014`, like a syntax error, rather than `HTTPCHAIN012`. A syntax error still propagates as `json.JSONDecodeError`, which the callers wrap in a `FileLoadError`; an unterminated block comment is one. A reference path the OS path call rejects with `ValueError` (a NUL, or on POSIX a lone surrogate) is a plain `ReferenceResolverError` from `validate_ref_path`.
 
 ### Security Features
 - `max_parent_traversal_depth`: Limits `..` in paths (default: 3)

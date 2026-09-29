@@ -1,0 +1,9 @@
+{
+    "type": "object",
+    "required": ["id", "name", "email",], // what every user has
+    "properties": {
+        "id": { "type": "integer" },
+        /* A non-empty name. */
+        "name": { "type": "string", "minLength": 1 },
+    },
+}

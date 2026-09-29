@@ -39,6 +39,18 @@ Reference a specific key within a file:
 
 ## File References
 
+A referenced file may have any name: `common.jsonc` works as `common.json` does. Every file is read as [JSON with comments](../usage/scenarios.md#comments-and-trailing-commas), so a shared fragment can explain itself:
+
+```json
+{
+    // Headers every request to the API sends.
+    "headers": {
+        "Accept": "application/json",
+        "X-Client": "pytest-httpchain", /* identifies the test traffic */
+    },
+}
+```
+
 ### Same Directory
 
 ```json

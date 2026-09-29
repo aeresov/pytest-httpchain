@@ -88,19 +88,19 @@ src/pytest_httpchain/
 ├── report_formatter.py        # HTTP request/response formatting for test reports
 ├── har_writer.py              # HAR file export for HTTP request/response logging
 ├── redaction.py               # Redaction: the one set of credential-hiding rules (headers, cookies, URL query) shared by reports, HAR, header verify and request-error messages
-├── constants.py               # ConfigOptions enum for pytest.ini settings + the shared user-function name grammar
+├── constants.py               # ConfigOptions enum for pytest.ini settings, scenario file extensions + the shared user-function name grammar
 ├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response, and whether a stage's retry may retry it) + subclasses RequestError, SaveError, VerificationError
 ├── userfunc.py                # Dynamic function import/invocation, incl. the model-aware call_user_function dispatch
 ├── models/                    # Pydantic models (Scenario, Stage, Request, etc.)
 ├── templates/                 # {{ expression }} substitution engine
-└── jsonref/                   # $ref resolution with deep merging
+└── jsonref/                   # $ref resolution with deep merging, and the JSONC reader every file on disk is parsed with
 ```
 
 The models, templates, and jsonref subpackages carry their own CLAUDE.md next to their code.
 
 ## Test File Pattern
 
-Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix configurable via `httpchain_suffix` ini option).
+Test scenarios are discovered by pattern: `test_<name>.http.json` or `test_<name>.http.jsonc` (suffix configurable via `httpchain_suffix` ini option; the extensions are `constants.SCENARIO_FILE_EXTENSIONS`). Every file read from disk, whatever its extension, is parsed as JSONC — comments and trailing commas allowed — by the one scanner in `jsonref/jsonc.py`; response bodies stay strict JSON.
 
 ## Key Execution Flow
 

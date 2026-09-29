@@ -286,6 +286,51 @@ def test_include_path_the_os_rejects_exits_one(tmp_path, command):
     assert r"Reference path '\ud800.json' is not a valid file path" in result.stderr
 
 
+JSONC_SCENARIO = """// Comments and trailing commas, here and in the file included.
+{
+    "stages": [
+        {
+            "name": "s", /* the only stage */
+            "request": { "$include": "request.jsonc" },
+            "response": [{ "verify": { "status": 200 } },],
+        },
+    ],
+}
+"""
+
+
+@pytest.fixture
+def jsonc_scenario(tmp_path) -> Path:
+    (tmp_path / "request.jsonc").write_text('{\n  "url": "https://x.test/a", // shared\n}\n')
+    scenario = tmp_path / "test_x.http.jsonc"
+    scenario.write_text(JSONC_SCENARIO)
+    return scenario
+
+
+def test_resolve_prints_strict_json(jsonc_scenario):
+    """The comments are gone from the printed document, and so are the trailing commas."""
+    result = runner.invoke(app, ["resolve", str(jsonc_scenario)])
+    assert result.exit_code == 0, result.output
+    expected = {"stages": [{"name": "s", "request": {"url": "https://x.test/a"}, "response": [{"verify": {"status": 200}}]}]}
+    assert result.output == json.dumps(expected, indent=2) + "\n"
+
+
+@pytest.mark.parametrize(("command", "line"), [("validate", "test_x.http.jsonc: OK"), ("show", "1 · s    GET https://x.test/a"), ("graph", 'S0["1 · s"]')])
+def test_every_command_reads_jsonc(jsonc_scenario, command, line):
+    result = runner.invoke(app, [command, str(jsonc_scenario)])
+    assert result.exit_code == 0, result.output
+    assert line in result.output
+
+
+@pytest.mark.parametrize("command", ["resolve", "show", "graph"])
+def test_unterminated_comment_exits_one(jsonc_scenario, command):
+    (jsonc_scenario.parent / "request.jsonc").write_text('{"url": "https://x.test/a"}\n/* never closed')
+    result = runner.invoke(app, [command, str(jsonc_scenario)])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.endswith("Failed to load external reference request.jsonc: Unterminated comment: line 2 column 1 (char 28)\n")
+
+
 # --- show / graph ---
 
 

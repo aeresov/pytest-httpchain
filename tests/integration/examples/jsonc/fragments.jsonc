@@ -1,0 +1,7 @@
+{
+    // The first user, whose name is Alice.
+    "user_request": {
+        "url": "{{ server }}/user/1",
+        "headers": { "Accept": "application/json", },
+    },
+}

@@ -1,0 +1,13 @@
+// Comments and trailing commas in a .json file too: every file the plugin
+// reads is JSON with comments. The same test name as the .jsonc beside it, and
+// a stage of the same name, yet a scenario of its own.
+{
+    "stages": [
+        {
+            "name": "user",
+            "fixtures": ["server"],
+            "request": { "url": "{{ server }}/user/1", /* a plain GET */ },
+            "response": [{ "verify": { "status": [200,] } },],
+        },
+    ],
+}

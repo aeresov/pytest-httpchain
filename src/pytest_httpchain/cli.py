@@ -120,7 +120,11 @@ def resolve(
     ref_parent_traversal_depth: RefParentTraversalDepth = 3,
     root_path: RootPath = None,
 ) -> None:
-    """Resolve $ref/$include/$merge and print the merged scenario JSON to stdout."""
+    """Resolve $ref/$include/$merge and print the merged scenario JSON to stdout.
+
+    The output is strict JSON: the comments and trailing commas a scenario or
+    an included file may hold are not in it.
+    """
     try:
         # The loader load_scenario uses, so the printed document is what
         # collection sees.

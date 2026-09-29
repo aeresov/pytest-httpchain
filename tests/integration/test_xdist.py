@@ -121,7 +121,13 @@ BY_HOST = _reads_token("by host", parametrize=[{"individual": {"host": ["::1", "
         pytest.param("loadscope", _chain(_reads_token("Users::list")), "*HTTPCHAIN032*", id="separator-in-stage-name"),
         # ... and so does a '::' in a parametrize id; pytest itself handles
         # that id, so only this mode rejects it.
-        pytest.param("loadscope", _chain(BY_HOST), "*--dist loadscope would run ?'test 1 - by host?::1?'?*", id="separator-in-parametrize-id"),
+        # The scenario is named by its class's node id.
+        pytest.param(
+            "loadscope",
+            _chain(BY_HOST),
+            "*--dist loadscope would run ?'test 1 - by host?::1?'? apart from the rest of scenario 'test_inline.http.json::inline': *",
+            id="separator-in-parametrize-id",
+        ),
     ],
 )
 def test_stage_that_would_leave_its_chain_rejected(run_scenario, mode, scenario, message):
