@@ -662,9 +662,17 @@ def test_graph_emits_mermaid(chain_scenario, args, direction):
     assert result.output == f'flowchart {direction}\n    S0["1 · create"]\n    S1["2 · get"]\n    S0 -->|user_id| S1\n'
 
 
-def test_graph_dots_the_edges_out_of_a_stage_that_may_skip(tmp_path):
+MAY_SKIP = [
+    pytest.param({"skip_if": "{{ flag }}"}, id="skip-if"),
+    pytest.param({"marks": ["skip"]}, id="skip-mark"),
+    pytest.param({"marks": ["xfail"]}, id="xfail-mark"),
+]
+
+
+@pytest.mark.parametrize("may_skip", MAY_SKIP)
+def test_graph_dots_the_edges_out_of_a_stage_that_may_skip(tmp_path, may_skip):
     """Its saves may never be made: the edge is drawn dotted."""
-    maybe = {**_stage("maybe", "https://x.test/a", skip_if="{{ flag }}"), "response": [{"save": {"jmespath": {"x": "x"}}}]}
+    maybe = {**_stage("maybe", "https://x.test/a", **may_skip), "response": [{"save": {"jmespath": {"x": "x"}}}]}
     sure = {**_stage("sure", "https://x.test/b"), "response": [{"save": {"jmespath": {"y": "y"}}}]}
     scenario = _write(tmp_path / "test_x.http.json", {"stages": [maybe, sure, _stage("reader", "https://x.test/{{ x }}/{{ y }}")]})
     result = runner.invoke(app, ["graph", str(scenario)])
@@ -672,13 +680,13 @@ def test_graph_dots_the_edges_out_of_a_stage_that_may_skip(tmp_path):
     assert result.output.splitlines()[-2:] == ["    S0 -.->|x| S2", "    S1 -->|y| S2"]
 
 
-@pytest.fixture
-def refresh_scenario(tmp_path) -> Path:
+@pytest.fixture(params=[{"skip_if": "{{ not stale }}"}, {"marks": ["xfail"]}], ids=["skip-if", "xfail-mark"])
+def refresh_scenario(tmp_path, request) -> Path:
     """A token saved by `login`, re-saved by a `refresh` that may skip, read by `use`."""
     saves_token = [{"save": {"jmespath": {"token": "t"}}}]
     stages = [
         {**_stage("login", "https://x.test/login"), "response": saves_token},
-        {**_stage("refresh", "https://x.test/refresh", skip_if="{{ not stale }}"), "response": saves_token},
+        {**_stage("refresh", "https://x.test/refresh", **request.param), "response": saves_token},
         _stage("use", "https://x.test/{{ token }}"),
     ]
     return _write(tmp_path / "test_refresh.http.json", {"substitutions": [{"vars": {"stale": False}}], "stages": stages})
@@ -690,6 +698,12 @@ def test_show_text_lists_every_stage_a_name_may_come_from(refresh_scenario):
     result = runner.invoke(app, ["show", str(refresh_scenario)])
     assert result.exit_code == 0, result.output
     assert result.output.splitlines()[-1] == "    consumes: token (from #2 refresh, else #1 login)"
+
+
+def test_show_json_says_which_stages_may_skip(refresh_scenario):
+    result = runner.invoke(app, ["show", "--format", "json", str(refresh_scenario)])
+    assert result.exit_code == 0, result.output
+    assert [stage["may_skip"] for stage in json.loads(result.output)["stages"]] == [False, True, False]
 
 
 def test_graph_draws_an_edge_from_the_producer_a_skipped_stage_falls_back_to(refresh_scenario):

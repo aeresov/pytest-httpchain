@@ -32,9 +32,11 @@ time against scenario substitutions only, which is why `StageScopes` exposes
 
 An earlier stage's saves are in scope because it passed: one that failed
 aborted the chain, so only an ``always_run`` stage runs without them. One
-that skipped (``skip_if``) leaves the chain healthy, so every later stage runs
-without them; `StageScopes.skippable_saves` holds the names only such stages
-save, and `StageScopes.when_skipped` the scope without them.
+that skipped leaves the chain healthy, so every later stage runs without them:
+a ``skip_if``, or a ``skip``, ``skipif`` or ``xfail`` mark of the stage's own
+(a `SkipCause`; an expected failure is reported skipped too).
+`StageScopes.skippable_saves` holds the names only such stages save, and
+`StageScopes.when_skipped` the scope without them.
 
 The template built-ins (``now()``, ``len()``, ``true``, ...) are in scope in
 every phase, beneath the user's names: a user name shadows a built-in of the
@@ -43,11 +45,14 @@ built-in (see `extract_template_variables` and `extract_builtin_stand_ins`).
 """
 
 import ast
+import warnings
 from collections import ChainMap
 from collections.abc import Iterable, Iterator, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from typing import Any, NamedTuple
+
+import pytest
 
 from pytest_httpchain.models import (
     CombinationsParameter,
@@ -68,6 +73,7 @@ from pytest_httpchain.models import (
     normalize_list_input,
 )
 from pytest_httpchain.templates import CALL_ONLY_BUILTINS, CONTEXT_HELPERS, TEMPLATE_BUILTINS, TemplatesError, find_templates, parse_expression, template_form
+from pytest_httpchain.utils import make_marker
 
 # The name under which response metadata is injected into response-step contexts.
 RESPONSE_META_NAME = "response"
@@ -568,6 +574,95 @@ def response_step_templates(stage: Stage, raw_response: Any) -> Iterator[tuple[A
 
 
 # --------------------------------------------------------------------------- #
+# Skip causes: which stages may end without their saves while the chain goes on.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class SkipCause:
+    """Why a stage may end without committing its saves while the stages after
+    it still run: its ``skip_if``, or a ``skip``, ``skipif`` or ``xfail`` mark of
+    its own. pytest reports all of them skipped (an expected failure is a skip
+    carrying ``wasxfail``), which `plugin.pytest_runtest_makereport` leaves
+    chain-healthy."""
+
+    mark: str | None
+    """The mark as written; ``None`` for the stage's ``skip_if``."""
+    fails_as_expected: bool = False
+    """An ``xfail`` that runs the stage: its saves are lost when it fails as
+    expected, where the others' are lost when it skips."""
+    never_called: bool = False
+    """pytest skips the stage at setup and never calls it, so nothing it reads
+    can fail either. Not so for ``skip_if: true``: the stage checks it after
+    ``always_run``, which it reads on an aborted chain."""
+
+
+def _conditions_apply(mark: pytest.Mark) -> bool | None:
+    """Whether a ``skipif``/``xfail`` mark applies, read as pytest's skipping
+    plugin reads it: with no condition it always does, otherwise when any
+    condition is true. ``None`` is pytest's to decide at run time: a string
+    condition is an expression it evaluates, unless the string is a literal."""
+    conditions = (mark.kwargs["condition"],) if "condition" in mark.kwargs else mark.args
+    if not conditions:
+        return True
+    verdict: bool | None = False
+    for condition in conditions:
+        if isinstance(condition, str):
+            try:
+                condition = ast.literal_eval(condition)
+            except Exception:
+                # Broad on purpose: whatever literal_eval rejects is an
+                # expression only pytest can evaluate.
+                verdict = None
+                continue
+        if condition:
+            return True
+    return verdict
+
+
+def mark_skip_cause(mark_str: str) -> SkipCause | None:
+    """The skip cause one stage mark is, if any: a ``skip``; a ``skipif`` whose
+    conditions may hold; an ``xfail`` whose conditions may hold, which runs the
+    stage unless ``run=False``. A mark that does not parse is HTTPCHAIN019's
+    to report, and no cause."""
+    try:
+        # Constructing an unregistered mark warns; only the parse matters here.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            mark = make_marker(mark_str).mark
+    except Exception:
+        return None
+    match mark.name:
+        case "skip":
+            applies, runs = True, False
+        case "skipif":
+            applies, runs = _conditions_apply(mark), False
+        case "xfail":
+            applies, runs = _conditions_apply(mark), bool(mark.kwargs.get("run", True))
+        case _:
+            return None
+    if applies is False:
+        return None
+    return SkipCause(mark=mark_str, fails_as_expected=runs, never_called=applies is True and not runs)
+
+
+def _stage_skip_cause(stage: Stage) -> SkipCause | None:
+    """Why ``stage`` may end without its saves, or ``None`` when it never does.
+    One pytest never calls comes first, since that stage reads nothing; then
+    its ``skip_if``; then its first mark that may skip it.
+
+    Scenario-level ``marks`` are not read. They apply to every stage, the one
+    that reads a save as much as the one that saves it: a scenario-wide
+    ``skipif`` skips both or neither, and under a scenario-wide ``xfail`` the
+    reader's failure is an expected one too.
+    """
+    causes = [cause for cause in map(mark_skip_cause, stage.marks) if cause is not None]
+    if stage.skip_if is not False:
+        causes.insert(0, SkipCause(mark=None))
+    return next((cause for cause in causes if cause.never_called), next(iter(causes), None))
+
+
+# --------------------------------------------------------------------------- #
 # Static scope model: per-stage, per-phase name availability.
 # --------------------------------------------------------------------------- #
 
@@ -635,12 +730,14 @@ class StageScopes:
     saves: frozenset[str]
     earlier_saves: frozenset[str]
     skippable_saves: frozenset[str]
-    """The ``earlier_saves`` that only stages with a ``skip_if`` save: none
+    """The ``earlier_saves`` that only stages with a `SkipCause` save: none
     is there when those stages skipped."""
+    skip_cause: SkipCause | None
+    """This stage's own, if it may skip."""
 
     @property
     def when_skipped(self) -> "StageScopes":
-        """This scope as it is when every earlier stage with a ``skip_if``
+        """This scope as it is when every earlier stage with a `SkipCause`
         skipped: without `skippable_saves`. A name in a phase's scope here but
         not in the same phase of ``when_skipped`` is defined only when such a
         stage ran."""
@@ -703,7 +800,7 @@ class StageScopes:
 def stage_scopes(scenario: Scenario) -> list[StageScopes]:
     """Per-stage scopes in execution order. ``earlier_saves`` accumulates stage
     by stage, mirroring the runtime commit of saves after a stage passes, and
-    ``skippable_saves`` holds those of them no stage without a ``skip_if``
+    ``skippable_saves`` holds those of them no stage without a `SkipCause`
     saves (``skip_if: false`` never skips)."""
     scenario_substitutions = frozenset(substitution_names(scenario.substitutions))
     scenario_fixtures = frozenset(scenario.fixtures)
@@ -713,6 +810,7 @@ def stage_scopes(scenario: Scenario) -> list[StageScopes]:
     unskippable_saves: frozenset[str] = frozenset()
     for stage in scenario.stages:
         saves = frozenset(saved_in_stage(stage))
+        skip_cause = _stage_skip_cause(stage)
         scopes.append(
             StageScopes(
                 scenario_substitutions=scenario_substitutions,
@@ -724,10 +822,11 @@ def stage_scopes(scenario: Scenario) -> list[StageScopes]:
                 saves=saves,
                 earlier_saves=earlier_saves,
                 skippable_saves=earlier_saves - unskippable_saves,
+                skip_cause=skip_cause,
             )
         )
         earlier_saves |= saves
-        if stage.skip_if is False:
+        if skip_cause is None:
             unskippable_saves |= saves
     return scopes
 

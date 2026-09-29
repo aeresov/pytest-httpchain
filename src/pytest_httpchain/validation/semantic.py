@@ -34,6 +34,8 @@ from pytest_httpchain.scoping import (
     SCENARIO_TEMPLATE_FIELDS,
     DefinedNames,
     NameUnion,
+    SkipCause,
+    StageScopes,
     defined_names,
     extract_builtin_stand_ins,
     extract_defined_variables,
@@ -44,7 +46,6 @@ from pytest_httpchain.scoping import (
     raw_stages,
     response_step_templates,
     saved_in_response,
-    saved_in_stage,
     stage_scopes,
     stats_name,
     substitution_names,
@@ -350,16 +351,23 @@ def _parametrize_rendered_values(raw_parametrize: Any) -> Any:
     return raw_parametrize
 
 
-def _skippable_save_diagnostic(scenario: Scenario, i: int, where: str, name: str, location: str) -> Diagnostic:
+def _skip_cause_text(cause: SkipCause) -> str:
+    return "skip_if" if cause.mark is None else f"the mark {cause.mark!r}"
+
+
+def _skippable_save_diagnostic(scenario: Scenario, scopes: list[StageScopes], i: int, where: str, name: str, location: str) -> Diagnostic:
     """HTTPCHAIN003 for a reference to ``name`` that only earlier stages with a
-    ``skip_if`` save (`scoping.StageScopes.skippable_saves`): a skip leaves the
-    chain healthy, so stage ``i`` runs, and finds the name undefined, whenever
-    those stages skipped. ``where`` is the phase that reads it."""
-    savers = [f"'{stage.name}'" for stage in scenario.stages[:i] if name in saved_in_stage(stage)]
+    `scoping.SkipCause` save (`scoping.StageScopes.skippable_saves`): a skip
+    leaves the chain healthy, so stage ``i`` runs, and finds the name undefined,
+    whenever those stages skipped. Each saver is named with its cause, its
+    ``skip_if`` or the mark as written. ``where`` is the phase that reads it."""
+    savers = [(scenario.stages[j].name, cause) for j in range(i) if name in scopes[j].saves and (cause := scopes[j].skip_cause)]
     if len(savers) == 1:
-        saved = f"which only stage {savers[0]} saves, and it has skip_if: when it skips"
+        [(saver, cause)] = savers
+        saved = f"which only stage '{saver}' saves, and it has {_skip_cause_text(cause)}: when it {'fails as expected' if cause.fails_as_expected else 'skips'}"
     else:
-        saved = f"which only stages {', '.join(savers)} save, and each has skip_if: when they all skip"
+        listed = ", ".join(f"'{saver}' ({_skip_cause_text(cause)})" for saver, cause in savers)
+        saved = f"which only stages {listed} save: when none of them saves it"
     return diag(
         DiagnosticCode.UNDEFINED_VAR,
         f"Stage '{scenario.stages[i].name}': {where} references '{name}', {saved}, '{name}' is undefined here — read it with get('{name}', <default>){_builtin_fallback({name})}",
@@ -374,9 +382,11 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
     ``scoping.stage_scopes``. An unavailable reference is a FORWARD_REF when the
     name is saved later (by a later stage, or by a later step of this stage's
     own response) or defined by a later substitution step, else an UNDEFINED_VAR.
-    An available one is an UNDEFINED_VAR too where only earlier stages with a
-    ``skip_if`` save it, and nothing else of that name is in scope: a skipped
-    stage, unlike a failed one, does not stop the stages after it. A built-in's
+    An available one is an UNDEFINED_VAR too where only earlier stages that may
+    skip (a ``skip_if``, or a ``skip``, ``skipif`` or ``xfail`` mark) save it,
+    and nothing else of that name is in scope: a skipped stage, unlike a failed
+    one, does not stop the stages after it. Not in a stage a mark keeps pytest
+    from ever calling, which reads nothing. A built-in's
     name the scenario defines too, called or passed as a function where that
     definition is not in scope, gets the built-in instead: a BUILTIN_STANDS_IN.
     """
@@ -394,8 +404,10 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
     for i, stage in enumerate(scenario.stages):
         scope = scopes[i]
         phases = scope.phases()
-        # The same phases, as they are when every earlier stage with a skip_if skipped.
-        skipped = phases if scope.when_skipped is scope else scope.when_skipped.phases()
+        # The same phases, as they are when every earlier stage that may skip
+        # skipped; unchanged in a stage pytest never calls, which reads nothing.
+        never_called = scope.skip_cause is not None and scope.skip_cause.never_called
+        skipped = phases if scope.when_skipped is scope or never_called else scope.when_skipped.phases()
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
         parametrize_refs, parametrize_stand_ins = _template_refs(_parametrize_rendered_values(raw.get("parametrize")), defined)
@@ -420,7 +432,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
         for name in sorted(always_run_refs):
             if name in phases.always_run:
                 if name not in skipped.always_run:
-                    yield _skippable_save_diagnostic(scenario, i, "always_run", name, f"stages[{i}].always_run")
+                    yield _skippable_save_diagnostic(scenario, scopes, i, "always_run", name, f"stages[{i}].always_run")
                 continue
             if name in all_saved:
                 j = first_save_stage[name]
@@ -441,7 +453,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
             yield _stand_in_diagnostic(f"Stage '{stage.name}': always_run", always_run_stand_ins, f"stages[{i}].always_run")
 
         # (phase, template text, names available to it, and those of them
-        # still available when every earlier stage with a skip_if skipped).
+        # still available when every earlier stage that may skip skipped).
         # Each substitution and response step is checked against its own
         # scope, not the whole stage's: checking cumulatively is what catches
         # intra-list forward references. A name referenced by several steps is
@@ -474,7 +486,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
             for name in sorted(refs):
                 if name in available:
                     if name not in available_when_skipped:
-                        yield _skippable_save_diagnostic(scenario, i, phase, name, f"stages[{i}].{phase}")
+                        yield _skippable_save_diagnostic(scenario, scopes, i, phase, name, f"stages[{i}].{phase}")
                     continue
                 if name in scope.stage_substitutions:
                     yield diag(

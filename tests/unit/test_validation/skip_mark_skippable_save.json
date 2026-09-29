@@ -1,0 +1,19 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "login",
+            "marks": ["skip(reason='login is not deployed yet')"],
+            "request": { "url": "{{ server }}/login", "method": "POST" },
+            "response": [
+                { "save": { "jmespath": { "token": "token" } } },
+                { "verify": { "status": 200 } }
+            ]
+        },
+        {
+            "name": "profile",
+            "request": { "url": "{{ server }}/me", "headers": { "Authorization": "Bearer {{ token }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

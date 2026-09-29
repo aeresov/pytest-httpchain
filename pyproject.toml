@@ -217,7 +217,9 @@ layers = [
     "carrier : dataflow : schema : importers",
     "validation : har_writer : report_formatter : request_builder : response_steps : parallel_stats",
     "body_schema",
-    "utils : scoping : redaction",
+    # scoping reads stage marks with utils.make_marker (scoping.SkipCause).
+    "scoping",
+    "utils : redaction",
     "userfunc",
     "models",
     "templates : jsonref",
