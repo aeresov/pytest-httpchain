@@ -315,7 +315,10 @@ def process_verify(
         if expression is _UNRENDERED:
             continue
         if not isinstance(expression, bool):
-            failures.add(f"Verify expression {i} must evaluate to bool, got {type(expression).__name__} ({expression!r}), a value written where a condition belongs")
+            # The type alone, never the value, as for skip_if: `{{
+            # response.headers['Set-Cookie'] }}` renders a credential, which
+            # the report redacts in the headers but this line would print.
+            failures.add(f"Verify expression {i} must evaluate to bool, got {type(expression).__name__}, a value written where a condition belongs")
         elif not expression:
             failures.add(f"Expression {i} failed: evaluated to {expression}")
 

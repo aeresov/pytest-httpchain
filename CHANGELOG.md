@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A verify expression that renders to something other than a boolean no longer prints the value
+  in its failure: `{{ response.headers['Set-Cookie'] }}` put the session cookie in the pytest
+  report, past the redaction that hides it among the headers. The failure names the type alone,
+  as `skip_if`'s does: `Verify expression 0 must evaluate to bool, got str, a value written where
+  a condition belongs`.
+
 ## [0.16.0] - 2026-09-29
 
 ### Added
