@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report, past the redaction that hides it among the headers. The failure names the type alone,
   as `skip_if`'s does: `Verify expression 0 must evaluate to bool, got str, a value written where
   a condition belongs`.
+- `pytest-httpchain import` no longer writes a secret multipart part recorded as bytes into the
+  scenario. A part named as a redacted query parameter (`password`, `token`, ...) whose content
+  is not text, as a HAR records it, was written as its `base64` value where a text part became
+  a placeholder. It is a placeholder too now, which holds the part base64-encoded, as recorded.
 
 ## [0.16.0] - 2026-09-29
 

@@ -463,7 +463,7 @@ the docs pass a secret (see [Authentication](usage/requests.md#authentication)):
   [redacts](getting-started.md#secrets-in-reports) by default (`X-API-Key`,
   `access_token`, `password`, `token`, ...), named after them (`x_api_key`),
   and the form fields, multipart parts (a text field, or a file's recorded
-  text) and JSON members named as those query
+  text, or its bytes, base64-encoded as recorded) and JSON members named as those query
   parameters are, at any depth of a JSON body: a string or a number there (a
   number is read with `json_loads`, to be sent as the number it was), each of
   a list's under that name. An object under the name is judged by its own
