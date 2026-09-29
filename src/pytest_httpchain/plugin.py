@@ -606,7 +606,8 @@ def pytest_configure(config: pytest.Config) -> None:
         return value
 
     # The same bare conversion for type="bool" (`maybe`), and in a native TOML
-    # table pytest's TypeError for a value that is not a boolean.
+    # table pytest's TypeError for a value that is not a boolean; as for
+    # _getint, newer pytest raises the UsageError itself.
     def _getbool(option: ConfigOptions) -> bool:
         try:
             return config.getini(option)

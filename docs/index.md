@@ -42,7 +42,7 @@ A stage's [`retry`](advanced/retry.md) attempts it again while it fails, after a
 
 ### Common Data Context
 
-A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use Jinja-style expressions (`{{ var }}`) in any request value.
+A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use Jinja-style expressions (`{{ var }}`) in any request value. [Built-in functions](usage/substitutions.md#built-in-functions) give the values tests keep needing without a fixture: the time (`now()`, `timestamp()`), base64, JSON and URL encoding, and SHA-256, MD5 and HMAC-SHA256 digests for signing a request.
 
 ### Request Bodies
 
@@ -55,6 +55,10 @@ JSON, form, XML, text, base64, a binary file and GraphQL, and [multipart uploads
 -   **JSON Schema** — Validate response structure against a schema, inline or from a file, or one inside a document you already have: `"schema": "./openapi.json#/components/schemas/User"` checks the response against an OpenAPI component, its `$ref`s resolved across the document and into local files, never over the network
 -   **User functions** — Call Python functions for custom extraction, verification, or authentication
 -   **Failure reports** — A failing verify step lists every check that failed, not only the first, and the report gives the request as a ready-to-run `curl` command beside the request and response it shows
+
+### Scenario-wide Client Settings
+
+A scenario's [`client`](usage/scenarios.md#client-configuration) block sets up the HTTP client all its stages share, once: a base URL their relative URLs are appended to, headers and query parameters sent with every request, timeout, redirects, proxy, HTTP/2 and connection pool. A stage overrides what it needs.
 
 ### Authentication
 

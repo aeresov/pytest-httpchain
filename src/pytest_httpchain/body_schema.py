@@ -820,6 +820,11 @@ def _resolve(keyword: str, ref: Any, resolver: Any, dialect: Dialect, max_parent
         raise _unresolvable(keyword, ref) from refused
     try:
         resolved, root = _lookup(resolver, ref)
+    except RecursionError:
+        # Out of stack in the middle of a validation that recurses as deep as
+        # the body (``"items": {"$ref": "#"}``), wherever the lookup it was
+        # making: the body's failure, not a reference that does not resolve.
+        raise
     except Exception as e:
         raise _unresolvable(keyword, ref) from e
     return resolved, _reached_dialect(resolved.contents, root, dialect)
@@ -1100,6 +1105,10 @@ class _LocalFiles:
             raise _Refused(f"names {shown}, a file on another host: nothing is read over the network, so keep it in a local file")
         try:
             path = Path.from_uri(uri)
+            # A name no file can have, a lone surrogate: Python 3.13 refuses
+            # it converting the URI, 3.14 only once the path is used, where
+            # exists() would read it as a file that is not there.
+            str(path).encode("utf-8")
         except ValueError as e:
             raise _Refused(f"names {shown}, which is not a local file path: {e}") from e
         # As a scenario's $include has it: a file that is not there is not

@@ -338,19 +338,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the last attempt the stage fails with that attempt's failure, `... (after 10 attempts)`, as does a
   `pytest.fail()` or a failure never retried on a later attempt, and the report shows that attempt,
   `HTTP Response (attempt 10 of 10)`; the HAR export records every attempt of every iteration, and
-  each retried failure logs a line at `INFO`. A sibling `on` beside a `$merge` of a shared `retry` is a merge conflict, as a sibling
-  `verify.status` list is, rather than concatenated: its kinds are alternatives, and concatenated
-  they would retry more than either side wrote. In a `parallel` stage each iteration retries on its
-  own, a wait ends at once when another iteration fails the stage, and each attempt takes a
-  `calls_per_sec` slot, a retried single iteration's too. What factory fixtures enter during the
-  attempts is exited when the iteration ends. The settings but `on` take templates, rendered once
-  per stage before any request against what `skip_if` sees; `validate` checks their references like
-  the `parallel` config's (`HTTPCHAIN003`/`HTTPCHAIN004`, `HTTPCHAIN035`), a setting the stage
-  cannot use fails it before the first request, and a `max_delay` rendered to `null` is refused
-  rather than lift the cap. A `delay`, `backoff` or `max_delay` that is not finite (JSON's `1e999`)
-  is refused at load, by `validate` too, and so is a `true` or `false` in any of the four, written
-  or rendered, which would have been read as `1`: `"attempts": "{{ poll }}"` with a flag for `poll`
-  attempted once.
+  each retried failure logs a line at `INFO`. A sibling `on` beside a `$merge` of a shared `retry`
+  is a merge conflict, as a sibling `verify.status` list is, rather than concatenated: its kinds are
+  alternatives, and concatenated they would retry more than either side wrote. In a `parallel` stage
+  each iteration retries on its own, a wait ends at once when another iteration fails the stage, and
+  each attempt takes a `calls_per_sec` slot, a retried single iteration's too. What factory fixtures
+  enter during the attempts is exited when the iteration ends. The settings but `on` take templates,
+  rendered once per stage before any request against what `skip_if` sees; `validate` checks their
+  references like the `parallel` config's (`HTTPCHAIN003`/`HTTPCHAIN004`, `HTTPCHAIN035`), a setting
+  the stage cannot use fails it before the first request, and a `max_delay` rendered to `null` is
+  refused rather than lift the cap. A `delay`, `backoff` or `max_delay` that is not finite (JSON's
+  `1e999`) is refused at load, by `validate` too, and so is a `true` or `false` in any of the four,
+  written or rendered, which would have been read as `1`: `"attempts": "{{ poll }}"` with a flag for
+  `poll` attempted once.
 
 ### Fixed
 
@@ -606,17 +606,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`invalid syntax`, without `(<unknown>, line 1)`).
 - `validate` and pytest collection report a template the engine refuses from its text alone, with
   the reason the stage fails with, as `HTTPCHAIN037` in a stage and `HTTPCHAIN038` at scenario
-  level or in a parametrize value (see Added), and that is its only finding. They reported nothing, or undefined names, for
-  what fails every run, such as `=` written for `==` or a dict literal whose `}` runs into the
-  template's closing `}}` (`{{ {'a': 1}}}`). An expression that did not parse was read for names as
-  a regex's identifiers, so `{{ response.status == 200 and True) }}` also had `and`, `status` and
-  `True` reported as undefined variables (`HTTPCHAIN003`), and one in a scenario-level template
-  the error `HTTPCHAIN017` over the words of its string literals; such a template still fails
-  `validate` and collection, as `HTTPCHAIN038`. A lambda's parameters are no longer read as names
-  a template defines. A template nested too deeply for Python's parser to read (a few thousand `-`
-  signs) crashed `validate` and collection with a `MemoryError`, and one holding a lone surrogate
-  (a `\ud800` escape in the JSON) with a `UnicodeEncodeError`. Both are reported the same way
-  now, and messages write the surrogate as its escape, which any terminal can print.
+  level or in a parametrize value (see Added), and that is its only finding. They reported nothing,
+  or undefined names, for what fails every run, such as `=` written for `==` or a dict literal whose
+  `}` runs into the template's closing `}}` (`{{ {'a': 1}}}`). An expression that did not parse was
+  read for names as a regex's identifiers, so `{{ response.status == 200 and True) }}` also had
+  `and`, `status` and `True` reported as undefined variables (`HTTPCHAIN003`), and one in a
+  scenario-level template the error `HTTPCHAIN017` over the words of its string literals; such a
+  template still fails `validate` and collection, as `HTTPCHAIN038`. A lambda's parameters are no
+  longer read as names a template defines. A template nested too deeply for Python's parser to read
+  (a few thousand `-` signs) crashed `validate` and collection with a `MemoryError`, and one holding
+  a lone surrogate (a `\ud800` escape in the JSON) with a `UnicodeEncodeError`. Both are reported
+  the same way now, and messages write the surrogate as its escape, which any terminal can print.
 - A value that cannot be turned into text fails the stage with a message naming where it was
   used: the template it is interpolated into, or the query parameter it is the value of.
   `"{{ server }}/items?n={{ 2 ** 100000 }}"`, a number past the 4300 digits Python converts to
@@ -1442,7 +1442,8 @@ This release carries a test-suite and CI pass.
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.2...HEAD
+[0.15.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.5...v0.15.0
 [0.14.5]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.4...v0.14.5

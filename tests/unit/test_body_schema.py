@@ -512,6 +512,21 @@ class TestReferences:
             False,
         )
 
+    def test_running_out_of_stack_in_a_lookup(self, tmp_path, monkeypatch):
+        """A validation that recurses as deep as the body (``"items": {"$ref":
+        "#"}``) runs out of stack wherever it is, on Python 3.14 in the middle
+        of a reference's lookup: that is the body's failure, the RecursionError
+        the verify step reports as one nested too deeply, not a reference that
+        does not resolve. Made to happen in the lookup here, as where the stack
+        gives out depends on the interpreter."""
+
+        def out_of_stack(resolver, ref):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(body_schema_module, "_lookup", out_of_stack)
+        with pytest.raises(RecursionError):
+            _inline({"items": {"$ref": "#"}}, tmp_path).validate([[1]])
+
     def test_anchor_that_does_not_exist(self, tmp_path):
         assert _unresolved(_inline({"$ref": "#nope"}, tmp_path, None), 1) == (
             "$ref '#nope' names the anchor 'nope', which is not in the inline schema",

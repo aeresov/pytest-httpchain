@@ -103,7 +103,9 @@ class TestPytestConfigure:
             pytest.param(ConfigOptions.REDACT_HEADERS, "Authorization:", "'Authorization:' is not a header name", id="redact-headers-not-a-name"),
             pytest.param(ConfigOptions.REDACT_HEADERS, '"Authorization', "No closing quotation", id="redact-headers-unbalanced-quote"),
             pytest.param(ConfigOptions.REDACT_QUERY_PARAMS, "'token", "No closing quotation", id="redact-query-unbalanced-quote"),
-            pytest.param(ConfigOptions.HAR_REDACT, "maybe", "httpchain_har_redact must be a boolean", id="har-redact-not-a-boolean"),
+            # The same two wrappers as a non-integer above, around pytest's own
+            # "invalid truth value" message.
+            pytest.param(ConfigOptions.HAR_REDACT, "maybe", "invalid truth value 'maybe'", id="har-redact-not-a-boolean"),
         ],
     )
     def test_invalid_config(self, pytester, option, value, match):
