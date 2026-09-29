@@ -1,0 +1,41 @@
+{
+    "substitutions": [
+        { "vars": { "greeting": "Hello \\{{ nobody }}" } },
+        { "vars": { "pair": { "open": "\\{{", "doubled": "\\\\{{ greeting }}" } } }
+    ],
+    "ssl": { "verify": "certs/\\{{ nobody }}.pem" },
+    "stages": [
+        {
+            "name": "literal_braces",
+            "parametrize": [ { "individual": { "placeholder": [ "\\{{ first }}", "\\{{ second }}" ] } } ],
+            "request": {
+                "url": "https://x.test/render?template=\\{{ nope }}",
+                "method": "POST",
+                "headers": { "X-Template": "\\{{ nope }}", "X-Mixed": "\\{{ nope }} {{ greeting }}" },
+                "body": { "json": { "template": "\\{{ nope }}", "handlebars": "\\{{#each nope}}\\{{this}}\\{{/each}}", "raw": "\\{{{{nope}}}} \\{{{{/nope}}}}", "jinja": "\\{{ '{{' }}", "nested": "\\{{ a {{ nope }} }}", "placeholder": "{{ placeholder }}" } }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": { "contains": [ "\\{{ nope }}" ], "matches": [ "\\{{\\w+}}" ] },
+                        "jmespath": { "template": "\\{{ nope }}" },
+                        "expressions": [ "{{ greeting != '' }}" ]
+                    }
+                },
+                { "save": { "regex": { "found": { "pattern": "\\{{(\\w+)}}", "group": 1 } } } },
+                { "save": { "jmespath": { "same": "items[?name == '\\{{ nope }}']", "quoted": "\"\\{{ nope }}\"" } } }
+            ]
+        },
+        {
+            "name": "graphql",
+            "request": { "url": "https://x.test/graphql", "method": "POST", "body": { "graphql": { "query": "query { render(template: \"Hello \\{{ nope }}\") }" } } },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "upload",
+            "request": { "url": "https://x.test/upload", "method": "POST", "body": { "files": { "one": "uploads/\\{{ nope }}.txt", "two": { "path": "uploads/\\{{ nope }}.txt" } } } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

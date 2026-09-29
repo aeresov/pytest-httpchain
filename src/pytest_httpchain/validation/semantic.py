@@ -46,7 +46,7 @@ from pytest_httpchain.scoping import (
     substitution_names,
     substitution_step_templates,
 )
-from pytest_httpchain.templates import CALL_ONLY_BUILTINS, TEMPLATE_BUILTINS, TEMPLATE_PATTERN, call_form, contains_template, is_complete_template
+from pytest_httpchain.templates import CALL_ONLY_BUILTINS, TEMPLATE_BUILTINS, call_form, contains_escape, contains_template, find_templates, is_complete_template, needs_rendering
 from pytest_httpchain.utils import make_marker, optional_as_list, path_segment, xdist_group_names
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ScenarioInfo, diag
 from pytest_httpchain.validation.loader import is_jmespath_expectations_position
@@ -582,7 +582,7 @@ def _relative_url_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
         return
     for i, stage in enumerate(scenario.stages):
         url = stage.request.url
-        template = re.search(TEMPLATE_PATTERN, url)
+        template = next(find_templates(url), None)
         # The literal text before a template is relative when it already ends
         # the first segment (a `/`, `?` or `#`) without a `:`, which a scheme needs.
         if is_relative_url(url) if template is None else re.match(r"[^:/?#]*[/?#]", url[: template.start()]):
@@ -824,6 +824,10 @@ def _template_key_diagnostics(test_data: dict[str, Any]) -> Iterator[Diagnostic]
     equally invisible to `contains_template` and `extract_template_variables`,
     so without this check nothing anywhere would mention it: no error, no
     warning, just a wrong request.
+
+    An escaped ``\\{{`` in a key is reported too: never rendered, the key
+    keeps the backslash that was meant to be removed, and no other check
+    would mention that either.
     """
 
     def templated_keys(root: Any, root_location: str) -> Iterator[tuple[str, str, tuple[str | int, ...]]]:
@@ -835,7 +839,7 @@ def _template_key_diagnostics(test_data: dict[str, Any]) -> Iterator[Diagnostic]
         pending: list[tuple[Any, str, Path, object, str, Path]] = [(root, root_location, (), None, "", ())]
         while pending:
             node, location, path, key, parent_location, parent_path = pending.pop()
-            if isinstance(key, str) and re.search(TEMPLATE_PATTERN, key):
+            if isinstance(key, str) and (contains_template(key) or contains_escape(key)):
                 yield key, parent_location, parent_path
             match node:
                 case dict():
@@ -847,7 +851,14 @@ def _template_key_diagnostics(test_data: dict[str, Any]) -> Iterator[Diagnostic]
             pending.extend(reversed(children))
 
     for key, location, path in templated_keys(test_data, ""):
-        if is_jmespath_expectations_position(path):
+        if not contains_template(key):
+            # An escape alone: never rendered, the key keeps its backslash.
+            if is_jmespath_expectations_position(path):
+                where = "a verify.jmespath key is never rendered, so JMESPath evaluates it"
+            else:
+                where = "only values are rendered, so the key is sent"
+            message = f"Key {key!r} has a backslash before '{{{{', but {where} as written, backslash included: the escape does nothing there. A key's braces need no escape."
+        elif is_jmespath_expectations_position(path):
             # Only one that compiles gets here (a quoted string or field name):
             # the model refuses the rest, saying why.
             message = (
@@ -868,7 +879,8 @@ def _template_kwargs_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
 
     Deliberate — the kwargs are the function's own defaults, not chain data — but
     it leaves the one template nothing ever renders, reaching the function as
-    literal text. Like a templated key (029), no other check would mention it.
+    literal text. Like a templated key (029), no other check would mention it,
+    nor an escaped ``\\{{`` there, which keeps its backslash.
 
     Driven off the validated model, not the raw JSON: a request body may
     legitimately carry a key named "functions", and only the model tells a
@@ -889,6 +901,13 @@ def _template_kwargs_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                             f"Function '{alias}' kwarg '{name}' contains a template expression, but a functions substitution's kwargs are passed to the "
                             f"function unrendered — it arrives as literal text. Render the value in a 'vars' substitution and pass that variable where the "
                             f"alias is called, or resolve the value inside the function.",
+                            location=location,
+                        )
+                    elif needs_rendering(value):
+                        yield diag(
+                            DiagnosticCode.TEMPLATE_IN_KWARGS,
+                            f"Function '{alias}' kwarg '{name}' has a backslash before '{{{{', but a functions substitution's kwargs are passed to the "
+                            f"function unrendered, backslash included: the escape does nothing there. Braces in a kwarg need no escape.",
                             location=location,
                         )
 

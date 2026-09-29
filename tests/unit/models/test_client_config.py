@@ -5,7 +5,7 @@ import re
 import pytest
 from pydantic import ValidationError
 
-from pytest_httpchain.models.entities import ClientConfig, Scenario
+from pytest_httpchain.models.entities import ClientConfig, Scenario, validate_rendered
 from tests.unit.models.helpers import assert_error_types
 
 
@@ -111,6 +111,34 @@ def test_refused_value_is_not_quoted(data, message):
         ClientConfig.model_validate(data)
     assert "s3cret" not in str(exc_info.value)
     assert all("s3cret" not in error["msg"] for error in exc_info.value.errors())
+
+
+@pytest.mark.parametrize("field", ["base_url", "proxy"])
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param(r"http://user:s3cret@h/\{{x}}", id="escaped"),
+        # With a template beside it the escape renders all the same.
+        pytest.param(r"http://user:s3cret@h/{{ path }}/\{{x}}", id="beside-a-template"),
+        # A backslash, then a template: a backslash in a URL.
+        pytest.param(r"http://user:s3cret@h/\\{{ path }}", id="doubled"),
+    ],
+)
+def test_client_url_refuses_a_backslash_before_braces(field, url):
+    """Rendered, an escape leaves literal braces, which the request builder
+    takes for a template that rendered to template text and fails the stage
+    on: refused as the scenario loads instead, so ``validate`` says so too.
+    Unquoted, as a client URL can carry credentials."""
+    with pytest.raises(ValidationError, match=re.escape(f"{field} cannot hold a backslash before '{{{{'")) as exc_info:
+        ClientConfig.model_validate({field: url})
+    assert "s3cret" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("field", ["base_url", "proxy"])
+def test_rendered_client_url_keeps_a_backslash_before_braces(field):
+    """A value a template rendered is final: a `\\{{` it holds is the
+    value's own, and only the URL check judges it."""
+    assert getattr(validate_rendered(ClientConfig, {field: r"http://h/\{{x}}"}), field) == r"http://h/\{{x}}"
 
 
 @pytest.mark.parametrize("field", ["timeout", "max_redirects", "max_connections", "max_keepalive_connections"])

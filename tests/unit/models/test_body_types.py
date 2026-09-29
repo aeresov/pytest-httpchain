@@ -20,6 +20,7 @@ from pytest_httpchain.models.entities import (
     Request,
     TextBody,
     XmlBody,
+    validate_rendered,
 )
 from tests.unit.models.helpers import assert_error_types
 
@@ -93,6 +94,33 @@ def test_graphql_query_from_file_accepted_verbatim(datadir, filename):
 )
 def test_path_fields_become_paths(model, field, value, expected):
     assert getattr(model(**{field: value}), field) == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "field", "value"),
+    [
+        # A path an escape is rendered out of is kept as written, for the
+        # one rendering: unescaped here, its braces were rendered again.
+        pytest.param(BinaryBody, "binary", r"data/\{{name}}.bin", id="binary-escaped"),
+        pytest.param(FilesBody, "files", {"file": r"data/\{{name}}.bin"}, id="files-escaped"),
+        pytest.param(FilesBody, "files", {"file": {"path": r"data/\{{name}}.bin"}}, id="file-spec-escaped"),
+    ],
+)
+def test_path_rendering_changes_is_kept_as_written(model, field, value):
+    assert model(**{field: value}).model_dump(mode="json", exclude_none=True)[field] == value
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        # What rendering made of the scenario's text is final: a Path.
+        pytest.param("data/name.bin", Path("data/name.bin"), id="plain"),
+        # A value a template put in, a `\{{` included, is never unescaped.
+        pytest.param(r"data/\{{name}}.bin", Path(r"data/\{{name}}.bin"), id="escape-a-value-holds"),
+    ],
+)
+def test_path_a_template_rendered_is_final(value, expected):
+    assert validate_rendered(BinaryBody, {"binary": value}).binary == expected
 
 
 @pytest.mark.parametrize(

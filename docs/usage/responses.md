@@ -316,7 +316,9 @@ earlier steps saved. Keys are JMESPath and are never rendered, so a template
 in one is caught: `"data.{{ field }}"` is not valid JMESPath and fails
 validation saying a key cannot hold a template, and one that still is (a
 quoted string such as `"'{{ x }}'"`, evaluated as written) gets the
-`HTTPCHAIN029` warning. Put the template in the value the key maps to.
+`HTTPCHAIN029` warning. Put the template in the value the key maps to. An
+escaped `\{{` is no template, and a key keeps it as written, backslash
+included, which `HTTPCHAIN029` warns of too: braces in a key need no escape.
 
 What is written decides what a template renders, not what it renders to. A
 template written where a value goes renders the value to compare with, an
@@ -926,14 +928,17 @@ when a template renders it:
 regex 'Order #(?P<id>\d+)' has no group named 'order' (its named groups: 'id')
 ```
 
-Because a pattern takes templates, a `{{` in one always opens a template,
-closed by the first `}}`, as in any value (a header or body `matches` pattern
-too). Braces the body holds, such as a page's own `{{ name }}` placeholders,
-are matched escaped: `"\\{\\{\\s*(\\w+)\\s*\\}\\}"`. A repeat count taken from
-a template keeps its braces inside the expression: with `n` at 3,
-`"\\d{{ '{' + str(n) + '}' }}"` renders `\d{3}`, while `"\\d{{{ n }}}"` is not a
-valid template, and `"\\d{ {{ n }} }"` renders `\d{ 3 }`, which Python's `re`
-reads as a digit followed by the text `{ 3 }`, not as a count.
+Because a pattern takes templates, a `{{` in one opens a template, closed by
+the first `}}`, as in any value (a header or body `matches` pattern too).
+Braces the body holds, such as a page's own `{{ name }}` placeholders, are
+matched escaped, as regex escapes them, `"\\{\\{\\s*(\\w+)\\s*\\}\\}"`, or as
+templates escape them (see [Literal braces](substitutions.md#literal-braces)),
+`"\\{{\\s*(\\w+)\\s*}}"`, which renders `{{\s*(\w+)\s*}}`, braces `re` reads
+as literal ones. A repeat count taken from a template keeps its braces inside
+the expression: with `n` at 3, `"\\d{{ '{' + str(n) + '}' }}"` renders `\d{3}`,
+while `"\\d{{{ n }}}"` is not a valid template, and `"\\d{ {{ n }} }"` renders
+`\d{ 3 }`, which Python's `re` reads as a digit followed by the text `{ 3 }`,
+not as a count.
 
 The saved names are known to `validate`, which reports a template reading one
 before the step that saves it, and to [`show` and `graph`](../cli.md), which

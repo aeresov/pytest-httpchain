@@ -2,7 +2,6 @@ import ast
 import copy
 import inspect
 import os
-import re
 from collections.abc import Callable, Mapping
 from types import MethodType, SimpleNamespace
 from typing import Any
@@ -25,7 +24,7 @@ from simpleeval import (
 )
 
 from pytest_httpchain.templates.exceptions import TemplatesError
-from pytest_httpchain.templates.expressions import TEMPLATE_PATTERN, extract_template_expression
+from pytest_httpchain.templates.expressions import contains_escape, extract_template_expression, find_templates, render_text
 from pytest_httpchain.templates.functions import HELPER_FUNCTIONS
 
 
@@ -429,18 +428,38 @@ def _eval_expr(evaluator: _Evaluator, expr: str, *, as_text: bool = False) -> An
 
 def _sub_string(line: str, evaluator: _Evaluator) -> Any:
     # A whole-string expression keeps its evaluated type; anything else is
-    # interpolated into the string.
+    # interpolated into the string, its escapes rendered.
     if (expr := extract_template_expression(line)) is not None:
         return _eval_expr(evaluator, expr)
+    return render_text(line, lambda expr: _eval_expr(evaluator, expr, as_text=True))
 
-    def _repl(match: re.Match[str]) -> str:
-        return _eval_expr(evaluator, match.group("expr").strip(), as_text=True)
 
-    return re.sub(TEMPLATE_PATTERN, _repl, line)
+def _has_template(text: str) -> bool:
+    return next(find_templates(text), None) is not None
+
+
+def _is_rewritten(text: str) -> bool:
+    return contains_escape(text) or _has_template(text)
 
 
 def contains_template(obj: Any) -> bool:
-    """True when any string anywhere in the structure holds a template.
+    """True when any string anywhere in the structure holds a template: the
+    structure's value is known only once rendered. An escaped ``\\{{`` is
+    not one (`needs_rendering` counts it).
+    """
+    return _any_string(obj, _has_template)
+
+
+def needs_rendering(obj: Any) -> bool:
+    """True when rendering changes any string anywhere in the structure: one
+    holds a template, or an escape (`contains_escape`), which only rendering
+    removes. What a caller asks before it skips rendering a value, where
+    `contains_template` asks whether the value is known before it renders."""
+    return _any_string(obj, _is_rewritten)
+
+
+def _any_string(obj: Any, predicate: Callable[[str], bool]) -> bool:
+    """True when ``predicate`` holds for any string anywhere in the structure.
 
     Iterative on purpose: a recursive walk spent two stack frames per level of
     nesting, so a value a few hundred levels deep overflowed it.
@@ -449,7 +468,7 @@ def contains_template(obj: Any) -> bool:
     while pending:
         match pending.pop():
             case str() as text:
-                if re.search(TEMPLATE_PATTERN, text):
+                if predicate(text):
                     return True
             case dict() as mapping:
                 pending.extend(mapping.values())
@@ -473,14 +492,14 @@ def _walk(obj: Any, evaluator: _Evaluator) -> Any:
         case tuple():
             return tuple(_walk(item, evaluator) for item in obj)
         case BaseModel():
-            if not contains_template(obj):
+            if not needs_rendering(obj):
                 return obj
 
             obj_dict = obj.model_dump(mode="python")
             processed_dict = _walk(obj_dict, evaluator)
             return type(obj).model_validate(processed_dict)
         case SimpleNamespace():
-            if not contains_template(obj):
+            if not needs_rendering(obj):
                 return obj
             # Walked in place, not by handing vars() to the dict case: that took
             # two frames per level of a nested ``vars`` value. Rebuilt as its
@@ -521,11 +540,14 @@ def walker(context: Mapping[str, Any]) -> Callable[[Any], Any]:
 
 
 def walk(obj: Any, context: Mapping[str, Any]) -> Any:
-    """Substitute every template in a structure, returning the same shape.
+    """Substitute every template in a structure, returning the same shape, and
+    render every escape (``\\{{`` is ``{{``).
 
     One evaluator serves the whole traversal. A model is dumped, substituted and
     re-validated (so the result is checked against the real field types), and
-    returned untouched when it holds no template at all.
+    returned untouched when it holds nothing to render (`needs_rendering`).
+    Only the structure's own strings are rendered, once: a value a template
+    evaluates to is put in as it is, never read for templates or escapes.
 
     The walk recurses once per level of nesting, so a value nested deeper than
     the stack allows fails as a `TemplatesError`, which callers already report,

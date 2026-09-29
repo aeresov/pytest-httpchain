@@ -413,6 +413,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and values and no dict, and a JSON body, `json_dumps` and `urlencode` take it as before.
   `validate` reads a subscript, `in` and the methods as it reads an attribute: the object's name is
   the one reference.
+- A backslash escapes a template's braces: `\{{` in a value renders as the text `{{` and opens no
+  template, so a Handlebars or Mustache payload, documentation text or a `{{placeholder}}` a server
+  expects is sent as written (`"X-Template": "\\{{name}}"` in the JSON file sends
+  `X-Template: {{name}}`). The escaped text runs to the first `}}` after it on its line, so
+  template syntax in it is sent as text, only the escaping backslash dropped (a Handlebars raw
+  block's `\{{{{raw}}}}`, Jinja's own `\{{ '{{' }}`, `\{{{{ id }}`, where `id` is not evaluated);
+  after that `}}` text is read as usual, so each tag of a payload takes its own backslash, and a
+  `}}` needs no escape.
+  Before `{{`, `\\` stands for one backslash, so a backslash before a template is written doubled
+  (`\\{{ id }}` renders a backslash, then the value), each pair before `{{` renders as one, and a
+  backslash anywhere else is left as it is. The escape is removed once, when the scenario's own
+  text renders: a value a template puts in, a save, a variable or a fixture's value, holding `{{`
+  or `\{{` is put in as it is. Every value that renders takes the escape (request fields, verify
+  operands and `jmespath` values, `save.regex` and `matches` patterns, `vars` and parametrize
+  values, file paths: a `binary` body, an upload, an `ssl` file). `validate` agrees: an escaped
+  template is no template, so no name in it is reported as undefined, a literal is checked as the
+  text it renders to (a GraphQL query or a JMESPath expression holding `\{{` in one of its strings,
+  whose own backslash escapes have none for `{`, is valid), `validate --deep` looks for the file
+  a path with an escape renders to, a field that takes only a whole template (`timeout`,
+  `skip_if`) refuses an escaped one as text, and the client's `base_url` and `proxy` and a
+  `verify.body.schema` file reference, which take no literal braces, refuse a backslash before
+  `{{` as the scenario loads. A key and a `functions` kwarg are never rendered, so they keep a
+  backslash as written, and `validate` warns of an escape there (`HTTPCHAIN029`, `HTTPCHAIN030`):
+  it does nothing, and the braces need none. The expression form `{{ '{{' }}` renders `{{` too, as
+  it did. See [Literal braces](docs/usage/substitutions.md#literal-braces).
 
 ### Fixed
 
@@ -767,6 +792,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which passed until now with the error only logged, fails after the upgrade. Call the factory in
   each stage that needs the resource, or, to share one across stages, provide it from a
   `class`-scoped fixture.
+- **BREAKING**: a backslash right before `{{` escapes the braces (see Added). `\{{ x }}` in a value
+  rendered a backslash, then the value of `x`; it now renders the text `{{ x }}`, and `x` is not
+  evaluated. Heads-up: to keep a backslash before a template, as in a Windows path
+  (`"C:\\{{ dir }}"` in the JSON file), double it (`"C:\\\\{{ dir }}"`), or write the path with
+  `/`. Every run of backslashes right before `{{` is doubled the same way: `\\{{ x }}`, which
+  rendered two backslashes and the value, now renders one. `client.base_url`, `client.proxy` and a
+  `verify.body.schema` file reference holding a backslash before `{{` fail validation. A key or a
+  `functions` kwarg holding one, never rendered, is sent as before, and now warned of
+  (`HTTPCHAIN029`, `HTTPCHAIN030`).
 - Report sections and header checks' failure messages redact credentials by default (see Added).
   Heads-up: a tool or test that read a token back from a report, or matched a header check's
   message on a cookie's value, sees `[REDACTED]` after the upgrade; set `httpchain_redact_headers`

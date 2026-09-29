@@ -32,6 +32,19 @@ def test_combinations_template_over_vars(template):
     assert args == [("a,b", [(1, "x"), (2, "y")])]
 
 
+def test_escaped_braces_render_at_collection_without_the_scenario_context():
+    """An escaped `\\{{` is no template, so the values need no scenario
+    substitutions to resolve (no collection-time context, and no
+    `HTTPCHAIN025`), but they render all the same: the test ids and the
+    values the stage gets hold the braces, not the backslash."""
+    parametrize = [{"individual": {"t": [r"\{{ a }}", "plain"]}}, {"combinations": [{"u": r"\{{ b }}", "w": r"\\\{{ c }}"}]}]
+    scenario = Scenario.model_validate({"stages": [{"name": "s", "request": {"url": "http://x"}, "parametrize": parametrize}]})
+    cls = create_test_class(scenario, "_Scenario")
+    assert cls._context_resolved_at_collection is False
+    marks = [mark.args for mark in getattr(cls, "test 0 - s").pytestmark if mark.name == "parametrize"]
+    assert sorted(marks) == [("t", ["{{ a }}", "plain"]), ("u,w", [("{{ b }}", r"\{{ c }}")])]
+
+
 @pytest.mark.parametrize(
     ("step", "field"),
     [

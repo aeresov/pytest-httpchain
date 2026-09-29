@@ -58,6 +58,7 @@ from pytest_httpchain.models import (
     VarsNamespace,
     Verify,
     VerifyStep,
+    validate_rendered,
     validate_rendered_scenario_auth,
     validate_rendered_verify,
 )
@@ -73,7 +74,7 @@ from pytest_httpchain.scoping import (
     with_saves,
     with_stage_substitutions,
 )
-from pytest_httpchain.templates import TemplatesError, contains_template, walk, walker
+from pytest_httpchain.templates import TemplatesError, needs_rendering, walk, walker
 from pytest_httpchain.utils import path_segment, process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
 
@@ -701,13 +702,14 @@ def _render_declared[M: BaseModel](
     (`_none_is_compared`) it validates but disables nothing either: the
     message says how to compare with null instead.
     """
-    # walk()'s own model step (hands back a model with no template untouched;
-    # otherwise dump, substitute, re-validate), taken apart at the re-validation.
-    # Only the declared fields are dumped, so the rendered model keeps the
-    # declared one's `model_fields_set`: a request's timeout and redirect
-    # setting count only where declared (`request_builder`), and a full dump
-    # made every default look declared.
-    if not contains_template(declared):
+    # walk()'s own model step (hands back a model with nothing to render
+    # untouched; otherwise dump, substitute, re-validate), taken apart at the
+    # re-validation. Only the declared fields are dumped, so the rendered model
+    # keeps the declared one's `model_fields_set`: a request's timeout and
+    # redirect setting count only where declared (`request_builder`), and a full
+    # dump made every default look declared. A model holding an escaped `\{{`
+    # and no template is rendered too: only rendering removes the escape.
+    if not needs_rendering(declared):
         return declared
     return _validate_substituted(declared, walk(declared.model_dump(mode="python", exclude_unset=True), context), where, error, validate)
 
@@ -722,12 +724,13 @@ def _validate_substituted[M: BaseModel](
 ) -> M:
     """`_render_declared` from the substitution on: ``substituted`` is
     ``declared`` dumped (its declared fields) with its templates rendered,
-    validated here, and refused where a template rendered a field to None.
+    validated here as rendered text (by default `validate_rendered`), and
+    refused where a template rendered a field to None.
 
     ``relocate`` maps where a value sits in ``declared`` to where its messages
     say it is, when ``declared`` holds it elsewhere than the scenario does
     (`_validated_values`): the guard's refusal and pydantic's report alike."""
-    validate = validate or type(declared).model_validate
+    validate = validate or functools.partial(validate_rendered, type(declared))
     if relocate is not None:
         validate = _relocating(validate, relocate)
     vanished = list(_rendered_away(declared, substituted))
@@ -811,12 +814,12 @@ def _verify_renderer(declared: Verify, context: Mapping[str, Any]) -> VerifyRend
     def render(values: list[tuple[_Keys, Any]]) -> dict[_Keys, Any]:
         rendered: dict[_Keys, Any] = {}
         substituted: dict[_Keys, Any] = {}
-        # Built for the first value holding a template: a step without one
-        # needs neither.
+        # Built for the first value holding a template or an escape: a step
+        # without one needs neither.
         substitute: Callable[[Any], Any] | None = None
         dumped: dict[str, Any] = {}
         for at, value in values:
-            if not contains_template(value):
+            if not needs_rendering(value):
                 rendered[at] = value
                 continue
             if substitute is None:

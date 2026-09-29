@@ -124,6 +124,16 @@ def _hide_ancestor_project_markers(monkeypatch):
         # client.base_url (templated from scenario substitutions) completes a
         # relative URL, literal or after a template; an absolute one ignores it.
         "relative_url_with_base_url.json",
+        # An escaped `\{{` is text wherever it is rendered, and so is what
+        # follows it up to its `}}`, template syntax included (a Handlebars raw
+        # block, a Jinja `{{ '{{' }}`, a nested `{{ }}`): no name it holds is
+        # read, and no expression in it is parsed, in a value, a parametrize
+        # value (no collection-time resolution), a pattern or a file path. A doubled backslash is one before a real
+        # template, which is read: the `vars` step reading `greeting` comes
+        # after the one defining it. A literal is judged as it renders: a
+        # GraphQL or JMESPath string holding one, whose own grammar has no
+        # `\{` escape, is valid.
+        "escaped_braces_ok.json",
         # $ref/$defs inside verify.body.schema are JSON Schema vocabulary, in
         # every response-step shape and through a spliced-in stage fragment.
         "inline_schema_standard_ref.json",
@@ -173,6 +183,9 @@ def _hide_ancestor_project_markers(monkeypatch):
         # Draft 3 to 7 ignore a `$ref`'s siblings, at runtime, so a missing
         # file referenced beside one is never looked for.
         "deep_inline_schema_ref_siblings_draft7.json",
+        # ssl.verify's path a template completes is the one the runtime
+        # renders and opens, known only then.
+        "deep_ssl_verify_templated.json",
     ],
 )
 def test_clean_fixture_has_no_diagnostics(datadir, fixture):
@@ -293,6 +306,9 @@ DIAGNOSED = [
     ("request_auth_forward_reference.json", [(C.FORWARD_REF, "stages[0].request", r"'token' is referenced before it is saved \(saved in stage 'login'\)")]),
     # Nothing to turn off at scenario level: the message says where it belongs.
     ("scenario_auth_false.json", [(C.SCHEMA, "auth", "false turns the scenario's auth off for one stage, so it belongs in a stage's request")]),
+    # Rendered, an escape would leave literal braces, which the stage fails
+    # as template text left in the client's URL: refused as it loads instead.
+    ("escaped_braces_client_url.json", [(C.SCHEMA, "client -> base_url", r"base_url cannot hold a backslash before '\{\{'")]),
     # A relative URL has nowhere to go without client.base_url, whether all of
     # it is literal or only the text before its first template.
     ("relative_url_without_base_url.json", [(C.RELATIVE_URL_WITHOUT_BASE_URL, "stages[0].request.url", r"'/users/1' is relative, but the scenario sets no client.base_url")]),
@@ -510,6 +526,20 @@ DIAGNOSED = [
     ("substitution_function_kwargs_template_ok.json", [(C.TEMPLATE_IN_KWARGS, "stages[0].substitutions", "'helper' kwarg 'arg'")]),
     ("scenario_function_kwargs_template.json", [(C.TEMPLATE_IN_KWARGS, "substitutions", "'seed' kwarg 'arg'")]),
     ("response_save_function_kwargs_template.json", [(C.TEMPLATE_IN_KWARGS, "stages[0].response[1].save.substitutions", "'extract' kwarg 'path'")]),
+    # Never rendered, a kwarg or a key keeps an escape's backslash, which was
+    # meant to be removed: said so, as a template there is.
+    (
+        "escaped_braces_in_kwargs.json",
+        [(C.TEMPLATE_IN_KWARGS, "substitutions", r"^Function 'render' kwarg 'template' has a backslash before '\{\{', but .* unrendered, backslash included")],
+    ),
+    (
+        "escaped_braces_in_key.json",
+        [(C.TEMPLATE_IN_KEY, "stages[0].request.headers", r"^Key '\\\\\{\{ name \}\}' has a backslash before '\{\{', but .* the key is sent as written")],
+    ),
+    (
+        "escaped_braces_in_jmespath_key.json",
+        [(C.TEMPLATE_IN_KEY, "stages[0].response[0].verify.jmespath", r"but a verify.jmespath key is never rendered, so JMESPath evaluates it as written")],
+    ),
     # Deep findings (opt-in) are warnings, never errors.
     ("deep_import_missing.json", [(C.IMPORT_FAILED, "stages[0].response[0].verify.user_functions[0]", "'does_not_exist' not found")]),
     ("deep_import_bad_module.json", [(C.IMPORT_FAILED, "stages[0].request.auth", "nosuchmodule_xyz")]),
@@ -524,6 +554,9 @@ DIAGNOSED = [
     ("deep_auth_required_missing.json", [(C.MISSING_ARG, "auth", "missing required argument 'token'")]),
     ("deep_auth_posonly.json", [(C.MISSING_ARG, "auth", "missing required argument 'token'")]),
     ("deep_binary_missing.json", [(C.REFERENCED_FILE_NOT_FOUND, "stages[0].request.body.binary", "definitely_missing_file")]),
+    # A path with only an escape names the file it renders to: the one the
+    # stage opens, braces and all.
+    ("deep_binary_escaped_missing.json", [(C.REFERENCED_FILE_NOT_FOUND, "stages[0].request.body.binary", r"^Referenced file not found: definitely_missing_\{\{name\}\}\.bin$")]),
     # Named per field / per element, not once for the whole value.
     ("deep_files_missing.json", [(C.REFERENCED_FILE_NOT_FOUND, "stages[0].request.body.files.absent", "definitely_missing_upload")]),
     # A file object's path, and one in a list, named where it is written.

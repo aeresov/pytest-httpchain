@@ -1,5 +1,6 @@
 """Unit tests for Save types: JMESPathSave, RegexSave, SubstitutionsSave, UserFunctionsSave."""
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -123,6 +124,13 @@ class TestRegexSave:
         with pytest.raises(ValidationError) as excinfo:
             RegexCapture(pattern=pattern, group=group)
         assert [error["msg"] for error in excinfo.value.errors()] == [f"Value error, {message}"]
+
+    def test_escaped_braces_are_a_literal_pattern(self):
+        """An escaped `{{` is no template, so the pattern is checked at load,
+        as the pattern it renders to, which the response is searched with."""
+        assert RegexCapture(pattern=r"\{{(\w+)}}", group=1).group == 1
+        with pytest.raises(ValidationError, match=re.escape(r"has no group 2 (it has 1 group; 0 is the whole match)")):
+            RegexCapture(pattern=r"\{{(\w+)}}", group=2)
 
     @pytest.mark.parametrize(
         "group",

@@ -1,12 +1,14 @@
 """Unit tests for `schema.build_schema`, the editor JSON Schema for scenario files."""
 
 import json
+import re
 from pathlib import Path
 
 import jsonschema
 import pytest
 
 from pytest_httpchain.schema import build_schema
+from pytest_httpchain.templates import TEMPLATE_PATTERN_ECMA, is_complete_template
 
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "docs" / "schema" / "scenario.schema.json"
 
@@ -84,12 +86,10 @@ def test_schema_descriptions_carry_no_rst_markup():
     assert not offenders, f"RST double backticks in schema descriptions: {offenders}"
 
 
-def test_schema_patterns_are_ecma262_compatible():
-    """JSON Schema defines `pattern` as an ECMA-262 regex. Python's named-group
-    spelling `(?P<name>...)` is a SyntaxError in JS engines, and VS Code's JSON
-    language service silently drops a pattern it cannot compile — so no emitted
-    pattern may use Python-only syntax. Examples and defaults are instances,
-    not schemas: a ``save.regex`` example's ``pattern`` is a Python regex."""
+def _schema_patterns(schema) -> list[str]:
+    """Every `pattern` the schema constrains a string with. Examples and
+    defaults are instances, not schemas: a ``save.regex`` example's
+    ``pattern`` is a Python regex."""
     patterns: list[str] = []
 
     def collect(node):
@@ -104,7 +104,16 @@ def test_schema_patterns_are_ecma262_compatible():
                 for item in node:
                     collect(item)
 
-    collect(build_schema())
+    collect(schema)
+    return patterns
+
+
+def test_schema_patterns_are_ecma262_compatible():
+    """JSON Schema defines `pattern` as an ECMA-262 regex. Python's named-group
+    spelling `(?P<name>...)` is a SyntaxError in JS engines, and VS Code's JSON
+    language service silently drops a pattern it cannot compile — so no emitted
+    pattern may use Python-only syntax."""
+    patterns = _schema_patterns(build_schema())
     assert patterns, "expected the schema to carry pattern constraints"
     offenders = [p for p in patterns if "(?P<" in p]
     assert not offenders, f"Python-only named groups in schema patterns: {offenders}"
@@ -186,7 +195,38 @@ def test_schema_accepts_documented_shapes(validator, document):
         pytest.param(_verify(jmespath={"price": {"gt": None}}), id="jmespath-null-bound"),
         pytest.param(_verify(jmespath={"price": {"gt": "5"}}), id="jmespath-numeric-text"),
         pytest.param(_verify(jmespath={"price": {"type": "int"}}), id="jmespath-type-unknown"),
+        # An escaped template is text, which a complete-template field refuses
+        # as the model does: the value would never be the number or switch.
+        pytest.param(_request(timeout=r"\{{ t }}"), id="timeout-escaped"),
+        pytest.param(_request(timeout=r"\\{{ t }}"), id="timeout-backslash-then-template"),
+        pytest.param(_with_stage(skip_if=r"\{{ flag }}"), id="skip-if-escaped"),
     ],
 )
 def test_schema_rejects_typos(validator, document):
     assert not validator.is_valid(document)
+
+
+@pytest.mark.parametrize(
+    ("value", "complete"),
+    [
+        ("{{ t }}", True),
+        ("  {{ t }}  ", True),
+        (r"\{{ t }}", False),
+        (r"\\{{ t }}", False),
+        (r" \{{ t }}", False),
+        # Braces in escaped text are text too.
+        (r"\{{{{ t }}", False),
+        ("{{ a }} {{ b }}", False),
+        # The expression form is a template, a `{{` in its expression included.
+        ("{{ '{{' }}", True),
+    ],
+)
+def test_complete_template_pattern_agrees_with_the_engine(value, complete):
+    """The schema's complete-template `pattern` (ECMA-262, no escape handling
+    of its own) is anchored after whitespace, where no backslash can escape
+    the braces: it accepts exactly what the engine takes whole, escaped forms
+    never."""
+    pattern = rf"^\s*{TEMPLATE_PATTERN_ECMA}\s*$"
+    assert pattern in _schema_patterns(build_schema())
+    assert (re.search(pattern, value) is not None) is complete
+    assert is_complete_template(value) is complete

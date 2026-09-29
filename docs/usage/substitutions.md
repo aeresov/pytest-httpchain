@@ -274,6 +274,98 @@ text only when the request is built, and a failure there names the parameter
     literally; the validator reports it as `HTTPCHAIN029`. Move the dynamic part
     into the value, or build the object in a user function.
 
+### Literal braces
+
+A `{{` in a value opens a template. To send the braces themselves (a
+Handlebars or Mustache payload, documentation text, a server that expects a
+`{{placeholder}}`), put a backslash before them: `\{{` is the text `{{`, and
+so is everything after it up to the first `}}`, which opens no template. So
+`\{{ name }}` is sent as `{{ name }}`, `name` never evaluated. In the JSON file
+the backslash is escaped in turn, so it is written `\\{{`:
+
+```json
+{
+    "request": {
+        "url": "https://api.example.com/templates",
+        "method": "POST",
+        "headers": {"X-Template": "\\{{name}}"},
+        "body": {
+            "json": {
+                "subject": "Hello \\{{user.name}}",
+                "body": "\\{{#each items}}\\{{this}}\\{{/each}}"
+            }
+        }
+    }
+}
+```
+
+This sends the header `X-Template: {{name}}` and the body
+`{"subject": "Hello {{user.name}}", "body": "{{#each items}}{{this}}{{/each}}"}`.
+`validate` reads no template there either, so `name`, `user` and `items` are
+not reported as undefined.
+
+The escaped text runs to the first `}}` after the backslash, on the same
+line, braces included, so template syntax inside it is text too: a Handlebars
+raw block's `\{{{{raw}}}}`, a Jinja payload's own `\{{ '{{' }}`, or a nested
+`\{{ a {{ b }} }}` is sent as written, one backslash less. After that `}}`,
+text is read as usual again, so each tag of a payload takes its own backslash.
+With no `}}` after it, the rest of the line is text.
+
+Before `{{`, a doubled backslash stands for one: to put a backslash right
+before a template, double it. Each pair of backslashes before `{{` renders as
+one, and one left over escapes the braces; a backslash anywhere else is left
+as it is (a Windows path's, a regex's `\d`), and a `}}` needs no escape at all:
+
+| In the JSON file | Renders as |
+|---|---|
+| `"\\{{ id }}"` | `{{ id }}` |
+| `"\\\\{{ id }}"` | a backslash, then the value of `id` |
+| `"\\\\\\{{ id }}"` | `\{{ id }}` |
+| `"\\{{{{ id }}"` | `{{{{ id }}` |
+| `"\\{{ id }}{{ id }}"` | `{{ id }}`, then the value of `id` |
+| `"\\{{{raw}}}"` | `{{{raw}}}` |
+
+An expression renders the braces too: `{{ '{{' }}` is `{{`, and since what a
+template renders is not read again, `"{{ '{{' }}name}}"` is `{{name}}`.
+
+The escape is removed once, when the scenario's own text renders. A value a
+template puts in, a saved response field, a variable or a fixture's value, is
+put in as it is, braces and backslashes alike, and never rendered again. An
+escaped template is text, so a field that takes only a whole template
+(`timeout`, `skip_if`) refuses it as it refuses other text, and a verify
+expression written that way is a string, not the boolean it needs
+(`HTTPCHAIN018`).
+
+Every value that renders takes the escape: request fields, verify operands
+and `verify.jmespath` values, `save.regex` and `matches` patterns, `vars`
+values and parametrize values. So does a file path (a `binary` body, an
+upload, an `ssl` file), rendered once as any value is: `"uploads/\\{{name}}.txt"`
+sends the file named `{{name}}.txt`, and `validate --deep` looks for that one.
+Write a path's separator before `{{` as `/`, which Windows takes too: a `\`
+there escapes the braces.
+
+A literal is checked as the text it renders to, so a GraphQL query or a
+JMESPath expression holding `\{{` in one of its strings is valid, although
+neither has a `\{` escape of its own:
+`"query { render(template: \"Hello \\{{name}}\") }"` sends
+`query { render(template: "Hello {{name}}") }`.
+
+Keys are never rendered, so a key keeps a `{{` and any backslash before it as
+written, and so does a `functions` substitution's kwarg, which is passed
+unrendered: braces there need no escape, and `validate` warns of one, which
+would be sent with its backslash (`HTTPCHAIN029`, `HTTPCHAIN030`). The
+client's `base_url` and `proxy`, and a `verify.body.schema` file reference,
+take no literal braces: a backslash before `{{` in one fails validation.
+
+In a regular expression, `\{{` renders `{{`, which Python's `re` reads as two
+literal braces, as it reads `\{\{`.
+
+!!! note "Migrating a backslash before a template"
+    Before this escape existed, `\{{ x }}` in a value rendered a backslash and
+    then the value of `x`. It now renders the text `{{ x }}`. Where the
+    backslash is meant (a Windows path such as `"C:\\{{ dir }}"` in the JSON
+    file), double it: `"C:\\\\{{ dir }}"`, or write the path with `/`.
+
 ### Basic Variable Access
 
 ```json

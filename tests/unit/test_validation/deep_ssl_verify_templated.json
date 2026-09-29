@@ -1,0 +1,5 @@
+{
+    "substitutions": [ { "vars": { "certs": "definitely_missing_dir" } } ],
+    "ssl": { "verify": "{{ certs }}/ca.pem" },
+    "stages": [ { "name": "s", "request": { "url": "https://x.test/a" }, "response": [ { "verify": { "status": 200 } } ] } ]
+}

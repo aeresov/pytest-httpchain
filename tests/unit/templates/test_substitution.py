@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from simpleeval import InvalidExpression
 
 from pytest_httpchain.models.types import VarsNamespace, convert_dict_to_namespace
-from pytest_httpchain.templates import CONTEXT_HELPERS, TEMPLATE_BUILTINS, TemplatesError, contains_template, parse_expression, substitution, walk, walker
+from pytest_httpchain.templates import CONTEXT_HELPERS, TEMPLATE_BUILTINS, TemplatesError, contains_template, needs_rendering, parse_expression, substitution, walk, walker
 from tests.unit.helpers import BEYOND_RECURSION_LIMIT, LOADABLE_BUT_DEEP, nested
 
 
@@ -255,6 +255,100 @@ class _Unprintable:
 def test_contains_template_at_any_depth(leaf, expected):
     """Iterative: a recursive walk spent two frames per level of nesting."""
     assert contains_template(nested(leaf, BEYOND_RECURSION_LIMIT)) is expected
+
+
+@pytest.mark.parametrize(
+    ("obj", "template", "rendering"),
+    [
+        ("{{ x }}", True, True),
+        ("plain", False, False),
+        # An escape is no template, but only rendering removes it.
+        (r"\{{ x }}", False, True),
+        ({"a": [r"\{{ x }}"]}, False, True),
+        (SampleModel(name=r"\{{ x }}", value=1), False, True),
+        (SimpleNamespace(a=r"\{{ x }}"), False, True),
+        # A backslash elsewhere is text, and so is a key, which is never rendered.
+        (r"C:\{x}", False, False),
+        ({r"\{{ k }}": "plain"}, False, False),
+    ],
+)
+def test_needs_rendering(obj, template, rendering):
+    """`contains_template` asks whether a value is known before it renders
+    (a parametrize value, a model's literal check), `needs_rendering` whether
+    rendering may be skipped (a model, a vars value)."""
+    assert contains_template(obj) is template
+    assert needs_rendering(obj) is rendering
+
+
+@pytest.mark.parametrize(("leaf", "expected"), [(r"\{{ x }}", True), ("plain", False)])
+def test_needs_rendering_at_any_depth(leaf, expected):
+    assert needs_rendering(nested(leaf, BEYOND_RECURSION_LIMIT)) is expected
+
+
+class TestEscapedBraces:
+    """`\\{{` renders as the text `{{`, the engine's one pass over the
+    scenario's own strings, which never reads what a template put in again."""
+
+    def test_escaped_template_is_text_never_evaluated(self):
+        # No context holds `undefined`: an escaped template is not evaluated.
+        assert walk(r"Hello \{{ undefined }}!", {}) == "Hello {{ undefined }}!"
+
+    def test_escaped_complete_template_stays_text(self):
+        """Escaped, a whole-string template is text: not the value, whatever
+        its type, and its padding is kept."""
+        assert walk(r"\{{ n }}", {"n": 1}) == "{{ n }}"
+        assert walk(r" \{{ n }} ", {"n": 1}) == " {{ n }} "
+
+    @pytest.mark.parametrize(
+        ("text", "rendered"),
+        [
+            # Jinja's own literal-brace idiom, sent as a payload.
+            (r"\{{ '{{' }}", "{{ '{{' }}"),
+            # A Handlebars raw block, whose four braces are escaped by one backslash.
+            (r"\{{{{raw}}}} {{ n }} \{{{{/raw}}}}", "{{{{raw}}}} 1 {{{{/raw}}}}"),
+            (r"\{{ a {{ undefined }} }}", "{{ a {{ undefined }} }}"),
+            (r"\{{{{ undefined }}", "{{{{ undefined }}"),
+        ],
+    )
+    def test_escaped_text_runs_to_its_closing_braces(self, text, rendered):
+        """What an escape's braces open is text up to the first `}}`: no
+        template in it is evaluated (nothing defines `undefined`), none is
+        parsed (`'{{'` would be an unterminated string)."""
+        assert walk(text, {"n": 1}) == rendered
+
+    def test_doubled_backslash_is_one_before_the_value(self):
+        """A backslash before a value is text too: the value is interpolated,
+        never kept whole."""
+        assert walk(r"\\{{ n }}", {"n": 1}) == "\\1"
+
+    def test_expression_form(self):
+        """The other way to write a literal `{{`, pinned: an expression whose
+        value is the text, which is not read again."""
+        assert walk("{{ '{{' }}name}}", {}) == "{{name}}"
+        assert walk("{{ '{{' + 'name' + '}' + '}' }}", {}) == "{{name}}"
+
+    def test_keys_are_never_rendered(self):
+        """A key keeps its backslash as it keeps its template: keys are sent
+        as written (HTTPCHAIN029 reports a template in one)."""
+        assert walk({r"\{{ k }}": r"\{{ v }}", "{{ k }}": "v"}, {"k": 1}) == {r"\{{ k }}": "{{ v }}", "{{ k }}": "v"}
+
+    def test_model_and_namespace_holding_only_an_escape_are_rendered(self):
+        """A model or namespace with no template is handed back as it is, but
+        one holding an escape is not: only rendering removes the escape."""
+        assert walk(SampleModel(name=r"\{{ x }}", value=1), {}) == SampleModel(name="{{ x }}", value=1)
+        rendered = walk(VarsNamespace(a=r"\{{ x }}"), {})
+        assert type(rendered) is VarsNamespace
+        assert rendered.a == "{{ x }}"
+
+    @pytest.mark.parametrize("value", ["{{ x }}", r"\{{ x }}", r"\\{{ x }}", "{{ '{{' }}"])
+    def test_a_value_is_never_rendered_again(self, value):
+        """Templates render only the scenario's own strings, once: a value (a
+        save, a variable, a response's text) holding a template or an escape
+        is put in as it is, whole or interpolated, and never unescaped."""
+        context = {"value": value, "x": 1}
+        assert walk("{{ value }}", context) == value
+        assert walk("<{{ value }}>", context) == f"<{value}>"
+        assert walk([r"\{{ value }}", r"\\{{ value }}"], context) == ["{{ value }}", f"\\{value}"]
 
 
 class TestWalkErrorMessages:

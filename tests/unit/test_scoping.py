@@ -197,6 +197,14 @@ class TestContextBuilders:
         # One statement, as the engine parses it: `x;` is `x`.
         pytest.param("{{ items; }}", {"items"}, id="trailing-semicolon-is-one-expression"),
         pytest.param("{{ len(items) }}", {"items"}, id="builtins-are-not-references"),
+        # An escaped template is text, never evaluated, so it names nothing,
+        # nor does a template's syntax in the text it escapes (up to its
+        # `}}`); after a doubled backslash, or after that `}}`, one is read.
+        pytest.param(r"\{{ items }}", set(), id="escaped-names-nothing"),
+        pytest.param(r"\\{{ items }}", {"items"}, id="doubled-backslash-then-template"),
+        pytest.param(r"\{{{{ items }}", set(), id="braces-inside-escaped-text-name-nothing"),
+        pytest.param(r"\{{ a {{ items }} }}", set(), id="template-inside-escaped-text-names-nothing"),
+        pytest.param(r"\{{ a }}{{ items }}", {"items"}, id="template-after-escaped-text"),
     ],
 )
 def test_template_references(template, expected):
@@ -381,6 +389,8 @@ def test_invalid_expressions_are_listed_once_each_in_document_order():
         "{{ b; c }}",
         "x {{ }} y",
         "{{ sorted(a, key=lambda r: r) }}",
+        # Beside an escaped one, which is neither reported nor rendered.
+        r"\{{ a = 1 }} {{ b; c }}",
         # A lone surrogate (one JSON \u escape away) is no text to parse; each
         # message escapes it, where printing it crashed `validate`.
         "{{ 'a\ud800' }}",

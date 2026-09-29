@@ -1148,6 +1148,82 @@ class TestVerifyRenderedValueByValue:
         assert str(self._failure(verify, {"gone": None})) == message
 
 
+class TestEscapedBraces:
+    """A declared model holding an escaped `\\{{` and no template is rendered
+    all the same, since only rendering removes the escape: handed back as it
+    was, it sent the backslash. What a template renders is final."""
+
+    def test_request_with_only_an_escape_is_rendered(self):
+        declared = Request.model_validate({"url": "http://t/", "headers": {"X-T": r"\{{name}}"}, "body": {"json": {"t": r"\{{ name }}"}}})
+        rendered = _render_declared(declared, {}, "request")
+        assert (rendered.headers, rendered.body.json) == ({"X-T": "{{name}}"}, {"t": "{{ name }}"})
+
+    def test_response_steps_with_only_an_escape_are_rendered(self):
+        """A verify operand and a regex pattern with nothing but an escape are
+        what the response is checked against and searched with, unescaped."""
+        sent: list[httpx.Request] = []
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: sent.append(request) or httpx.Response(200, text="Hello {{name}}")))
+        stage = Stage.model_validate(
+            {
+                "name": "s",
+                "request": {"url": r"http://mock/ok?q=\{{name}}"},
+                "response": [
+                    {"verify": {"status": 200, "body": {"contains": [r"Hello \{{name}}"], "matches": [r"^Hello \{{name}}$"]}}},
+                    {"save": {"regex": {"placeholder": r"\{{(\w+)}}"}}},
+                ],
+            }
+        )
+        carrier = _make_carrier_subclass(client=client)
+        try:
+            result = carrier._execute_single_iteration(stage, ChainMap({}), {})
+        finally:
+            client.close()
+        assert sent[0].url.params["q"] == "{{name}}"
+        assert result.saved_context == {"placeholder": "name"}
+
+    def test_rendered_value_holding_an_escape_is_final(self):
+        """A path a template rendered is validated again as it rendered: a
+        value's `\\{{` is the value's own, never unescaped."""
+        rendered = _render_declared(Request.model_validate({"url": "http://t/", "body": {"binary": "{{ path }}"}}), {"path": r"files/\{{x}}.bin"}, "request")
+        assert rendered.body.binary == Path(r"files/\{{x}}.bin")
+
+    @pytest.mark.parametrize("context", [{}, {"name": "other"}], ids=["name-undefined", "name-defined"])
+    @pytest.mark.parametrize(
+        ("body", "path_of"),
+        [
+            pytest.param({"binary": r"data/\{{name}}.bin"}, lambda body: body.binary, id="binary"),
+            pytest.param({"files": {"f": r"data/\{{name}}.bin"}}, lambda body: body.files["f"], id="files"),
+            pytest.param({"files": {"f": {"path": r"data/\{{name}}.bin"}}}, lambda body: body.files["f"].path, id="file-object"),
+            pytest.param({"multipart": {"files": {"f": [r"data/\{{name}}.bin"]}}}, lambda body: body.multipart.files["f"][0], id="multipart"),
+        ],
+    )
+    def test_escaped_literal_path_renders_once(self, body, path_of, context):
+        """A path with an escape is rendered once, as any value is: its
+        `{{name}}` is the file's own braces, never a template, whatever the
+        context holds. Unescaped as it loaded, it was rendered again: a stage
+        failure on an undefined `name`, or another file. Its rendered text
+        holds a template's syntax, so the field's template branch takes it as
+        well as the path branch, and the smart union keeps it a `str`: the
+        type pinned here, which the request builder reads as a path."""
+        rendered = _render_declared(Request.model_validate({"url": "http://t/", "method": "POST", "body": body}), context, "request")
+        assert path_of(rendered.body) == "data/{{name}}.bin"
+
+    def test_escaped_ssl_paths_render_once(self):
+        """`ssl.verify` has no template branch, so it renders to a `Path`;
+        a `cert` path whose rendered text holds braces stays a `str`, beside
+        a `Path` rendered from a template."""
+        declared = SSLConfig.model_validate({"verify": r"certs/\{{ca}}.pem", "cert": [r"certs/\{{c}}.pem", "{{ dir }}/k.pem"]})
+        rendered = _render_declared(declared, {"ca": "other", "c": "other", "dir": "keys"}, "ssl")
+        assert (rendered.verify, rendered.cert) == (Path("certs/{{ca}}.pem"), ("certs/{{c}}.pem", Path("keys/k.pem")))
+        assert isinstance(rendered.cert, tuple)
+        assert [type(path) for path in (rendered.verify, *rendered.cert)] == [type(Path()), str, type(Path())]
+
+    def test_graphql_query_with_only_an_escape_renders(self):
+        """A literal judged as it renders loads, and renders to that text."""
+        declared = Request.model_validate({"url": "http://t/", "method": "POST", "body": {"graphql": {"query": r'query { render(template: "Hello \{{name}}") }'}}})
+        assert _render_declared(declared, {}, "request").body.graphql.query == 'query { render(template: "Hello {{name}}") }'
+
+
 class TestVerifyStatusRendered:
     """``verify.status`` written as one template renders to any of its forms (a
     code, a class, a list of them), and a list entry written as one to a code

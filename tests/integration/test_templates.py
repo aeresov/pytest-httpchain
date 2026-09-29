@@ -1,6 +1,8 @@
+import json
+
 import pytest
 
-from tests.integration.helpers import stage
+from tests.integration.helpers import HAR_ARGS, stage
 
 
 # uuid4(); Python expressions; complete templates keep their type (int, dict,
@@ -116,3 +118,80 @@ def test_builtin_called_where_a_stage_defines_its_own_warns_and_runs(run_scenari
     )
     result.assert_outcomes(passed=2, warnings=1)
     result.stdout.fnmatch_lines(["*HTTPCHAIN036] Scenario-level 'substitutions' uses the function timestamp(), but the scenario's own definition of 'timestamp'*"])
+
+
+def test_escaped_braces_reach_the_server_literally(run_scenario, pytester):
+    """`\\{{` sends a literal `{{`, in a JSON body and a header alike, and
+    `\\\\{{ x }}` a backslash, then x's value. A value that holds braces or
+    an escape, saved from the response, is sent on as it is: rendering reads
+    the scenario's own text once, never a value. What an escape's braces open
+    is text up to its `}}`, template syntax included (Jinja's `{{ '{{' }}`, a
+    Handlebars raw block). Collection's validator reads no template in the
+    escaped text, so `name` and `raw` are not undefined names, and `'{{'` no
+    invalid expression."""
+    body = {
+        "greeting": "Hello \\{{name}}",
+        "doubled": "\\\\{{ who }}",
+        "kept": "\\\\\\{{ who }}",
+        "jinja": "\\{{ '{{' }}",
+        "raw": "\\{{{{raw}}}} {{ who }} \\{{{{/raw}}}}",
+    }
+    headers = {"X-Literal": "\\{{name}}", "X-Greeting": "{{ greeting }}", "X-Kept": "{{ kept }}"}
+    result = run_scenario(
+        {
+            "substitutions": [{"vars": {"who": "you"}}],
+            "stages": [
+                stage(
+                    "body",
+                    "/echo/json",
+                    request={"method": "POST", "body": {"json": body}},
+                    response=[
+                        {"verify": {"status": 200, "jmespath": {"received.greeting": "Hello \\{{name}}"}}},
+                        {"save": {"jmespath": {"greeting": "received.greeting", "kept": "received.kept"}}},
+                    ],
+                ),
+                stage("headers", "/headers", request={"headers": headers}),
+            ],
+        },
+        args=HAR_ARGS,
+    )
+    result.assert_outcomes(passed=2, warnings=0)
+    # A HAR file per stage, named in stage order.
+    [sent_body], [sent_headers] = (json.loads(har.read_text(encoding="utf-8"))["log"]["entries"] for har in sorted((pytester.path / "har_out").glob("*.har")))
+    assert json.loads(sent_body["request"]["postData"]["text"]) == {
+        "greeting": "Hello {{name}}",
+        "doubled": "\\you",
+        "kept": "\\{{ who }}",
+        "jinja": "{{ '{{' }}",
+        "raw": "{{{{raw}}}} you {{{{/raw}}}}",
+    }
+    received = json.loads(sent_headers["response"]["content"]["text"])["received_headers"]
+    assert {name: received[name] for name in headers} == {"X-Literal": "{{name}}", "X-Greeting": "Hello {{name}}", "X-Kept": "\\{{ who }}"}
+
+
+def test_escaped_braces_in_a_file_path_name_the_file(run_scenario, pytester):
+    """A file path with an escape is rendered once, as any value is: the file
+    sent is the one named `{{name}}.bin`, braces and all, though a `name` is
+    defined. As a binary body, an upload and a file object's path alike."""
+    (pytester.path / "{{name}}.bin").write_bytes(b"braces")
+    path = "\\{{name}}.bin"
+    result = run_scenario(
+        {
+            "substitutions": [{"vars": {"name": "other"}}],
+            "stages": [
+                stage(
+                    "binary",
+                    "/echo/binary",
+                    request={"method": "POST", "body": {"binary": path}},
+                    response=[{"verify": {"status": 200, "jmespath": {"size": 6}}}],
+                ),
+                stage(
+                    "files",
+                    "/echo/multipart",
+                    request={"method": "POST", "body": {"files": {"plain": path, "object": {"path": path}}}},
+                    response=[{"verify": {"status": 200, "jmespath": {"fields.plain": {"eq": {"filename": "\\{{name}}.bin", "size": 6}}, "fields.object.size": 6}}}],
+                ),
+            ],
+        }
+    )
+    result.assert_outcomes(passed=2, warnings=0)

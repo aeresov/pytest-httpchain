@@ -86,6 +86,19 @@ class TestUrl:
     def test_concrete_url_kept_as_written(self, url):
         assert Request(url=url).url == url
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            # Checked as the URL sent, its escape rendered: the backslash is no
+            # `\` in the authority, which WHATWG and httpx read apart.
+            pytest.param(r"http://user:\{{x}}@example.com/", id="escape-in-userinfo"),
+            pytest.param(r"http://example.com/render?t=\{{name}}", id="escape-in-query"),
+            pytest.param(r"/render/\{{name}}", id="escape-in-relative-path"),
+        ],
+    )
+    def test_escaped_url_kept_as_written(self, url):
+        assert Request(url=url).url == url
+
     @pytest.mark.parametrize("url_type", [HttpUrl, AnyHttpUrl, AnyUrl, pydantic_core.Url])
     def test_pydantic_url_object_taken_as_its_string(self, url_type):
         """A single-expression template keeps its value's type, so

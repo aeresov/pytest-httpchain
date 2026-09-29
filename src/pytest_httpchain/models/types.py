@@ -31,21 +31,42 @@ from pydantic import (
     StrictFloat,
     StrictInt,
     TypeAdapter,
+    ValidationInfo,
     ValidatorFunctionWrapHandler,
     WithJsonSchema,
     WrapValidator,
 )
 
 from pytest_httpchain.constants import parse_user_function_name
-from pytest_httpchain.templates import TEMPLATE_PATTERN, TEMPLATE_PATTERN_ECMA, is_complete_template
+from pytest_httpchain.templates import TEMPLATE_PATTERN_ECMA, contains_escape, contains_template, find_templates, is_complete_template, needs_rendering, unescape
+
+# The validation context of a model the carrier validates again once its
+# templates rendered (`entities.validate_rendered`): it validated as written
+# before, so its text is now what was sent or compared, final. What only the
+# scenario's own text means is not read in it: an escaped `\{{` (a value a
+# template rendered holds one as it is: `as_rendered`, `_path_or_text`,
+# `refuse_escaped_braces`), a matcher's authoring hint.
+RENDERED = object()
 
 
-def create_string_validator(validation_func: Callable[[str], Any], error_message: str) -> Callable[[str], str]:
-    """Factory for creating string validators."""
+def as_rendered(value: str, info: ValidationInfo) -> str:
+    """The text a literal is used as, which its check judges: the scenario's
+    own text with its escapes rendered (``\\{{`` is ``{{``, `unescape`), as
+    rendering makes it before it is sent, compared or compiled, where the
+    escape's backslash could read as the literal grammar's own (a GraphQL or
+    JMESPath string's escape, a URL's authority). The field keeps the text as
+    written, for the one rendering to unescape. A value a template rendered
+    (`RENDERED`) is final as it is."""
+    return value if info.context is RENDERED else unescape(value)
 
-    def validator(v: str) -> str:
+
+def create_string_validator(validation_func: Callable[[str], Any], error_message: str) -> Callable[[str, ValidationInfo], str]:
+    """Factory for a literal's validator: ``validation_func`` judges the text
+    the literal is used as (`as_rendered`), and the value is kept as written."""
+
+    def validator(v: str, info: ValidationInfo) -> str:
         try:
-            validation_func(v)
+            validation_func(as_rendered(v, info))
         except Exception as e:
             raise ValueError(error_message) from e
         return v
@@ -156,7 +177,7 @@ def validate_schema_file_ref(value: Any, handler: ValidatorFunctionWrapHandler) 
     stands for its text. A string with a template in it is the engine's to
     render, left to ``PartialTemplateStr``, as a URL's is (`_literal_url`)."""
     v: str = handler(str(value) if isinstance(value, PurePath) else value)
-    if template := re.search(TEMPLATE_PATTERN, v):
+    if template := next(find_templates(v), None):
         raise ValueError(f"Not a literal file reference: it contains a template expression at position {template.start()}")
     parse_schema_file_ref(v)
     return v
@@ -176,7 +197,7 @@ def validate_jmespath_key(v: str) -> str:
     try:
         jmespath.compile(v)
     except Exception as e:
-        if re.search(TEMPLATE_PATTERN, v):
+        if contains_template(v):
             raise ValueError("Invalid JMESPath expression: a key is never rendered, only the value it maps to, so it cannot hold a template") from e
         raise ValueError("Invalid JMESPath expression") from e
     return v
@@ -229,7 +250,7 @@ def validate_template_expression(v: str) -> str:
 
 
 def _check_partial_template_str(v: str, got: str) -> str:
-    matches = list(re.finditer(TEMPLATE_PATTERN, v))
+    matches = list(find_templates(v))
     if not matches:
         raise ValueError(f"Must contain at least one template expression like '{{{{ expr }}}}'{got}")
 
@@ -247,6 +268,25 @@ def validate_unquoted_partial_template_str(v: str) -> str:
     """`validate_partial_template_str` for a value that can carry credentials,
     whose message does not quote it (see `validate_proxy_url`)."""
     return _check_partial_template_str(v, "")
+
+
+def refuse_escaped_braces(what: str) -> Callable[[Any, ValidationInfo], Any]:
+    """A before-validator for a field that names a server or a file and is
+    checked once rendered for template text left in it (``client.base_url``
+    and ``client.proxy`` by `request_builder`, a ``body.schema`` file by
+    `response_steps`): a backslash before ``{{`` in what the scenario writes is
+    refused, template or not. Rendered, an escape leaves literal braces, which
+    that check cannot tell from a template that rendered to template text, so
+    the stage would fail on what ``validate`` passed. ``what`` names the field.
+    The value is not quoted: a URL can carry credentials. A value a template
+    rendered (`RENDERED`) is final, and a ``\\{{`` a value put there is kept."""
+
+    def refuse(value: Any, info: ValidationInfo) -> Any:
+        if isinstance(value, str) and info.context is not RENDERED and contains_escape(value):
+            raise ValueError(f"{what} cannot hold a backslash before '{{{{' (an escaped '{{{{' renders as literal braces, which it does not take)")
+        return value
+
+    return refuse
 
 
 def validate_function_import_name(v: str) -> str:
@@ -482,7 +522,28 @@ FunctionImportName = Annotated[str, AfterValidator(validate_function_import_name
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
 JMESPathKey = Annotated[str, AfterValidator(validate_jmespath_key)]
 JSONSchemaInline = Annotated[dict[str, Any], AfterValidator(validate_json_schema_inline)]
-SerializablePath = Annotated[Path, PlainSerializer(lambda x: str(x), return_type=str)]
+
+
+def _path_or_text(value: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo) -> Any:
+    """A path field's value, a `Path` once its text is final: as written when
+    rendering changes nothing in it, else once rendered (`RENDERED`). Text
+    rendering changes (a template, an escaped ``\\{{``) is kept as written,
+    for the one rendering the carrier gives a model's text (its dump, where a
+    `Path` is text again): unescaped when it loaded, a ``\\{{`` made ``{{``
+    was then rendered once more, as a template. Nor is the text normalized
+    as a path before it renders: on Windows, a ``Path`` reads ``a/\\{{x}}``
+    as ``a\\{{x}}``, whose separator would then escape the braces."""
+    if isinstance(value, str) and info.context is not RENDERED and needs_rendering(value):
+        return value
+    return handler(value)
+
+
+# A file path: a `Path` when final, text while something in it renders
+# (`_path_or_text`); either dumps as its text. Beside `PartialTemplateStr` in a
+# union, rendered text holding a template's syntax (braces an escape left) is
+# valid in both branches and stays a `str` (pydantic's smart union keeps the
+# input's type), so code reading a rendered path takes either.
+SerializablePath = Annotated[Path, WrapValidator(_path_or_text), PlainSerializer(lambda x: str(x), return_type=str)]
 SchemaFileRefStr = Annotated[str, WrapValidator(validate_schema_file_ref), WithJsonSchema({"type": "string", "minLength": 1})]
 RegexPattern = Annotated[str, AfterValidator(validate_regex_pattern)]
 # A regex group a `save.regex` entry saves: its number or its name.
@@ -581,7 +642,7 @@ def _literal_url(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
     otherwise pass here and fail only when rendered.
     """
     v: str = handler(str(value) if isinstance(value, AnyUrl | pydantic_core.Url) else value)
-    if template := re.search(TEMPLATE_PATTERN, v):
+    if template := next(find_templates(v), None):
         raise ValueError(f"Not a literal URL: it contains a template expression at position {template.start()}")
     return v
 
@@ -666,10 +727,12 @@ def _check_relative_url(v: str) -> None:
         raise ValueError(f"Invalid URL: {e}") from e
 
 
-def validate_http_url_reference(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
+def validate_http_url_reference(value: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo) -> str:
     """Validate a request URL, keeping it as written: an absolute http(s) URL
     (`_check_http_url`), or a relative reference (`_check_relative_url`),
-    which the scenario's ``client.base_url`` completes.
+    which the scenario's ``client.base_url`` completes. What is checked is the
+    URL sent, its escapes rendered (`as_rendered`): an escape's backslash is
+    no ``\\`` in the URL's authority.
 
     Whether there is a base_url is not this field's to know: the validator
     reports a relative URL without one (HTTPCHAIN034), and so does the request
@@ -678,10 +741,11 @@ def validate_http_url_reference(value: Any, handler: ValidatorFunctionWrapHandle
     ``http:/x`` still fail as absolute URLs.
     """
     v = _literal_url(value, handler)
-    if v and is_relative_url(v):
-        _check_relative_url(v)
+    url = as_rendered(v, info)
+    if url and is_relative_url(url):
+        _check_relative_url(url)
     else:
-        _check_http_url(v)
+        _check_http_url(url)
     return v
 
 

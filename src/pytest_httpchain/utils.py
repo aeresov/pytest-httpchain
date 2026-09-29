@@ -21,7 +21,7 @@ import pytest
 from pytest_httpchain.errors import SchemaFileError, StageExecutionError
 from pytest_httpchain.jsonref import loads_jsonc
 from pytest_httpchain.models import FunctionsSubstitution, Substitution, VarsSubstitution
-from pytest_httpchain.templates import contains_template, walk, walker
+from pytest_httpchain.templates import needs_rendering, walk, walker
 from pytest_httpchain.userfunc import call_target, wrap_function
 
 logger = logging.getLogger(__name__)
@@ -158,7 +158,7 @@ def _resolve_function_name(name: str, context: Mapping[str, Any]) -> str:
     """Render a templated import name (``mod.{{ x }}:fn``) against the current
     context; literal names pass through untouched. The model advertises the
     template form, so it must resolve here — nothing downstream sees a context."""
-    if "{{" not in name:
+    if not needs_rendering(name):
         return name
     resolved = walk(name, context)
     if not isinstance(resolved, str):
@@ -182,11 +182,12 @@ def process_substitutions(
         # Flattened per step, deliberately: a snapshot taken before the step
         # seeds anything, which keeps a step's own names out of its own scope.
         # A vars step renders through one `walker()` over it, built at the first
-        # value that holds a template (so `result` may already hold the step's
-        # earlier names by then), and pays the evaluator's pass over the context
-        # once per step rather than once per value. Template-free values skip
-        # the walk entirely and are stored as they are: the scenario model's own
-        # objects, not copies, as template-free namespace values already were.
+        # value that holds a template or an escape (so `result` may already hold
+        # the step's earlier names by then), and pays the evaluator's pass over
+        # the context once per step rather than once per value. Values with
+        # nothing to render skip the walk entirely and are stored as they are:
+        # the scenario model's own objects, not copies, as such namespace values
+        # already were.
         current_context = {**(context or {}), **result}
         match step:
             case FunctionsSubstitution():
@@ -198,7 +199,7 @@ def process_substitutions(
             case VarsSubstitution():
                 render: Callable[[Any], Any] | None = None
                 for key, value in step.vars.items():
-                    if contains_template(value):
+                    if needs_rendering(value):
                         render = render or walker(current_context)
                         value = render(value)
                     result[key] = value

@@ -38,6 +38,7 @@ from pydantic.json_schema import JsonDict
 from pydantic_core import InitErrorDetails, PydanticCustomError
 
 from pytest_httpchain.models.types import (
+    RENDERED,
     Base64String,
     BaseUrlStr,
     FunctionImportName,
@@ -70,8 +71,10 @@ from pytest_httpchain.models.types import (
     UnquotedPartialTemplateStr,
     VariableName,
     XMLString,
+    as_rendered,
     convert_namespace_items_to_dict,
     convert_namespace_to_dict,
+    refuse_escaped_braces,
     regex_group,
     validate_function_import_name,
     validate_unquoted_partial_template_str,
@@ -222,7 +225,7 @@ class ClientConfig(StrictModel):
     # own messages do not quote it either (`validate_proxy_url`).
     model_config = ConfigDict(hide_input_in_errors=True)
 
-    base_url: BaseUrlStr | UnquotedPartialTemplateStr | None = Field(
+    base_url: Annotated[BaseUrlStr | UnquotedPartialTemplateStr | None, BeforeValidator(refuse_escaped_braces("base_url"))] = Field(
         default=None,
         description="Absolute http(s) URL without a query or fragment. A relative request.url is appended to its path.",
         examples=["https://api.example.com/v1", "{{ api_root }}"],
@@ -235,7 +238,7 @@ class ClientConfig(StrictModel):
     timeout: PositiveFloat | NumberOrTemplate = Field(default=30.0, description="Timeout in seconds for requests that do not set request.timeout.")
     follow_redirects: Literal[True, False] | TemplateExpressionOnly = Field(default=True, description="Whether requests that do not set request.allow_redirects follow redirects.")
     max_redirects: PositiveInt | NumberOrTemplate = Field(default=20, description="Redirects a request follows at most before it fails.")
-    proxy: ProxyUrlStr | UnquotedPartialTemplateStr | None = Field(
+    proxy: Annotated[ProxyUrlStr | UnquotedPartialTemplateStr | None, BeforeValidator(refuse_escaped_braces("proxy"))] = Field(
         default=None,
         description="Proxy for every request (http, https, socks5 or socks5h URL); replaces the proxy environment variables.",
         examples=["http://proxy.example.com:8080", "{{ proxy_url }}"],
@@ -420,7 +423,15 @@ _RENDERED_SCENARIO_AUTH: TypeAdapter[Any] = TypeAdapter(ScenarioAuth, config=Con
 
 def validate_rendered_scenario_auth(value: Any) -> Auth:
     """A scenario's ``auth`` once its templates rendered (see above)."""
-    return _RENDERED_SCENARIO_AUTH.validate_python(value)
+    return _RENDERED_SCENARIO_AUTH.validate_python(value, context=RENDERED)
+
+
+def validate_rendered[M: BaseModel](model: type[M], value: Any) -> M:
+    """``value``, a model of ``model`` dumped with its templates rendered,
+    validated again as one (the `RENDERED` context): its text is final, so
+    what only the scenario's own text means, an escaped ``\\{{``, is not
+    read in it."""
+    return model.model_validate(value, context=RENDERED)
 
 
 with _suppress_field_shadow_warning("json"):
@@ -699,12 +710,13 @@ class RegexCapture(StrictModel):
     )
 
     @model_validator(mode="after")
-    def _group_is_in_the_pattern(self) -> Self:
-        """A group a literal pattern does not have fails at load. One a
+    def _group_is_in_the_pattern(self, info: ValidationInfo) -> Self:
+        """A group a literal pattern does not have fails at load: the pattern
+        it is searched with, its escapes rendered (`as_rendered`). One a
         template renders is checked once it has, when re-validated here, or
         by `response_steps.process_save` when it rendered to template text."""
         if self.group is not None and not contains_template([self.pattern, self.group]):
-            regex_group(re.compile(self.pattern), self.group)
+            regex_group(re.compile(as_rendered(self.pattern, info)), self.group)
         return self
 
 
@@ -785,7 +797,11 @@ with _suppress_field_shadow_warning("schema"):
         # stands for the dict it was declared as: converted all the way down, as
         # a schema is plain JSON. Ahead of the union, keeping its member tags in
         # pydantic's error locations.
-        schema: Annotated[JSONSchemaInline | SchemaFileRefStr | PartialTemplateStr | None, BeforeValidator(convert_namespace_to_dict)] = Field(
+        schema: Annotated[
+            JSONSchemaInline | SchemaFileRefStr | PartialTemplateStr | None,
+            BeforeValidator(convert_namespace_to_dict),
+            BeforeValidator(refuse_escaped_braces("A schema file reference")),
+        ] = Field(
             default=None,
             description="JSON Schema the body must validate against: inline, or a local file, optionally with a JSON pointer into it "
             "(openapi.json#/components/schemas/User). Its $refs resolve across the document and into other local files.",
@@ -836,11 +852,6 @@ def _operand_schema(schema: JsonDict) -> None:
 
 
 _EQ_HINT = 'to compare with an object, give it as eq: {"eq": {...}}'
-
-# The validation context of a model re-validated once its templates rendered
-# (`validate_rendered_verify`): it validated as declared before, so what can
-# fail now is a rendered value, never how the scenario was written.
-_RENDERED = object()
 
 
 class JMESPathMatcher(StrictModel):
@@ -904,7 +915,7 @@ class JMESPathMatcher(StrictModel):
         "admin"}``) fails as a matcher, and gets the same hint beside those
         errors. A rendered matcher (`validate_rendered_verify`) was one as
         declared: only its rendered operands can fail, and the hint is noise."""
-        if not isinstance(data, dict) or info.context is _RENDERED:
+        if not isinstance(data, dict) or info.context is RENDERED:
             return handler(data)
         unknown = [key for key in data if key not in cls.model_fields and key != "$schema"]
         if unknown:
@@ -1032,7 +1043,7 @@ def validate_rendered_verify(declared: Verify, value: Any) -> Verify:
     values = {expression for expression, expected in declared.jmespath.items() if not isinstance(expected, JMESPathMatcher)}
     if values and isinstance(value, dict) and isinstance(expectations := value.get("jmespath"), dict):
         value = {**value, "jmespath": {expression: _DeclaredValue(expected) if expression in values else expected for expression, expected in expectations.items()}}
-    return Verify.model_validate(value, context=_RENDERED)
+    return Verify.model_validate(value, context=RENDERED)
 
 
 class SaveStep(StrictModel):

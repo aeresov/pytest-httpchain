@@ -40,7 +40,6 @@ built-in (see `extract_template_variables` and `extract_builtin_stand_ins`).
 """
 
 import ast
-import re
 from collections import ChainMap
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
@@ -64,7 +63,7 @@ from pytest_httpchain.models import (
     VarsSubstitution,
     normalize_list_input,
 )
-from pytest_httpchain.templates import CALL_ONLY_BUILTINS, CONTEXT_HELPERS, TEMPLATE_BUILTINS, TEMPLATE_PATTERN, TemplatesError, parse_expression, template_form
+from pytest_httpchain.templates import CALL_ONLY_BUILTINS, CONTEXT_HELPERS, TEMPLATE_BUILTINS, TemplatesError, find_templates, parse_expression, template_form
 
 # The name under which response metadata is injected into response-step contexts.
 RESPONSE_META_NAME = "response"
@@ -214,7 +213,7 @@ def _template_expressions(obj: Any) -> Iterator[str]:
     while pending:
         match pending.pop():
             case str() as text:
-                for match in re.finditer(TEMPLATE_PATTERN, text):
+                for match in find_templates(text):
                     yield match.group("expr").strip()
             case dict() as mapping:
                 pending.extend(reversed(mapping.values()))

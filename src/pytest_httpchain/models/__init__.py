@@ -76,6 +76,7 @@ from pytest_httpchain.models.entities import (
     XmlBody,
     normalize_list_input,
     parametrize_values_contain_template,
+    validate_rendered,
     validate_rendered_scenario_auth,
     validate_rendered_verify,
 )
@@ -161,6 +162,7 @@ __all__ = [
     "regex_group",
     "parametrize_values_contain_template",
     "normalize_list_input",
+    "validate_rendered",
     "validate_rendered_scenario_auth",
     "validate_rendered_verify",
 ]

@@ -10,7 +10,6 @@ import email.message
 import email.utils
 import mimetypes
 import os
-import re
 import ssl
 import threading
 from collections.abc import Generator, Iterable, Iterator, Mapping
@@ -46,7 +45,7 @@ from pytest_httpchain.models import (
     is_relative_url,
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
-from pytest_httpchain.templates import TEMPLATE_PATTERN, contains_template
+from pytest_httpchain.templates import contains_template
 from pytest_httpchain.userfunc import UserFunctionError, call_target, call_user_function, import_function
 from pytest_httpchain.utils import resolve_scenario_path
 
@@ -116,7 +115,7 @@ def _client_url(client: ClientConfig, name: str) -> str | None:
     can carry credentials (`validate_proxy_url`).
     """
     value = getattr(client, name)
-    if value is not None and re.search(TEMPLATE_PATTERN, value):
+    if value is not None and contains_template(value):
         raise StageExecutionError(f"client.{name} must resolve to a URL, but it rendered to text with a template expression in it (not shown, as it can carry credentials)")
     return value
 

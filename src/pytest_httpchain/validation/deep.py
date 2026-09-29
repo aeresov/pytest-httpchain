@@ -27,6 +27,7 @@ from pytest_httpchain.models import (
     UserFunctionsSave,
     VerifyStep,
 )
+from pytest_httpchain.templates import contains_template, unescape
 from pytest_httpchain.userfunc import UserFunctionError, call_target, import_function
 from pytest_httpchain.utils import path_segment, resolve_scenario_path, schema_error_text
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, diag
@@ -62,11 +63,19 @@ def check_scenario_deep(
 
 
 def _literal_path(value: Any) -> Path | None:
-    """A concrete filesystem path for a literal path value, else None (missing
-    values, inline schemas, and anything holding a ``{{ }}`` template)."""
+    """The file a path value names before any stage runs, else None (missing
+    values, inline schemas, and a path holding a template, known only once
+    rendered).
+
+    A path field holds a path that rendering changes as text, not as a
+    `Path` (`types.SerializablePath`): one with only an escaped ``\\{{``
+    names the file it renders to, the braces the file's own (`unescape`), as
+    the runtime opens it."""
     match value:
-        case str() | Path() if "{{" not in str(value):
-            return Path(value)
+        case Path():
+            return value
+        case str() if not contains_template(value):
+            return Path(unescape(value))
         case _:
             return None
 
@@ -105,7 +114,7 @@ def _check_schema(schema: Any, location: str, base_dir: Path | None, ref_bounds:
         case dict():
             # Meta-checked by the model already.
             body = inline_body_schema(schema, base_dir, ref_bounds)
-        case str() if "{{" not in schema:
+        case str() if not contains_template(schema):
             file = SchemaFile.locate(schema, base_dir)
             if not file.path.exists():
                 # Named with the pointer, and escaped (a NUL, one JSON \u escape away).
@@ -225,7 +234,7 @@ def _function_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
 
     for call, injected, check_signature, location in sites:
         name, kwargs = call_target(call)
-        if "{{" in name:
+        if contains_template(name):
             continue  # template form — the real name is only known at runtime
         try:
             func = import_function(name)

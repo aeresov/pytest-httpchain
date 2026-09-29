@@ -16,6 +16,7 @@ from pytest_httpchain.models.entities import (
     UserFunctionKwargs,
     UserFunctionName,
     Verify,
+    validate_rendered,
     validate_rendered_verify,
 )
 from tests.unit.models.helpers import assert_error_types
@@ -278,13 +279,25 @@ class TestVerifyJmespath:
             pytest.param("items[", "Invalid JMESPath expression", id="invalid"),
             pytest.param("", "Invalid JMESPath expression", id="empty"),
             # Keys are never rendered: `{{` is not JMESPath, and the error says why.
-            pytest.param("data.{{ field }}", "a key is never rendered, only the value it maps to, so it cannot hold a template", id="template"),
+            pytest.param(
+                "data.{{ field }}",
+                "Invalid JMESPath expression: a key is never rendered, only the value it maps to, so it cannot hold a template",
+                id="template",
+            ),
+            # An escaped one is no template: the key fails as JMESPath alone.
+            pytest.param(r"data.\{{ field }}", "Invalid JMESPath expression", id="escaped-template"),
         ],
     )
     def test_key_is_a_jmespath_expression(self, key, message):
-        with pytest.raises(ValidationError, match=re.escape(message)) as exc_info:
+        with pytest.raises(ValidationError) as exc_info:
             Verify(jmespath={key: 1})
         assert_error_types(exc_info, "value_error", at="[key]")
+        assert [error["msg"] for error in exc_info.value.errors()] == [f"Value error, {message}"]
+
+    def test_key_is_never_unescaped(self):
+        """A key is JMESPath as written, never rendered: a backslash in it is
+        JMESPath's (a raw string literal keeps it)."""
+        assert list(Verify(jmespath={r"'\{{ x }}'": 1}).jmespath) == [r"'\{{ x }}'"]
 
     @pytest.mark.parametrize(
         ("rendered", "expected"),
@@ -363,6 +376,23 @@ class TestResponseBody:
         """Wiring only: the exhaustive cases live in test_type_validators.py."""
         with pytest.raises(ValidationError, match=re.escape(message)):
             ResponseBody(schema=schema)
+
+    @pytest.mark.parametrize("schema", [r"schemas/\{{x}}.json", r"{{ dir }}/\{{x}}.json"])
+    def test_schema_file_reference_refuses_a_backslash_before_braces(self, schema):
+        """Rendered, an escape leaves literal braces, which the verify step
+        takes for a template that rendered to template text: refused as the
+        scenario loads, so ``validate`` agrees with the stage."""
+        with pytest.raises(ValidationError, match=re.escape("A schema file reference cannot hold a backslash before '{{'")):
+            ResponseBody(schema=schema)
+
+    def test_escapes_in_an_inline_schema_render(self):
+        """An inline schema is rendered as a whole, escapes and all: it is
+        never checked for template text."""
+        schema = {"type": "string", "const": r"\{{name}}"}
+        assert ResponseBody(schema=schema).schema == schema
+
+    def test_rendered_schema_file_reference_is_final(self):
+        assert validate_rendered(ResponseBody, {"schema": r"schemas/\{{x}}.json"}).schema == r"schemas/\{{x}}.json"
 
     def test_schema_from_namespace(self):
         """A schema in ``vars`` renders as namespaces all the way down, which

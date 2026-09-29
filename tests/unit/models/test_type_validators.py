@@ -18,6 +18,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from pytest_httpchain.models.types import (
+    RENDERED,
     Base64String,
     FunctionImportName,
     GraphQLQuery,
@@ -27,6 +28,7 @@ from pytest_httpchain.models.types import (
     RegexPattern,
     SchemaFileRef,
     SchemaFileRefStr,
+    SerializablePath,
     TemplateExpression,
     VariableName,
     VarsNamespace,
@@ -164,7 +166,9 @@ class TestTemplateExpression:
     def test_valid(self, value):
         assert validate(TemplateExpression, value) == value
 
-    @pytest.mark.parametrize("value", ["prefix {{ value }}", "{{ value }} suffix", "just a string"])
+    # An escaped template is text, and so is a backslash before one: neither
+    # is the value, whatever its type. Nor is a template in escaped text.
+    @pytest.mark.parametrize("value", ["prefix {{ value }}", "{{ value }} suffix", "just a string", r"\{{ value }}", r"\\{{ value }}", r"\{{{{ value }}"])
     def test_invalid(self, value):
         with pytest.raises(ValidationError, match="Must be a complete template expression"):
             validate(TemplateExpression, value)
@@ -173,7 +177,20 @@ class TestTemplateExpression:
 class TestPartialTemplateStr:
     """At least one non-empty ``{{ expr }}`` anywhere in the string."""
 
-    @pytest.mark.parametrize("value", ["{{ value }}", "Hello {{ name }}!", "prefix {{ value }} suffix", "{{ first }} and {{ second }}"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "{{ value }}",
+            "Hello {{ name }}!",
+            "prefix {{ value }} suffix",
+            "{{ first }} and {{ second }}",
+            # A backslash, then a template; an escaped one beside a template,
+            # which the escaped text's `}}` ends.
+            r"\\{{ value }}",
+            r"\{{ text }} and {{ value }}",
+            r"\{{ text }}{{ value }}",
+        ],
+    )
     def test_valid(self, value):
         assert validate(PartialTemplateStr, value) == value
 
@@ -182,11 +199,95 @@ class TestPartialTemplateStr:
         [
             ("no template here", "Must contain at least one template expression"),
             ("{{  }}", "Template expression cannot be empty"),
+            # Escaped, braces are text: no template, however many.
+            (r"\{{ value }}", "Must contain at least one template expression"),
+            (r"\{{ a }} and \{{ b }}", "Must contain at least one template expression"),
+            (r"\{{  }}", "Must contain at least one template expression"),
+            # A template's syntax in escaped text, up to its `}}`, is text too.
+            (r"\{{{{ value }}", "Must contain at least one template expression"),
+            (r"\{{ a {{ value }} }}", "Must contain at least one template expression"),
         ],
     )
     def test_invalid(self, value, message):
         with pytest.raises(ValidationError, match=message):
             validate(PartialTemplateStr, value)
+
+
+class TestSerializablePath:
+    """A path is a `Path` once its text is final. Text rendering changes (a
+    template, an escape) is kept as written, for the one rendering: unescaped
+    as it loaded, a `\\{{` made `{{` was then rendered once more, as a
+    template, and a `Path` would normalize it before it renders."""
+
+    @pytest.mark.parametrize(
+        "written",
+        [
+            r"files/\{{name}}.bin",
+            r"files/\\\{{name}}.bin",
+            r"files/\\{{ name }}.bin",
+            "files/{{ name }}.bin",
+            # A separator before the escape, which Windows would fold into it.
+            r"files\\{{name}}.bin",
+        ],
+    )
+    def test_text_rendering_changes_is_kept(self, written):
+        assert validate(SerializablePath, written) == written
+
+    # A backslash anywhere but before `{{` is the path's own.
+    @pytest.mark.parametrize("written", [r"files\name.bin", "files/name.bin", "files/{name}.bin"])
+    def test_final_text_is_a_path(self, written):
+        assert validate(SerializablePath, written) == Path(written)
+
+    def test_rendered_path_is_final(self):
+        """What a template rendered holds a value as it is: a path a template
+        rendered is a `Path`, never unescaped."""
+        assert TypeAdapter(SerializablePath).validate_python(r"files/\{{name}}.bin", context=RENDERED) == Path(r"files/\{{name}}.bin")
+
+
+class TestLiteralJudgedAsRendered:
+    """A literal is checked as the text it is used as, its escapes rendered
+    (`as_rendered`), and kept as written for the one rendering to unescape:
+    judged as written, an escape's backslash read as the grammar's own escape,
+    which GraphQL and JMESPath strings have no `\\{` for. A value a template
+    rendered (`RENDERED`) is final, judged as it is."""
+
+    @pytest.mark.parametrize(
+        ("annotated_type", "value"),
+        [
+            pytest.param(GraphQLQuery, r'query { render(template: "Hello \{{name}}") }', id="graphql-string"),
+            pytest.param(JMESPathExpression, r'"\{{ name }}"', id="jmespath-quoted-identifier"),
+            pytest.param(JMESPathExpression, r'items[?name == `"\{{x}}"`]', id="jmespath-json-literal"),
+        ],
+    )
+    def test_escape_in_a_string_of_the_grammar(self, annotated_type, value):
+        assert validate(annotated_type, value) == value
+        with pytest.raises(ValidationError):
+            TypeAdapter(annotated_type).validate_python(value, context=RENDERED)
+
+    @pytest.mark.parametrize(
+        ("annotated_type", "value"),
+        [
+            pytest.param(RegexPattern, r"^\{{(\w+)}}$", id="regex"),
+            pytest.param(XMLString, r"<t>\{{name}}</t>", id="xml"),
+        ],
+    )
+    def test_kept_as_written(self, annotated_type, value):
+        assert validate(annotated_type, value) == value
+
+    @pytest.mark.parametrize(
+        ("annotated_type", "value", "message"),
+        [
+            # `{{` alone is no base64 either.
+            pytest.param(Base64String, r"\{{", "Invalid base64 encoding", id="base64"),
+            # Two backslashes before a `{{` that opens no template render one,
+            # which escapes nothing in JMESPath. As written, JMESPath read them
+            # as one escaped backslash.
+            pytest.param(JMESPathExpression, r'"\\{{"', "Invalid JMESPath expression", id="jmespath-doubled"),
+        ],
+    )
+    def test_rendered_text_is_what_fails(self, annotated_type, value, message):
+        with pytest.raises(ValidationError, match=message):
+            validate(annotated_type, value)
 
 
 class TestBase64String:

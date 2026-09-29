@@ -37,7 +37,7 @@ from jsonschema_specifications import REGISTRY as _META_SCHEMAS
 
 from pytest_httpchain.errors import SchemaFileError, SchemaPointerError
 from pytest_httpchain.models import json_schema_validator_class, parse_schema_file_ref
-from pytest_httpchain.templates import contains_template
+from pytest_httpchain.templates import needs_rendering
 from pytest_httpchain.utils import read_json_schema_file, resolve_scenario_path, schema_error_text
 
 type Dialect = type[jsonschema.protocols.Validator]
@@ -207,9 +207,9 @@ class BodySchema:
         it, references included, are not walked. Each schema once, each
         problem once, however many references share it. A template in an
         inline schema is rendered before the schema is used, so a reference
-        (or an ``$id``) there that holds one is known only then; a file, and
-        any document a reference reaches, is read as it is, templates and
-        all.
+        (or an ``$id``) there that holds one, or an escaped ``\\{{``, is known
+        only then; a file, and any document a reference reaches, is read as
+        it is, templates and all.
         """
         reported: set[str] = set()
         try:
@@ -232,7 +232,7 @@ class BodySchema:
                 continue
             templated = id(contents) in rendered
             schema_id = contents.get("$id")
-            if templated and isinstance(schema_id, str) and contains_template(schema_id):
+            if templated and isinstance(schema_id, str) and needs_rendering(schema_id):
                 continue
             dialect = _declared_dialect(contents, dialect)
             specification = _specification(dialect)
@@ -253,7 +253,7 @@ class BodySchema:
                     if keyword not in dialect.VALIDATORS or keyword not in contents:
                         continue
                     ref = contents[keyword]
-                    if templated and isinstance(ref, str) and contains_template(ref):
+                    if templated and isinstance(ref, str) and needs_rendering(ref):
                         continue
                     problem = self._follow(keyword, ref, resolver, dialect, seen, pending)
                     if problem is not None:

@@ -3,7 +3,7 @@ import pytest
 
 import pytest_httpchain.templates.substitution as substitution_module
 from pytest_httpchain.errors import StageExecutionError
-from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
+from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsNamespace, VarsSubstitution
 from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.utils import make_marker, path_segment, process_substitutions, request_content, xdist_group_names
 
@@ -24,6 +24,14 @@ class TestProcessSubstitutions:
                 id="later-steps-see-earlier",
             ),
             pytest.param([VarsSubstitution(vars={"key": "first"}), VarsSubstitution(vars={"key": "second"})], {"key": "second"}, id="later-step-overrides"),
+            # A value with nothing but an escape is rendered too: only rendering
+            # removes it. What an earlier value rendered to is final: `echo`
+            # gets `first`'s backslash, not another pass.
+            pytest.param(
+                [VarsSubstitution(vars={"text": r"\{{name}}", "obj": {"t": r"\{{name}}"}, "first": r"\\\{{name}}"}), VarsSubstitution(vars={"echo": "{{ first }}"})],
+                {"text": "{{name}}", "obj": VarsNamespace(t="{{name}}"), "first": r"\{{name}}", "echo": r"\{{name}}"},
+                id="escapes",
+            ),
         ],
     )
     def test_vars_steps(self, substitutions, expected):
