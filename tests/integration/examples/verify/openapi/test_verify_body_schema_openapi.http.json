@@ -1,0 +1,59 @@
+{
+    "stages": [
+        {
+            "name": "user_matches_component",
+            "description": "A response against a schema an OpenAPI document holds, taken out by a JSON pointer: its $refs resolve across the document and into the file beside it",
+            "fixtures": ["server"],
+            "parallel": { "repeat": 3, "max_concurrency": 3 },
+            "request": {
+                "url": "{{ server }}/user/1"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "schema": "api/openapi.json#/components/schemas/User"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "user_list_matches_component",
+            "description": "Another component of the same document, whose items $ref one more",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/users"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "schema": "api/openapi.json#/components/schemas/UserList"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "user_list_is_not_one_user",
+            "description": "A body the component does not describe fails the stage",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/users"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "schema": "api/openapi.json#/paths/~1user~1{id}/get/responses/200/content/application~1json/schema"
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

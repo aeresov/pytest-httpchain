@@ -1,0 +1,11 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                { "verify": { "status": 200, "body": { "schema": "schema_refs/openapi.json#/components/schemas/Nobody" } } }
+            ]
+        }
+    ]
+}

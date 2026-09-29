@@ -10,13 +10,17 @@ from pytest_httpchain.models.entities import (
     Base64Body,
     BinaryBody,
     FilesBody,
+    FileSpec,
     FormBody,
     GraphQL,
     GraphQLBody,
     JsonBody,
+    Multipart,
+    MultipartBody,
     Request,
     TextBody,
     XmlBody,
+    validate_rendered,
 )
 from tests.unit.models.helpers import assert_error_types
 
@@ -31,6 +35,7 @@ from tests.unit.models.helpers import assert_error_types
         pytest.param({"base64": "dGVzdA=="}, Base64Body, id="base64"),
         pytest.param({"binary": "file.bin"}, BinaryBody, id="binary"),
         pytest.param({"files": {"f": "file.txt"}}, FilesBody, id="files"),
+        pytest.param({"multipart": {"fields": {"f": "v"}}}, MultipartBody, id="multipart"),
         pytest.param({"graphql": {"query": "{ test }"}}, GraphQLBody, id="graphql"),
     ],
 )
@@ -94,6 +99,33 @@ def test_path_fields_become_paths(model, field, value, expected):
 @pytest.mark.parametrize(
     ("model", "field", "value"),
     [
+        # A path an escape is rendered out of is kept as written, for the
+        # one rendering: unescaped here, its braces were rendered again.
+        pytest.param(BinaryBody, "binary", r"data/\{{name}}.bin", id="binary-escaped"),
+        pytest.param(FilesBody, "files", {"file": r"data/\{{name}}.bin"}, id="files-escaped"),
+        pytest.param(FilesBody, "files", {"file": {"path": r"data/\{{name}}.bin"}}, id="file-spec-escaped"),
+    ],
+)
+def test_path_rendering_changes_is_kept_as_written(model, field, value):
+    assert model(**{field: value}).model_dump(mode="json", exclude_none=True)[field] == value
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        # What rendering made of the scenario's text is final: a Path.
+        pytest.param("data/name.bin", Path("data/name.bin"), id="plain"),
+        # A value a template put in, a `\{{` included, is never unescaped.
+        pytest.param(r"data/\{{name}}.bin", Path(r"data/\{{name}}.bin"), id="escape-a-value-holds"),
+    ],
+)
+def test_path_a_template_rendered_is_final(value, expected):
+    assert validate_rendered(BinaryBody, {"binary": value}).binary == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "field", "value"),
+    [
         pytest.param(TextBody, "text", "prefix {{ value }} suffix", id="text"),
         pytest.param(Base64Body, "base64", "{{ encoded_data }}", id="base64"),
         pytest.param(Base64Body, "base64", "prefix{{ value }}", id="base64-partial"),
@@ -133,3 +165,120 @@ def test_json_namespace_becomes_dict():
 
 def test_graphql_variables_namespace_becomes_dict():
     assert GraphQL(query="{ a }", variables=SimpleNamespace(id="1")).variables == {"id": "1"}
+
+
+class TestMultipart:
+    """``body.multipart`` and the file forms ``body.files`` shares with it."""
+
+    def test_fields_and_files_forms(self):
+        """Every field value form and every file form, as the model keeps
+        them: literal paths become paths, a file object a `FileSpec`, a list
+        a list of either."""
+        multipart = Multipart.model_validate(
+            {
+                "fields": {"title": "Report", "tags": ["a", 2, 1.5, True], "draft": False},
+                "files": {
+                    "document": "./report.pdf",
+                    "images": ["a.png", {"path": "b.png", "filename": "photo.png", "content_type": "image/png"}],
+                    "note": {"content": "text", "filename": "note.txt"},
+                    "blob": {"base64": "iVBORw0KGgo="},
+                },
+            }
+        )
+        assert multipart.fields == {"title": "Report", "tags": ["a", 2, 1.5, True], "draft": False}
+        assert multipart.files == {
+            "document": Path("report.pdf"),
+            "images": [Path("a.png"), FileSpec(path=Path("b.png"), filename="photo.png", content_type="image/png")],
+            "note": FileSpec(content="text", filename="note.txt"),
+            "blob": FileSpec(base64="iVBORw0KGgo="),
+        }
+
+    @pytest.mark.parametrize("key", ["fields", "files"])
+    def test_one_of_fields_and_files_is_enough(self, key):
+        """Either alone is a body, even empty: a form without inputs."""
+        assert Multipart.model_validate({key: {}}).model_fields_set == {key}
+
+    def test_files_body_takes_the_same_file_forms(self):
+        """A string path is what it was; objects and lists are new."""
+        body = FilesBody.model_validate({"files": {"doc": "a.txt", "more": ["b.txt", {"content": "c"}]}})
+        assert body.files == {"doc": Path("a.txt"), "more": [Path("b.txt"), FileSpec(content="c")]}
+
+    @pytest.mark.parametrize(
+        "multipart",
+        [
+            pytest.param({"fields": {"title": "{{ title }}", "tags": "{{ tags }}"}}, id="field-values"),
+            pytest.param({"files": {"doc": "{{ path }}", "images": "{{ images }}", "list": ["{{ a }}", "b/{{ name }}.png"]}}, id="file-paths"),
+            pytest.param(
+                {"files": {"doc": {"path": "{{ p }}", "content_type": "{{ ct }}", "filename": "{{ fn }}"}, "b": {"base64": "{{ data }}"}, "c": {"content": "{{ text }}"}}},
+                id="file-object-fields",
+            ),
+        ],
+    )
+    def test_template_kept_as_unvalidated_str(self, multipart):
+        """A template stands where any value goes, and is checked once rendered."""
+        assert Multipart.model_validate(multipart).model_dump(exclude_unset=True, mode="json") == multipart
+
+    @pytest.mark.parametrize(
+        ("multipart", "message"),
+        [
+            pytest.param({}, "A multipart body sets at least one of: fields, files", id="neither-fields-nor-files"),
+            # One sentence for what no member of a union of pydantic's strict
+            # types takes, instead of one error per member.
+            pytest.param({"fields": {"a": None}}, "A multipart field is text, a number or a boolean, or a list of them, got null", id="field-null"),
+            pytest.param({"fields": {"a": {"k": "v"}}}, "A multipart field is text, a number or a boolean, or a list of them, got an object", id="field-object"),
+            pytest.param({"fields": {"a": ["x", ["y"]]}}, "A multipart field's list holds text, numbers or booleans, got list at [1]", id="field-list-in-list"),
+            pytest.param({"files": {"a": {"path": "x", "content": "y"}}}, "A file object sets exactly one of: path, content, base64, got path and content", id="two-sources"),
+            pytest.param({"files": {"a": {"filename": "x.txt"}}}, "A file object sets exactly one of: path, content, base64", id="no-source"),
+            pytest.param({"files": {"a": None}}, "A file is a path or a file object, got null", id="file-null"),
+            pytest.param({"files": {"a": ["x", None]}}, "A file is a path or a file object, got null", id="file-null-in-list"),
+            # Written into the part's headers as given: a newline would end
+            # the header early and start another.
+            pytest.param(
+                {"files": {"a": {"content": "x", "content_type": "text/plain\r\nX-Injected: 1"}}},
+                "A content type must not contain a control character, got '\\r' at position 10",
+                id="content-type-newline",
+            ),
+        ],
+    )
+    def test_invalid_rejected(self, multipart, message):
+        with pytest.raises(ValidationError) as exc_info:
+            Multipart.model_validate(multipart)
+        assert [error["msg"] for error in exc_info.value.errors()] == [f"Value error, {message}"]
+
+    @pytest.mark.parametrize(
+        ("files", "error", "at"),
+        [
+            # A list in a list: a list holds files, not lists.
+            pytest.param({"a": [["x"]]}, "union_tag_invalid", 0, id="list-in-list"),
+            pytest.param({"a": {"content": "x", "content_type": ""}}, "string_too_short", "content_type", id="empty-content-type"),
+            pytest.param({"a": {"content": "x", "size": 1}}, "extra_forbidden", "size", id="unknown-key"),
+            pytest.param({"a": {"base64": "not base64!"}}, "value_error", "base64", id="bad-base64"),
+        ],
+    )
+    def test_invalid_file_rejected(self, files, error, at):
+        with pytest.raises(ValidationError) as exc_info:
+            Multipart.model_validate({"files": files})
+        assert_error_types(exc_info, error, at=at)
+
+    def test_rendered_values_are_taken_as_declared(self):
+        """What templates render: a tuple is a list (a set, unordered, is
+        not), a ``vars`` object a file object, a path object a path. A tuple
+        of ``vars`` objects is the list of file objects it stands for: the
+        namespace conversion walks lists only, so each item converts its own."""
+        note = SimpleNamespace(content="x", filename="n.txt")
+        multipart = Multipart.model_validate(
+            {
+                "fields": {"tags": ("a", "b")},
+                "files": {"note": note, "doc": Path("d.pdf"), "more": (Path("e.pdf"),), "notes": (note, SimpleNamespace(path="f.png"))},
+            }
+        )
+        assert multipart.fields == {"tags": ["a", "b"]}
+        assert multipart.files == {
+            "note": FileSpec(content="x", filename="n.txt"),
+            "doc": Path("d.pdf"),
+            "more": [Path("e.pdf")],
+            "notes": [FileSpec(content="x", filename="n.txt"), FileSpec(path=Path("f.png"))],
+        }
+        assert FilesBody.model_validate({"files": {"notes": (note,)}}).files == {"notes": [FileSpec(content="x", filename="n.txt")]}
+        with pytest.raises(ValidationError, match="got set"):
+            Multipart.model_validate({"fields": {"tags": {"a", "b"}}})

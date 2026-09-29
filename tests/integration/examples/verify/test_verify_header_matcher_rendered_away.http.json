@@ -1,0 +1,32 @@
+{
+    "stages": [
+        {
+            "name": "header_matcher_renders_to_null",
+            "description": "A header matcher field that renders to null beside a static one must fail, not silently skip its check",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/headers"
+            },
+            "response": [
+                {
+                    "save": {
+                        "jmespath": {
+                            "expected_value": "no_such_key"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "status": 200,
+                        "headers": {
+                            "X-Custom-Header": {
+                                "contains": "{{ expected_value }}",
+                                "not_contains": "error"
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

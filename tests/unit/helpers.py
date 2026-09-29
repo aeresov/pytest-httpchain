@@ -3,7 +3,7 @@
 A plain helpers module (not conftest.py, which pytest treats as a plugin file,
 not an import target)::
 
-    from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
+    from tests.unit.helpers import NOT_FOUND, TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
 """
 
 import threading
@@ -32,6 +32,10 @@ BEYOND_RECURSION_LIMIT = 5_000
 LOADABLE_BUT_DEEP = 700
 
 _BOUNDED_STACK_SIZE = 8 * 1024 * 1024
+
+# How the OS says a file is missing, as a regex: Windows' os.stat() words it
+# its own way (`[WinError 2] The system cannot find the file specified`).
+NOT_FOUND = r"\[(?:Errno|WinError) 2\] (?:No such file or directory|The system cannot find the file specified)"
 
 
 def nested(leaf: Any, depth: int) -> Any:

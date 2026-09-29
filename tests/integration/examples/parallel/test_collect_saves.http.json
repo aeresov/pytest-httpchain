@@ -1,0 +1,56 @@
+{
+    "description": "parallel.collect_saves keeps every iteration's saves: create resources in parallel, then delete every one, even after a failure",
+    "marks": ["usefixtures('api_root')"],
+    "client": { "base_url": "{{ env('HTTPCHAIN_EXAMPLE_API_ROOT') }}" },
+    "stages": [
+        {
+            "name": "create_resources",
+            "parallel": {
+                "foreach": [ { "individual": { "name": ["a", "b", "c", "d"] } } ],
+                "max_concurrency": 4,
+                "collect_saves": true
+            },
+            "request": { "method": "POST", "url": "/resources", "body": { "json": { "name": "{{ name }}" } } },
+            "response": [
+                { "verify": { "status": 201 } },
+                { "save": { "jmespath": { "created_ids": "id", "created_names": "name" } } }
+            ]
+        },
+        {
+            "name": "one_entry_per_iteration",
+            "description": "In iteration order, whichever the server answered first; entry i of each list is iteration i's",
+            "request": { "url": "/resources" },
+            "response": [
+                { "save": { "jmespath": { "listed": "resources[].[id, name]" } } },
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ created_names == ['a', 'b', 'c', 'd'] }}",
+                            "{{ sorted(listed) == sorted([id, name] for id, name in zip(created_ids, created_names)) }}"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "fails",
+            "description": "Aborts the chain: only the always_run stages below still run",
+            "request": { "url": "/bad" },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "delete_resources",
+            "always_run": "{{ exists('created_ids') }}",
+            "parallel": { "foreach": [ { "individual": { "id": "{{ created_ids }}" } } ] },
+            "request": { "method": "DELETE", "url": "/resources/{{ id }}" },
+            "response": [ { "verify": { "status": 204 } } ]
+        },
+        {
+            "name": "none_left",
+            "always_run": true,
+            "request": { "url": "/resources" },
+            "response": [ { "verify": { "status": 200, "jmespath": { "resources": [] } } } ]
+        }
+    ]
+}

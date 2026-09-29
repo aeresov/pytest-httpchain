@@ -1,0 +1,31 @@
+{
+    "substitutions": [
+        { "vars": { "started": "{{ now() }}", "query": { "q": "a b", "tags": ["x", "y"] }, "secret": "s3cr3t" } }
+    ],
+    "client": { "headers": { "X-Client-Time": "{{ now('%Y-%m-%d') }}" } },
+    "stages": [
+        {
+            "name": "signed",
+            "always_run": "{{ timestamp() > 0 }}",
+            "request": {
+                "url": "https://x.test/search?{{ urlencode(query) }}",
+                "headers": {
+                    "X-Timestamp": "{{ str(timestamp()) }}",
+                    "X-Request-Ms": "{{ str(timestamp_ms()) }}",
+                    "X-Signature": "{{ hmac_sha256(secret, started, 'base64') }}",
+                    "X-Checksum": "{{ sha256(started) + md5(started) }}",
+                    "X-Payload": "{{ b64encode(json_dumps(query), urlsafe=true) }}"
+                }
+            },
+            "response": [
+                { "verify": { "status": 200 } },
+                { "save": { "jmespath": { "timestamp": "meta.timestamp" } } }
+            ]
+        },
+        {
+            "name": "decoded",
+            "request": { "url": "https://x.test/items/{{ quote(started) }}?at={{ timestamp }}" },
+            "response": [ { "verify": { "expressions": [ "{{ json_loads(b64decode(response.headers['x-token']))['ok'] }}" ] } } ]
+        }
+    ]
+}

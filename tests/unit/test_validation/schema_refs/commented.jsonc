@@ -1,0 +1,12 @@
+{
+    "$defs": {
+        // A user, with the email the shared file defines.
+        "User": {
+            "type": "object",
+            "properties": {
+                "email": { "$ref": "common.json#/$defs/Email" },
+            },
+            "required": ["email",],
+        },
+    },
+}

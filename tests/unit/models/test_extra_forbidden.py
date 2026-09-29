@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from pytest_httpchain.models.entities import (
     Base64Body,
     BinaryBody,
+    ClientConfig,
     CombinationsParameter,
     FilesBody,
     FormBody,
@@ -16,6 +17,7 @@ from pytest_httpchain.models.entities import (
     JsonBody,
     ParallelForeachConfig,
     ParallelRepeatConfig,
+    RegexSave,
     Request,
     ResponseBody,
     Scenario,
@@ -35,6 +37,8 @@ from tests.unit.models.helpers import assert_error_types
     ("model", "data", "typo"),
     [
         (SSLConfig, {"verify": True, "verfy": False}, "verfy"),
+        (ClientConfig, {"base_url": "https://x.test/", "base_uri": "https://x.test/"}, "base_uri"),
+        (ClientConfig, {"max_connection": 5}, "max_connection"),
         (UserFunctionKwargs, {"name": "mod:func", "kwarg": {}}, "kwarg"),
         (Request, {"url": "https://x.test/", "headerz": {}}, "headerz"),
         (Request, {"url": "https://x.test/", "param": {}}, "param"),
@@ -52,6 +56,9 @@ from tests.unit.models.helpers import assert_error_types
         # A header matcher object, reached through Verify's str | HeaderMatcher union.
         (Verify, {"headers": {"content-type": {"equals": "x"}}}, "equals"),
         (JMESPathSave, {"jmespath": {"x": "y"}, "extra": "field"}, "extra"),
+        (RegexSave, {"regex": {"x": "y"}, "extra": "field"}, "extra"),
+        # A capture object, reached through the entry's pattern | capture union.
+        (RegexSave, {"regex": {"x": {"pattern": "(y)", "groups": 1}}}, "groups"),
         (SubstitutionsSave, {"substitutions": [], "extra": "field"}, "extra"),
         (UserFunctionsSave, {"user_functions": [], "extra": "field"}, "extra"),
         (IndividualParameter, {"individual": {"n": [1]}, "idz": ["a"]}, "idz"),

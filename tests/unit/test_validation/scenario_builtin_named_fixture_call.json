@@ -1,0 +1,11 @@
+{
+    "fixtures": ["now"],
+    "substitutions": [ { "vars": { "started": "{{ now() }}" } } ],
+    "stages": [
+        {
+            "name": "first",
+            "request": { "url": "https://x.test/a", "headers": { "X-Started": "{{ started }}", "X-Now": "{{ now() }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

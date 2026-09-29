@@ -1,0 +1,10 @@
+{
+    "substitutions": [ { "vars": { "ids": [3, 1, 2] } } ],
+    "stages": [
+        {
+            "name": "sorted",
+            "request": { "url": "https://x.test/items", "params": { "ids": "{{ sorted(ids, key=lambda i: -i) }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

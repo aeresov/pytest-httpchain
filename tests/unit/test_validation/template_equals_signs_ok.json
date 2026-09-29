@@ -1,0 +1,15 @@
+{
+    "substitutions": [ { "vars": { "status": "open", "page": 2 } } ],
+    "stages": [
+        {
+            "name": "search",
+            "request": {
+                "url": "https://x.test/search",
+                "method": "POST",
+                "headers": { "X-Query": "{{ 'status = ' + status + '; page' }}" },
+                "body": { "json": { "filter": "{{ dict(status=status, page=page) }}", "first": "{{ page == 1 }}", "last": "{{ {'page': page} }}", "raw": "{{ page; }}" } }
+            },
+            "response": [ { "verify": { "status": 200, "expressions": ["{{ response.status != 500 }}"] } } ]
+        }
+    ]
+}

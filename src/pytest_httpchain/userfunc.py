@@ -23,25 +23,35 @@ class UserFunctionError(HttpChainError):
 NAME_PATTERN = USER_FUNCTION_NAME_PATTERN
 
 
-def import_function(name: str) -> Callable[..., Any]:
-    """Import a ``"module.path:function_name"`` function."""
+def import_function(name: str, *, quoted: bool = True) -> Callable[..., Any]:
+    """Import a ``"module.path:function_name"`` function.
+
+    ``quoted=False`` is for a name that must not be shown, one a template
+    rendered where a credential can end up instead (`request_builder`'s
+    auth): a failure's message then says only why, as a clause for the caller
+    to put in a sentence of its own, and gives what importing the module
+    raised by its type alone, as its message names the module. Nothing is
+    chained to it either.
+    """
     try:
         module_path, function_name = parse_user_function_name(name)
     except ValueError as e:
-        raise UserFunctionError(str(e)) from None
+        raise UserFunctionError(str(e) if quoted else "it is not a 'module:function' name") from None
 
     try:
         module = importlib.import_module(module_path)
     except Exception as e:
         # Importing runs the module's top-level code, which can raise anything.
+        if not quoted:
+            raise UserFunctionError(f"importing its module raised {type(e).__name__}") from None
         raise UserFunctionError(f"Failed to import module '{module_path}': {e}") from e
 
     if not hasattr(module, function_name):
-        raise UserFunctionError(f"Function '{function_name}' not found in module '{module_path}'")
+        raise UserFunctionError(f"Function '{function_name}' not found in module '{module_path}'" if quoted else "its module has no function of that name")
 
     func = getattr(module, function_name)
     if not callable(func):
-        raise UserFunctionError(f"'{module_path}:{function_name}' is not callable")
+        raise UserFunctionError(f"'{module_path}:{function_name}' is not callable" if quoted else "what it names is not callable")
 
     return func
 

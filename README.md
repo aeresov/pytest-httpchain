@@ -28,7 +28,7 @@ Testing HTTP APIs with plain pytest often leads to these pain points:
 
 ### Declarative JSON format
 
-Test scenarios are JSON documents that describe _what_ to test, not _how_. No setup code to scroll through — the request and assertions are right there.
+Test scenarios are JSON documents that describe _what_ to test, not _how_. No setup code to scroll through — the request and assertions are right there. Comments (`//`, `/* */`) and trailing commas are welcome in every scenario and every file it pulls in; name a file `test_<name>.http.jsonc` and editors treat it as JSON with comments.
 
 ### `$include` / `$merge` with deep merging
 
@@ -36,17 +36,43 @@ Reuse arbitrary parts of your scenarios with JSONRef. Properties merge with type
 
 ### Multi-stage execution
 
-Each scenario contains 1+ stages executed in order. One stage failure stops the chain. Use `always_run` for cleanup stages that should execute regardless.
+Each scenario contains 1+ stages executed in order. One stage failure stops the chain. Use `always_run` for cleanup stages that should execute regardless, and `skip_if` to skip a stage on a condition known only once the chain is running, such as a value an earlier stage saved.
+
+### Retries and polling
+
+A stage's `retry` attempts it again while it fails, after a wait that can grow each time: poll an asynchronous job until it reports `done`, or ride out eventual consistency and a flaky network (`"retry": {"attempts": 10, "delay": 0.5, "backoff": 2}`). Each attempt sends a freshly rendered request and runs every response step; only the attempt that passes saves anything.
+
+### Parallel stages and load checks
+
+A stage's `parallel` sends its request many times at once (`repeat`) or once per parameter set (`foreach`), with a concurrency cap and a rate limit. Its report sums the run up: iterations passed, failed and cancelled, wall time, throughput and p50/p95/p99 latency. `thresholds` fail the stage below a success ratio or above a latency (`"thresholds": {"min_success_ratio": 0.99, "max_p95_ms": 300}`), letting it run on after failed requests as long as enough pass, and `stats_as` saves the numbers for a later stage.
 
 ### Common data context
 
-A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use template expressions (`{{ var }}`) in any request **value** — substitution happens dynamically before each stage. (Dict keys are not substituted; `HTTPCHAIN029` flags a template in a key.)
+A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use template expressions (`{{ var }}`) in any request **value** — substitution happens dynamically before each stage. (Dict keys are not substituted; `HTTPCHAIN029` flags a template in a key.) Built-in functions give the values tests keep needing without a fixture: the time (`now()`, `timestamp()`), base64, JSON and URL encoding, and SHA-256, MD5 and HMAC-SHA256 digests for signing a request.
+
+### Request bodies
+
+JSON, form, XML, text, base64, a binary file and GraphQL, and multipart uploads that mix form fields with files: each file read from a path or given inline, several under one name if need be, with its own filename and content type.
 
 ### Response processing
 
--   **JMESPath** — Extract values from JSON responses directly
--   **JSON Schema** — Validate response structure against a schema
+-   **JMESPath** — Assert on values in JSON responses directly (`"jmespath": {"data.id": 42, "items": {"length": 3}}`), or extract them for later stages
+-   **Regex** — Save values from bodies that are not JSON, such as a CSRF token from an HTML form (`"regex": {"csrf": "name=\"csrf\" value=\"([^\"]+)\""}`)
+-   **JSON Schema** — Validate response structure against a schema, inline or from a file, or one inside a document you already have: `"schema": "./openapi.json#/components/schemas/User"` checks the response against an OpenAPI component, its `$ref`s resolved across the document and into local files, never over the network
 -   **User functions** — Call Python functions for custom extraction, verification, or [authentication](https://www.python-httpx.org/advanced/authentication/#custom-authentication-schemes)
+-   **Failure reports** — A failing verify step lists every check that failed, not only the first, and the report gives the request as a ready-to-run `curl` command beside the request and response it shows
+
+### Scenario-wide client settings
+
+A scenario's `client` block sets up the HTTP client all its stages share, once: a base URL their relative URLs are appended to, headers and query parameters sent with every request, timeout, redirects, proxy, HTTP/2 and connection pool. A stage overrides what it needs.
+
+### Authentication
+
+Basic, digest and bearer authentication are built in, for the whole scenario or one request: `"auth": {"bearer": "{{ token }}"}` sends the token a login stage saved. `"auth": false` exempts a public endpoint, and a Python function covers any other scheme.
+
+### Import recorded traffic
+
+Start from traffic you already have: `pytest-httpchain import har session.har` turns a browser's HAR export into a scenario, a stage per request, and `pytest-httpchain import curl '...'` does the same for curl commands from an API's docs or a failing stage's report. It sets the base URL, maps query strings, JSON, form and multipart bodies and Basic or Bearer credentials into the dialect, leaves out the transport headers and static assets, and writes no secret: tokens, passwords and cookies become placeholders read from environment variables. What it writes passes `validate`.
 
 ### Full pytest integration
 
@@ -58,6 +84,9 @@ Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix i
 
 ```json
 {
+    "client": {
+        "base_url": "https://api.example.com"
+    },
     "substitutions": [
         {
             "vars": {
@@ -68,7 +97,7 @@ Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix i
     "stages": {
         "get_user": {
             "request": {
-                "url": "https://api.example.com/users/{{ user_id }}"
+                "url": "/users/{{ user_id }}"
             },
             "response": [
                 {
@@ -86,15 +115,14 @@ Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix i
             ]
         },
         "update_user": {
-            "fixtures": ["now_utc"],
             "request": {
-                "url": "https://api.example.com/users/{{ user_id }}",
+                "url": "/users/{{ user_id }}",
                 "method": "PUT",
                 "body": {
                     "json": {
                         "user": {
                             "name": "{{ user_name }}_updated",
-                            "timestamp": "{{ str(now_utc) }}"
+                            "timestamp": "{{ now() }}"
                         }
                     }
                 }
@@ -110,7 +138,7 @@ Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix i
         "cleanup": {
             "always_run": true,
             "request": {
-                "url": "https://api.example.com/cleanup",
+                "url": "/cleanup",
                 "method": "POST"
             }
         }
@@ -118,31 +146,18 @@ Create a JSON test file named like `test_<name>.<suffix>.json` (default suffix i
 }
 ```
 
-The one stage above that needs Python is `update_user`, which asks for a `now_utc` fixture — ordinary pytest fixtures, resolved from your `conftest.py`:
-
-```python
-# conftest.py
-import pytest
-from datetime import datetime
-
-
-@pytest.fixture
-def now_utc():
-    return datetime.now()
-```
-
 Scenario we created:
 
+-   the scenario's HTTP client gets a base URL, so every stage gives only its path
 -   common data context is seeded with the first variable `user_id`
 -   **get_user**  
-    url is assembled using `user_id` variable from common data context  
+    url is assembled using `user_id` variable from common data context, and appended to the base URL  
     HTTP GET call is made  
     we verify the call returned code 200  
     assuming JSON body is returned, we extract a value by JMESPath expression `user.name` and save it to common data context under `user_name` key
 -   **update_user**  
-    `now_utc` fixture value is injected into common data context  
     url is assembled using `user_id` variable from common data context  
-    we create JSON body in place using values from common data context, note that `now_utc` is converted to string in place  
+    we create JSON body in place using values from common data context, and the current UTC time from the built-in `now()`  
     HTTP PUT call with body is made  
     we verify the call returned code 200
 -   **cleanup**  
@@ -167,12 +182,13 @@ pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
 
 ## Configuration
 
--   Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`.
+-   Test file discovery is based on this name pattern: `test_<name>.<suffix>.json`, or `test_<name>.<suffix>.jsonc`.
     The suffix is configurable via the `httpchain_suffix` pytest ini option, default value is **http**.
 -   `$include`/`$merge` instructions (and their legacy alias `$ref`) can point to other files using relative paths; absolute paths are rejected for security, and every reference must resolve inside the root path (pytest's `rootdir` when collecting; `--root-path` for the CLI).
     You can limit the depth of relative path traversal using the `httpchain_ref_parent_traversal_depth` ini option, default value is **3**.
 -   Template expressions support list/dict comprehensions. You can limit the maximum comprehension length using the `httpchain_max_comprehension_length` ini option, default value is **50000**.
 -   Parallel stage iterations (repeat/foreach) have a safety limit configurable via the `httpchain_max_parallel_iterations` ini option, default value is **10000**.
+-   A failing stage's report prints the values of credential headers and query parameters as `[REDACTED]`, keeping their names (and cookie names). The lists are set by the `httpchain_redact_headers` ini option, default **Authorization Proxy-Authorization Cookie Set-Cookie X-API-Key API-Key X-Auth-Token**, and `httpchain_redact_query_params`, default **access_token refresh_token id_token api_key apikey client_secret password token**; an empty value disables one. Request and response bodies, and DEBUG logs, are not redacted. See [Secrets in reports](https://aeresov.github.io/pytest-httpchain/getting-started/#secrets-in-reports).
 
 ### HAR export
 
@@ -182,7 +198,7 @@ Pass `--httpchain-output-dir DIR` on the pytest command line to write an [HAR](h
 pytest --httpchain-output-dir ./har-output
 ```
 
-HAR files contain full requests/responses **including credential headers and saved tokens** — nothing is redacted, so scrub them before sharing. Bodies are embedded complete and uncapped (binary bodies grow ~33% as base64), so scenarios that transfer large payloads produce large `.har` files. See the [HAR export docs](https://aeresov.github.io/pytest-httpchain/getting-started/#har-export).
+HAR files contain full requests/responses **including credential headers and saved tokens**: a HAR is usually replayed, which needs the real values, so nothing is redacted unless the `httpchain_har_redact` ini option is `true` (it applies the report's rules to URLs, headers and cookies; bodies stay complete). Scrub them before sharing. Bodies are embedded complete and uncapped (binary bodies grow ~33% as base64), so scenarios that transfer large payloads produce large `.har` files. See the [HAR export docs](https://aeresov.github.io/pytest-httpchain/getting-started/#har-export).
 
 ## AI agent support
 
@@ -190,10 +206,11 @@ HAR files contain full requests/responses **including credential headers and sav
 
 ### Scenario validation
 
-Validate scenario files for structure and common problems — undefined variables, variables referenced before they are saved (data-flow ordering), duplicate stage names, fixture/variable conflicts, no-op `verify` steps, and contradictory body checks:
+Validate scenario files for structure and common problems — undefined variables, variables referenced before they are saved (data-flow ordering), duplicate stage names, fixture/variable conflicts, no-op `verify` steps, and contradictory body checks. Name the files, or a directory to check every scenario pytest would collect in it:
 
 ```bash
 uvx pytest-httpchain validate tests/test_login.http.json
+uvx pytest-httpchain validate tests/
 ```
 
 Each finding carries a stable diagnostic code (`HTTPCHAINxxx`) and a severity — the [full code reference](https://aeresov.github.io/pytest-httpchain/diagnostics/) is on the docs site, along with a recipe for filtering the `ScenarioValidationWarning` warnings the same checks emit at pytest collection. It exits non-zero when any file is invalid, so it doubles as a CI gate. Use `--format json` for machine-readable output (editor/CI integration):
@@ -239,7 +256,7 @@ uvx pytest-httpchain schema > scenario.schema.json
 More read-only commands help author and debug scenarios offline — no network, no test run:
 
 ```bash
-# Print a scenario with all $ref/$include/$merge inlined and deep-merged
+# Print a scenario with all $ref/$include/$merge inlined and deep-merged, as strict JSON (comments dropped)
 uvx pytest-httpchain resolve tests/test_login.http.json
 
 # Summarize stages and the variable data-flow (which stage saves what, who consumes it)

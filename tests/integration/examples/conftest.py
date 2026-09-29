@@ -1,4 +1,6 @@
 import base64
+import os
+import secrets
 import socket
 import ssl
 import threading
@@ -8,7 +10,7 @@ from http import HTTPStatus
 
 import pytest
 from flask import Flask, request
-from flask_httpauth import HTTPBasicAuth
+from flask_httpauth import HTTPBasicAuth, HTTPDigestAuth, HTTPTokenAuth
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.serving import make_server
 
@@ -16,21 +18,97 @@ app = Flask(__name__)
 auth = HTTPBasicAuth()
 users = {"user": generate_password_hash("pass")}
 
+# Digest keeps the plain password: the server computes the same digest.
+digest_auth = HTTPDigestAuth(realm="examples")
+DIGEST_OPAQUE = "examples-opaque"
+# The nonces issued, kept here instead of in Flask's session (the default),
+# which needs a secret key and the session cookie back with every answer.
+# Module-level like the counter: a scenario's stages each get a server of
+# their own, and the scenario's digest auth answers them all with one nonce.
+_digest_nonces: set[str] = set()
+
+# Tokens /login issued, for /me. "s3cret-" marks them, so a test can tell
+# whether one got out.
+token_auth = HTTPTokenAuth(scheme="Bearer")
+_tokens: set[str] = set()
+
 # Thread-safe counter for parallel tests
 _counter_lock = threading.Lock()
 _counter = 0
 
+# Requests that reached /flaky (see there).
+_flaky_lock = threading.Lock()
+_flaky_calls = 0
 
-def reset_counter():
-    global _counter
+# Requests that reached /barrier (see there).
+_barrier = threading.Condition()
+_arrived = 0
+
+# What POST /resources created, by id, and the last id it gave. Module-level
+# like the counter: a scenario creating resources in one stage and deleting
+# them in another is served by one `api_root` server for all its stages.
+_resources_lock = threading.Lock()
+_resources: dict[int, dict] = {}
+_last_resource_id = 0
+
+# What POST /jobs started, by id: how many polls each needs to be done and how
+# many it has had. Module-level like the resources, for the same reason.
+_jobs_lock = threading.Lock()
+_jobs: dict[int, dict] = {}
+
+
+def reset_server_state():
+    global _counter, _flaky_calls, _arrived, _last_resource_id
     with _counter_lock:
         _counter = 0
+    with _flaky_lock:
+        _flaky_calls = 0
+    with _barrier:
+        _arrived = 0
+    with _resources_lock:
+        _resources.clear()
+        _last_resource_id = 0
+    with _jobs_lock:
+        _jobs.clear()
 
 
 @auth.verify_password
 def verify_password(username, password):
     if username in users and check_password_hash(users[username], password):
         return username
+
+
+@digest_auth.get_password
+def digest_password(username):
+    return {"user": "pass"}.get(username)
+
+
+@digest_auth.generate_nonce
+def generate_nonce():
+    nonce = secrets.token_hex(16)
+    _digest_nonces.add(nonce)
+    return nonce
+
+
+@digest_auth.verify_nonce
+def verify_nonce(nonce):
+    return nonce in _digest_nonces
+
+
+@digest_auth.generate_opaque
+def generate_opaque():
+    return DIGEST_OPAQUE
+
+
+@digest_auth.verify_opaque
+def verify_opaque(opaque):
+    return opaque == DIGEST_OPAQUE
+
+
+@token_auth.verify_token
+def verify_token(token):
+    if token in _tokens:
+        return "user"
 
 
 # ============ Basic Endpoints ============
@@ -52,6 +130,29 @@ def answer():
     return {"answer": 42}, HTTPStatus.OK
 
 
+@app.route("/digest", methods=["GET", "POST"])
+@digest_auth.login_required
+def digest_protected():
+    return {"user": digest_auth.current_user()}, HTTPStatus.OK
+
+
+@app.post("/login")
+def login():
+    """A bearer token for the JSON body's username and password, for /me."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not verify_password(data.get("username"), data.get("password", "")):
+        return {"error": "invalid credentials"}, HTTPStatus.UNAUTHORIZED
+    token = f"s3cret-{secrets.token_hex(8)}"
+    _tokens.add(token)
+    return {"token": token}, HTTPStatus.OK
+
+
+@app.get("/me")
+@token_auth.login_required
+def me():
+    return {"user": token_auth.current_user()}, HTTPStatus.OK
+
+
 @app.get("/delay/<int:seconds>")
 def delay(seconds: int):
     time.sleep(seconds)
@@ -65,6 +166,21 @@ def delay_ms(ms: int):
     # whole seconds of sleep per run.
     time.sleep(ms / 1000)
     return {"delayed_ms": ms}, HTTPStatus.OK
+
+
+@app.get("/barrier/<int:parties>")
+def barrier(parties: int):
+    """Answer once ``parties`` requests are in flight together, or 504 after
+    ``?timeout=`` seconds (5 by default): anything capping concurrency below
+    ``parties``, such as a connection pool, keeps them from ever meeting. A
+    concurrency test built on it passes in no more time than the requests take
+    to arrive, whatever the machine's speed, and fails with a status."""
+    global _arrived
+    with _barrier:
+        _arrived += 1
+        _barrier.notify_all()
+        met = _barrier.wait_for(lambda: _arrived >= parties, timeout=float(request.args.get("timeout", 5)))
+    return {"arrived": _arrived}, HTTPStatus.OK if met else HTTPStatus.GATEWAY_TIMEOUT
 
 
 # ============ Echo Endpoints (for body type tests) ============
@@ -104,9 +220,16 @@ def echo_binary():
 
 @app.post("/echo/multipart")
 def echo_multipart():
-    """Echo multipart field names, filenames, and sizes"""
-    fields = {name: {"filename": f.filename, "size": len(f.read())} for name, f in request.files.items()}
-    return {"fields": fields}, HTTPStatus.OK
+    """Echo a multipart body. `form`: each form field's values, in the order
+    sent. `files`: each file part per name, in the order sent, with its
+    filename, content type, size and content as text (undecodable bytes
+    replaced). `fields`: the first file of each name, filename and size."""
+    files: dict[str, list[dict]] = {}
+    for name, f in request.files.items(multi=True):
+        data = f.read()
+        files.setdefault(name, []).append({"filename": f.filename, "content_type": f.content_type, "size": len(data), "text": data.decode(errors="replace")})
+    fields = {name: {"filename": parts[0]["filename"], "size": parts[0]["size"]} for name, parts in files.items()}
+    return {"fields": fields, "form": request.form.to_dict(flat=False), "files": files}, HTTPStatus.OK
 
 
 @app.post("/graphql")
@@ -166,6 +289,76 @@ def increment_counter():
         return {"count": _counter}, HTTPStatus.OK
 
 
+@app.get("/flaky/<int:every>")
+def flaky(every: int):
+    """500 for every ``every``-th request since the server state was reset,
+    200 for the others: an endpoint failing a known share of a parallel
+    stage's requests, in whatever order they arrive."""
+    global _flaky_calls
+    with _flaky_lock:
+        _flaky_calls += 1
+        call = _flaky_calls
+    return {"call": call}, HTTPStatus.INTERNAL_SERVER_ERROR if call % every == 0 else HTTPStatus.OK
+
+
+# ============ Resource Endpoints (for parallel.collect_saves tests) ============
+
+
+@app.post("/resources")
+def create_resource():
+    """Create a resource from the JSON body: 201 with it and the id it was given."""
+    global _last_resource_id
+    data = request.get_json(force=True, silent=True) or {}
+    with _resources_lock:
+        _last_resource_id += 1
+        resource = {**data, "id": _last_resource_id}
+        _resources[_last_resource_id] = resource
+    return resource, HTTPStatus.CREATED
+
+
+@app.get("/resources")
+def list_resources():
+    """Every resource created and not deleted yet, in the order they were created."""
+    with _resources_lock:
+        return {"resources": list(_resources.values())}, HTTPStatus.OK
+
+
+@app.delete("/resources/<int:resource_id>")
+def delete_resource(resource_id: int):
+    with _resources_lock:
+        if _resources.pop(resource_id, None) is None:
+            return {"error": "Resource not found"}, HTTPStatus.NOT_FOUND
+    return "", HTTPStatus.NO_CONTENT
+
+
+# ============ Job Endpoints (for retry tests) ============
+
+
+@app.post("/jobs")
+def create_job():
+    """Start a job, done once polled as many times as the JSON body's ``polls``
+    says (3 by default): 202 with its id."""
+    data = request.get_json(force=True, silent=True) or {}
+    with _jobs_lock:
+        job_id = len(_jobs) + 1
+        _jobs[job_id] = {"polls": int(data.get("polls", 3)), "polled": 0}
+    return {"id": job_id, "status": "pending"}, HTTPStatus.ACCEPTED
+
+
+@app.get("/jobs/<int:job_id>")
+def poll_job(job_id: int):
+    """One poll of a job: ``pending`` until its last, ``done`` with its
+    ``result`` from then on. ``polled`` counts the polls, this one included."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return {"error": "Job not found"}, HTTPStatus.NOT_FOUND
+        job["polled"] += 1
+        polled, done = job["polled"], job["polled"] >= job["polls"]
+    body = {"id": job_id, "status": "done" if done else "pending", "polled": polled}
+    return {**body, "result": f"report-{job_id}"} if done else body, HTTPStatus.OK
+
+
 # ============ Redirect Endpoints ============
 
 
@@ -185,11 +378,34 @@ def redirect_bad():
     return redirect("/bad")
 
 
+@app.post("/redirect-post/<int:code>")
+def redirect_post(code: int):
+    """POST redirected with `code` to the ?to= path, for redirect body tests:
+    a 307/308 re-sends the body, a 302 turns the request into a bodiless GET"""
+    from flask import redirect
+
+    return redirect(request.args["to"], code=code)
+
+
 @app.get("/template-literal")
 def template_literal_body():
     """Server data that LOOKS like a template expression: the engine must save
     it literally, never evaluate it (response data is not scenario code)."""
     return {"tpl": "literal {{ probe }} text"}, HTTPStatus.OK
+
+
+@app.get("/page")
+def html_page():
+    """An HTML page, not JSON, for regex saves: a form's CSRF token, an order
+    number in running text, and a list of links."""
+    page = (
+        "<html><body>\n"
+        '<form action="/echo/form" method="post"><input type="hidden" name="csrf" value="c5rf-t0ken"></form>\n'
+        "<p>Order #1042 is confirmed.</p>\n"
+        '<ul><li><a href="/item/1">One</a></li><li><a href="/item/2">Two</a></li><li><a href="/item/3">Three</a></li></ul>\n'
+        "</body></html>\n"
+    )
+    return page, HTTPStatus.OK, {"Content-Type": "text/html; charset=utf-8"}
 
 
 # ============ Verification Endpoints ============
@@ -323,8 +539,45 @@ def _run_app(ssl_context: ssl.SSLContext | None = None):
 
 @pytest.fixture
 def server():
-    reset_counter()  # Reset counter before each test
+    reset_server_state()  # Before each test
     with _run_app() as url:
+        yield url
+
+
+# The environment variables `api_root` and `https_proxy` export their URL in.
+API_ROOT_ENV = "HTTPCHAIN_EXAMPLE_API_ROOT"
+HTTPS_PROXY_ENV = "HTTPCHAIN_EXAMPLE_HTTPS_PROXY"
+
+
+@contextmanager
+def _exported(name: str, value: str):
+    """``value`` in the environment variable ``name`` for the block."""
+    previous = os.environ.get(name)
+    os.environ[name] = value
+    try:
+        yield value
+    finally:
+        if previous is None:
+            del os.environ[name]
+        else:
+            os.environ[name] = previous
+
+
+@pytest.fixture(scope="class")
+def api_root():
+    """The app served for a whole scenario, its URL exported as
+    ``HTTPCHAIN_EXAMPLE_API_ROOT``.
+
+    A scenario's ``client`` block resolves once, against scenario substitutions
+    only, never a fixture (HTTPCHAIN016), so a base URL comes from the scenario
+    or from the environment, as a real suite's would:
+    ``"base_url": "{{ env('HTTPCHAIN_EXAMPLE_API_ROOT') }}"``. A scenario asks
+    for this with ``usefixtures('api_root')`` in its marks, which sets the
+    variable up before its first stage builds the client; class scope serves
+    all its stages from the one server.
+    """
+    reset_server_state()
+    with _run_app() as url, _exported(API_ROOT_ENV, url):
         yield url
 
 
@@ -387,6 +640,27 @@ def mtls_server():
         yield url
 
 
+@pytest.fixture(scope="class")
+def https_proxy():
+    """The app over TLS as the scenario's proxy, its URL exported as
+    ``HTTPCHAIN_EXAMPLE_HTTPS_PROXY``, like ``api_root``'s.
+
+    It demands a client certificate, so a request through it that succeeds
+    shows both halves of ``ssl`` reached the proxy's own TLS connection: the
+    CA bundle at ``ca.pem`` (or ``verify: false``) and the certificate at
+    ``client.pem``. The app answers a proxy's absolute-form request as its
+    own, whatever host it names.
+    """
+    import trustme
+
+    ca = trustme.CA()
+    context = _tls_server_context(ca, require_client_cert=True)
+    ca.issue_cert("client@example.com").private_key_and_cert_chain_pem.write_to_path(HTTPS_CLIENT_BUNDLE)
+
+    with _run_app(context) as url, _exported(HTTPS_PROXY_ENV, url):
+        yield url
+
+
 @pytest.fixture
 def server_keep():
     """Like ``server`` but does NOT reset the shared counter at setup.
@@ -421,6 +695,50 @@ def request_id():
         return str(uuid.uuid4())
 
     return _make_id
+
+
+@pytest.fixture(scope="class")
+def connection():
+    """A class-scoped resource, closed once the scenario's last stage is done."""
+    conn = {"closed": False}
+    yield conn
+    conn["closed"] = True
+
+
+@pytest.fixture
+def transaction(connection):
+    """Factory fixture whose value is a context manager built on ``connection``:
+    ``{{ transaction('t1') }}`` begins one, and its exit commits it, printing
+    so, or raises — on a closed connection, as a real commit would, or when
+    asked to with ``fail=True``."""
+
+    @contextmanager
+    def _transaction(name, fail=False):
+        yield name
+        if connection["closed"]:
+            raise RuntimeError(f"cannot commit {name}: connection closed")
+        if fail:
+            raise RuntimeError(f"commit of {name} rejected")
+        print(f"transaction {name} committed")
+
+    return _transaction
+
+
+@pytest.fixture(scope="class", params=["alpha", "beta"])
+def tenant(request):
+    """A class-scoped fixture with params: a scenario whose every stage requests
+    it runs its whole chain once per tenant. Each setup is printed, so a test
+    can count them."""
+    print(f"tenant setup: {request.param}")
+    return request.param
+
+
+@pytest.fixture
+def beta_setup_error(tenant):
+    """Fail setup for the ``beta`` tenant only: the first stage of a chain that
+    is not the scenario's first."""
+    if tenant == "beta":
+        raise RuntimeError("fixture setup failed for beta")
 
 
 @pytest.fixture

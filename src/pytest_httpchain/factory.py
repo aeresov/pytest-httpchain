@@ -4,11 +4,11 @@
 import inspect
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds
 from pytest_httpchain.carrier import Carrier, fresh_scenario_state
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import (
@@ -18,6 +18,7 @@ from pytest_httpchain.models import (
     Stage,
     parametrize_values_contain_template,
 )
+from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.scoping import base_global_context
 from pytest_httpchain.templates import walk
 from pytest_httpchain.utils import make_marker, process_substitutions
@@ -37,12 +38,30 @@ def _make_stage_method(stage_template: Stage) -> Callable:
     return call_execute_stage
 
 
+def _parametrize_values(stage: Stage, field: str, value: Any) -> list[Any]:
+    """A template-form parametrize step's re-validated values, or a collection
+    error naming the step.
+
+    Both step kinds also accept a template string, so a template rendering to
+    another template passes re-validation as text. Unchecked, pytest would
+    parametrize over its characters (``individual``), and reading the first
+    combination's keys would fail with a bare AttributeError
+    (``combinations``). ``parallel.foreach`` guards the same case at run time
+    (``carrier``).
+    """
+    if not isinstance(value, list):
+        raise StageExecutionError(f"parametrize {field} on stage '{stage.name}' must resolve to a list, got {value!r}")
+    return value
+
+
 def create_test_class(
     scenario: Scenario,
     class_name: str,
     max_parallel_iterations: int = 10_000,
     scenario_dir: Path | None = None,
+    ref_bounds: ReferenceBounds = UNBOUNDED,
     record_all_exchanges: bool = False,
+    redaction: Redaction = DEFAULT_REDACTION,
 ) -> type[Carrier]:
     """Build a scenario's test class.
 
@@ -62,7 +81,9 @@ def create_test_class(
             "__doc__": scenario.description,
             "scenario": scenario,
             "scenario_dir": scenario_dir,
+            "ref_bounds": ref_bounds,
             "record_all_exchanges": record_all_exchanges,
+            "redaction": redaction,
             "global_context": base_global_context(scenario_context),
             "_context_resolved_at_collection": needs_collection_context,
             "max_parallel_iterations": max_parallel_iterations,
@@ -99,15 +120,21 @@ def create_test_class(
                         param_values = walk(declared_values, scenario_context)
                         if isinstance(declared_values, str):
                             revalidated = IndividualParameter.model_validate({"individual": {param_names[0]: param_values}, "ids": step.ids})
-                            param_values = revalidated.individual[param_names[0]]
+                            param_values = _parametrize_values(stage, f"individual '{param_names[0]}'", revalidated.individual[param_names[0]])
 
                     case CombinationsParameter(combinations=combinations) if combinations:
-                        resolved_combinations = [vars(item) if isinstance(item, SimpleNamespace) else item for item in walk(combinations, scenario_context)]
+                        resolved_combinations = walk(combinations, scenario_context)
                         if isinstance(combinations, str):
                             revalidated_combos = CombinationsParameter.model_validate({"combinations": resolved_combinations, "ids": step.ids})
-                            resolved_combinations = cast(list[dict[str, Any]], revalidated_combos.combinations)
+                            resolved_combinations = _parametrize_values(stage, "combinations", revalidated_combos.combinations)
                         param_names = list(resolved_combinations[0].keys())
-                        param_values = [tuple(combo[name] for name in param_names) for combo in resolved_combinations]
+                        # pytest unpacks each argvalue only for several argnames:
+                        # a lone key takes the bare value, or its 1-tuple would
+                        # reach the request as "(1,)".
+                        if len(param_names) == 1:
+                            param_values = [combo[param_names[0]] for combo in resolved_combinations]
+                        else:
+                            param_values = [tuple(combo[name] for name in param_names) for combo in resolved_combinations]
 
                     case _:
                         raise RuntimeError(f"Unhandled parametrize step: {type(step).__name__}")

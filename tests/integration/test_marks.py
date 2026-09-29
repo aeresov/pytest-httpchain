@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from tests.integration.helpers import named
+from tests.integration.helpers import HAR_ARGS, named
 
 
 @pytest.mark.parametrize(
@@ -28,10 +28,39 @@ from tests.integration.helpers import named
         # Only evaluated once a stage has failed: in a healthy chain the
         # would-crash template never runs.
         ("always_run_lazy", {"passed": 2}),
+        # A skip_if skip leaves the chain healthy: the stage after it runs,
+        # and finds nothing saved by the skipped one. A parametrized stage
+        # decides per parameter.
+        ("skip_if", {"passed": 3, "skipped": 3}),
+        # After an abort, a stage without always_run skips as ever; one that
+        # always_run lets through still skips when its skip_if holds.
+        ("skip_if_after_abort", {"failed": 1, "passed": 1, "skipped": 2}),
     ),
 )
 def test_marks(run_scenario, scenario, outcomes):
     run_scenario(f"marks/test_{scenario}.http.json").assert_outcomes(**outcomes)
+
+
+def test_skip_if_reports_its_template_and_records_nothing(run_scenario, pytester):
+    """The skip's reason is the template as declared, and a skipped stage
+    sent no request: only the stages that ran leave a HAR file."""
+    result = run_scenario("marks/test_skip_if.http.json", args=("-rs", *HAR_ARGS))
+    result.assert_outcomes(passed=3, skipped=3)
+    result.stdout.fnmatch_lines(
+        [
+            "SKIPPED [[]1[]] *: skip_if: {{ not feature }}",
+            "SKIPPED [[]1[]] *: skip_if: {{ get('first_user') == 'Alice' }}",
+            "SKIPPED [[]1[]] *: skip_if: {{ env == 'prod' }}",
+        ]
+    )
+    # Named <file>_<class>_test_<n>_-_<stage>[_<params>_]-<hash>.har.
+    har_files = sorted(path.name for path in (pytester.path / "har_out").glob("*.har"))
+    assert [name.split("_-_", 1)[1].rsplit("-", 1)[0] for name in har_files] == ["sees_no_save", "saves_once", "per_env_dev_"], har_files
+
+
+def test_skip_if_after_an_abort_says_which_gate_skipped(run_scenario):
+    result = run_scenario("marks/test_skip_if_after_abort.http.json", args=("-rs",))
+    result.stdout.fnmatch_lines(["SKIPPED [[]1[]] *: Flow aborted", "SKIPPED [[]1[]] *: skip_if: {{ not exists('resource_id') }}"])
 
 
 def test_always_run_template_error(run_scenario):

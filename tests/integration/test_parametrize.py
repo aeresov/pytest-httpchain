@@ -1,6 +1,6 @@
 import pytest
 
-from tests.integration.helpers import named
+from tests.integration.helpers import named, stage
 
 
 @pytest.mark.parametrize(
@@ -28,3 +28,29 @@ def test_parametrize_templated_combinations_ragged_fails_collection(run_scenario
     result = run_scenario("parametrize/test_parametrize_templated_combinations_ragged.http.json", args="--collect-only")
     assert result.ret != 0
     result.stdout.fnmatch_lines(["*different parameters*"])
+
+
+SINGLE_KEY_COMBOS = [{"item_id": 1}, {"item_id": 2}]
+
+
+@pytest.mark.parametrize(
+    ("combinations", "substitutions"),
+    [
+        pytest.param(SINGLE_KEY_COMBOS, [], id="static"),
+        pytest.param("{{ combos }}", [{"vars": {"combos": SINGLE_KEY_COMBOS}}], id="templated"),
+    ],
+)
+def test_parametrize_single_key_combinations(run_scenario, combinations, substitutions):
+    """A one-key combination hands the stage its bare value, as `individual`
+    does. pytest unpacks each argvalue only when there are several argnames, so
+    the 1-tuple built for a lone key reached the request as `/item/(1,)` — and a
+    stage that did not check the value still passed. The generated test ids
+    follow the value too, instead of pytest's `item_id0` for a tuple."""
+    response = [{"verify": {"status": 200}}, {"save": {"jmespath": {"got_id": "id"}}}, {"verify": {"expressions": ["{{ got_id == item_id }}"]}}]
+    scenario = {
+        "substitutions": substitutions,
+        "stages": [stage("single_key", "/item/{{ item_id }}", parametrize=[{"combinations": combinations}], response=response)],
+    }
+    result = run_scenario(scenario, args="-v")
+    result.assert_outcomes(passed=2)
+    result.stdout.fnmatch_lines(["*single_key[[]1[]] PASSED*", "*single_key[[]2[]] PASSED*"])

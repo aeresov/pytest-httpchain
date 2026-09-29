@@ -1,0 +1,21 @@
+{
+    "substitutions": [{ "vars": { "password": "pass" } }],
+    "auth": { "digest": { "username": "user", "password": "{{ password }}" } },
+    "stages": [
+        {
+            "name": "login",
+            "request": { "url": "https://x.test/login", "method": "POST", "auth": { "basic": { "username": "user", "password": "{{ password }}" } } },
+            "response": [{ "verify": { "status": 200 } }, { "save": { "jmespath": { "token": "token" } } }]
+        },
+        {
+            "name": "me",
+            "request": { "url": "https://x.test/me", "auth": { "bearer": "{{ token }}" } },
+            "response": [{ "verify": { "status": 200 } }]
+        },
+        {
+            "name": "public",
+            "request": { "url": "https://x.test/health", "auth": false },
+            "response": [{ "verify": { "status": 200 } }]
+        }
+    ]
+}

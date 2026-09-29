@@ -1,3 +1,5 @@
+import ast
+import re
 import uuid
 from collections import ChainMap
 from collections.abc import Mapping
@@ -6,9 +8,10 @@ from typing import Any
 
 import pytest
 from pydantic import BaseModel
+from simpleeval import InvalidExpression
 
-import pytest_httpchain.templates.substitution as substitution_module
-from pytest_httpchain.templates import TEMPLATE_BUILTINS, TemplatesError, contains_template, walk, walker
+from pytest_httpchain.models.types import VarsNamespace, convert_dict_to_namespace
+from pytest_httpchain.templates import CONTEXT_HELPERS, TEMPLATE_BUILTINS, TemplatesError, contains_template, needs_rendering, parse_expression, substitution, walk, walker
 from tests.unit.helpers import BEYOND_RECURSION_LIMIT, LOADABLE_BUT_DEEP, nested
 
 
@@ -103,30 +106,6 @@ class TestWalk:
             walk("{{ x }}", context)
 
 
-class TestWalker:
-    def test_one_evaluator_serves_every_call(self, monkeypatch):
-        """The evaluator is built when the walker is bound, not per call: that
-        per-call pass over the context is what the walker exists to save."""
-        builds: list[dict[str, Any]] = []
-        build = substitution_module._build_evaluator
-
-        def counting_build(context):
-            builds.append(dict(context))
-            return build(context)
-
-        monkeypatch.setattr(substitution_module, "_build_evaluator", counting_build)
-        render = walker({"x": 1})
-
-        assert [render("{{ x }}"), render({"k": ["{{ x + 1 }}"]}), render("x={{ x }}")] == [1, {"k": [2]}, "x=1"]
-        assert builds == [{"x": 1}]
-
-    def test_context_is_read_when_bound(self):
-        context = {"x": 1}
-        render = walker(context)
-        context["x"] = 2
-        assert render("{{ x }}") == 1
-
-
 @pytest.mark.parametrize(
     ("expr", "context", "expected"),
     [
@@ -160,6 +139,8 @@ class TestWalker:
         ("{{ bool(0) }}", {}, False),
         ("{{ bool([]) }}", {}, False),
         ("{{ bool([1]) }}", {}, True),
+        # A ';' inside a string literal separates no statements.
+        ("{{ 'a;b' + x }}", {"x": ";c"}, "a;b;c"),
     ],
 )
 def test_expression_value(expr, context, expected):
@@ -265,10 +246,109 @@ def test_contains_template(obj, expected):
     assert contains_template(obj) is expected
 
 
+class _Unprintable:
+    def __str__(self) -> str:
+        raise RuntimeError("no text form")
+
+
 @pytest.mark.parametrize(("leaf", "expected"), [("{{ x }}", True), ("plain", False)])
 def test_contains_template_at_any_depth(leaf, expected):
     """Iterative: a recursive walk spent two frames per level of nesting."""
     assert contains_template(nested(leaf, BEYOND_RECURSION_LIMIT)) is expected
+
+
+@pytest.mark.parametrize(
+    ("obj", "template", "rendering"),
+    [
+        ("{{ x }}", True, True),
+        ("plain", False, False),
+        # An escape is no template, but only rendering removes it.
+        (r"\{{ x }}", False, True),
+        ({"a": [r"\{{ x }}"]}, False, True),
+        (SampleModel(name=r"\{{ x }}", value=1), False, True),
+        (SimpleNamespace(a=r"\{{ x }}"), False, True),
+        # A backslash elsewhere is text, and so is a key, which is never rendered.
+        (r"C:\{x}", False, False),
+        ({r"\{{ k }}": "plain"}, False, False),
+    ],
+)
+def test_needs_rendering(obj, template, rendering):
+    """`contains_template` asks whether a value is known before it renders
+    (a parametrize value, a model's literal check), `needs_rendering` whether
+    rendering may be skipped (a model, a vars value)."""
+    assert contains_template(obj) is template
+    assert needs_rendering(obj) is rendering
+
+
+@pytest.mark.parametrize(("leaf", "expected"), [(r"\{{ x }}", True), ("plain", False)])
+def test_needs_rendering_at_any_depth(leaf, expected):
+    assert needs_rendering(nested(leaf, BEYOND_RECURSION_LIMIT)) is expected
+
+
+class TestEscapedBraces:
+    """`\\{{` renders as the text `{{`, the engine's one pass over the
+    scenario's own strings, which never reads what a template put in again."""
+
+    def test_escaped_template_is_text_never_evaluated(self):
+        # No context holds `undefined`: an escaped template is not evaluated.
+        assert walk(r"Hello \{{ undefined }}!", {}) == "Hello {{ undefined }}!"
+
+    def test_escaped_complete_template_stays_text(self):
+        """Escaped, a whole-string template is text: not the value, whatever
+        its type, and its padding is kept."""
+        assert walk(r"\{{ n }}", {"n": 1}) == "{{ n }}"
+        assert walk(r" \{{ n }} ", {"n": 1}) == " {{ n }} "
+
+    @pytest.mark.parametrize(
+        ("text", "rendered"),
+        [
+            # Jinja's own literal-brace idiom, sent as a payload.
+            (r"\{{ '{{' }}", "{{ '{{' }}"),
+            # A Handlebars raw block, whose four braces are escaped by one backslash.
+            (r"\{{{{raw}}}} {{ n }} \{{{{/raw}}}}", "{{{{raw}}}} 1 {{{{/raw}}}}"),
+            (r"\{{ a {{ undefined }} }}", "{{ a {{ undefined }} }}"),
+            (r"\{{{{ undefined }}", "{{{{ undefined }}"),
+        ],
+    )
+    def test_escaped_text_runs_to_its_closing_braces(self, text, rendered):
+        """What an escape's braces open is text up to the first `}}`: no
+        template in it is evaluated (nothing defines `undefined`), none is
+        parsed (`'{{'` would be an unterminated string)."""
+        assert walk(text, {"n": 1}) == rendered
+
+    def test_doubled_backslash_is_one_before_the_value(self):
+        """A backslash before a value is text too: the value is interpolated,
+        never kept whole."""
+        assert walk(r"\\{{ n }}", {"n": 1}) == "\\1"
+
+    def test_expression_form(self):
+        """The other way to write a literal `{{`, pinned: an expression whose
+        value is the text, which is not read again."""
+        assert walk("{{ '{{' }}name}}", {}) == "{{name}}"
+        assert walk("{{ '{{' + 'name' + '}' + '}' }}", {}) == "{{name}}"
+
+    def test_keys_are_never_rendered(self):
+        """A key keeps its backslash as it keeps its template: keys are sent
+        as written (HTTPCHAIN029 reports a template in one)."""
+        assert walk({r"\{{ k }}": r"\{{ v }}", "{{ k }}": "v"}, {"k": 1}) == {r"\{{ k }}": "{{ v }}", "{{ k }}": "v"}
+
+    def test_model_and_namespace_holding_only_an_escape_are_rendered(self):
+        """A model or namespace with no template is handed back as it is, but
+        one holding an escape is not: only rendering removes the escape."""
+        assert walk(SampleModel(name=r"\{{ x }}", value=1), {}) == SampleModel(name="{{ x }}", value=1)
+        rendered = walk(VarsNamespace(a=r"\{{ x }}"), {})
+        assert type(rendered) is VarsNamespace
+        assert rendered.a == "{{ x }}"
+
+    @pytest.mark.parametrize("value", ["{{ x }}", r"\{{ x }}", r"\\{{ x }}", "{{ '{{' }}"])
+    def test_a_value_is_never_rendered_again(self, value):
+        """Templates render only the scenario's own strings, once: a value (a
+        save, a variable, a response's text) holding a template or an escape
+        is put in as it is, whole or interpolated, and never unescaped."""
+        context = {"value": value, "x": 1}
+        assert walk("{{ value }}", context) == value
+        assert walk("<{{ value }}>", context) == f"<{value}>"
+        assert walk([r"\{{ value }}", r"\\{{ value }}"], context) == ["{{ value }}", f"\\{value}"]
 
 
 class TestWalkErrorMessages:
@@ -284,7 +364,8 @@ class TestWalkErrorMessages:
             ("{{ 1 / 0 }}", {}, "ZeroDivisionError"),
             ("{{ 'text' + 5 }}", {}, "TypeError"),
             ("{{ [1, 2][10] }}", {}, "IndexError"),
-            ("{{ dict(a=1)['b'] }}", {}, "KeyError"),
+            # Named as the attribute path names an attribute, not as a bare KeyError.
+            ("{{ dict(a=1)['b'] }}", {}, r"^Key error in expression '\{\{ dict\(a=1\)\['b'\] \}\}': Key 'b' does not exist"),
             ("{{ 1 + }}", {}, "Invalid expression"),
         ],
     )
@@ -313,13 +394,396 @@ class TestWalkErrorMessages:
             walk("{{ boom() }}", {"boom": boom})
         assert isinstance(exc_info.value.__cause__, CustomBoom)
 
+    @pytest.mark.parametrize(
+        ("template", "context", "expected_match"),
+        [
+            # Python refuses to render an int past 4300 digits as text.
+            pytest.param("x {{ 2 ** 100000 }}", {}, r"ValueError in expression '\{\{ 2 \*\* 100000 \}\}': Exceeds the limit", id="int-digit-limit"),
+            pytest.param("x {{ value }}", {"value": _Unprintable()}, r"RuntimeError in expression '\{\{ value \}\}': no text form", id="raising-str"),
+        ],
+    )
+    def test_interpolation_that_cannot_render_is_a_templates_error(self, template, context, expected_match):
+        """Interpolating a value calls str() on it, which can raise too. That
+        call ran outside the expression's error handling, so its raw exception
+        escaped a stage as a plugin traceback instead of failing it."""
+        with pytest.raises(TemplatesError, match=expected_match):
+            walk(template, context)
+
+    @pytest.mark.parametrize("template", ["{{ ok == True; False }}", "x {{ ok; False }}"], ids=["whole-string", "interpolated"])
+    def test_multiple_statements_are_rejected(self, template):
+        """simpleeval parses in exec mode and evaluated only the first of
+        `a; b`, behind a mere warning — so this verify expression came out
+        True, and the stage passed on half of what it asserts."""
+        with pytest.raises(TemplatesError, match=r"Invalid expression '\{\{ .*; False \}\}': a template holds one expression, not 2 statements"):
+            walk(template, {"ok": True})
+
+    @pytest.mark.parametrize(
+        ("template", "reason"),
+        [
+            # `=` for `==`: simpleeval evaluated the right-hand side behind an
+            # AssignmentAttempted warning, so this verify expression came out
+            # True whatever `user.active` was.
+            pytest.param("{{ user.active = True }}", "not an assignment; to compare two values, write '=='", id="assign"),
+            pytest.param("n={{ count = 3 }}", "not an assignment; to compare two values, write '=='", id="assign-interpolated"),
+            pytest.param("{{ user['active'] = flag = True }}", "not an assignment; to compare two values, write '=='", id="assign-chained"),
+            # Evaluated to the right-hand side too: 1, not count + 1.
+            pytest.param("{{ count += 1 }}", "not an assignment", id="augmented"),
+            # simpleeval refused these two itself, but only at evaluation, as a
+            # feature it does not have: now the one reason, known to validate.
+            pytest.param("{{ count: int = 1 }}", "not an assignment", id="annotated"),
+            pytest.param("{{ [(n := x) for x in items] }}", r"a template cannot assign a name \(':='\)", id="walrus"),
+            pytest.param("{{ import os }}", "not a statement", id="import"),
+            pytest.param("{{ del count }}", "not a statement", id="del"),
+        ],
+    )
+    def test_assignments_and_statements_are_rejected(self, template, reason):
+        expr = template.partition("{{ ")[2].removesuffix(" }}")
+        with pytest.raises(TemplatesError, match=rf"^Invalid expression '{re.escape('{{ ' + expr + ' }}')}': (a template holds one expression, )?{reason}$"):
+            walk(template, {"user": SimpleNamespace(active=False), "flag": False, "count": 0, "items": [1]})
+
+    @pytest.mark.parametrize(
+        ("template", "reason"),
+        [
+            # Python's own reason, without its "(<unknown>, line 1)": a template is one line.
+            pytest.param("{{ 1 + }}", "invalid syntax", id="syntax"),
+            # The dict literal's `}` ran into the template's `}}`: the template ended a brace early.
+            pytest.param("{{ {'a': 1}}}", "'{' was never closed", id="brace-before-closing-braces"),
+            pytest.param("x {{ }} y", "a template holds one expression, and this one is empty", id="empty"),
+            # CPython's parser runs out of stack on these, as a MemoryError and a RecursionError.
+            pytest.param("{{ " + "-" * 100_000 + "1 }}", "the expression is too complex to parse", id="parser-stack"),
+            pytest.param("{{ a" + ".b" * 100_000 + " }}", "the expression is too complex to parse", id="ast-recursion"),
+            # A lone surrogate, one JSON \u escape away: the parser raised a
+            # UnicodeEncodeError, which escaped walk() as it was.
+            pytest.param("{{ 'a\ud800' }}", "the expression holds '\\ud800', which is not valid text (surrogates not allowed)", id="lone-surrogate"),
+        ],
+    )
+    def test_text_that_does_not_parse_says_why(self, template, reason):
+        with pytest.raises(TemplatesError, match=rf"^Invalid expression '.*': {re.escape(reason)}$"):
+            walk(template, {"a": SimpleNamespace(b=1)})
+
+    def test_a_lone_surrogate_is_written_escaped(self):
+        """As the scenario's JSON writes it: no UTF-8 stream can print the
+        character itself, and `validate` crashed printing it."""
+        with pytest.raises(TemplatesError) as excinfo:
+            walk("{{ 'a\ud800' }}", {})
+        assert str(excinfo.value).startswith("Invalid expression '{{ 'a\\ud800' }}': ")
+
+    # Each template the engine refuses from its text alone, and the reason.
+    # simpleeval refused each too ("Sorry, Lambda is not available in this
+    # evaluator"), but only once evaluation reached it, so `validate` never
+    # saw it.
+    _REFUSED_FROM_TEXT = [
+        pytest.param("{{ sorted(items, key=lambda row: row) }}", "does not evaluate a lambda", id="lambda"),
+        pytest.param("{{ {x for x in items} }}", "does not evaluate a set comprehension; write set(... for ...)", id="set-comprehension"),
+        pytest.param("{{ max(*items) }}", "does not evaluate '*' unpacking outside a list literal ([*a, *b])", id="starred-argument"),
+        pytest.param("{{ (*items, 1) }}", "does not evaluate '*' unpacking outside a list literal ([*a, *b])", id="starred-in-tuple"),
+        pytest.param("{{ [x for *x, y in pairs] }}", "does not evaluate '*' unpacking outside a list literal ([*a, *b])", id="starred-target"),
+        pytest.param("{{ (yield) }}", "does not evaluate 'yield'", id="yield"),
+        pytest.param("{{ (yield from items) }}", "does not evaluate 'yield from'", id="yield-from"),
+        pytest.param("{{ await items }}", "does not evaluate 'await'", id="await"),
+        # A key of JSON data read as an attribute: MongoDB's `_id`.
+        pytest.param("{{ doc._id }}", "does not read an attribute named '_id'; for a key of that name, write ['_id']", id="underscore-attribute"),
+        pytest.param("{{ doc.__class__ }}", "does not read an attribute named '__class__'", id="dunder-attribute"),
+        pytest.param("{{ items.func_name }}", "does not read an attribute named 'func_name'; for a key of that name, write ['func_name']", id="func-attribute"),
+        pytest.param("{{ 'id-{}'.format(1) }}", "does not read the attribute 'format'; build the text with an f-string or +", id="format"),
+        pytest.param("{{ items.mro }}", "does not read the attribute 'mro'", id="disallowed-attribute"),
+        # simpleeval took the function for a lambda: "Lambda Functions not implemented".
+        pytest.param("{{ fns[0]() }}", "calls only a name or an attribute (f(), obj.method())", id="call-of-a-subscript"),
+        pytest.param("{{ get('f')() }}", "calls only a name or an attribute (f(), obj.method())", id="call-of-a-call"),
+        pytest.param("{{ (lambda: 1)() }}", "does not evaluate a lambda", id="call-of-a-lambda"),
+    ]
+    _CONTEXT = {"items": [1, 2], "pairs": [[1, 2]], "doc": {"_id": 1}, "fns": [len], "f": len}
+
+    @pytest.mark.parametrize(("template", "reason"), _REFUSED_FROM_TEXT)
+    def test_what_the_engine_refuses_from_the_text_is_refused_up_front(self, template, reason):
+        with pytest.raises(TemplatesError, match=rf"^Invalid expression '.*': the template engine {re.escape(reason)}$"):
+            walk(template, self._CONTEXT)
+
+    @pytest.mark.parametrize(("template", "reason"), _REFUSED_FROM_TEXT)
+    def test_simpleeval_refuses_each_template_refused(self, template, reason):
+        """Never stricter than the engine where it evaluates the expression:
+        should simpleeval learn one of these (outside the lists read, as it
+        spreads a list's ``*`` outside its node map), this fails."""
+        expr = template.removeprefix("{{ ").removesuffix(" }}")
+        # FeatureNotAvailable ("Sorry, Lambda is not available ..."), or for a
+        # starred comprehension target an AttributeError of its own.
+        with pytest.raises((InvalidExpression, AttributeError)):
+            substitution._build_evaluator(self._CONTEXT).eval(expr)
+
+    def test_an_unevaluated_kind_is_refused_where_evaluation_would_not_reach_it(self):
+        """Refused from its text, as the validator refuses it, not only when
+        the branch holding it is taken."""
+        with pytest.raises(TemplatesError, match="does not evaluate a lambda"):
+            walk("{{ 1 if ok else (lambda: 2) }}", {"ok": True})
+
+    @pytest.mark.parametrize(
+        ("template", "expected"),
+        [
+            # The one `*` the engine takes, spread by the list itself.
+            pytest.param("{{ [*a, *b] }}", [1, 2, 3], id="list-spread"),
+            pytest.param("{{ {**d, 'k': 2} }}", {"k": 2}, id="dict-spread"),
+            pytest.param("{{ set(x for x in a) }}", {1, 2}, id="set-of-a-generator"),
+        ],
+    )
+    def test_spreads_and_generators_evaluate(self, template, expected):
+        assert walk(template, {"a": [1, 2], "b": [3], "d": {"k": 1}}) == expected
+
+    @pytest.mark.parametrize(
+        ("template", "expected"),
+        [
+            # The `=` of a keyword argument and a comparison assign nothing;
+            # nor does a `;` or an `=` inside a string.
+            pytest.param("{{ dict(a=count) }}", {"a": 0}, id="keyword-argument"),
+            pytest.param("{{ count == 0 }}", True, id="comparison"),
+            pytest.param("{{ 'a = b; c' }}", "a = b; c", id="string"),
+            # One statement: a trailing `;` ends it, and is no second one.
+            pytest.param("{{ count; }}", 0, id="trailing-semicolon"),
+        ],
+    )
+    def test_equals_signs_that_assign_nothing_evaluate(self, template, expected):
+        assert walk(template, {"count": 0}) == expected
+
+    @pytest.mark.parametrize("expr", ["user.active = True", "1 +", "a; b", "", "(n := 1)"])
+    def test_parse_expression_gives_the_reason_the_runtime_gives(self, expr):
+        """The validator reports the reason `parse_expression` gives
+        (HTTPCHAIN037); the stage fails with the same one."""
+        with pytest.raises(TemplatesError) as parsed:
+            parse_expression(expr)
+        with pytest.raises(TemplatesError) as rendered:
+            walk("x {{ " + expr + " }}", {})
+        assert str(rendered.value) == f"Invalid expression '{{{{ {expr} }}}}': {parsed.value}"
+
+    def test_parse_expression_returns_the_expression_evaluated(self):
+        """Not the statement around it: the validator walks this tree for the
+        names a template reads."""
+        tree = parse_expression("  sorted(rows, key=len)  ")
+        assert isinstance(tree, ast.Call)
+        assert ast.unparse(tree) == "sorted(rows, key=len)"
+
+
+class TestObjectAccess:
+    """A `vars` object (the models' `VarsNamespace`) read by attribute and by
+    key, as a dict saved from a response is read."""
+
+    @staticmethod
+    def _context() -> dict[str, Any]:
+        return {
+            "user": convert_dict_to_namespace({"name": "Alice", "Content-Type": "json", "address": {"city": "Oslo"}, "roles": [{"id": 1}, {"id": 2}]}),
+            "order": convert_dict_to_namespace({"items": [1, 2], "keys": "k", "_id": 7}),
+            "saved": {"name": "Bob", "X-Request-Id": "r-1"},
+        }
+
+    @pytest.mark.parametrize(
+        ("template", "expected"),
+        [
+            pytest.param("{{ user.name }}", "Alice", id="attribute"),
+            pytest.param("{{ user['name'] }}", "Alice", id="subscript"),
+            pytest.param("{{ user['Content-Type'] }}", "json", id="key-that-is-no-identifier"),
+            pytest.param("{{ user['address']['city'] }}", "Oslo", id="nested-subscript"),
+            pytest.param("{{ user.address['city'] + user['address'].city }}", "OsloOslo", id="mixed"),
+            pytest.param("{{ user.roles[1]['id'] }}", 2, id="object-in-a-list"),
+            pytest.param("{{ [role['id'] for role in user.roles] }}", [1, 2], id="objects-in-a-comprehension"),
+            pytest.param("{{ 'name' in user }}", True, id="in"),
+            pytest.param("{{ 'nick' not in user }}", True, id="not-in"),
+            pytest.param("{{ len(user) }}", 4, id="len"),
+            pytest.param("{{ [k for k in user] }}", ["name", "Content-Type", "address", "roles"], id="iteration-in-order"),
+            pytest.param("{{ sorted(user)[0] }}", "Content-Type", id="sorted"),
+            pytest.param("{{ list(user.keys()) }}", ["name", "Content-Type", "address", "roles"], id="keys"),
+            pytest.param("{{ list(user.values())[:2] }}", ["Alice", "json"], id="values"),
+            pytest.param("{{ {k: v for k, v in user.items() if k == 'name'} }}", {"name": "Alice"}, id="items"),
+            pytest.param("{{ user.get('nick', 'anon') }}", "anon", id="get-default"),
+            pytest.param("{{ user.get('nick') }}", None, id="get-none"),
+            pytest.param("{{ user.get('name') }}", "Alice", id="get"),
+            pytest.param("{{ dict(user)['name'] }}", "Alice", id="dict"),
+            pytest.param("{{ {**user}['Content-Type'] }}", "json", id="dict-spread"),
+            pytest.param("{{ 'x' if user.get('address') else 'y' }}", "x", id="truth"),
+            # A dict saved from a response reads the same way.
+            pytest.param("{{ saved['X-Request-Id'] + saved.name }}", "r-1Bob", id="saved-dict"),
+        ],
+    )
+    def test_access_forms(self, template, expected):
+        assert walk(template, self._context()) == expected
+
+    def test_key_named_like_a_method(self):
+        """The attribute reads the data, as it always did; so does every key
+        form. The shadowed method, called, calls the data."""
+        context = self._context()
+        assert walk("{{ order.items }}", context) == [1, 2]
+        assert walk("{{ order['items'] }}", context) == [1, 2]
+        assert walk("{{ order.keys }}", context) == "k"
+        assert walk("{{ [order[k] for k in order][0] }}", context) == [1, 2]
+        with pytest.raises(TemplatesError, match=r"^TypeError in expression '\{\{ order.items\(\) \}\}': 'list' object is not callable$"):
+            walk("{{ order.items() }}", context)
+
+    def test_underscore_key_reads_by_subscript_only(self):
+        """simpleeval refuses an attribute starting with `_`, from the text,
+        but never a key: `_eval_subscript` checks nothing of the key."""
+        context = self._context()
+        assert walk("{{ order['_id'] }}", context) == 7
+        with pytest.raises(TemplatesError, match=r"for a key of that name, write \['_id'\]$"):
+            walk("{{ order._id }}", context)
+
+    def test_subscript_reaches_the_data_only(self):
+        with pytest.raises(TemplatesError, match=r"^Key error in expression .*: Key '__class__' does not exist"):
+            walk("{{ user['__class__'] }}", self._context())
+
+    @pytest.mark.parametrize(
+        ("template", "message"),
+        [
+            pytest.param(
+                "{{ user['nick'] }}",
+                "Key error in expression '{{ user['nick'] }}': Key 'nick' does not exist in expression 'user['nick']'",
+                id="vars-object",
+            ),
+            pytest.param(
+                "{{ user['address']['zip'] == 1 }}",
+                "Key error in expression '{{ user['address']['zip'] == 1 }}': Key 'zip' does not exist in expression 'user['address']['zip'] == 1'",
+                id="nested",
+            ),
+            pytest.param(
+                "Name: {{ saved['nick'] }}",
+                "Key error in expression '{{ saved['nick'] }}': Key 'nick' does not exist in expression 'saved['nick']'",
+                id="saved-dict-interpolated",
+            ),
+            # As the attribute path names a missing attribute.
+            pytest.param(
+                "{{ user.nick }}",
+                "Attribute error in expression '{{ user.nick }}': Attribute 'nick' does not exist in expression 'user.nick'",
+                id="attribute",
+            ),
+        ],
+    )
+    def test_missing_key_names_it(self, template, message):
+        with pytest.raises(TemplatesError) as excinfo:
+            walk(template, self._context())
+        assert str(excinfo.value) == message
+
+    def test_key_error_of_a_function_is_not_taken_for_a_missing_key(self):
+        """Only the subscript's own lookup is: a user function's KeyError is
+        its own error, named by its type as any other."""
+
+        def lookup():
+            return {}["gone"]
+
+        with pytest.raises(TemplatesError, match=r"^KeyError in expression '\{\{ lookup\(\)\['x'\] \}\}': 'gone'$"):
+            walk("{{ lookup()['x'] }}", {"lookup": lookup})
+
+    @pytest.mark.parametrize(
+        ("template", "expression", "call"),
+        [
+            pytest.param("{{ user.keys }}", "user.keys", ".keys()", id="keys"),
+            pytest.param("{{ user.items }}", "user.items", ".items()", id="items"),
+            pytest.param("Values: {{ user.values }}", "user.values", ".values()", id="interpolated"),
+            pytest.param("{{ user.address.get }}", "user.address.get", ".get(...)", id="get-takes-a-key"),
+            # Inside an expression too: the method is a value there, always
+            # true and never equal to data, so each of these passed as a check.
+            pytest.param("{{ user.items != [] }}", "user.items != []", ".items()", id="compared"),
+            pytest.param("{{ user.get is not None }}", "user.get is not None", ".get(...)", id="is-not-none"),
+            pytest.param("{{ bool(user.values) }}", "bool(user.values)", ".values()", id="truth"),
+            pytest.param("{{ 'x' if user.keys else 'y' }}", "'x' if user.keys else 'y'", ".keys()", id="condition"),
+            pytest.param("{{ 'k=' + str(user.keys) }}", "'k=' + str(user.keys)", ".keys()", id="str"),
+            pytest.param("{{ [user.items][0] }}", "[user.items][0]", ".items()", id="in-a-list"),
+            pytest.param("{{ [r.get for r in user.roles] }}", "[r.get for r in user.roles]", ".get(...)", id="in-a-comprehension"),
+            # Handed to a call, but not as its key=: the call is not the method's.
+            pytest.param("{{ dict(at=user.get) }}", "dict(at=user.get)", ".get(...)", id="other-keyword"),
+            pytest.param("{{ sorted(user, user.get) }}", "sorted(user, user.get)", ".get(...)", id="positional"),
+        ],
+    )
+    def test_method_read_as_a_value_is_refused(self, template, expression, call):
+        """An attribute where the object has no key of that name was a missing
+        attribute; now that the object has methods, it would read one, a value
+        that compares as no data does and whose repr holds the whole object.
+        It stays the missing attribute wherever it sits, and the message adds
+        how the method is called."""
+        name = call.split("(")[0].removeprefix(".")
+        with pytest.raises(TemplatesError) as excinfo:
+            walk(template, self._context())
+        assert str(excinfo.value) == (
+            f"Attribute error in expression '{{{{ {expression} }}}}': Attribute '{name}' does not exist in expression '{expression}'; "
+            f"the object has no key '{name}'; to call its method, write {call}"
+        )
+
+    @pytest.mark.parametrize(
+        ("template", "expected"),
+        [
+            pytest.param("{{ user.get('nick', 'anon') }}", "anon", id="called"),
+            pytest.param("{{ user.get('address').get('city') }}", "Oslo", id="chained-calls"),
+            pytest.param("{{ [r.get('id') for r in user.roles] }}", [1, 2], id="called-in-a-comprehension"),
+            pytest.param("{{ max(scores, key=scores.get) }}", "b", id="key-of-a-built-in"),
+            pytest.param("{{ sorted(scores, key=scores.get) }}", ["c", "a", "b"], id="sorted-by-value"),
+        ],
+    )
+    def test_method_called_or_handed_as_a_key(self, template, expected):
+        """What a method is for: a call, or a ``key=``, which calls it."""
+        context = self._context() | {"scores": convert_dict_to_namespace({"a": 2, "b": 5, "c": 1})}
+        assert walk(template, context) == expected
+
+    def test_method_of_a_saved_object_is_the_dicts(self):
+        """A saved object is a dict, whose attribute simpleeval reads before
+        its key, as it always has: the docs point to the key forms for a key
+        named like a method."""
+        saved = {"items": 3}
+        assert walk("{{ saved.items }}", {"saved": saved}) == saved.items
+        assert walk("{{ saved['items'] }}", {"saved": saved}) == 3
+
+    def test_method_of_another_object_is_left_alone(self):
+        """A fixture's object may hand out a method on purpose: only a `vars`
+        object's are refused."""
+
+        class Helper(SimpleNamespace):
+            def ping(self) -> str:
+                return "pong"
+
+        helper = Helper()
+        assert walk("{{ helper.ping }}", {"helper": helper}) == helper.ping
+
+    def test_walk_keeps_the_type_at_every_depth(self):
+        """Rendered, a `vars` object keeps its key access: `_walk` rebuilt it
+        as a plain SimpleNamespace."""
+        value = convert_dict_to_namespace({"id": "{{ n }}", "inner": {"k": "{{ n }}"}, "list": [{"k": "{{ n }}"}]})
+        result = walk(value, {"n": 1})
+        assert (type(result), type(result.inner), type(result.list[0])) == (VarsNamespace, VarsNamespace, VarsNamespace)
+        assert (result["id"], result["inner"]["k"], result["list"][0]["k"]) == (1, 1, 1)
+        assert list(result) == ["id", "inner", "list"]
+
+    def test_object_nested_hundreds_deep_interpolates(self):
+        """Text reads the object's repr, which spent three frames a level
+        while it recursed, and failed the stage at a depth the loader
+        accepts."""
+        deep = convert_dict_to_namespace({"k": nested("x", LOADABLE_BUT_DEEP)})
+        assert walk("v={{ deep }}", {"deep": deep}) == f"v={deep!r}"
+        assert walk("v={{ deep }}", {"deep": deep}).startswith("v=namespace(k=[namespace(k=[")
+
+    def test_dict_copy_of_an_object_with_a_keys_key(self):
+        """`dict()` and `**` call `.keys()`, which such a key's data shadows;
+        a comprehension over the keys, or a JSON round trip, copies it."""
+        context = self._context()
+        with pytest.raises(TemplatesError, match=r"^TypeError in expression '\{\{ dict\(order\) \}\}': 'str' object is not callable$"):
+            walk("{{ dict(order) }}", context)
+        assert walk("{{ {k: order[k] for k in order} }}", context) == {"items": [1, 2], "keys": "k", "_id": 7}
+        assert walk("{{ json_loads(json_dumps(order)) }}", context) == {"items": [1, 2], "keys": "k", "_id": 7}
+
+    def test_walk_keeps_a_plain_namespace_plain(self):
+        result = walk(SimpleNamespace(a="{{ n }}"), {"n": 1})
+        assert type(result) is SimpleNamespace
+        assert result == SimpleNamespace(a=1)
+
 
 @pytest.mark.parametrize("name", sorted(TEMPLATE_BUILTINS))
 def test_advertised_builtin_resolves(name):
     """M14: every name the validator treats as engine-provided must resolve —
-    to a function, or a JSON literal's value — not raise "Undefined variable"."""
-    result = walk("{{ " + name + " }}", {})
+    to a function, or a JSON literal's value — not raise "Undefined variable".
+    Read inside a list: a helper that a template renders to is refused."""
+    [result] = walk("{{ [" + name + "] }}", {})
     assert callable(result) or result is None or isinstance(result, bool)
+
+
+@pytest.mark.parametrize("name", sorted(CONTEXT_HELPERS))
+def test_context_helpers_are_never_shadowed(name):
+    """A user callable named get or exists never replaces the built-in, which
+    the validator's reference model assumes: a call to either is no reference
+    to a user name."""
+    assert walk("{{ " + name + "('x') }}", {name: lambda *_: "user"}) != "user"
 
 
 class TestChainMapContextSemantics:
@@ -365,3 +829,56 @@ class TestChainMapContextSemantics:
     def test_upper_layer_adds_without_hiding_lower_ones(self):
         context = ChainMap({"b": 2}, {"a": 1})
         assert walk("{{ a + b }}", context) == 3
+
+
+class TestWalker:
+    """``walker(context)`` is ``walk`` bound to one context, for many
+    structures each substituted on its own: one evaluator serves every call."""
+
+    def test_substitutes_as_walk_does(self):
+        substitute = walker({"a": 1, "items": [1, 2]})
+        assert substitute({"x": "{{ a }}", "y": ["{{ [i * 2 for i in items] }}", "n={{ a }}"]}) == {"x": 1, "y": [[2, 4], "n=1"]}
+
+    def test_one_evaluator_serves_every_call(self, monkeypatch):
+        """The evaluator is built when the walker is bound, not per call: that
+        per-call pass over the context is what the walker exists to save."""
+        builds: list[dict[str, Any]] = []
+        build = substitution._build_evaluator
+
+        def counting_build(context):
+            builds.append(dict(context))
+            return build(context)
+
+        monkeypatch.setattr(substitution, "_build_evaluator", counting_build)
+        render = walker({"x": 1})
+
+        assert [render("{{ x }}"), render({"k": ["{{ x + 1 }}"]}), render("x={{ x }}")] == [1, {"k": [2]}, "x=1"]
+        assert builds == [{"x": 1}]
+
+    def test_context_is_read_when_bound(self):
+        context = {"x": 1}
+        render = walker(context)
+        context["x"] = 2
+        assert render("{{ x }}") == 1
+
+    @pytest.mark.parametrize(
+        "failing",
+        [
+            pytest.param("{{ missing }}", id="undefined"),
+            pytest.param("{{ [boom() for i in items] }}", id="raised-in-a-comprehension"),
+            pytest.param("{{ [i for i in range(10 ** 9)] }}", id="comprehension-too-long"),
+        ],
+    )
+    def test_a_call_that_raises_leaves_the_next_unaffected(self, failing):
+        """simpleeval swaps its name lookup in for a comprehension and restores
+        it on the way out, whatever ended it; the next call sees the context
+        as the first did."""
+
+        def boom():
+            raise ValueError("boom")
+
+        substitute = walker({"items": [1, 2], "boom": boom, "i": "outer"})
+        with pytest.raises(TemplatesError):
+            substitute(failing)
+        assert substitute("{{ [i for i in items] }}") == [1, 2]
+        assert substitute("{{ i }}") == "outer"

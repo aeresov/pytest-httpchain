@@ -5,16 +5,13 @@ full plugin path: running a scenario with ``--httpchain-output-dir`` must drop a
 file per executed stage, and that file must parse as valid HAR JSON.
 """
 
+import base64
 import json
 from datetime import datetime
 
 import pytest
 
-from tests.integration.helpers import har_entries, stage
-
-# Relative to the pytester dir, which is the CWD of both in-process and
-# subprocess runs.
-HAR_ARGS = ("-s", "--httpchain-output-dir", "har_out")
+from tests.integration.helpers import HAR_ARGS, har_entries, named, stage
 
 
 @pytest.fixture
@@ -53,6 +50,37 @@ def test_har_form_repeats_are_separate_scalar_params(run_scenario, har_dir):
         {"name": "tag", "value": "two"},
         {"name": "empty", "value": ""},
     ]
+
+
+def test_har_records_url_query_merged_with_params(run_scenario, har_dir):
+    """The HAR shows the URL that went out: its own query merged with params,
+    where httpx's params= used to replace it and category=books never reached
+    the server."""
+    request = {"params": {"sort": "price", "limit": 10}}
+    result = run_scenario({"stages": [stage("merged_query", "/search?category=books&sort=name", request=request)]}, args=HAR_ARGS)
+
+    result.assert_outcomes(passed=1)
+    [entry] = har_entries(har_dir)
+    assert entry["request"]["url"].endswith("/search?category=books&sort=price&limit=10")
+    assert entry["request"]["queryString"] == [
+        {"name": "category", "value": "books"},
+        {"name": "sort", "value": "price"},
+        {"name": "limit", "value": "10"},
+    ]
+    # /search echoes the two keys it reads.
+    assert json.loads(entry["response"]["content"]["text"]) == {"category": "books", "sort": "price", "results": []}
+
+
+def test_url_reaches_the_server_as_written(run_scenario, har_dir):
+    """The rendered URL used to be re-validated into pydantic's HttpUrl and sent
+    WHATWG-normalized: this encoded path-traversal probe went out as ``/ok``,
+    got a 200, and the stage expecting the server to refuse it failed."""
+    not_found = [{"verify": {"status": 404}}]
+    result = run_scenario({"stages": [stage("encoded_dot_segment", "/static/%2e%2e/ok", response=not_found)]}, args=HAR_ARGS)
+
+    result.assert_outcomes(passed=1)
+    [entry] = har_entries(har_dir)
+    assert entry["request"]["url"].endswith("/static/%2e%2e/ok")
 
 
 def test_parallel_stage_har_contains_every_iteration(run_scenario, har_dir):
@@ -141,23 +169,82 @@ def test_har_entries_carry_real_start_times(run_scenario, har_dir):
     assert spread >= 0.4, f"start times span only {spread}s — fabricated at export time?"
 
 
-def test_multipart_upload_degrades_in_har_and_report(run_scenario, har_dir):
-    """A multipart (files) body is a streaming httpx request whose bytes are
-    consumed on send; the HAR and report paths must degrade to 'body not
-    captured' instead of erroring — previously the whole HAR file was silently
-    dropped and the request section showed a formatting error."""
+def test_multipart_body_is_captured_in_har_and_report(run_scenario, har_dir):
+    """A multipart body is sent as the bytes it was encoded to, so the HAR
+    entry records it and the report shows it, part by part, a binary file
+    standing in for itself alone (the first file: the report cuts a body at
+    1000 characters). It was a stream httpx never buffered: bodySize -1, no
+    postData, and "not captured" in the report."""
     result = run_scenario(
-        "body_types/test_files_body.http.json",
+        "body_types/test_multipart_body.http.json",
         "body_types/upload_a.txt",
         "body_types/upload_b.bin",
         args=(*HAR_ARGS, "-rA"),
     )
 
     result.assert_outcomes(passed=1)
-    result.stdout.fnmatch_lines(["*HTTP Request*", "*Streaming body*not captured*"])
-    result.stdout.no_fnmatch_line("*Error formatting*")
+    result.stdout.fnmatch_lines(
+        [
+            "*HTTP Request*",
+            'Content-Disposition: form-data; name="title"',
+            "",
+            "Quarterly report",
+            'Content-Disposition: form-data; name="blob"; filename="blob"',
+            "Content-Type: application/octet-stream",
+            "",
+            "<Binary content: 8 bytes>",
+        ]
+    )
     [entry] = har_entries(har_dir)
-    # -1 is HAR's "unknown size": the streaming body is gone after the send.
-    assert entry["request"]["bodySize"] == -1
-    assert "postData" not in entry["request"]
-    assert entry["response"]["status"] == 200
+    request = entry["request"]
+    sent = {header["name"].lower(): header["value"] for header in request["headers"]}
+    body = base64.b64decode(request["postData"]["text"])
+    assert request["postData"]["encoding"] == "base64"
+    assert request["postData"]["mimeType"] == "multipart/form-data"
+    assert request["bodySize"] == len(body) == int(sent["content-length"])
+    boundary = sent["content-type"].partition("boundary=")[2]
+    assert body.startswith(f'--{boundary}\r\nContent-Disposition: form-data; name="title"\r\n\r\nQuarterly report\r\n'.encode())
+    assert body.endswith(f"--{boundary}--\r\n".encode())
+
+
+# httpx builds a redirect follow-up that keeps the method from the original's
+# body stream and never reads it; the report and HAR used to present that body
+# as a consumed streaming upload.
+_POST_JSON = {"method": "POST", "body": {"json": {"k": "v"}}}
+
+
+@pytest.mark.parametrize(
+    ("name", "path", "request_"),
+    named(
+        # The follow-up re-sends the GET's own empty body stream.
+        ("get_302", "/redirect-ok", {}),
+        # A 302 turns the POST into a GET, which drops the body. httpx buffers
+        # that rebuilt empty body, so this row guards the POST body staying off it.
+        ("post_302", "/redirect-post/302?to=/ok", _POST_JSON),
+    ),
+)
+def test_redirect_follow_up_without_body_reports_empty_body(run_scenario, har_dir, name, path, request_):
+    result = run_scenario({"stages": [stage(name, path, request=request_)]}, args=(*HAR_ARGS, "-rA"))
+
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(["*HTTP Request (after 1 redirect)*"])
+    result.stdout.no_fnmatch_line("*Streaming body*")
+    _, follow_up = (entry["request"] for entry in har_entries(har_dir))
+    assert follow_up["method"] == "GET"
+    assert follow_up["bodySize"] == 0
+    assert "postData" not in follow_up
+
+
+def test_redirect_follow_up_replaying_body_reports_it(run_scenario, har_dir):
+    """A 307 re-POSTs the body to the target: the follow-up's HAR entry
+    carries it just as the first hop's does, and the report shows it."""
+    result = run_scenario({"stages": [stage("post_307", "/redirect-post/307?to=/echo/json", request=_POST_JSON)]}, args=(*HAR_ARGS, "-rA"))
+
+    result.assert_outcomes(passed=1)
+    # Inside the request section: the response echoes the body too, indented deeper.
+    result.stdout.fnmatch_lines(["*HTTP Request (after 1 redirect)*", '  "k": "v"', "*HTTP Response (after 1 redirect)*"])
+    hop, follow_up = (entry["request"] for entry in har_entries(har_dir))
+    assert follow_up["method"] == "POST"
+    assert json.loads(follow_up["postData"]["text"]) == {"k": "v"}
+    assert follow_up["postData"] == hop["postData"]
+    assert follow_up["bodySize"] == hop["bodySize"]

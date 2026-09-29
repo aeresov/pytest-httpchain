@@ -26,7 +26,7 @@ Testing HTTP APIs with plain pytest often leads to these pain points:
 
 ### Declarative JSON Format
 
-Test scenarios are JSON documents that describe _what_ to test, not _how_. No setup code to scroll through — the request and assertions are right there.
+Test scenarios are JSON documents that describe _what_ to test, not _how_. No setup code to scroll through — the request and assertions are right there. [Comments and trailing commas](usage/scenarios.md#comments-and-trailing-commas) are welcome in every scenario and every file it pulls in; name a file `test_<name>.http.jsonc` and editors treat it as JSON with comments.
 
 ### `$include` / `$merge` / `$ref` with Deep Merging
 
@@ -34,17 +34,35 @@ Reuse arbitrary parts of your scenarios with JSON references. Properties merge w
 
 ### Multi-Stage Execution
 
-Each scenario contains 1+ stages executed in order. One stage failure stops the chain. Use `always_run` for cleanup stages that should execute regardless.
+Each scenario contains 1+ stages executed in order. One stage failure stops the chain. Use `always_run` for cleanup stages that should execute regardless, and `skip_if` to skip a stage on a condition known only once the chain is running, such as a value an earlier stage saved.
+
+### Retries and Polling
+
+A stage's [`retry`](advanced/retry.md) attempts it again while it fails, after a wait that can grow each time: poll an asynchronous job until it is done, or ride out eventual consistency and a flaky network. Only the attempt that passes saves anything.
 
 ### Common Data Context
 
-A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use Jinja-style expressions (`{{ var }}`) in any request value.
+A key-value store persists throughout scenario execution. Variables, fixtures, and saved response data all live here. Use Jinja-style expressions (`{{ var }}`) in any request value. [Built-in functions](usage/substitutions.md#built-in-functions) give the values tests keep needing without a fixture: the time (`now()`, `timestamp()`), base64, JSON and URL encoding, and SHA-256, MD5 and HMAC-SHA256 digests for signing a request.
+
+### Request Bodies
+
+JSON, form, XML, text, base64, a binary file and GraphQL, and [multipart uploads](usage/requests.md#file-uploads-multipart) that mix form fields with files: each file read from a path or given inline, several under one name if need be, with its own filename and content type.
 
 ### Response Processing
 
--   **JMESPath** — Extract values from JSON responses directly
--   **JSON Schema** — Validate response structure against a schema
+-   **JMESPath** — Assert on values in JSON responses directly (`"jmespath": {"data.id": 42, "items": {"length": 3}}`), or extract them for later stages
+-   **Regex** — Save values from bodies that are not JSON, such as a CSRF token from an HTML form (`"regex": {"csrf": "name=\"csrf\" value=\"([^\"]+)\""}`)
+-   **JSON Schema** — Validate response structure against a schema, inline or from a file, or one inside a document you already have: `"schema": "./openapi.json#/components/schemas/User"` checks the response against an OpenAPI component, its `$ref`s resolved across the document and into local files, never over the network
 -   **User functions** — Call Python functions for custom extraction, verification, or authentication
+-   **Failure reports** — A failing verify step lists every check that failed, not only the first, and the report gives the request as a ready-to-run `curl` command beside the request and response it shows
+
+### Scenario-wide Client Settings
+
+A scenario's [`client`](usage/scenarios.md#client-configuration) block sets up the HTTP client all its stages share, once: a base URL their relative URLs are appended to, headers and query parameters sent with every request, timeout, redirects, proxy, HTTP/2 and connection pool. A stage overrides what it needs.
+
+### Authentication
+
+Basic, digest and bearer authentication are built in, for the whole scenario or one request: `"auth": {"bearer": "{{ token }}"}` sends the token a login stage saved. `"auth": false` exempts a public endpoint, and a Python function covers any other scheme.
 
 ### Parametrization
 
@@ -52,7 +70,11 @@ Run stages with different parameter values, similar to pytest's `@pytest.mark.pa
 
 ### Parallel Execution
 
-Execute multiple requests concurrently for load testing, stress testing, or bulk operations.
+Execute multiple requests concurrently for load testing, stress testing, or bulk operations. With [`collect_saves`](advanced/parallel.md#collecting-every-iterations-saves), every request's saved values are kept as lists, so a later stage can delete every resource a parallel stage created. The report sums a parallel stage up (iterations passed and failed, throughput, p50/p95/p99 latency), and [`thresholds`](advanced/parallel.md#thresholds) fail it below a success ratio or above a latency.
+
+### Import Recorded Traffic
+
+Start from traffic you already have: [`pytest-httpchain import`](cli.md#import) turns a browser's HAR export, or curl commands from an API's docs or a failing stage's report, into a scenario, a stage per request. Base URL, query parameters, JSON, form and multipart bodies and Basic or Bearer credentials map into the dialect, and no secret is written: tokens, passwords and cookies become placeholders read from environment variables.
 
 ### Full pytest Integration
 
@@ -103,10 +125,11 @@ See [Getting Started](getting-started.md) for detailed installation and configur
 
 `pytest-httpchain` ships a scenario validator to help AI agents (and humans) author and check test scenarios.
 
-Validate scenario files for structure and common problems (undefined variables, variables used before they are saved, duplicate stage names, fixture conflicts, no-op `verify` steps, contradictory body checks); every finding carries a stable `HTTPCHAINxxx` diagnostic code, and it exits non-zero on failure, so it works as a CI gate:
+Validate scenario files for structure and common problems (undefined variables, variables used before they are saved, duplicate stage names, fixture conflicts, no-op `verify` steps, contradictory body checks); every finding carries a stable `HTTPCHAINxxx` diagnostic code, and it exits non-zero on failure, so it works as a CI gate. Name the files, or a directory to check every scenario pytest would collect in it:
 
 ```bash
 uvx pytest-httpchain validate tests/test_login.http.json
+uvx pytest-httpchain validate tests/
 # machine-readable output for editors / CI:
 uvx pytest-httpchain validate --format json tests/test_login.http.json
 ```
@@ -128,6 +151,13 @@ uvx pytest-httpchain schema > scenario.schema.json
 uvx pytest-httpchain resolve tests/test_login.http.json
 uvx pytest-httpchain show tests/test_login.http.json
 uvx pytest-httpchain graph tests/test_login.http.json
+```
+
+And `import` writes a starter scenario, which passes `validate`, from recorded traffic:
+
+```bash
+uvx pytest-httpchain import har session.har -o tests/test_checkout.http.json
+uvx pytest-httpchain import curl -o tests/test_orders.http.json 'curl https://api.example.com/v1/orders'
 ```
 
 Every command and option is documented in the [CLI reference](cli.md).

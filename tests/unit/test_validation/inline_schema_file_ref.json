@@ -7,7 +7,7 @@
                 {
                     "verify": {
                         "body": {
-                            "schema": { "$ref": "shared_schema_that_does_not_exist.json" }
+                            "schema": { "$ref": "schema_refs/common.json#/$defs/Email" }
                         }
                     }
                 }

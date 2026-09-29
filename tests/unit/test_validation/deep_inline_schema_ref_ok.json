@@ -1,0 +1,11 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                { "verify": { "status": 200, "body": { "schema": { "type": "object", "properties": { "email": { "$ref": "schema_refs/common.json#/$defs/Email" } } } } } }
+            ]
+        }
+    ]
+}

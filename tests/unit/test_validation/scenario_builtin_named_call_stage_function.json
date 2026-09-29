@@ -1,0 +1,16 @@
+{
+    "substitutions": [ { "vars": { "started": "{{ timestamp() }}" } } ],
+    "stages": [
+        {
+            "name": "real",
+            "request": { "url": "https://x.test/a", "headers": { "X-Started": "{{ str(started) }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        },
+        {
+            "name": "frozen",
+            "substitutions": [ { "functions": { "timestamp": "clock:fixed" } } ],
+            "request": { "url": "https://x.test/b", "headers": { "X-T": "{{ str(timestamp()) }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

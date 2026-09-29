@@ -1,0 +1,23 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "body": {
+                            "schema": {
+                                "$id": "https://example.com/schemas/customer",
+                                "type": "object",
+                                "properties": { "address": { "$ref": "/schemas/address" } },
+                                "$defs": { "address": { "$id": "/schemas/address", "type": "object", "required": ["street"] } }
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

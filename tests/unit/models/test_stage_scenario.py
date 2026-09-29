@@ -26,6 +26,7 @@ class TestStageFields:
             ("marks", []),
             ("fixtures", []),
             ("always_run", False),
+            ("skip_if", False),
             ("substitutions", []),
             ("parametrize", None),
             ("parallel", None),
@@ -58,6 +59,8 @@ class TestStageFields:
             pytest.param("always_run", True, id="always_run-true"),
             pytest.param("always_run", "{{ should_always_run }}", id="always_run-template"),
             pytest.param("always_run", "{{ env == 'production' }}", id="always_run-conditional-template"),
+            pytest.param("skip_if", True, id="skip_if-true"),
+            pytest.param("skip_if", "{{ not get('feature_enabled', false) }}", id="skip_if-template"),
             # An empty list stays distinct from the None default.
             pytest.param("parametrize", [], id="parametrize-empty"),
         ],
@@ -65,13 +68,27 @@ class TestStageFields:
     def test_field_roundtrip(self, field, value):
         assert getattr(make_stage(**{field: value}), field) == value
 
+    @pytest.mark.parametrize(
+        "value",
+        [
+            # Only a whole template evaluates to a bool: text around one is a string.
+            pytest.param("skip {{ flag }}", id="partial-template"),
+            pytest.param("true", id="string"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_skip_if_takes_a_bool_or_one_template(self, value):
+        with pytest.raises(ValidationError) as exc_info:
+            make_stage(skip_if=value)
+        assert {error["loc"][0] for error in exc_info.value.errors()} == {"skip_if"}
+
 
 class TestScenarioSimpleFields:
     """Per-field defaults and round-trips for Scenario's simple fields.
 
     (stages / substitutions have their own classes below because they coerce
-    their inputs rather than storing them verbatim; auth is the same
-    Authenticated field Request has, covered in test_request.py.)"""
+    their inputs rather than storing them verbatim; auth takes the forms
+    Request's does but false, covered in test_request.py.)"""
 
     @pytest.mark.parametrize(
         ("attr", "default"),

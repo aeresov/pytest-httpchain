@@ -1,0 +1,17 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "create",
+            "parallel": {
+                "foreach": [ { "individual": { "name": ["a", "b"] } } ],
+                "collect_saves": "{{ name == 'a' }}"
+            },
+            "request": { "url": "{{ server }}/items", "method": "POST", "body": { "json": { "name": "{{ name }}" } } },
+            "response": [
+                { "verify": { "status": 201 } },
+                { "save": { "jmespath": { "created_ids": "id" } } }
+            ]
+        }
+    ]
+}

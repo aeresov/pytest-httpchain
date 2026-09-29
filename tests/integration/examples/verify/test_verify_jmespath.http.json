@@ -1,0 +1,56 @@
+{
+    "stages": [
+        {
+            "name": "list_users",
+            "description": "Assert on the JSON body directly, without a save",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/users"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "jmespath": {
+                            "length(users)": 3,
+                            "users[?role == 'admin'].name": ["Alice"],
+                            "users[0]": {"eq": {"id": 1, "name": "Alice", "role": "admin"}},
+                            "users[0].name": {"matches": "^A", "type": "string"},
+                            "users[*].id": {"contains": 2, "not_contains": 4, "length": 3},
+                            "users[2].id": {"gt": 2, "le": 3.0, "type": "integer"},
+                            "users[0].email": null
+                        }
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "first_id": "users[0].id",
+                            "first_user": "users[0]"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "get_user",
+            "description": "Values are templates, rendered like any verify field; a saved object is the value to compare with",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/user/{{ first_id }}"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "jmespath": {
+                            "id": "{{ first_id }}",
+                            "{id: id, name: name, role: role}": "{{ first_user }}",
+                            "email": {"contains": "@", "ne": null},
+                            "deleted_at": {"type": "null"}
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

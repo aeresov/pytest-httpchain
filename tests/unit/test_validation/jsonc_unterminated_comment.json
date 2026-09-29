@@ -1,0 +1,6 @@
+{
+    "stages": [
+        { "name": "s", "request": { "url": "http://server/x" }, "response": [{ "verify": { "status": 200 } }] }
+    ]
+}
+/* A comment never closed

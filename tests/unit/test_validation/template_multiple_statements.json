@@ -1,0 +1,10 @@
+{
+    "substitutions": [ { "vars": { "token": "{{ env('TOKEN', 'dev'); 'fallback' }}" } } ],
+    "stages": [
+        {
+            "name": "me",
+            "request": { "url": "https://x.test/me", "headers": { "Authorization": "Bearer {{ token }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

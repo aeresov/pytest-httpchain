@@ -43,7 +43,14 @@ def validate_ref_path(ref_path: str, base_path: Path, root_path: Path, max_paren
     candidates: list[Path] = []
     outside_root: list[Path] = []
     for base in paths_to_try:
-        resolved = (base / ref_path).resolve()
+        try:
+            resolved = (base / ref_path).resolve()
+        except ValueError as e:
+            # A lone surrogate the filesystem encoding cannot hold, one JSON \u
+            # escape away (a NUL is refused above). The OS call's ValueError is
+            # outside every caller's except block, so it escaped as a raw traceback.
+            # repr keeps the message printable.
+            raise ReferenceResolverError(f"Reference path {ref_path!r} is not a valid file path: {e}") from e
         if not resolved.exists():
             continue
         target = candidates if resolved.is_relative_to(root_path_resolved) else outside_root

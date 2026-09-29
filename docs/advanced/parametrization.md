@@ -74,6 +74,10 @@ Run a stage with multiple parameter combinations:
 }
 ```
 
+Every combination must have the same keys, and each key becomes a stage
+parameter. A single key works too: the step then behaves exactly like
+`individual` with the same values.
+
 ### With Custom IDs
 
 ```json
@@ -114,6 +118,16 @@ Chain multiple parameter definitions:
 
 This creates a cross-product: 3 environments × 2 formats = 6 test runs.
 
+## Parametrizing the Whole Scenario
+
+Stage `parametrize` repeats one stage within the scenario's single chain. Every
+run shares the chain's saved values and HTTP client, and the stages after it see
+what the last run saved. To run the whole chain once per value instead, each
+run starting fresh, list a `class`-scoped fixture with `params` in the
+scenario's `fixtures`. Listed on only some stages, it varies in place like
+stage `parametrize` (and draws a warning when two or more stages request it).
+See [Parametrized fixtures](../usage/scenarios.md#parametrized-fixtures).
+
 ## Template Expressions in Parameters
 
 Parameter values can use template expressions:
@@ -151,9 +165,49 @@ Parameter values can use template expressions:
 }
 ```
 
-Values that come from scenario `vars` are exposed as namespaces, so use attribute
-access (`{{ user.id }}`), not subscript (`{{ user['id'] }}`). Plain dicts from
-fixtures or `combinations` parameters keep subscript access.
+An object from scenario `vars` reads by attribute (`{{ user.id }}`) or by key
+(`{{ user['id'] }}`), as a dict from a fixture or a `combinations` parameter
+does (see [Reading objects](../usage/substitutions.md#reading-objects)).
+
+A `combinations` step can be one template for the whole list, such as
+`"combinations": "{{ test_users }}"`: each object in it is one combination, whose
+keys name the stage parameters (`{{ id }}`, `{{ name }}`). An object nested inside
+a combination from `vars` is a namespace like any other `vars` value.
+
+A template given for a whole list must render a list, or a tuple such as
+`{{ tuple(test_users) }}`. One that renders another template string fails
+collection, naming the step and the stage.
+
+## Test IDs
+
+Without `ids`, each run's test id is built from its values, as with pytest's own
+parametrize: a string, number or boolean appears as is (`[1]`, `[GET-/users]`),
+anything else as its parameter name and position (`[user0]`).
+
+A template that draws values at random (`uuid4()`, `rand()`, `randint()`) or
+reads the clock (`now()`, `timestamp()`) is resolved when the scenario is
+collected, and every
+[pytest-xdist](parallel.md#running-scenarios-in-parallel-with-pytest-xdist)
+worker collects on its own. Each worker then gets different ids, and the run
+stops with "Different tests were collected between gw0 and gw1". Give such a
+step explicit `ids`:
+
+```json
+{
+    "parametrize": [
+        {
+            "combinations": "{{ [{'token': uuid4()} for _ in range(2)] }}",
+            "ids": ["token_a", "token_b"]
+        }
+    ]
+}
+```
+
+Under `--dist loadscope`, an id containing `::`, such as the one built from the
+value `"::1"`, fails collection: loadscope would run that stage apart from the
+rest of the scenario (see
+[pytest-xdist](parallel.md#running-scenarios-in-parallel-with-pytest-xdist)).
+Give the step explicit `ids` there too.
 
 ## Complete Example
 

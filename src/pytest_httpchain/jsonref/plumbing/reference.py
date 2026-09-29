@@ -9,25 +9,29 @@ from typing import Any, Self
 
 from deepmerge import STRATEGY_END, Merger
 
-from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, ReferenceResolverError
+from pytest_httpchain.jsonref.equality import json_equal
+from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, FileLoadError, InvalidJSONError, ReferenceResolverError
+from pytest_httpchain.jsonref.jsonc import loads_jsonc
 from pytest_httpchain.jsonref.plumbing.circular import CircularDependencyTracker
 from pytest_httpchain.jsonref.plumbing.path import parse_json_pointer, validate_ref_path
 
 # Predicate over a document position: the tuple of keys and indices from the
 # root to a value, composed across file boundaries.
-type OpaquePredicate = Callable[[tuple[str | int, ...]], bool]
+type PositionPredicate = Callable[[tuple[str | int, ...]], bool]
 
 REF_PATTERN = re.compile(r"^(?P<file>[^#]+)?(?:#(?P<pointer>/.*))?$")
 
 REF_KEYS = ("$include", "$merge", "$ref")
 
 # What loading a file can raise besides the resolver's own errors, wrapped into
-# `ReferenceResolverError` with the original as ``__cause__``, which consumers
-# classify on. A non-UTF-8 file fails in ``read_text`` with UnicodeDecodeError,
-# not JSONDecodeError. Deep nesting raises RecursionError, which is not a
-# ValueError: from CPython's decoder at thousands of levels, and from the
-# resolver's own walk, one frame per level, at under a thousand.
-_LOAD_ERRORS = (OSError, json.JSONDecodeError, UnicodeDecodeError, RecursionError)
+# a `FileLoadError` holding the file's path, the original as ``__cause__``,
+# which consumers classify on. Content the reader itself rejects (bytes that
+# are not UTF-8, an integer too long to parse) is already an `InvalidJSONError`
+# naming the file, see `_parse_json_rejecting_duplicates`. Deep nesting raises
+# RecursionError, which is not a ValueError: from CPython's decoder at
+# thousands of levels, and from the resolver's own walk, one frame per level,
+# at under a thousand.
+_LOAD_ERRORS = (OSError, json.JSONDecodeError, RecursionError)
 
 
 def _load_error_text(e: BaseException) -> str:
@@ -40,9 +44,11 @@ def _raise_on_conflict(config: Any, path: list[Any], base: Any, nxt: Any) -> Any
 
     Used as both the fallback and the type-conflict strategy, so no-last-wins
     holds for every combination, nulls included. Equality is judged in JSON
-    terms, where Python's ``True == 1`` must not pass as equal.
+    terms (`json_equal`), where Python's ``True == 1`` must not pass as equal,
+    at any depth: two lists or objects an atomic position keeps whole are equal
+    only if every member is, so ``[true]`` and ``[1]`` conflict.
     """
-    if isinstance(base, bool) == isinstance(nxt, bool) and base == nxt:
+    if json_equal(base, nxt):
         return base
     location = ".".join(str(part) for part in path) or "root"
     raise ReferenceResolverError(f"Merge conflict at {location}")
@@ -57,32 +63,47 @@ _SIBLING_MERGER = Merger(
 )
 
 
-def _build_opaque_aware_merger(opaque: OpaquePredicate, base_path: tuple[str | int, ...]) -> Merger:
-    """Sibling merger treating opaque positions as atomic: two opaque subtrees
-    must be equal or conflict, never blend.
+def _build_atomic_aware_merger(atomic: PositionPredicate, base_path: tuple[str | int, ...]) -> Merger:
+    """Sibling merger treating the ``atomic`` positions like scalars: two lists
+    or dicts there must be equal or conflict, never concatenate or blend.
 
     ``base_path`` is the reference site's position, since deepmerge's ``path`` is
     relative to the merge root.
+
+    The merge root itself is exempt. A position is atomic because two whole
+    values written for it, a fragment's and a sibling's of some enclosing
+    reference, must not blend into a third. A reference written *at* the
+    position with siblings beside it (``{"$merge": "common.json#/price",
+    "lt": 100}``) is one value composed on purpose, so it merges as anywhere
+    else, key by key.
     """
 
-    def atomic_at_opaque(config: Any, path: list[Any], base: Any, nxt: Any) -> Any:
-        if opaque(base_path + tuple(path)):
+    def keep_whole_at_atomic(config: Any, path: list[Any], base: Any, nxt: Any) -> Any:
+        if path and atomic(base_path + tuple(path)):
             return _raise_on_conflict(config, path, base, nxt)
         return STRATEGY_END
 
     return Merger(
-        [(list, [atomic_at_opaque, "append"]), (dict, [atomic_at_opaque, "merge"])],
+        [(list, [keep_whole_at_atomic, "append"]), (dict, [keep_whole_at_atomic, "merge"])],
         [_raise_on_conflict],
         [_raise_on_conflict],
     )
 
 
 def _parse_json_rejecting_duplicates(path: Path) -> Any:
-    """Parse a JSON file, rejecting duplicate object keys.
+    """Parse a JSON file, comments and trailing commas allowed (`loads_jsonc`),
+    rejecting duplicate object keys.
 
     ``json.loads`` keeps the last one, which in a scenario silently drops a step
-    and weakens the test. `DuplicateKeyError` propagates unwrapped through the
-    callers' narrower except blocks.
+    and weakens the test. A ``/*`` never closed is a syntax error, a
+    ``JSONDecodeError`` at its position, as any other is.
+
+    ``utf-8-sig`` accepts the byte-order mark Windows editors write. Any other
+    content failure short of a syntax error is an `InvalidJSONError` naming
+    this file: undecodable bytes and the int-string conversion limit raise plain
+    ``ValueError``, which the callers' ``except (OSError, JSONDecodeError)``
+    let escape raw. Raised here as a type of its own, it propagates unwrapped
+    through those blocks, and the validator can tell it from a reference problem.
     """
 
     def pairs_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -93,21 +114,39 @@ def _parse_json_rejecting_duplicates(path: Path) -> Any:
             result[key] = value
         return result
 
-    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs_hook)
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise InvalidJSONError(f"{path} is not valid UTF-8: {e}") from e
+    try:
+        return loads_jsonc(text, object_pairs_hook=pairs_hook)
+    except json.JSONDecodeError:
+        raise
+    except ValueError as e:
+        raise InvalidJSONError(f"{path} cannot be parsed: {e}") from e
 
 
 class ReferenceResolver:
     """Resolves reference directives in a document.
 
     ``opaque`` marks positions that are not the resolver's to process: those
-    subtrees pass through verbatim, directives and all.
+    subtrees pass through verbatim, directives and all. ``atomic`` marks
+    positions whose value is resolved as usual but merges with a sibling as a
+    whole, like a scalar. An opaque position merges atomically too.
     """
 
-    def __init__(self, max_parent_traversal_depth: int = 3, root_path: Path | None = None, opaque: OpaquePredicate | None = None):
+    def __init__(
+        self,
+        max_parent_traversal_depth: int = 3,
+        root_path: Path | None = None,
+        opaque: PositionPredicate | None = None,
+        atomic: PositionPredicate | None = None,
+    ):
         self.max_parent_traversal_depth = max_parent_traversal_depth
         self.tracker = CircularDependencyTracker()
         self.root_path = root_path
         self.opaque = opaque
+        self.atomic = atomic
 
     def resolve_document(self, data: dict[str, Any], base_path: Path, root_path: Path) -> dict[str, Any]:
         """Resolve every reference in a document, relative to ``base_path`` and
@@ -133,7 +172,7 @@ class ReferenceResolver:
             return self.resolve_document(data, path.parent, root_path)
 
         except _LOAD_ERRORS as e:
-            raise ReferenceResolverError(f"Failed to load JSON from {path}: {_load_error_text(e)}") from e
+            raise FileLoadError(f"Failed to load JSON from {path}: {_load_error_text(e)}", path) from e
 
     def _resolve_refs(
         self,
@@ -211,7 +250,7 @@ class ReferenceResolver:
             return child_resolver._resolve_refs(external_data, resolved_path.parent, root_data=full_external_data, root_path=root_path, doc_path=doc_path)
 
         except _LOAD_ERRORS as e:
-            raise ReferenceResolverError(f"Failed to load external reference {file_path}: {_load_error_text(e)}") from e
+            raise FileLoadError(f"Failed to load external reference {file_path}: {_load_error_text(e)}", resolved_path) from e
         finally:
             self.tracker.clear_external_ref(resolved_path, pointer)
 
@@ -273,11 +312,17 @@ class ReferenceResolver:
 
         resolved_siblings = self._resolve_refs(siblings, current_path, root_data, root_path, doc_path)
 
-        merger = _SIBLING_MERGER if self.opaque is None else _build_opaque_aware_merger(self.opaque, doc_path)
+        if self.opaque is None and self.atomic is None:
+            merger = _SIBLING_MERGER
+        else:
+            merger = _build_atomic_aware_merger(self._merges_atomically, doc_path)
         return merger.merge(referenced_data, resolved_siblings)
+
+    def _merges_atomically(self, path: tuple[str | int, ...]) -> bool:
+        return (self.opaque is not None and self.opaque(path)) or (self.atomic is not None and self.atomic(path))
 
     def _create_child_resolver(self, root_path: Path) -> Self:
         """A resolver for another document, inheriting the cycle tracker."""
-        child_resolver = type(self)(self.max_parent_traversal_depth, root_path, opaque=self.opaque)
+        child_resolver = type(self)(self.max_parent_traversal_depth, root_path, opaque=self.opaque, atomic=self.atomic)
         child_resolver.tracker = self.tracker.create_child_tracker()
         return child_resolver

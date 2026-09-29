@@ -41,6 +41,15 @@ def test_fixture_var_conflict_fails_collection(pytester):
     result.stdout.fnmatch_lines(["*Conflicting fixtures and vars*"])
 
 
+def test_relative_url_without_base_url_fails_collection(pytester):
+    """HTTPCHAIN034 is an error: without client.base_url the request has
+    nowhere to go, and the stage would fail every run."""
+    _write(pytester, "test_relative.http.json", {"stages": [_stage("s", "/users/1")]})
+    result = pytester.runpytest("--collect-only")
+    assert result.ret != 0
+    result.stdout.fnmatch_lines(["*HTTPCHAIN034*'/users/1' is relative, but the scenario sets no client.base_url*"])
+
+
 def test_undefined_variable_warns_at_collection(pytester):
     _write(
         pytester,
@@ -130,28 +139,45 @@ def test_ambiguous_ref_keeps_its_diagnostic_under_filterwarnings_error(pytester)
     result.stdout.no_fnmatch_line("*Failed to parse JSON file*")
 
 
-def test_load_failures_are_coded_the_same_way_as_the_cli(pytester):
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        # One trailing comma is accepted (JSON with comments), a second is not.
+        pytest.param(b'{"stages": {"s": {"request": {"url": "http://x"}},,}}', "Expecting property name enclosed in double quotes: line 1 column 51", id="syntax"),
+        pytest.param(b'{"stages": {}}\n/* never closed', "Unterminated comment: line 2 column 1", id="unterminated-comment"),
+        # Not UTF-8: fell through to HTTPCHAIN015's catch-all, not naming the problem.
+        pytest.param('{"stages": {"café": {"request": {"url": "http://x"}}}}'.encode("latin-1"), "is not valid UTF-8", id="not-utf8"),
+    ],
+)
+@pytest.mark.parametrize("include", [False, True], ids=["scenario", "included-file"])
+def test_load_failures_are_coded_the_same_way_as_the_cli(pytester, content, message, include):
     """Collection and `validate` share one load-failure taxonomy.
 
     They used to have two: the same malformed file produced
     `[HTTPCHAIN014] Invalid JSON syntax` from the CLI and an uncoded
     "Cannot load JSON file" from pytest, contradicting docs/diagnostics.md,
-    which carves out only 020-024 as CLI-only.
+    which carves out only 020-024 as CLI-only. In a file the scenario
+    includes, both name that file: a line and column alone read as the
+    scenario's.
     """
     from pytest_httpchain.validation import validate_scenario
 
     path = pytester.path / "test_broken.http.json"
-    path.write_text('{"stages": {"s": {"request": {"url": "http://x"}},}}')
+    bad = pytester.path / "part.json" if include else path
+    bad.write_bytes(content)
+    if include:
+        path.write_text('{"$include": "part.json"}')
 
     cli = validate_scenario(path)
     assert [d.code for d in cli.diagnostics] == ["HTTPCHAIN014"], cli.diagnostics
-    assert "Illegal trailing comma" in cli.diagnostics[0].message
+    assert message in cli.diagnostics[0].message
+    assert ("part.json" in cli.diagnostics[0].message) is include
 
     result = pytester.runpytest("--collect-only")
 
     assert result.ret != 0
     # The same code AND the same wording, not merely "some error either way".
-    result.stdout.fnmatch_lines(["*[[]HTTPCHAIN014[]]*Illegal trailing comma*"])
+    result.stdout.fnmatch_lines([f"*[[]HTTPCHAIN014[]]*{'part.json*' if include else ''}{message}*"])
 
 
 def test_unknown_key_fails_collection_with_code(pytester):

@@ -6,9 +6,13 @@
     "[toml]": {
         "editor.defaultFormatter": "tamasfe.even-better-toml"
     },
+    "files.associations": {
+        "**/examples/jsonc/*.json": "jsonc",
+        "**/test_validation/*jsonc*.json": "jsonc"
+    },
     "json.schemas": [
         {
-            "fileMatch": ["**/test_*.http.json"],
+            "fileMatch": ["**/test_*.http.json", "**/test_*.http.jsonc"],
             "url": "./docs/schema/scenario.schema.json"
         }
     ]

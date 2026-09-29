@@ -42,8 +42,9 @@ uv run python scripts/generate_schema.py && git add -N docs/schema && git diff -
 # Format
 uv run ruff format .
 
-# Validate scenario file(s) (exits non-zero if invalid)
+# Validate scenario file(s), or every scenario under a directory (exits non-zero if invalid)
 uv run pytest-httpchain validate tests/integration/examples/save/test_save_jmespath.http.json
+uv run pytest-httpchain validate tests/integration/examples
 
 # Deep validation (opt-in): import user functions + check signatures + referenced files
 uv run pytest-httpchain validate --deep --syspath tests/integration/examples tests/integration/examples/save/test_save_user_function.http.json
@@ -73,43 +74,49 @@ The plugin is a single distribution; domain subpackages (models, templates, json
 
 ```
 src/pytest_httpchain/
-├── cli.py                     # Typer CLI (validate, schema, resolve, show, graph)
-├── validation/                # Shared validator (CLI + collection-time), a package: diagnostics (codes/result types), loader ($ref + model validation), semantic (checks incl. order-aware data-flow), deep (imports/signatures/files, `validate --deep` only), validate (file-level entry point)
+├── cli.py                     # Typer CLI (validate, schema, resolve, show, graph, import har|curl)
+├── importers/                 # `import`: recorded traffic -> starter scenario. builder (RecordedRequest -> scenario dict: base_url, params, headers, body forms, auth shorthands, secrets -> env-read vars placeholders, no recorded `$ref`/`$include`/`$merge` as a key; the text written validated as a file, through the loader, before it is written), curl (shlex-based POSIX reader of curl commands, incl. format_curl's: the pipeline's command named curl, redirections and here-documents as the stdin `@-` reads, curl's URL globbing), har (HAR entries, static-asset/--include/--exclude filters, response-set cookies left to the client); CLI side, nothing below imports it
+├── validation/                # Shared validator (CLI + collection-time), a package: diagnostics (codes/result types), loader ($ref + model validation), semantic (checks incl. order-aware data-flow), deep (imports/signatures/files, `validate --deep` only), validate (entry points: one file, and the paths `validate` is given), discovery (the scenario files a directory given to `validate` holds, found as pytest collects them, and the suffix read from the config file pytest would read)
 ├── dataflow.py                # DataFlow model + analyze_dataflow() (stage data-flow analysis, used by show/graph)
 ├── scoping.py                 # Single encoding of the scope/visibility rules: StageScopes static name sets (used by validation + dataflow) and runtime ChainMap context builders (used by carrier)
 ├── schema.py                  # build_schema() — JSON Schema generation shared by the schema command
 ├── plugin.py                  # pytest hooks, JSON test file collection (JsonModule), chain-contiguity ordering hooks
 ├── factory.py                 # Collection-time test-class factory (create_test_class)
-├── carrier.py                 # Runtime execution engine (Carrier class): chain state, iteration matrix, threading, reporting
-├── request_builder.py         # Resolved models -> httpx kwargs (build_client_kwargs, build_request_kwargs)
+├── carrier.py                 # Runtime execution engine (Carrier class): chain state, iteration matrix, retry attempts, threading, reporting
+├── request_builder.py         # Resolved models -> httpx kwargs (build_client_kwargs, build_request_kwargs), multipart bodies encoded to bytes, and auth flows (build_auth: basic, digest, bearer, user functions)
 ├── response_steps.py          # Meaning of a single verify/save step (process_verify, process_save) — pure, no chain state
-├── utils.py                   # Marker construction, substitution processing, scenario-relative path resolution
+├── parallel_stats.py          # A parallel stage's stats (counts, wall time, throughput, nearest-rank latency percentiles) from how its iterations ended, the Parallel Summary report section, the stats_as object, and parallel.thresholds checks and failure message — pure; the carrier times and classifies the iterations
+├── body_schema.py             # verify.body.schema made ready to validate (BodySchema): file + JSON pointer, one referencing registry resolving $refs across the document and into local files held to the `$include` path rules (relative, traversal depth, reference root; never remote), a `$ref`'s target validated in its document's dialect, dialect choice, per-file parse and registry caches; shared by the runtime and `validate --deep`
+├── utils.py                   # Marker construction, substitution processing, scenario-relative path resolution, location path segments
 ├── report_formatter.py        # HTTP request/response formatting for test reports
 ├── har_writer.py              # HAR file export for HTTP request/response logging
-├── constants.py               # ConfigOptions enum for pytest.ini settings + the shared user-function name grammar
-├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response) + subclasses RequestError, SaveError, VerificationError
+├── redaction.py               # Redaction: the one set of credential-hiding rules (headers, cookies, URL query) shared by reports, HAR, header verify and request-error messages
+├── constants.py               # ConfigOptions enum for pytest.ini settings, the scenario file-name grammar (suffix + extensions, shared by collection and `validate`) + the shared user-function name grammar
+├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response, and whether a stage's retry may retry it) + subclasses RequestError, SaveError, VerificationError
 ├── userfunc.py                # Dynamic function import/invocation, incl. the model-aware call_user_function dispatch
 ├── models/                    # Pydantic models (Scenario, Stage, Request, etc.)
 ├── templates/                 # {{ expression }} substitution engine
-└── jsonref/                   # $ref resolution with deep merging
+└── jsonref/                   # $ref resolution with deep merging, and the JSONC reader every file on disk is parsed with
 ```
 
 The models, templates, and jsonref subpackages carry their own CLAUDE.md next to their code.
 
 ## Test File Pattern
 
-Test scenarios are discovered by pattern: `test_<name>.http.json` (suffix configurable via `httpchain_suffix` ini option).
+Test scenarios are discovered by pattern: `test_<name>.http.json` or `test_<name>.http.jsonc` (suffix configurable via `httpchain_suffix` ini option; the extensions are `constants.SCENARIO_FILE_EXTENSIONS`). Every file read from disk, whatever its extension, is parsed as JSONC — comments and trailing commas allowed — by the one scanner in `jsonref/jsonc.py`; response bodies stay strict JSON.
 
 ## Key Execution Flow
 
 1. **Collection**: `plugin.py:JsonModule.collect()` loads JSON, resolves `$ref`, validates against `Scenario` model, then runs `validation.check_scenario()` which returns coded `Diagnostic` objects — error-severity → `CollectError`, warning-severity → `ScenarioValidationWarning`
 2. **Class generation**: `factory.py:create_test_class()` creates dynamic test class with stage methods
 3. **Execution**: Each stage method calls `Carrier.execute_stage()` which:
-   - Processes substitutions into context
+   - Processes substitutions into context, then evaluates `skip_if` against it (a skip saves nothing and leaves the chain healthy)
    - Walks request model through template engine, then `request_builder.build_request_kwargs()`
    - Executes HTTP request via httpx
-   - Processes response steps via `response_steps.process_verify()` / `process_save()`
-   - Updates global context with saved values
+   - Processes response steps via `response_steps.process_verify()` / `process_save()`; a verify step gets the declared model and the carrier's renderer (`_verify_renderer`), which renders the step's values one at a time with one evaluator (`templates.walker`), all before the first check runs, so a value that does not render is one failure, listed in its check's place among the step's
+   - With a stage `retry`, makes each iteration's attempts (`Carrier._execute_attempts`): a failure `retry.on` names and another attempt may change (`StageExecutionError.retryable`) waits and attempts again, the request rendered anew and the response steps run in a fresh context
+   - For a parallel stage, records how each iteration ended and how long its requests spent in the HTTP client (`_ParallelRun`), then holds the stats (`parallel_stats`) to `parallel.thresholds`; a `min_success_ratio` below 1 lets the iterations run on after failures instead of cancelling the pool
+   - Updates global context with saved values (and a parallel stage's `stats_as` object)
 
 Per-scenario mutable class state (client, abort flag, exchange bookkeeping) is defined once in `carrier.fresh_scenario_state()`; the factory seeds each generated subclass with it and `teardown_class` re-applies it.
 
@@ -140,7 +147,8 @@ run_scenario({"stages": [stage("s", "/headers", request={"timeout": 0.2})]})  # 
 `tests/integration/helpers.py` holds the rest: `stage()` builds a stage against
 the example `server` fixture (GET, expect 200) so an inline scenario spells out
 only what its test is about; `har_entries()` reads the one HAR file a run
-wrote; `named()` builds parametrize rows whose first value is the test id.
+wrote (`HAR_ARGS` makes it write one); `named()` builds parametrize rows whose
+first value is the test id.
 Scenarios that differ only in expected outcome share one parametrized test
 (`test_verify_passes`, `test_save_fails_cleanly`, ...) with the rationale as a
 comment on the row.

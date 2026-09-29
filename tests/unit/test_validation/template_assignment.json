@@ -1,0 +1,12 @@
+{
+    "stages": [
+        {
+            "name": "profile",
+            "request": { "url": "https://x.test/me" },
+            "response": [
+                { "save": { "jmespath": { "active": "active" } } },
+                { "verify": { "status": 200, "expressions": ["{{ active = True }}"] } }
+            ]
+        }
+    ]
+}

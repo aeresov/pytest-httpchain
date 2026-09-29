@@ -1,0 +1,66 @@
+{
+    "substitutions": [
+        {
+            "vars": {
+                "title": "Quarterly report",
+                "tags": ["a", "b"],
+                "second_image": "upload_b.bin"
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "multipart_body",
+            "description": "Form fields and files in one multipart body: repeated fields and files, per-file filename and content type, inline content",
+            "fixtures": ["server"],
+            "request": {
+                "method": "POST",
+                "url": "{{ server }}/echo/multipart",
+                "body": {
+                    "multipart": {
+                        "fields": {
+                            "title": "{{ title }}",
+                            "tags": "{{ tags }}",
+                            "draft": false,
+                            "pages": 12
+                        },
+                        "files": {
+                            "blob": { "base64": "iVBORw0KGgo=" },
+                            "document": "upload_a.txt",
+                            "images": [
+                                "upload_a.txt",
+                                { "path": "{{ second_image }}", "filename": "photo.png", "content_type": "image/png" }
+                            ],
+                            "note": { "content": "about the {{ title }}", "filename": "note.txt", "content_type": "text/plain" },
+                            "meta": { "content": "{\"pages\": 12}", "filename": "", "content_type": "application/json" }
+                        }
+                    }
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200,
+                        "jmespath": {
+                            "form.title": ["Quarterly report"],
+                            "form.tags": ["a", "b"],
+                            "form.draft": ["false"],
+                            "form.pages": ["12"],
+                            "form.meta": ["{\"pages\": 12}"],
+                            "files.document[0].filename": "upload_a.txt",
+                            "files.document[0].content_type": "text/plain",
+                            "files.document[0].text": "hello upload",
+                            "files.images[*].filename": ["upload_a.txt", "photo.png"],
+                            "files.images[1].content_type": "image/png",
+                            "files.images[1].text": "BBBB",
+                            "files.note[0].text": "about the Quarterly report",
+                            "files.blob[0].filename": "blob",
+                            "files.blob[0].content_type": "application/octet-stream",
+                            "files.blob[0].size": 8
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

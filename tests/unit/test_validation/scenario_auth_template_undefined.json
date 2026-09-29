@@ -1,0 +1,10 @@
+{
+    "auth": { "bearer": "{{ token }}" },
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/me" },
+            "response": [{ "verify": { "status": 200 } }]
+        }
+    ]
+}

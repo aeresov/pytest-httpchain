@@ -1,10 +1,11 @@
+import httpx
 import pytest
 
 import pytest_httpchain.templates.substitution as substitution_module
 from pytest_httpchain.errors import StageExecutionError
-from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsSubstitution
+from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsNamespace, VarsSubstitution
 from pytest_httpchain.templates import TemplatesError
-from pytest_httpchain.utils import make_marker, process_substitutions
+from pytest_httpchain.utils import make_marker, path_segment, process_substitutions, request_content, xdist_group_names
 
 # The functions these tests import live in a module of their own; see its
 # docstring for why they are not defined here.
@@ -23,6 +24,14 @@ class TestProcessSubstitutions:
                 id="later-steps-see-earlier",
             ),
             pytest.param([VarsSubstitution(vars={"key": "first"}), VarsSubstitution(vars={"key": "second"})], {"key": "second"}, id="later-step-overrides"),
+            # A value with nothing but an escape is rendered too: only rendering
+            # removes it. What an earlier value rendered to is final: `echo`
+            # gets `first`'s backslash, not another pass.
+            pytest.param(
+                [VarsSubstitution(vars={"text": r"\{{name}}", "obj": {"t": r"\{{name}}"}, "first": r"\\\{{name}}"}), VarsSubstitution(vars={"echo": "{{ first }}"})],
+                {"text": "{{name}}", "obj": VarsNamespace(t="{{name}}"), "first": r"\{{name}}", "echo": r"\{{name}}"},
+                id="escapes",
+            ),
         ],
     )
     def test_vars_steps(self, substitutions, expected):
@@ -143,3 +152,45 @@ def test_make_marker(mark_str, expected):
 def test_make_marker_rejects_non_literal_expressions(mark_str, error):
     with pytest.raises(error):
         make_marker(mark_str)
+
+
+def test_xdist_group_names_reads_names_as_xdist_does():
+    """First argument, else ``name``, else "default", as a string; other marks ignored."""
+    marks = ["xdist_group('db')", "xdist_group(name='cache')", "xdist_group()", "xdist_group(7)", "slow", "skip(reason='db')"]
+    assert xdist_group_names(make_marker(mark) for mark in marks) == {"db", "cache", "default", "7"}
+
+
+@pytest.mark.parametrize(
+    ("request_", "expected"),
+    [
+        pytest.param(httpx.Request("POST", "http://t/", content=b"body"), b"body", id="buffered"),
+        # httpx builds a follow-up that keeps the method with stream= and never
+        # reads it: a 307/308 re-sends the original's ByteStream, a redirected
+        # GET its own empty one. Plain bytes, so they are recovered.
+        pytest.param(httpx.Request("POST", "http://t/", stream=httpx.ByteStream(b"body")), b"body", id="redirect-replayed-body"),
+        pytest.param(httpx.Request("GET", "http://t/", stream=httpx.ByteStream(b"")), b"", id="redirect-empty-body"),
+        # No other stream is iterated again: an iterator may be spent, and a
+        # multipart body is not told apart from a file-backed one, even when it
+        # is built from bytes, as the plugin builds it.
+        pytest.param(httpx.Request("POST", "http://t/", content=iter([b"chunk"])), None, id="iterator-stream"),
+        pytest.param(httpx.Request("POST", "http://t/", files={"f": ("f.txt", b"x")}), None, id="multipart-stream"),
+    ],
+)
+def test_request_content(request_, expected):
+    assert request_content(request_) == expected
+
+
+@pytest.mark.parametrize(
+    ("key", "segment"),
+    [
+        pytest.param(0, "[0]", id="index"),
+        pytest.param("status", ".status", id="name"),
+        pytest.param("X-Custom-Header", ".X-Custom-Header", id="header-name"),
+        # A JMESPath expression as a key: dotted, it would read as two steps.
+        pytest.param("data.id", '["data.id"]', id="dotted"),
+        pytest.param("items[0]", '["items[0]"]', id="brackets"),
+        pytest.param('a"b', '["a\\"b"]', id="quote"),
+    ],
+)
+def test_path_segment(key, segment):
+    assert path_segment(key) == segment

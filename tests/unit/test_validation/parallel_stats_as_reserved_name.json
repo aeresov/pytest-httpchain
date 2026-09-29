@@ -1,0 +1,11 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "load",
+            "parallel": { "repeat": 3, "stats_as": "response" },
+            "request": { "url": "{{ server }}/ok" },
+            "response": [{ "verify": { "status": 200 } }]
+        }
+    ]
+}

@@ -1,32 +1,72 @@
 """Validated type aliases for the scenario models: content validators (JMESPath,
 regex, XML, GraphQL, base64, templates, import names, identifiers, schemas,
-paths) and the ``SimpleNamespace``<->``dict`` round-trip that makes ``vars``
-attribute-accessible in templates and JSON-serializable in bodies."""
+paths, URLs) and the `VarsNamespace`<->``dict`` round-trip that makes ``vars``
+objects readable by attribute and by key in templates and JSON-serializable in
+bodies."""
 
 import base64
 import keyword
 import re
+import threading
 import types
 import xml.etree.ElementTree
-from collections.abc import Callable
-from pathlib import Path
-from typing import Annotated, Any
+from collections.abc import Callable, ItemsView, Iterable, Iterator, KeysView, Mapping, ValuesView
+from pathlib import Path, PurePath
+from typing import Annotated, Any, Literal, NamedTuple, get_args
+from urllib.parse import unquote
 
 import graphql
+import httpx
 import jmespath
 import jsonschema
-from pydantic import AfterValidator, BeforeValidator, Field, JsonValue, PlainSerializer, WithJsonSchema
+import pydantic_core
+from pydantic import (
+    AfterValidator,
+    AnyHttpUrl,
+    AnyUrl,
+    BeforeValidator,
+    Field,
+    JsonValue,
+    PlainSerializer,
+    StrictFloat,
+    StrictInt,
+    TypeAdapter,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    WithJsonSchema,
+    WrapValidator,
+)
 
 from pytest_httpchain.constants import parse_user_function_name
-from pytest_httpchain.templates import TEMPLATE_PATTERN, TEMPLATE_PATTERN_ECMA, is_complete_template
+from pytest_httpchain.templates import TEMPLATE_PATTERN_ECMA, contains_escape, contains_template, find_templates, is_complete_template, needs_rendering, unescape
+
+# The validation context of a model the carrier validates again once its
+# templates rendered (`entities.validate_rendered`): it validated as written
+# before, so its text is now what was sent or compared, final. What only the
+# scenario's own text means is not read in it: an escaped `\{{` (a value a
+# template rendered holds one as it is: `as_rendered`, `_path_or_text`,
+# `refuse_escaped_braces`), a matcher's authoring hint.
+RENDERED = object()
 
 
-def create_string_validator(validation_func: Callable[[str], Any], error_message: str) -> Callable[[str], str]:
-    """Factory for creating string validators."""
+def as_rendered(value: str, info: ValidationInfo) -> str:
+    """The text a literal is used as, which its check judges: the scenario's
+    own text with its escapes rendered (``\\{{`` is ``{{``, `unescape`), as
+    rendering makes it before it is sent, compared or compiled, where the
+    escape's backslash could read as the literal grammar's own (a GraphQL or
+    JMESPath string's escape, a URL's authority). The field keeps the text as
+    written, for the one rendering to unescape. A value a template rendered
+    (`RENDERED`) is final as it is."""
+    return value if info.context is RENDERED else unescape(value)
 
-    def validator(v: str) -> str:
+
+def create_string_validator(validation_func: Callable[[str], Any], error_message: str) -> Callable[[str, ValidationInfo], str]:
+    """Factory for a literal's validator: ``validation_func`` judges the text
+    the literal is used as (`as_rendered`), and the value is kept as written."""
+
+    def validator(v: str, info: ValidationInfo) -> str:
         try:
-            validation_func(v)
+            validation_func(as_rendered(v, info))
         except Exception as e:
             raise ValueError(error_message) from e
         return v
@@ -72,9 +112,129 @@ def validate_json_schema_inline(v: dict[str, Any]) -> dict[str, Any]:
     return v
 
 
+class SchemaFileRef(NamedTuple):
+    """A ``verify.body.schema`` file reference taken apart (`parse_schema_file_ref`):
+    the file's ``path`` and the ``fragment`` after its ``#``, both as written
+    (``""`` for none), and the JSON pointer's ``pointer`` segments, decoded."""
+
+    path: str
+    fragment: str
+    pointer: tuple[str, ...]
+
+
+# What makes a reference a URI, not a path: `http:`, `https:` or `file:`, in
+# any form, or another scheme with an authority (`ftp://host/...`). Any other
+# colon is a path's (`schemas:v1/user.json`, `user-2024-01-01T10:00.json`), and
+# so is a Windows drive's (C:\schemas\user.json, one letter).
+_URI = re.compile(r"(?:https?|file):|[a-z][a-z0-9+.-]+://", re.IGNORECASE)
+# An RFC 6901 escape is ~0 (for ~) or ~1 (for /): any other ~ is not one.
+_BAD_POINTER_ESCAPE = re.compile(r"~(?![01])")
+
+
+def parse_schema_file_ref(ref: str) -> SchemaFileRef:
+    """Take a ``body.schema`` file reference apart, or say why it is not one.
+
+    ``./openapi.json#/components/schemas/User`` is a local file, then, after
+    the first ``#``, an RFC 6901 JSON pointer in URI fragment form:
+    percent-decoded first (``%20`` is a space), then split at each ``/``, each
+    segment unescaped (``~1`` is ``/``, ``~0`` is ``~``). An empty fragment, or
+    none, selects the whole document. Anything that is not a pointer after the
+    ``#``, such as a plain-name anchor, is refused, and so is a URI (an
+    ``http:``, ``https:`` or ``file:`` one, or any with ``//`` after its
+    scheme): remote schemas are never fetched. A path cannot hold a ``#``,
+    then, and ``./`` before one that starts like a URI keeps it a path.
+
+    Shared by the model, which refuses a bad reference at load, the runtime
+    and ``validate --deep``, which read the file and follow the pointer, so
+    all three take a reference apart the same way.
+    """
+    path, _, fragment = ref.partition("#")
+    if not path:
+        raise ValueError(f"A schema file reference must name a file before its '#', got {ref!r}")
+    if uri := _URI.match(path):
+        if uri.group().lower().startswith("http"):
+            raise ValueError(f"A schema file must be a local file: remote schemas are not fetched, got {ref!r}")
+        raise ValueError(f"A schema file must be a local file path, not a URI, got {ref!r}")
+    if not fragment:
+        return SchemaFileRef(path, fragment, ())
+    if not fragment.startswith("/"):
+        raise ValueError(f"The part after '#' must be a JSON pointer starting with '/' (such as '#/components/schemas/User'), got {ref!r}")
+    try:
+        decoded = unquote(fragment, errors="strict")
+    except UnicodeDecodeError as e:
+        raise ValueError(f"The JSON pointer's percent-encoding is not UTF-8, got {ref!r}") from e
+    segments = decoded[1:].split("/")
+    for segment in segments:
+        if _BAD_POINTER_ESCAPE.search(segment):
+            raise ValueError(f"A '~' in a JSON pointer must be followed by 0 (for '~') or 1 (for '/'), got {ref!r}")
+    return SchemaFileRef(path, fragment, tuple(segment.replace("~1", "/").replace("~0", "~") for segment in segments))
+
+
+def validate_schema_file_ref(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
+    """Validate a ``body.schema`` file reference, keeping it as written: a
+    `Path` would normalize the pointer after its ``#`` (``//`` is an empty key,
+    a trailing ``/`` one more). A path object a template renders (a fixture's)
+    stands for its text. A string with a template in it is the engine's to
+    render, left to ``PartialTemplateStr``, as a URL's is (`_literal_url`)."""
+    v: str = handler(str(value) if isinstance(value, PurePath) else value)
+    if template := next(find_templates(v), None):
+        raise ValueError(f"Not a literal file reference: it contains a template expression at position {template.start()}")
+    parse_schema_file_ref(v)
+    return v
+
+
 validate_jmespath_expression = create_string_validator(jmespath.compile, "Invalid JMESPath expression")
 
+
+def validate_jmespath_key(v: str) -> str:
+    """A ``verify.jmespath`` key: a JMESPath expression, which is never rendered.
+
+    Only values are substituted, so a template in a key reaches JMESPath as
+    written, and ``{{`` is not JMESPath: a key with one that fails to compile
+    is refused saying why. One that compiles (``'{{ x }}'``, a JMESPath string
+    literal) is HTTPCHAIN029's to report, as a templated key is anywhere.
+    """
+    try:
+        jmespath.compile(v)
+    except Exception as e:
+        if contains_template(v):
+            raise ValueError("Invalid JMESPath expression: a key is never rendered, only the value it maps to, so it cannot hold a template") from e
+        raise ValueError("Invalid JMESPath expression") from e
+    return v
+
+
 validate_regex_pattern = create_string_validator(re.compile, "Invalid regular expression")
+
+
+def validate_regex_group_name(v: str) -> str:
+    """A regex group's name, which ``re`` takes only as a Python identifier,
+    so a name that cannot be one fails at load whatever the pattern."""
+    if not v.isidentifier():
+        raise ValueError(f"Invalid group name {v!r}: a group is a number (0 for the whole match) or the name of a (?P<name>...) group")
+    return v
+
+
+def regex_group(pattern: re.Pattern[str], group: int | str | None) -> int | str:
+    """The group of ``pattern`` a ``save.regex`` entry saves from a match:
+    ``group`` when set, and otherwise group 1 when the pattern has any
+    groups, else the whole match (0). A ValueError says why ``pattern`` has
+    no such group.
+
+    Shared by the model, which checks a literal pattern's group at load, and
+    `response_steps.process_save`, which checks one a template rendered: the
+    same groups are refused in the same words, before any match is tried.
+    """
+    if group is None:
+        return 1 if pattern.groups else 0
+    if isinstance(group, int):
+        if group > pattern.groups:
+            count = "no groups" if not pattern.groups else "1 group" if pattern.groups == 1 else f"{pattern.groups} groups"
+            raise ValueError(f"regex '{pattern.pattern}' has no group {group} (it has {count}; 0 is the whole match)")
+    elif group not in pattern.groupindex:
+        names = f"its named groups: {', '.join(map(repr, pattern.groupindex))}" if pattern.groupindex else "it has no named groups"
+        raise ValueError(f"regex '{pattern.pattern}' has no group named {group!r} ({names})")
+    return group
+
 
 validate_xml = create_string_validator(xml.etree.ElementTree.fromstring, "Invalid XML")
 
@@ -89,15 +249,44 @@ def validate_template_expression(v: str) -> str:
     return v
 
 
-def validate_partial_template_str(v: str) -> str:
-    matches = list(re.finditer(TEMPLATE_PATTERN, v))
+def _check_partial_template_str(v: str, got: str) -> str:
+    matches = list(find_templates(v))
     if not matches:
-        raise ValueError(f"Must contain at least one template expression like '{{{{ expr }}}}', got: {v!r}")
+        raise ValueError(f"Must contain at least one template expression like '{{{{ expr }}}}'{got}")
 
     for match in matches:
         if not match.group("expr").strip():
             raise ValueError(f"Template expression cannot be empty at position {match.start()}")
     return v
+
+
+def validate_partial_template_str(v: str) -> str:
+    return _check_partial_template_str(v, f", got: {v!r}")
+
+
+def validate_unquoted_partial_template_str(v: str) -> str:
+    """`validate_partial_template_str` for a value that can carry credentials,
+    whose message does not quote it (see `validate_proxy_url`)."""
+    return _check_partial_template_str(v, "")
+
+
+def refuse_escaped_braces(what: str) -> Callable[[Any, ValidationInfo], Any]:
+    """A before-validator for a field that names a server or a file and is
+    checked once rendered for template text left in it (``client.base_url``
+    and ``client.proxy`` by `request_builder`, a ``body.schema`` file by
+    `response_steps`): a backslash before ``{{`` in what the scenario writes is
+    refused, template or not. Rendered, an escape leaves literal braces, which
+    that check cannot tell from a template that rendered to template text, so
+    the stage would fail on what ``validate`` passed. ``what`` names the field.
+    The value is not quoted: a URL can carry credentials. A value a template
+    rendered (`RENDERED`) is final, and a ``\\{{`` a value put there is kept."""
+
+    def refuse(value: Any, info: ValidationInfo) -> Any:
+        if isinstance(value, str) and info.context is not RENDERED and contains_escape(value):
+            raise ValueError(f"{what} cannot hold a backslash before '{{{{' (an escaped '{{{{' renders as literal braces, which it does not take)")
+        return value
+
+    return refuse
 
 
 def validate_function_import_name(v: str) -> str:
@@ -107,12 +296,158 @@ def validate_function_import_name(v: str) -> str:
     return v
 
 
+class VarsNamespace(types.SimpleNamespace):
+    """An object a scenario writes in ``vars`` (at any depth), as templates
+    read it: by attribute, as a SimpleNamespace is (``{{ user.name }}``), and
+    as a mapping of its keys, as the same object saved from a response (a
+    dict) is: ``{{ headers['Content-Type'] }}`` for a key that is no
+    identifier, ``{{ 'name' in user }}``, ``{{ len(user) }}``, iteration over
+    the keys in the order written, ``keys()``, ``values()``, ``items()`` and
+    ``get(key, default=None)``. An empty object is false, as ``{}`` is.
+
+    Every method reads the instance's own dict, never an attribute. So a key
+    named like a method is data wherever a key is read (``order['items']``,
+    ``for k in order``), and an attribute still reads the data first, as it
+    always did (``order.items`` is the key's value), which shadows that method:
+    ``order.items()`` calls the data, and so do ``dict(order)`` and
+    ``{**order}`` for a key named ``keys``: both call ``order.keys()``
+    (``{k: order[k] for k in order}`` copies any object). A key starting with
+    ``_``, which the template engine never reads as an attribute, is read by
+    subscript (``doc['_id']``); only the data is reached that way, never the
+    class's attributes (``user['__class__']`` is a missing key).
+
+    Still a SimpleNamespace, so everything that takes one as the object it
+    stands for (a JSON body, ``json_dumps`` and ``urlencode``, the rendered
+    models' conversions) takes this, and equality is a SimpleNamespace's: the
+    same keys and values, a plain SimpleNamespace included. And a registered
+    `Mapping` (below), which pydantic's lax list refuses, as it refuses a
+    dict: iterable, an object rendered where a list goes (a parameter's
+    values, ``verify.status``) was otherwise taken for the list of its keys.
+
+    Read-only as templates use it (they assign nothing), so threads share one
+    freely. It pickles as a SimpleNamespace does, by class and dict, and its
+    repr is a SimpleNamespace's text, ``namespace(...)``, at any depth
+    (`_namespace_repr`).
+    """
+
+    def __getitem__(self, key: str) -> Any:
+        return vars(self)[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in vars(self)
+
+    def __len__(self) -> int:
+        return len(vars(self))
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(vars(self))
+
+    def keys(self) -> KeysView[str]:
+        return vars(self).keys()
+
+    def values(self) -> ValuesView[Any]:
+        return vars(self).values()
+
+    def items(self) -> ItemsView[str, Any]:
+        return vars(self).items()
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return vars(self).get(key, default)
+
+    def __repr__(self) -> str:
+        # A SimpleNamespace's own text (whose repr names a subclass by its
+        # class), so a `vars` object interpolated into text reads as it
+        # always has.
+        return _namespace_repr(self)
+
+
+Mapping.register(VarsNamespace)
+
+# The namespaces whose repr is being written, by (id, thread), as reprlib keys
+# its guard: one met again inside itself, directly or through a value whose
+# own repr it is written in, reads `namespace(...)`.
+_repr_running: set[tuple[int, int]] = set()
+
+# What `_namespace_repr` has pending: text to write as it stands, a value to
+# write the repr of, a container whose members are all written.
+_TEXT, _VALUE, _DONE = range(3)
+
+
+def _namespace_repr(root: types.SimpleNamespace) -> str:
+    """``repr(root)`` as SimpleNamespace's own would write it, for any depth.
+
+    Iterative over namespaces and the plain lists, tuples and dicts between
+    them, in which it writes what their C reprs write, recursion markers
+    included: a Python repr per level spent three frames on each, so an
+    object nested a few hundred levels deep, which the loader accepts and
+    SimpleNamespace's C repr wrote, overflowed. Any other value is its own
+    ``repr()``."""
+    thread = threading.get_ident()
+    pieces: list[str] = []
+    # The lists, tuples and dicts being written, from the root down to the one
+    # in hand: a member among them is a cycle; one met again elsewhere is
+    # only shared, and written again, as the C reprs do.
+    path: set[int] = set()
+    held: set[tuple[int, int]] = set()
+    pending: list[tuple[int, Any]] = [(_VALUE, root)]
+    try:
+        while pending:
+            action, item = pending.pop()
+            if action == _TEXT:
+                pieces.append(item)
+                continue
+            if action == _DONE:
+                if isinstance(item, types.SimpleNamespace):
+                    held.discard((id(item), thread))
+                    _repr_running.discard((id(item), thread))
+                else:
+                    path.discard(id(item))
+                continue
+            kind = type(item)
+            if kind is VarsNamespace or kind is types.SimpleNamespace:
+                key = (id(item), thread)
+                if key in _repr_running:
+                    pieces.append("namespace(...)")
+                    continue
+                _repr_running.add(key)
+                held.add(key)
+                opening, closing = "namespace(", ")"
+                # The C repr's: a key that is no text, or empty, is left out.
+                members = [(f"{name}=", value) for name, value in vars(item).items() if isinstance(name, str) and name]
+            elif kind is list or kind is tuple or kind is dict:
+                opening, closing = {list: "[]", tuple: "()", dict: "{}"}[kind]
+                if id(item) in path:
+                    pieces.append(f"{opening}...{closing}")
+                    continue
+                path.add(id(item))
+                if kind is dict:
+                    members = [(f"{key!r}: ", value) for key, value in item.items()]
+                else:
+                    members = [("", value) for value in item]
+                    if kind is tuple and len(item) == 1:
+                        closing = ",)"
+            else:
+                pieces.append(repr(item))
+                continue
+            pieces.append(opening)
+            # Pushed last member first, so the first comes off the stack first.
+            pending.append((_DONE, item))
+            pending.append((_TEXT, closing))
+            for index in range(len(members) - 1, -1, -1):
+                prefix, value = members[index]
+                pending.append((_VALUE, value))
+                pending.append((_TEXT, (", " if index else "") + prefix))
+    finally:
+        _repr_running.difference_update(held)
+    return "".join(pieces)
+
+
 def convert_dict_to_namespace(v: Any) -> Any:
-    """Recursively turn dicts into ``SimpleNamespace``, so ``{{ var.attr }}``
-    works in templates."""
+    """Recursively turn dicts into `VarsNamespace`, so ``{{ var.attr }}`` and
+    ``{{ var['key'] }}`` work in templates."""
     match v:
         case dict():
-            return types.SimpleNamespace(**{key: convert_dict_to_namespace(value) for key, value in v.items()})
+            return VarsNamespace(**{key: convert_dict_to_namespace(value) for key, value in v.items()})
         case list():
             return [convert_dict_to_namespace(item) for item in v]
         case _:
@@ -120,29 +455,107 @@ def convert_dict_to_namespace(v: Any) -> Any:
 
 
 def convert_namespace_to_dict(v: Any) -> Any:
-    """Recursively normalize ``SimpleNamespace`` back to dicts, so the value is
-    JSON-serializable."""
-    match v:
-        case types.SimpleNamespace():
-            return {key: convert_namespace_to_dict(value) for key, value in vars(v).items()}
-        case list():
-            return [convert_namespace_to_dict(item) for item in v]
-        case dict():
-            return {key: convert_namespace_to_dict(value) for key, value in v.items()}
-        case _:
-            return v
+    """Normalize ``SimpleNamespace`` back to dicts at every depth, so the value
+    is JSON-serializable. Lists and dicts are copied, keys in their order.
+
+    Iterative: it runs as a validator on JSON bodies, inline schemas and
+    ``verify.jmespath`` operands, where the loader accepts a value of any depth,
+    and a recursive walk overflowed on one nested past the recursion limit. A
+    value that contains itself (a fixture's self-referencing list) is refused
+    with a ValueError, which pydantic reports, where the recursion overflowed
+    and a plain loop would never end.
+    """
+    containers = (types.SimpleNamespace, dict, list)
+    if not isinstance(v, containers):
+        return v
+    root: list[Any] = [None]
+    # The containers being copied, from the root down to the one in hand: a
+    # member among them is a cycle, while one met again elsewhere is only
+    # shared and is copied once more, as the recursive walk did.
+    in_progress: set[int] = set()
+    # (value to copy, the container its copy goes in, the key there), or the
+    # id of a container whose members are all copied.
+    pending: list[tuple[Any, Any, Any] | int] = [(v, root, 0)]
+    while pending:
+        entry = pending.pop()
+        if isinstance(entry, int):
+            in_progress.discard(entry)
+            continue
+        value, parent, slot = entry
+        if id(value) in in_progress:
+            raise ValueError("the value contains itself, so it cannot be converted to JSON")
+        match value:
+            case types.SimpleNamespace() | dict():
+                copy: Any = {}
+                members: Iterable[tuple[Any, Any]] = (vars(value) if isinstance(value, types.SimpleNamespace) else value).items()
+            case _:
+                copy = [None] * len(value)
+                members = enumerate(value)
+        parent[slot] = copy
+        in_progress.add(id(value))
+        pending.append(id(value))
+        for key, member in members:
+            # Every key is placed now, so the copy keeps the original's order.
+            copy[key] = member
+            if isinstance(member, containers):
+                pending.append((member, copy, key))
+    return root[0]
+
+
+def convert_namespace_items_to_dict(v: Any) -> Any:
+    """Turn a sequence's ``SimpleNamespace`` items into dicts, one level only:
+    the values keep their shape, so a nested ``vars`` object stays
+    attribute-accessible.
+
+    A sequence is whatever pydantic's lax ``list`` takes, i.e. any iterable but
+    text and mappings: a template can render a tuple (``{{ tuple(combos) }}``)
+    and a user function an iterator, and one this skipped would reach the
+    ``list[dict]`` it feeds with its namespaces intact. A `VarsNamespace`,
+    iterable over its keys, is a mapping: one object is no list of them."""
+    if isinstance(v, Iterable) and not isinstance(v, (str, bytes, bytearray, Mapping)):
+        return [dict(vars(item)) if isinstance(item, types.SimpleNamespace) else item for item in v]
+    return v
 
 
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
 FunctionImportName = Annotated[str, AfterValidator(validate_function_import_name)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
+JMESPathKey = Annotated[str, AfterValidator(validate_jmespath_key)]
 JSONSchemaInline = Annotated[dict[str, Any], AfterValidator(validate_json_schema_inline)]
-SerializablePath = Annotated[Path, PlainSerializer(lambda x: str(x), return_type=str)]
+
+
+def _path_or_text(value: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo) -> Any:
+    """A path field's value, a `Path` once its text is final: as written when
+    rendering changes nothing in it, else once rendered (`RENDERED`). Text
+    rendering changes (a template, an escaped ``\\{{``) is kept as written,
+    for the one rendering the carrier gives a model's text (its dump, where a
+    `Path` is text again): unescaped when it loaded, a ``\\{{`` made ``{{``
+    was then rendered once more, as a template. Nor is the text normalized
+    as a path before it renders: on Windows, a ``Path`` reads ``a/\\{{x}}``
+    as ``a\\{{x}}``, whose separator would then escape the braces."""
+    if isinstance(value, str) and info.context is not RENDERED and needs_rendering(value):
+        return value
+    return handler(value)
+
+
+# A file path: a `Path` when final, text while something in it renders
+# (`_path_or_text`); either dumps as its text. Beside `PartialTemplateStr` in a
+# union, rendered text holding a template's syntax (braces an escape left) is
+# valid in both branches and stays a `str` (pydantic's smart union keeps the
+# input's type), so code reading a rendered path takes either.
+SerializablePath = Annotated[Path, WrapValidator(_path_or_text), PlainSerializer(lambda x: str(x), return_type=str)]
+SchemaFileRefStr = Annotated[str, WrapValidator(validate_schema_file_ref), WithJsonSchema({"type": "string", "minLength": 1})]
 RegexPattern = Annotated[str, AfterValidator(validate_regex_pattern)]
+# A regex group a `save.regex` entry saves: its number or its name.
+RegexGroupNumber = Annotated[StrictInt, Field(ge=0)]
+RegexGroupName = Annotated[str, AfterValidator(validate_regex_group_name)]
 XMLString = Annotated[str, AfterValidator(validate_xml)]
 GraphQLQuery = Annotated[str, AfterValidator(validate_graphql_query)]
 TemplateExpression = Annotated[str, AfterValidator(validate_template_expression)]
 PartialTemplateStr = Annotated[str, AfterValidator(validate_partial_template_str)]
+# The template branch beside `BaseUrlStr` and `ProxyUrlStr`: a URL they refuse
+# is refused here as well, and must not be quoted here either.
+UnquotedPartialTemplateStr = Annotated[str, AfterValidator(validate_unquoted_partial_template_str)]
 
 # Editor-schema only: these tighten the `string` branch of `concrete | template`
 # fields so an editor flags e.g. timeout "abc", without affecting runtime
@@ -191,10 +604,289 @@ HttpMethodToken = Annotated[
     WithJsonSchema({"type": "string", "pattern": _HTTP_METHOD_TOKEN_PATTERN}),
 ]
 
+# The WHATWG parser behind pydantic's URL types, as a check only.
+_WHATWG_HTTP_URL = TypeAdapter(AnyHttpUrl)
+
+# What WHATWG strips from both ends of a URL. Not ``str.strip()``'s set, which
+# also takes U+00A0, U+3000, U+2028, ...: WHATWG keeps those, and httpx
+# percent-encodes them just as WHATWG does.
+_C0_CONTROL_OR_SPACE = "".join(map(chr, range(0x21)))
+
+
+# RFC 3986's scheme. A URL starting with one is absolute; anything else is a
+# relative reference (whose first segment cannot hold a ':' for this reason).
+_URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+
+# The proxy schemes httpx accepts (the socks ones need its `socks` extra).
+_PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
+
+
+def is_relative_url(url: str) -> bool:
+    """Whether ``url`` is a relative reference, which ``client.base_url``
+    completes, rather than an absolute URL.
+
+    The one test the model, the request builder and the validator share, so
+    all three read a URL the same way.
+    """
+    return not _URL_SCHEME.match(url)
+
+
+def _literal_url(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
+    """The URL string a wrap validator judges.
+
+    A pydantic URL object, which a single-expression template can render to
+    (a pydantic-settings field, say), stands for its string, as it did when
+    the field was ``HttpUrl``. A string with a template in it is the engine's
+    to render, so it is not a literal URL here: it is left to
+    ``PartialTemplateStr``, which refuses an empty ``{{ }}`` that would
+    otherwise pass here and fail only when rendered.
+    """
+    v: str = handler(str(value) if isinstance(value, AnyUrl | pydantic_core.Url) else value)
+    if template := next(find_templates(v), None):
+        raise ValueError(f"Not a literal URL: it contains a template expression at position {template.start()}")
+    return v
+
+
+def _invalid_url(e: httpx.InvalidURL, v: str, quote: bool) -> ValueError:
+    """httpx's parse error, as a URL check reports it.
+
+    Unquoted, a URL with an ``@`` in it loses httpx's reason too: the reason
+    quotes the part httpx could not parse, and that can be the credentials
+    before the ``@``. A ``/`` in a password ends the authority early, so
+    ``http://user:pa/ss@host`` is ``Invalid port: 'pa'`` to httpx.
+    """
+    if quote or "@" not in v:
+        return ValueError(f"Invalid URL: {e}")
+    return ValueError("Invalid URL (httpx's reason is not shown, as it can quote the credentials before the '@')")
+
+
+def _check_http_url(v: str, *, quote: bool = True) -> None:
+    """Check an absolute http(s) URL with a host, as written.
+
+    pydantic's ``HttpUrl`` handed back the URL WHATWG-normalized, and that is
+    what was sent: ``/static/%2e%2e/ok`` went out as ``/ok``, a ``\\`` in the
+    path as ``/``, and a URL over 2083 characters was refused. Its parser
+    still judges the URL here — scheme, host and port, with its own errors —
+    but its result is dropped. Where it would read the URL differently from
+    httpx, which sends it, the URL is refused instead of repaired:
+
+    - surrounding C0 controls or spaces (stripped by WHATWG; httpx sends a
+      space as ``%20`` and refuses a control, so one message covers both);
+    - anything httpx does not read as an http(s) URL with a host
+      (``http:/x``, a control character anywhere, a host only a browser's
+      IDNA mapping accepts);
+    - a ``\\`` in the authority, where WHATWG ends it and httpx does not, so
+      ``http://a:1\\@b:2/`` is ``a:1`` to the check and ``b:2`` on the wire;
+    - a percent-encoded host, which WHATWG decodes and httpx sends undecoded.
+
+    The last two keep the host and port judged here the ones httpx connects
+    to. Other host spellings go to the resolver as written: ``127.1`` and
+    ``[0:0::1]`` reach the address WHATWG read; ``127.0.0.1.``, which WHATWG
+    trims, fails when sent.
+
+    ``quote=False`` keeps the URL out of the messages (see `validate_proxy_url`).
+    """
+    got = f", got: {v!r}" if quote else ""
+    _WHATWG_HTTP_URL.validate_python(v)
+    if v != v.strip(_C0_CONTROL_OR_SPACE):
+        raise ValueError(f"URL must not start or end with a space or control character{got}")
+    try:
+        url = httpx.URL(v)
+    except httpx.InvalidURL as e:
+        raise _invalid_url(e, v, quote) from e
+    if url.scheme not in ("http", "https") or not url.host:
+        raise ValueError(f"URL must start with 'http://' or 'https://' and a host{got}")
+    # httpx found a host, so `v` is `scheme://authority...`; httpx's authority
+    # runs to the first `/`, `?` or `#`.
+    authority = re.split(r"[/?#]", v.split("://", 1)[1], maxsplit=1)[0]
+    if "\\" in authority:
+        raise ValueError(f"URL must not contain '\\' before its path (a browser reads it as '/', httpx as part of the host){got}")
+    if "%" in url.host:
+        raise ValueError(f"URL host must not be percent-encoded (httpx sends it undecoded){got}")
+
+
+def _check_relative_url(v: str) -> None:
+    """Check a relative reference, which httpx appends to ``client.base_url``'s
+    path as written (see `validate_http_url_reference`).
+
+    Refused where httpx would not send what is written: surrounding C0
+    controls or spaces, as for an absolute URL; a leading ``//``, a
+    network-path reference whose host httpx drops, keeping only its path; a
+    leading ``:``, which httpx reads as an empty scheme and drops; and
+    anything httpx cannot parse.
+    """
+    if v != v.strip(_C0_CONTROL_OR_SPACE):
+        raise ValueError(f"URL must not start or end with a space or control character, got: {v!r}")
+    if v.startswith("//"):
+        raise ValueError(f"URL must not start with '//' without a scheme (httpx would drop the host and append the path to client.base_url), got: {v!r}")
+    if v.startswith(":"):
+        raise ValueError(f"Relative URL must not start with ':' (httpx drops it), got: {v!r}")
+    try:
+        httpx.URL(v)
+    except httpx.InvalidURL as e:
+        raise ValueError(f"Invalid URL: {e}") from e
+
+
+def validate_http_url_reference(value: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo) -> str:
+    """Validate a request URL, keeping it as written: an absolute http(s) URL
+    (`_check_http_url`), or a relative reference (`_check_relative_url`),
+    which the scenario's ``client.base_url`` completes. What is checked is the
+    URL sent, its escapes rendered (`as_rendered`): an escape's backslash is
+    no ``\\`` in the URL's authority.
+
+    Whether there is a base_url is not this field's to know: the validator
+    reports a relative URL without one (HTTPCHAIN034), and so does the request
+    builder, for a template that renders to one. Anything without a scheme is
+    a relative reference, so ``not-a-url`` is a path now; ``ftp://x`` or
+    ``http:/x`` still fail as absolute URLs.
+    """
+    v = _literal_url(value, handler)
+    url = as_rendered(v, info)
+    if url and is_relative_url(url):
+        _check_relative_url(url)
+    else:
+        _check_http_url(url)
+    return v
+
+
+def validate_base_url(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
+    """Validate ``client.base_url``: an absolute http(s) URL without a query or
+    fragment. httpx appends a relative URL to the base URL's raw path, query
+    included, so ``https://h/v1?x=1`` would put every stage's path in its
+    query. Its messages do not quote it, as a proxy's do not."""
+    v = _literal_url(value, handler)
+    _check_http_url(v, quote=False)
+    if "?" in v or "#" in v:
+        raise ValueError("base_url must not have a query or fragment (the stage's URL would be appended after it; put default query parameters in client.params)")
+    return v
+
+
+def validate_proxy_url(value: Any, handler: ValidatorFunctionWrapHandler) -> str:
+    """Validate a proxy URL as httpx accepts one: an http, https, socks5 or
+    socks5h URL with a host. The socks schemes need httpx's ``socks`` extra,
+    which the client reports when it is missing.
+
+    The messages do not quote the URL, nor do those of ``client.base_url``:
+    their userinfo is credentials (httpx sends it as ``Proxy-Authorization``
+    or ``Authorization``), and the value is usually rendered from a secret,
+    at scenario initialization, whose failure message is also the skip reason
+    of every later stage. ``ClientConfig`` hides pydantic's ``input_value``
+    for the same reason.
+    """
+    v = _literal_url(value, handler)
+    if v != v.strip(_C0_CONTROL_OR_SPACE):
+        raise ValueError("URL must not start or end with a space or control character")
+    try:
+        url = httpx.URL(v)
+    except httpx.InvalidURL as e:
+        raise _invalid_url(e, v, quote=False) from e
+    if url.scheme not in _PROXY_SCHEMES or not url.host:
+        raise ValueError("Proxy URL must start with 'http://', 'https://', 'socks5://' or 'socks5h://' and a host")
+    return v
+
+
+# Passed to httpx as written; the schemas keep HttpUrl's `format: uri` hint.
+HttpUrlReferenceStr = Annotated[
+    str,
+    WrapValidator(validate_http_url_reference),
+    WithJsonSchema({"type": "string", "format": "uri-reference", "minLength": 1}),
+]
+BaseUrlStr = Annotated[
+    str,
+    WrapValidator(validate_base_url),
+    WithJsonSchema({"type": "string", "format": "uri", "minLength": 1}),
+]
+ProxyUrlStr = Annotated[
+    str,
+    WrapValidator(validate_proxy_url),
+    WithJsonSchema({"type": "string", "format": "uri", "minLength": 1}),
+]
+
 # Nonstandard codes (nginx 499) must be assertable. Sits after ``HTTPStatus``.
 StatusCode = Annotated[int, Field(ge=100, le=599)]
 
+# A status class, "2xx" for any code 200-299. The x's take either case and are
+# kept lowercase: one spelling for the consumer, and for its failure message.
+_STATUS_CLASS_PATTERN = r"^[1-5][xX]{2}$"
+StatusClass = Annotated[str, Field(pattern=_STATUS_CLASS_PATTERN), AfterValidator(str.lower)]
+
+
+def is_status_class(value: object) -> bool:
+    """True for a status class (``"2xx"``), which a validated ``verify.status``
+    holds beside codes and, where a template rendered to template text, text
+    that is neither."""
+    return isinstance(value, str) and re.fullmatch(_STATUS_CLASS_PATTERN, value) is not None
+
+
+# `verify.jmespath` operands, compared with values a JSON body holds.
+# A number as JSON has it: an int or a float, never a bool (an int to Python)
+# and never text, so a template rendering "5" is refused, not compared as 5.
+JsonNumber = StrictInt | StrictFloat
+# A length is a count: a non-negative int, as strictly.
+JsonLength = Annotated[StrictInt, Field(ge=0)]
+# The JSON types a `type` matcher names, spelled as JSON Schema spells them.
+JsonTypeName = Literal["string", "number", "integer", "boolean", "array", "object", "null"]
+JSON_TYPE_NAMES: tuple[str, ...] = get_args(JsonTypeName)
+
 Base64String = Annotated[str, AfterValidator(validate_base64)]
+
+
+def _is_form_scalar(value: Any) -> bool:
+    """Text, a number or a boolean (an int to Python): what a form field sends."""
+    return isinstance(value, str | int | float)
+
+
+def _form_kind(value: Any) -> str:
+    """How a multipart field's message names what it got, as the scenario
+    would have written it."""
+    if value is None:
+        return "null"
+    if isinstance(value, dict | types.SimpleNamespace):
+        return "an object"
+    return type(value).__name__
+
+
+def validate_multipart_field_value(value: Any) -> Any:
+    """A ``body.multipart.fields`` value: text, a number or a boolean, or a
+    list of them, each sent as a field of its own under the one name.
+
+    One validator for the whole value, rather than a union of pydantic's
+    strict types, so that a value no member takes (a field a template rendered
+    to None, an object) is refused in one sentence naming it, not in five. A
+    tuple a template renders is a list; a set, whose order is arbitrary, is not.
+    """
+    if _is_form_scalar(value):
+        return value
+    if isinstance(value, list | tuple):
+        for i, item in enumerate(value):
+            if not _is_form_scalar(item):
+                raise ValueError(f"A multipart field's list holds text, numbers or booleans, got {_form_kind(item)} at [{i}]")
+        return list(value)
+    raise ValueError(f"A multipart field is text, a number or a boolean, or a list of them, got {_form_kind(value)}")
+
+
+_FORM_SCALAR_SCHEMA: dict[str, Any] = {"type": ["string", "number", "boolean"]}
+MultipartFieldValue = Annotated[
+    Any,
+    AfterValidator(validate_multipart_field_value),
+    WithJsonSchema({"anyOf": [_FORM_SCALAR_SCHEMA, {"type": "array", "items": _FORM_SCALAR_SCHEMA}]}),
+]
+
+# A control character would end the part's Content-Type header line early, or
+# start another: httpx writes the value into the part's headers as it is. A
+# tab is whitespace a header value may hold.
+_CONTROL_CHARACTER = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
+
+
+def validate_part_content_type(value: str) -> str:
+    """A multipart file's ``content_type``: written into its part's headers as
+    given, so without a control character, which would break the part."""
+    if control := _CONTROL_CHARACTER.search(value):
+        raise ValueError(f"A content type must not contain a control character, got {control.group()!r} at position {control.start()}")
+    return value
+
+
+PartContentType = Annotated[str, Field(min_length=1), AfterValidator(validate_part_content_type)]
 NamespaceFromDict = Annotated[Any, AfterValidator(convert_dict_to_namespace)]
 # Accepts a SimpleNamespace or a dict; always yields a dict.
 NamespaceOrDict = Annotated[dict[str, JsonValue], BeforeValidator(convert_namespace_to_dict)]

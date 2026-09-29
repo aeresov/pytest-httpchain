@@ -1,3 +1,4 @@
+import json
 import warnings
 
 import pytest
@@ -98,6 +99,51 @@ def test_same_file_referenced_repeatedly_is_not_a_cycle(create_json_files):
         }
     )
     assert load_json(files["main.json"]) == {"first": "value", "second": "value", "third": {"common": "value"}}
+
+
+@pytest.mark.parametrize("bom_file", ["main.json", "part.json"], ids=["main-file", "referenced-file"])
+def test_utf8_byte_order_mark_is_accepted(tmp_path, bom_file):
+    """Editors on Windows write a BOM, which json.loads rejects as invalid JSON."""
+    texts = {"main.json": '{"data": {"$include": "part.json"}}', "part.json": '{"name": "café"}'}
+    for name, text in texts.items():
+        (tmp_path / name).write_text("\ufeff" + text if name == bom_file else text, encoding="utf-8")
+    assert load_json(tmp_path / "main.json") == {"data": {"name": "café"}}
+
+
+class TestJsonc:
+    """Every file is read as JSON with comments: the main file and each one
+    a reference pulls in, whatever its extension, a BOM before it too."""
+
+    MAIN = """﻿// The scenario
+{
+    "data": {
+        "$include": "part.jsonc#/stage", /* a fragment's */
+        "extra": [1, 2,], // merged with the fragment's
+    },
+    "same": {"$ref": "#/data/extra"},
+}
+"""
+    PART = """{
+    /* several
+       lines */
+    "stage": {"name": "café // not a comment", "extra": [0,],},
+}"""
+
+    def test_main_and_referenced_file(self, tmp_path):
+        (tmp_path / "main.json").write_text(self.MAIN, encoding="utf-8")
+        (tmp_path / "part.jsonc").write_text(self.PART, encoding="utf-8")
+        assert load_json(tmp_path / "main.json") == {
+            "data": {"name": "café // not a comment", "extra": [0, 1, 2]},
+            "same": [1, 2],
+        }
+
+    def test_unterminated_comment_in_referenced_file(self, tmp_path):
+        """A syntax error of the file it is in, at the comment's opening."""
+        (tmp_path / "main.json").write_text('{"data": {"$include": "part.jsonc"}}', encoding="utf-8")
+        (tmp_path / "part.jsonc").write_text('{"a": 1}\n/* never closed\n', encoding="utf-8")
+        with pytest.raises(ReferenceResolverError, match=r"^Failed to load external reference part\.jsonc: Unterminated comment: line 2 column 1 \(char 9\)$") as excinfo:
+            load_json(tmp_path / "main.json")
+        assert isinstance(excinfo.value.__cause__, json.JSONDecodeError)
 
 
 @pytest.mark.parametrize("directive", ["$ref", "$include", "$merge"])

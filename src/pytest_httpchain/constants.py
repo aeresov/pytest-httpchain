@@ -1,5 +1,6 @@
-"""Ini option names and the user-function name grammar."""
+"""Ini option names, the scenario file-name grammar and the user-function name grammar."""
 
+import functools
 import re
 from enum import StrEnum
 
@@ -30,15 +31,54 @@ def parse_user_function_name(name: str) -> tuple[str, str]:
     raise ValueError(f"Invalid function name format: {name}")
 
 
+# What a scenario file's name ends with, after ``test_<name>.<suffix>``: pytest
+# collects both, and ``validate`` takes both without a warning. The reader is the
+# same for both (``jsonref.loads_jsonc``, comments and trailing commas allowed in
+# any file), so ``.jsonc`` only tells editors to expect JSON with comments.
+SCENARIO_FILE_EXTENSIONS = (".json", ".jsonc")
+
+# The ``httpchain_suffix`` when the ini option is unset, and what a value must
+# look like: it sits between two dots of a file name.
+DEFAULT_SUFFIX = "http"
+_SUFFIX_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,32}")
+
+
+def check_suffix(suffix: str) -> str:
+    """Return ``suffix``, or raise ``ValueError`` saying what is wrong with it.
+
+    One rule in one wording, for the ini option (``pytest_configure``, and
+    ``validate`` reading it from the file pytest would) and for ``validate
+    --suffix``; each caller names the value it checked.
+    """
+    if not _SUFFIX_PATTERN.fullmatch(suffix):
+        raise ValueError("must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
+    return suffix
+
+
+@functools.cache
+def scenario_file_pattern(suffix: str) -> re.Pattern[str]:
+    """The names pytest collects as scenarios: ``test_<name>.<suffix>`` and one
+    of the extensions, matched whole (``fullmatch``), with ``<name>`` as the
+    ``name`` group. ``pytest_collect_file`` and ``validate``'s directory search
+    both match by it, so ``validate tests/`` checks what ``pytest tests/`` runs.
+    """
+    extensions = "|".join(re.escape(extension) for extension in SCENARIO_FILE_EXTENSIONS)
+    return re.compile(rf"test_(?P<name>.+)\.{re.escape(suffix)}(?:{extensions})")
+
+
 class ConfigOptions(StrEnum):
     """Ini option names, settable in pytest.ini or [tool.pytest.ini_options].
 
     The ``httpchain_`` prefix is required: pytest ini options share one global
-    namespace across plugins. Defaults live in ``plugin.pytest_addoption``; the
-    HAR output directory is a CLI flag, not an ini option.
+    namespace across plugins. Defaults are registered in
+    ``plugin.pytest_addoption`` (the redaction lists come from ``redaction``);
+    the HAR output directory is a CLI flag, not an ini option.
     """
 
     SUFFIX = "httpchain_suffix"
     REF_PARENT_TRAVERSAL_DEPTH = "httpchain_ref_parent_traversal_depth"
     MAX_COMPREHENSION_LENGTH = "httpchain_max_comprehension_length"
     MAX_PARALLEL_ITERATIONS = "httpchain_max_parallel_iterations"
+    REDACT_HEADERS = "httpchain_redact_headers"
+    REDACT_QUERY_PARAMS = "httpchain_redact_query_params"
+    HAR_REDACT = "httpchain_har_redact"

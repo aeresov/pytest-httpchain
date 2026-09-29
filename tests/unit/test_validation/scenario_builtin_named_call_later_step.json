@@ -1,0 +1,13 @@
+{
+    "substitutions": [
+        { "vars": { "started": "{{ now() }}" } },
+        { "functions": { "now": "clock:fixed_iso" } }
+    ],
+    "stages": [
+        {
+            "name": "first",
+            "request": { "url": "https://x.test/a", "headers": { "X-Started": "{{ started }}", "X-Now": "{{ now() }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

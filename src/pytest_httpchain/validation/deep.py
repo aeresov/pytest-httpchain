@@ -9,31 +9,44 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from pytest_httpchain.errors import SchemaFileError
+from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds, SchemaFile, file_body_schema, inline_body_schema
+from pytest_httpchain.errors import SchemaFileError, SchemaPointerError
 from pytest_httpchain.models import (
     BinaryBody,
     FilesBody,
+    FileSpec,
     FunctionsSubstitution,
+    Multipart,
+    MultipartBody,
     SaveStep,
     Scenario,
     SubstitutionsSave,
     UserFunctionCall,
+    UserFunctionKwargs,
+    UserFunctionName,
     UserFunctionsSave,
     VerifyStep,
-    check_json_schema,
 )
+from pytest_httpchain.templates import contains_template, unescape
 from pytest_httpchain.userfunc import UserFunctionError, call_target, import_function
-from pytest_httpchain.utils import read_json_schema_file, resolve_scenario_path, schema_error_text
+from pytest_httpchain.utils import path_segment, resolve_scenario_path, schema_error_text
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, diag
 
 
-def check_scenario_deep(scenario: Scenario, syspaths: list[Path] | None = None, scenario_dir: Path | None = None) -> list[Diagnostic]:
+def check_scenario_deep(
+    scenario: Scenario,
+    syspaths: list[Path] | None = None,
+    scenario_dir: Path | None = None,
+    ref_bounds: ReferenceBounds = UNBOUNDED,
+) -> list[Diagnostic]:
     """Referenced-file existence, user-function imports, and call-signature compatibility.
 
     Imports user modules, so ``syspaths`` (and the CWD) are temporarily prepended
-    to ``sys.path`` to resolve them the way pytest would.
+    to ``sys.path`` to resolve them the way pytest would. ``ref_bounds`` is
+    what a body schema's references to files are held to, the root and the
+    parent traversal depth the scenario's own references were loaded under.
     """
-    diagnostics = list(_file_diagnostics(scenario, scenario_dir))
+    diagnostics = list(_file_diagnostics(scenario, scenario_dir, ref_bounds))
 
     saved_path = list(sys.path)
     try:
@@ -50,11 +63,19 @@ def check_scenario_deep(scenario: Scenario, syspaths: list[Path] | None = None, 
 
 
 def _literal_path(value: Any) -> Path | None:
-    """A concrete filesystem path for a literal path value, else None (missing
-    values, inline schemas, and anything holding a ``{{ }}`` template)."""
+    """The file a path value names before any stage runs, else None (missing
+    values, inline schemas, and a path holding a template, known only once
+    rendered).
+
+    A path field holds a path that rendering changes as text, not as a
+    `Path` (`types.SerializablePath`): one with only an escaped ``\\{{``
+    names the file it renders to, the braces the file's own (`unescape`), as
+    the runtime opens it."""
     match value:
-        case str() | Path() if "{{" not in str(value):
-            return Path(value)
+        case Path():
+            return value
+        case str() if not contains_template(value):
+            return Path(unescape(value))
         case _:
             return None
 
@@ -70,29 +91,66 @@ def _check_path_value(value: Any, location: str, base_dir: Path | None = None) -
         yield diag(DiagnosticCode.REFERENCED_FILE_NOT_FOUND, f"Referenced file not found: {path}", location)
 
 
-def _check_schema_path(schema: Any, location: str, base_dir: Path | None = None) -> Iterator[Diagnostic]:
-    """HTTPCHAIN020/021 for a literal JSON-schema file path."""
-    path = _literal_path(schema)
-    if path is None:
-        return
-    path = resolve_scenario_path(base_dir, path)
-    if not path.exists():
-        yield diag(DiagnosticCode.REFERENCED_FILE_NOT_FOUND, f"Schema file not found: {path}", location)
-        return
+def _check_file(entry: Any, location: str, base_dir: Path | None) -> Iterator[Diagnostic]:
+    """HTTPCHAIN020 for the literal path a multipart body's file names: a path,
+    or a file object's ``path``, and a list's items one at a time. Content given
+    inline (``content``, ``base64``) reads no file."""
+    if isinstance(entry, list):
+        for index, item in enumerate(entry):
+            yield from _check_file(item, f"{location}[{index}]", base_dir)
+    elif isinstance(entry, FileSpec):
+        yield from _check_path_value(entry.path, f"{location}.path", base_dir)
+    else:
+        yield from _check_path_value(entry, location, base_dir)
+
+
+def _check_schema(schema: Any, location: str, base_dir: Path | None, ref_bounds: ReferenceBounds) -> Iterator[Diagnostic]:
+    """HTTPCHAIN020/021 for a body schema: a literal file reference's file
+    exists and is JSON, its pointer leads somewhere, the schema it selects is
+    valid, and, in any schema, every ``$ref`` it reaches resolves to a valid
+    schema, as the runtime resolves them (`body_schema`). A file that is not
+    there is HTTPCHAIN020, anything else HTTPCHAIN021."""
+    match schema:
+        case dict():
+            # Meta-checked by the model already.
+            body = inline_body_schema(schema, base_dir, ref_bounds)
+        case str() if not contains_template(schema):
+            file = SchemaFile.locate(schema, base_dir)
+            if not file.path.exists():
+                # Named with the pointer, and escaped (a NUL, one JSON \u escape away).
+                yield diag(DiagnosticCode.REFERENCED_FILE_NOT_FOUND, f"Schema file not found: {file}", location)
+                return
+            try:
+                body = file_body_schema(file, ref_bounds)
+            except SchemaFileError as e:
+                yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, f"Schema file is not valid JSON: {file.path}: {e}", location)
+                return
+            except SchemaPointerError as e:
+                yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, f"Schema pointer '#{file.fragment}' leads nowhere in {file.path}: {e}", location)
+                return
+            try:
+                body.check()
+            except Exception as e:
+                yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, f"Schema file is not a valid JSON Schema: {file}: {schema_error_text(e)}", location)
+                return
+        case _:
+            return
+    subject = body.where[0].upper() + body.where[1:]
     try:
-        data = read_json_schema_file(path)
-    except SchemaFileError as e:
-        yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, f"Schema file is not valid JSON: {path}: {e}", location)
-        return
-    try:
-        check_json_schema(data)
+        for reason, missing in body.unresolvable():
+            code = DiagnosticCode.REFERENCED_FILE_NOT_FOUND if missing else DiagnosticCode.SCHEMA_FILE_INVALID
+            yield diag(code, f"{subject}: {reason}", location)
     except Exception as e:
-        yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, f"Schema file is not a valid JSON Schema: {path}: {schema_error_text(e)}", location)
+        # A document the walk cannot read, reported as one, not a traceback
+        # that ends the whole `validate --deep` run, every other file's
+        # findings with it.
+        yield diag(DiagnosticCode.SCHEMA_FILE_INVALID, f"{subject}: its references cannot be checked: {e}", location)
 
 
-def _file_diagnostics(scenario: Scenario, base_dir: Path | None = None) -> Iterator[Diagnostic]:
+def _file_diagnostics(scenario: Scenario, base_dir: Path | None = None, ref_bounds: ReferenceBounds = UNBOUNDED) -> Iterator[Diagnostic]:
     """Every literal filesystem path the scenario references, resolved against
-    the scenario file's directory as the runtime does."""
+    the scenario file's directory as the runtime does, and every file its body
+    schemas reference, held to ``ref_bounds`` as the runtime holds them."""
     yield from _check_path_value(scenario.ssl.cert, "ssl.cert", base_dir)
     yield from _check_path_value(scenario.ssl.verify, "ssl.verify", base_dir)
 
@@ -101,14 +159,17 @@ def _file_diagnostics(scenario: Scenario, base_dir: Path | None = None) -> Itera
             case BinaryBody(binary=binary):
                 yield from _check_path_value(binary, f"stages[{i}].request.body.binary", base_dir)
             case FilesBody(files=files):
-                for field, file_path in files.items():
-                    yield from _check_path_value(file_path, f"stages[{i}].request.body.files.{field}", base_dir)
+                for field, entry in files.items():
+                    yield from _check_file(entry, f"stages[{i}].request.body.files{path_segment(field)}", base_dir)
+            case MultipartBody(multipart=Multipart(files=files)):
+                for field, entry in files.items():
+                    yield from _check_file(entry, f"stages[{i}].request.body.multipart.files{path_segment(field)}", base_dir)
             case _:
                 pass
 
         for k, step in enumerate(stage.response):
             if isinstance(step, VerifyStep):
-                yield from _check_schema_path(step.verify.body.schema, f"stages[{i}].response[{k}].verify.body.schema", base_dir)
+                yield from _check_schema(step.verify.body.schema, f"stages[{i}].response[{k}].verify.body.schema", base_dir, ref_bounds)
 
 
 def _signature_problems(func: Any, provided: set[str]) -> Iterator[tuple[DiagnosticCode, str]]:
@@ -149,13 +210,16 @@ def _function_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                     for alias, call in functions.items():
                         sites.append((call, set(), False, f"{location_prefix}.functions.{alias}"))
 
-    if scenario.auth is not None:
-        sites.append((scenario.auth, set(), True, "auth"))
+    def add_auth_site(auth: Any, location: str) -> None:
+        # Only a user function: the built-in schemes and `false` import nothing.
+        if isinstance(auth, UserFunctionName | UserFunctionKwargs):
+            sites.append((auth, set(), True, location))
+
+    add_auth_site(scenario.auth, "auth")
     add_substitution_sites(scenario.substitutions, "substitutions")
 
     for i, stage in enumerate(scenario.stages):
-        if stage.request.auth is not None:
-            sites.append((stage.request.auth, set(), True, f"stages[{i}].request.auth"))
+        add_auth_site(stage.request.auth, f"stages[{i}].request.auth")
         add_substitution_sites(stage.substitutions, f"stages[{i}].substitutions")
         for k, step in enumerate(stage.response):
             match step:
@@ -170,7 +234,7 @@ def _function_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
 
     for call, injected, check_signature, location in sites:
         name, kwargs = call_target(call)
-        if "{{" in name:
+        if contains_template(name):
             continue  # template form — the real name is only known at runtime
         try:
             func = import_function(name)

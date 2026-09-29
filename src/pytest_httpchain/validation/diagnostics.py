@@ -46,6 +46,16 @@ class DiagnosticCode(StrEnum):
     SCHEMA_SCENARIO_DIRECTIVE = "HTTPCHAIN028"
     TEMPLATE_IN_KEY = "HTTPCHAIN029"
     TEMPLATE_IN_KWARGS = "HTTPCHAIN030"
+    STAGE_XDIST_GROUP = "HTTPCHAIN031"
+    NODE_ID_SEPARATOR_IN_STAGE_NAME = "HTTPCHAIN032"
+    UNREADABLE_XDIST_GROUP = "HTTPCHAIN033"
+    RELATIVE_URL_WITHOUT_BASE_URL = "HTTPCHAIN034"
+    UNCALLED_BUILTIN = "HTTPCHAIN035"
+    BUILTIN_STANDS_IN = "HTTPCHAIN036"
+    INVALID_EXPRESSION = "HTTPCHAIN037"
+    SCENARIO_INVALID_EXPRESSION = "HTTPCHAIN038"
+    NO_SCENARIO_FILES = "HTTPCHAIN039"
+    STATS_REPLACE_SAVE = "HTTPCHAIN040"
 
 
 # A code's severity is a property of the code, not of the site that raises it:
@@ -86,6 +96,16 @@ SEVERITY: dict[DiagnosticCode, Severity] = {
     DiagnosticCode.SCHEMA_SCENARIO_DIRECTIVE: "warning",
     DiagnosticCode.TEMPLATE_IN_KEY: "warning",
     DiagnosticCode.TEMPLATE_IN_KWARGS: "warning",
+    DiagnosticCode.STAGE_XDIST_GROUP: "error",
+    DiagnosticCode.NODE_ID_SEPARATOR_IN_STAGE_NAME: "error",
+    DiagnosticCode.UNREADABLE_XDIST_GROUP: "error",
+    DiagnosticCode.RELATIVE_URL_WITHOUT_BASE_URL: "error",
+    DiagnosticCode.UNCALLED_BUILTIN: "warning",
+    DiagnosticCode.BUILTIN_STANDS_IN: "warning",
+    DiagnosticCode.INVALID_EXPRESSION: "warning",
+    DiagnosticCode.SCENARIO_INVALID_EXPRESSION: "error",
+    DiagnosticCode.NO_SCENARIO_FILES: "error",
+    DiagnosticCode.STATS_REPLACE_SAVE: "warning",
 }
 
 

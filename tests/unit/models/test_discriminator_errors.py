@@ -18,6 +18,8 @@ CASES = [
     ("body: unknown key", lambda: Request(url="https://example.com", method="POST", body={"jsonn": {"a": 1}}), "body"),
     ("body: empty object", lambda: Request(url="https://example.com", method="POST", body={}), "body"),
     ("body: not an object", lambda: Request(url="https://example.com", method="POST", body="raw"), "body"),
+    ("auth: unknown key", lambda: Request(url="https://example.com", auth={"basci": {"username": "u", "password": "p"}}), "auth"),
+    ("auth: not an object or a name", lambda: Request(url="https://example.com", auth=1), "auth"),
     ("save: unknown key", lambda: SaveStep(save={"invalid": "value"}), "save"),
     ("parallel: unknown key", lambda: Stage.model_validate(stage_dict(parallel={"nope": 1})), "parallel"),
     ("substitution: unknown key", lambda: Stage.model_validate(stage_dict(substitutions=[{"invalid_key": "value"}])), "substitutions"),

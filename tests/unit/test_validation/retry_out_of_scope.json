@@ -1,0 +1,12 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "fan_out",
+            "parallel": { "foreach": [ { "individual": { "polls": [1, 2] } } ] },
+            "retry": { "attempts": "{{ polls + 1 }}" },
+            "request": { "url": "{{ server }}/jobs/{{ polls }}" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

@@ -1,9 +1,10 @@
-"""Builders for scenarios written inline by an integration test, and table rows.
+"""Builders for scenarios written inline by an integration test, table rows,
+and the HAR files a run exports.
 
 A plain helpers module (not conftest.py, which pytest treats as a plugin file,
 not an import target)::
 
-    from tests.integration.helpers import har_entries, named, stage
+    from tests.integration.helpers import HAR_ARGS, har_entries, named, stage
 """
 
 import json
@@ -34,6 +35,12 @@ def write_scenario(directory: Path, scenario: dict[str, Any], name: str = "test_
     path = directory / name
     path.write_text(json.dumps(scenario))
     return path
+
+
+# The args that make a run write HAR files for `har_entries` to read, under
+# "har_out" relative to the pytester dir, which is the CWD of both in-process
+# and subprocess runs.
+HAR_ARGS = ("-s", "--httpchain-output-dir", "har_out")
 
 
 def har_entries(har_dir: Path) -> list[dict[str, Any]]:

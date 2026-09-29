@@ -1,6 +1,9 @@
+import json
+import shutil
+
 import pytest
 
-from tests.integration.helpers import named
+from tests.integration.helpers import named, stage, write_scenario
 
 # Every row copies both: user-function and schema-file scenarios need them,
 # and an unused copy is harmless.
@@ -13,6 +16,7 @@ AUX = ("verify.py", "verify/schema.json")
         ("status", 2),
         ("headers", 1),
         ("expressions", 1),
+        ("jmespath", 2),
         ("user_function", 1),
         ("body_schema", 2),
         ("body_contains", 1),
@@ -46,6 +50,12 @@ def test_verify_passes(run_scenario, scenario, passed):
         # validate cleanly (`status` is optional), so a truthiness gate silently
         # dropped the only assertion and passed green against a 400.
         ("status_rendered_away", {"failed": 1}, "*rendered to None*"),
+        # The same for a header matcher field — here fed by a JMESPath save of a
+        # missing key. Its static sibling keeps the matcher valid, so the
+        # rendered-away `contains` was simply not checked.
+        ("header_matcher_rendered_away", {"failed": 1}, "*'verify.headers.X-Custom-Header.contains' was declared as '{{ expected_value }}' but rendered to None*"),
+        # JSON equality, not Python's: `true == 1` would have passed the stage.
+        ("jmespath_mismatch", {"failed": 1}, "*JMESPath 'active' doesn't match: expected 1, got true*"),
     ),
 )
 def test_verify_fails_cleanly(run_scenario, scenario, outcomes, line):
@@ -65,3 +75,100 @@ def test_stage_failure_message_is_not_duplicated(run_scenario):
     failures = result.stdout.str().split("=== FAILURES ===")[-1].split("short test summary")[0]
     assert failures.count("The above exception was the direct cause") == 0
     assert failures.count("During handling of the above exception") == 0
+
+
+def test_failure_report_lists_every_failed_check_and_a_curl_command(run_scenario):
+    """One run shows everything wrong with the response, a template that
+    fails to render among it, and a command that sends the request again: its
+    credentials stay hidden, with a note to fill them in. The step after the
+    failing one does not run."""
+    request = {
+        "method": "POST",
+        "params": {"access_token": "s3cret-query"},
+        "headers": {"Authorization": "Bearer s3cret-header"},
+        "body": {"json": {"note": "it's"}},
+    }
+    response = [
+        {
+            "verify": {
+                "status": 201,
+                "headers": {"Content-Type": {"contains": "json"}},
+                "jmespath": {"received.note": "its"},
+                "expressions": ["{{ response.headers['x-missing'] == 'a' }}"],
+                "body": {"contains": ["nope"]},
+            }
+        },
+        {"verify": {"status": 404}},
+    ]
+    result = run_scenario({"stages": [stage("create", "/echo/json", request=request, response=response)]})
+
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(
+        [
+            "4 verification checks failed:",
+            "  1. Status code doesn't match: expected 201, got 200",
+            """  2. JMESPath 'received.note' doesn't match: expected "its", got "it's\"""",
+            # Rendered with the step's other values, before any check ran, and
+            # listed in its check's place: the status failure is not hidden.
+            "  3. Key error in expression '{{ response.headers[[]'x-missing'] == 'a' }}': Key 'x-missing' does not exist in expression 'response.headers[[]'x-missing'] == 'a''",
+            "  4. Body doesn't contain 'nope'",
+            "*HTTP Request (curl)*",
+            "# [[]REDACTED] stands for a value this report hides: fill it in before running.",
+            "curl -X POST 'http://*/echo/json?access_token=[[]REDACTED]' \\",
+            "  --globoff \\",
+            "  -H 'authorization: [[]REDACTED]' \\",
+            "  -H 'content-type: application/json' \\",
+            "  --compressed \\",
+            # httpx's JSON spacing differs across its supported versions.
+            """  --data-raw '{"note":*"it'"'"'s"}'""",
+            "*HTTP Response*",
+        ]
+    )
+    output = result.stdout.str()
+    assert "s3cret" not in output
+    assert "expected 404" not in output
+
+
+def test_body_schema_from_an_openapi_document(run_scenario):
+    """A schema an OpenAPI document holds, taken out by a JSON pointer, its
+    `$ref`s resolved across the document (``#/components/schemas/Role``) and
+    into the file beside it (``common.json``, relative to the document, not
+    to the scenario): on every iteration of a parallel stage, whose threads
+    share the parsed document. The pointer may reach any schema in it, a
+    path's response schema too, escapes and all. The scenario sits beside
+    the document's directory, in the tree as in the run, so it is a scenario
+    `validate --deep` checks clean where it is."""
+    result = run_scenario("verify/openapi")
+    result.assert_outcomes(passed=2, failed=1)
+    # The last stage fails: a list of users is not the path's one user.
+    result.stdout.fnmatch_lines(["test_verify_body_schema_openapi.http.json ..F", "*user_list_is_not_one_user*", "Body schema validation failed: 'id' is a required property"])
+
+
+def test_body_schema_reference_outside_the_rootdir_fails(pytester):
+    """A body schema's references are held to pytest's rootdir, as the
+    scenario's own $include is: the plugin hands it to the carrier."""
+    project = pytester.mkdir("project")
+    (project / "pytest.ini").write_text("[pytest]\n")
+    shutil.copy(pytester.copy_example("conftest.py"), project)
+    (pytester.path / "shared.json").write_text(json.dumps({"$defs": {"Ok": {"const": "ok"}}}))
+    response = [{"verify": {"status": 200, "body": {"schema": {"$ref": "../shared.json#/$defs/Ok"}}}}]
+    write_scenario(project, {"stages": [stage("escapes", "/ok", response=response)]})
+
+    result = pytester.runpytest("project")
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines([f"*Cannot resolve a reference in inline body schema: $ref '../shared.json#/$defs/Ok' names *shared.json, outside the reference root {project}*"])
+
+
+def test_body_schema_reference_depth_follows_the_ini_option(pytester):
+    """httpchain_ref_parent_traversal_depth bounds a body schema's references
+    as it bounds the scenario's $include: the plugin hands it to the carrier
+    with the rootdir. Inside the rootdir, one `..` is one too many at 0."""
+    pytester.makeini("[pytest]\nhttpchain_ref_parent_traversal_depth = 0\n")
+    pytester.copy_example("conftest.py")
+    (pytester.path / "shared.json").write_text(json.dumps({"$defs": {"Ok": {"const": "ok"}}}))
+    response = [{"verify": {"status": 200, "body": {"schema": {"$ref": "../shared.json#/$defs/Ok"}}}}]
+    write_scenario(pytester.mkdir("sub"), {"stages": [stage("climbs", "/ok", response=response)]})
+
+    result = pytester.runpytest("sub")
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(["*$ref '../shared.json#/$defs/Ok' exceeds the maximum parent traversal depth of 0 (httpchain_ref_parent_traversal_depth)*"])

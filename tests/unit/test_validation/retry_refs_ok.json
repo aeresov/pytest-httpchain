@@ -1,0 +1,28 @@
+{
+    "fixtures": ["server"],
+    "substitutions": [{ "vars": { "patience": 30 } }],
+    "stages": [
+        {
+            "name": "submit",
+            "request": { "url": "{{ server }}/jobs", "method": "POST" },
+            "response": [
+                { "verify": { "status": 202 } },
+                { "save": { "jmespath": { "job_id": "id", "polls": "polls" } } }
+            ]
+        },
+        {
+            "name": "wait_for_job",
+            "parametrize": [{ "individual": { "backoff": [1, 2] } }],
+            "substitutions": [{ "vars": { "first_wait": 0.1 } }],
+            "retry": {
+                "attempts": "{{ polls + 1 }}",
+                "delay": "{{ first_wait }}",
+                "backoff": "{{ backoff }}",
+                "max_delay": "{{ patience }}",
+                "on": "verify"
+            },
+            "request": { "url": "{{ server }}/jobs/{{ job_id }}" },
+            "response": [ { "verify": { "status": 200, "jmespath": { "status": "done" } } } ]
+        }
+    ]
+}

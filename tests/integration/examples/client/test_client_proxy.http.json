@@ -1,0 +1,14 @@
+{
+    "description": "client.proxy carries every request: the example app answers for a host that does not resolve",
+    "marks": ["usefixtures('api_root')"],
+    "client": {
+        "proxy": "{{ env('HTTPCHAIN_EXAMPLE_API_ROOT') }}"
+    },
+    "stages": [
+        {
+            "name": "through_the_proxy",
+            "request": { "url": "http://unresolvable.invalid/ok" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

@@ -1,0 +1,9 @@
+{
+    "stages": [
+        {
+            "name": "odd",
+            "request": { "url": "https://x.test/{{ 'a\ud800' }}" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

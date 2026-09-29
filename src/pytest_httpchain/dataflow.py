@@ -11,13 +11,14 @@ from pydantic import BaseModel
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
+    defined_names,
     extract_template_variables,
     raw_list_entries,
     raw_stages,
     saved_in_step,
     stage_scopes,
     substitution_names,
-    substitution_step_refs,
+    substitution_step_templates,
 )
 
 
@@ -28,7 +29,10 @@ def _consumed(refs: set[str], earlier_saves: frozenset[str], shadows: frozenset[
 
 
 class DataFlowEdge(BaseModel):
-    """A data dependency: ``vars`` saved by stage ``producer`` are referenced by stage ``consumer``."""
+    """A data dependency: ``vars`` saved by stage ``producer`` are referenced by
+    stage ``consumer``. A name has more than one producer when its last writer
+    before the consumer has a ``skip_if``: one edge from each writer back to the
+    nearest that never skips (`analyze_dataflow`)."""
 
     producer: int
     consumer: int
@@ -36,7 +40,9 @@ class DataFlowEdge(BaseModel):
 
 
 class StageFlow(BaseModel):
-    """Per-stage data-flow summary."""
+    """Per-stage data-flow summary. ``skip_if`` is the stage's as declared:
+    unless it is ``false``, the stage may skip, and a later stage then reads
+    the value an earlier stage saved under the same name, or finds none."""
 
     index: int
     name: str
@@ -44,6 +50,7 @@ class StageFlow(BaseModel):
     url: str
     fixtures: list[str]
     marks: list[str]
+    skip_if: bool | str
     saves: list[str]
     consumes: list[str]
 
@@ -57,6 +64,20 @@ class DataFlow(BaseModel):
     scenario_vars: list[str] = []
 
 
+def _producers(writers: list[int], stages: list[StageFlow]) -> list[int]:
+    """The stages a consumer may read a name from, given its earlier writers in
+    stage order: the last writer, as a later save shadows an earlier one — and
+    while that writer has a ``skip_if``, the writer before it too, since a
+    skipped stage leaves the chain running on the earlier value. The walk stops
+    at the nearest writer that never skips; nearest first."""
+    producers: list[int] = []
+    for index in reversed(writers):
+        producers.append(index)
+        if stages[index].skip_if is False:
+            break
+    return producers
+
+
 def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     """Build the stage data-flow graph for a validated scenario.
 
@@ -66,15 +87,24 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     order with the stage's own accumulated saves added as they land.
     ``parametrize`` values are excluded: they resolve against scenario scope,
     never saved values.
+
+    A consumed name comes from its last writer before the consumer. When that
+    writer has a ``skip_if`` it may have skipped with the chain going on, and
+    the consumer then reads the writer before it: so the edges run from each
+    writer back to, and including, the nearest one that never skips — ``graph``
+    draws those from a stage with a ``skip_if`` dotted.
     """
     raws = raw_stages(test_data)
     scopes = stage_scopes(scenario)
+    defined = defined_names(scenario)
 
     stages: list[StageFlow] = []
     edges: list[DataFlowEdge] = []
-    # A re-saved variable is attributed to its last writer before the consumer,
-    # matching the runtime layering where a later save shadows an earlier one.
-    last_save_stage: dict[str, int] = {}
+    # Every stage that saves a name, in stage order. A re-saved variable is
+    # attributed to its last writer before the consumer, matching the runtime
+    # layering where a later save shadows an earlier one, and to the writers
+    # before it back to one that cannot skip (`_producers`).
+    writers: dict[str, list[int]] = {}
 
     for i, stage in enumerate(scenario.stages):
         scope = scopes[i]
@@ -82,11 +112,13 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
 
         consumes: set[str] = set()
 
-        for entry_refs, prior_sub_names in substitution_step_refs(raw.get("substitutions")):
-            consumes |= _consumed(entry_refs, scope.earlier_saves, scope.always_run_shadows | prior_sub_names)
+        for templates, prior_sub_names in substitution_step_templates(raw.get("substitutions")):
+            consumes |= _consumed(extract_template_variables(templates, defined=defined), scope.earlier_saves, scope.always_run_shadows | prior_sub_names)
 
-        consumes |= _consumed(extract_template_variables(raw.get("parallel")), scope.earlier_saves, scope.pre_iteration_shadows)
-        consumes |= _consumed(extract_template_variables(raw.get("request")), scope.earlier_saves, scope.request_shadows)
+        consumes |= _consumed(extract_template_variables(raw.get("skip_if"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
+        consumes |= _consumed(extract_template_variables(raw.get("parallel"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
+        consumes |= _consumed(extract_template_variables(raw.get("retry"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
+        consumes |= _consumed(extract_template_variables(raw.get("request"), defined=defined), scope.earlier_saves, scope.request_shadows)
         # Response steps resolve in order, each save layering its names over the
         # context (the runtime's per-step with_saves): once a step re-saves a
         # name, later steps read this stage's fresh value, not the earlier
@@ -100,14 +132,15 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         raw_response = raw_list_entries(raw.get("response"))
         for k, step in enumerate(stage.response):
             step_raw = raw_response[k] if k < len(raw_response) else None
-            step_refs = extract_template_variables(step_raw) - {RESPONSE_META_NAME}
+            step_refs = extract_template_variables(step_raw, defined=defined) - {RESPONSE_META_NAME}
             consumes |= _consumed(step_refs, scope.earlier_saves, scope.request_shadows | own_saves)
             own_saves |= frozenset(saved_in_step(step))
-        consumes |= _consumed(extract_template_variables(raw.get("always_run")), scope.earlier_saves, scope.always_run_shadows)
+        consumes |= _consumed(extract_template_variables(raw.get("always_run"), defined=defined), scope.earlier_saves, scope.always_run_shadows)
 
         by_producer: dict[int, list[str]] = {}
         for name in consumes:
-            by_producer.setdefault(last_save_stage[name], []).append(name)
+            for producer in _producers(writers[name], stages):
+                by_producer.setdefault(producer, []).append(name)
         for producer in sorted(by_producer):
             edges.append(DataFlowEdge(producer=producer, consumer=i, vars=sorted(by_producer[producer])))
 
@@ -116,16 +149,17 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
                 index=i,
                 name=stage.name,
                 method=str(stage.request.method),
-                url=str(stage.request.url),
+                url=stage.request.url,
                 fixtures=sorted(stage.fixtures),
                 marks=list(stage.marks),
+                skip_if=stage.skip_if,
                 saves=sorted(scope.saves),
                 consumes=sorted(consumes),
             )
         )
 
         for name in scope.saves:
-            last_save_stage[name] = i
+            writers.setdefault(name, []).append(i)
 
     return DataFlow(
         stages=stages,

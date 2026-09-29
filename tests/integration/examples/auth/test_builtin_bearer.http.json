@@ -1,0 +1,27 @@
+{
+    "description": "A bearer token a login stage saved, rendered per stage",
+    "stages": [
+        {
+            "name": "login",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/login",
+                "method": "POST",
+                "body": { "json": { "username": "user", "password": "pass" } }
+            },
+            "response": [{ "verify": { "status": 200 } }, { "save": { "jmespath": { "token": "token" } } }]
+        },
+        {
+            "name": "token_from_the_login",
+            "fixtures": ["server"],
+            "request": { "url": "{{ server }}/me", "auth": { "bearer": "{{ token }}" } },
+            "response": [{ "verify": { "status": 200, "body": { "contains": ["\"user\""] } } }]
+        },
+        {
+            "name": "unknown_token_refused",
+            "fixtures": ["server"],
+            "request": { "url": "{{ server }}/me", "auth": { "bearer": "not-issued" } },
+            "response": [{ "verify": { "status": 401 } }]
+        }
+    ]
+}

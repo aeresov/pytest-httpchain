@@ -1,0 +1,12 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/page" },
+            "response": [
+                { "save": { "regex": { "order_id": { "pattern": "Order #(?P<id>\\d+)", "group": "order" } } } },
+                { "verify": { "status": 200 } }
+            ]
+        }
+    ]
+}

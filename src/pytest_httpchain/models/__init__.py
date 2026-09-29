@@ -6,17 +6,28 @@ All models use Pydantic V2 with discriminated unions for flexible body types.
 
 Key models:
 - Scenario: Root model representing a complete test scenario
+- ClientConfig: The scenario's shared HTTP client (base URL, default headers, pool)
 - Stage: Individual test stage with request and response processing
-- Request: HTTP request configuration (method, URL, headers, body)
-- Verify: Response verification rules (status, headers, body, expressions)
-- Save: Data extraction from responses (JMESPath, substitutions, user functions)
+- RetryConfig: a stage's attempts after a failure (polling, flaky networks)
+- Request: HTTP request configuration (method, URL, headers, body, auth)
+- Auth: authentication, built in (basic, digest, bearer) or a user function
+- Verify: Response verification rules (status, headers, JMESPath, body, expressions)
+- Save: Data extraction from responses (JMESPath, regex, substitutions, user functions)
 """
 
 from pytest_httpchain.models.entities import (
+    RETRY_ON,
+    Auth,
+    AuthCredentials,
     Base64Body,
+    BasicAuth,
+    BearerAuth,
     BinaryBody,
+    ClientConfig,
     CombinationsParameter,
+    DigestAuth,
     FilesBody,
+    FileSpec,
     FormBody,
     FunctionsDict,
     FunctionsList,
@@ -24,19 +35,29 @@ from pytest_httpchain.models.entities import (
     GraphQLBody,
     HeaderMatcher,
     IndividualParameter,
+    JMESPathExpectation,
+    JMESPathMatcher,
     JMESPathSave,
     JsonBody,
+    Multipart,
+    MultipartBody,
     ParallelConfig,
     ParallelConfigBase,
     ParallelForeachConfig,
     ParallelRepeatConfig,
+    ParallelThresholds,
     Parameter,
     Parameters,
+    RegexCapture,
+    RegexSave,
     Request,
+    RequestAuth,
     RequestBody,
     ResponseBody,
     Responses,
     ResponseStep,
+    RetryConfig,
+    RetryOn,
     Save,
     SaveStep,
     Scenario,
@@ -56,8 +77,21 @@ from pytest_httpchain.models.entities import (
     XmlBody,
     normalize_list_input,
     parametrize_values_contain_template,
+    validate_rendered,
+    validate_rendered_scenario_auth,
+    validate_rendered_verify,
 )
-from pytest_httpchain.models.types import check_json_schema, json_schema_validator_class
+from pytest_httpchain.models.types import (
+    JSON_TYPE_NAMES,
+    SchemaFileRef,
+    VarsNamespace,
+    check_json_schema,
+    is_relative_url,
+    is_status_class,
+    json_schema_validator_class,
+    parse_schema_file_ref,
+    regex_group,
+)
 
 __all__ = [
     "Scenario",
@@ -66,6 +100,10 @@ __all__ = [
     "ParallelConfigBase",
     "ParallelForeachConfig",
     "ParallelRepeatConfig",
+    "ParallelThresholds",
+    "RETRY_ON",
+    "RetryConfig",
+    "RetryOn",
     "Parameters",
     "Parameter",
     "CombinationsParameter",
@@ -76,9 +114,13 @@ __all__ = [
     "SaveStep",
     "Verify",
     "HeaderMatcher",
+    "JMESPathExpectation",
+    "JMESPathMatcher",
     "ResponseBody",
     "Save",
     "JMESPathSave",
+    "RegexSave",
+    "RegexCapture",
     "SubstitutionsSave",
     "UserFunctionsSave",
     "Substitutions",
@@ -86,6 +128,7 @@ __all__ = [
     "FunctionsSubstitution",
     "VarsSubstitution",
     "Request",
+    "RequestAuth",
     "RequestBody",
     "JsonBody",
     "XmlBody",
@@ -94,15 +137,34 @@ __all__ = [
     "Base64Body",
     "BinaryBody",
     "FilesBody",
+    "FileSpec",
+    "MultipartBody",
+    "Multipart",
     "GraphQLBody",
     "FunctionsDict",
     "FunctionsList",
     "UserFunctionCall",
     "UserFunctionName",
     "UserFunctionKwargs",
+    "Auth",
+    "AuthCredentials",
+    "BasicAuth",
+    "DigestAuth",
+    "BearerAuth",
     "SSLConfig",
+    "ClientConfig",
+    "JSON_TYPE_NAMES",
+    "SchemaFileRef",
+    "VarsNamespace",
     "check_json_schema",
+    "is_relative_url",
+    "is_status_class",
     "json_schema_validator_class",
+    "parse_schema_file_ref",
+    "regex_group",
     "parametrize_values_contain_template",
     "normalize_list_input",
+    "validate_rendered",
+    "validate_rendered_scenario_auth",
+    "validate_rendered_verify",
 ]

@@ -1,0 +1,12 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "fan_out",
+            "skip_if": "{{ item == 1 }}",
+            "parallel": { "foreach": [{ "individual": { "item": [1, 2] } }] },
+            "request": { "url": "{{ server }}/items/{{ item }}" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

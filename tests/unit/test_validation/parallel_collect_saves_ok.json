@@ -1,0 +1,28 @@
+{
+    "fixtures": ["server"],
+    "stages": [
+        {
+            "name": "create",
+            "substitutions": [ { "vars": { "keep_all": true } } ],
+            "parallel": {
+                "foreach": [ { "individual": { "name": ["a", "b", "c"] } } ],
+                "collect_saves": "{{ keep_all }}"
+            },
+            "request": { "url": "{{ server }}/items", "method": "POST", "body": { "json": { "name": "{{ name }}" } } },
+            "response": [
+                { "verify": { "status": 201 } },
+                { "save": { "jmespath": { "created_ids": "id" } } }
+            ]
+        },
+        {
+            "name": "cleanup",
+            "always_run": "{{ exists('created_ids') }}",
+            "parallel": {
+                "foreach": [ { "individual": { "id": "{{ created_ids }}" } } ],
+                "collect_saves": false
+            },
+            "request": { "url": "{{ server }}/items/{{ id }}", "method": "DELETE" },
+            "response": [ { "verify": { "status": 204 } } ]
+        }
+    ]
+}

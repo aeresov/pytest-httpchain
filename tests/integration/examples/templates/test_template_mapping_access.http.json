@@ -1,0 +1,63 @@
+{
+    "substitutions": [
+        {
+            "description": "An object with a key that is no identifier, one named like a method and one starting with '_'",
+            "vars": {
+                "trace": { "X-Request-Id": "req-42", "items": ["a", "b"], "_id": 7 }
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "saved_object",
+            "description": "A JSON object saved from the response, read by key",
+            "fixtures": ["server"],
+            "request": { "url": "{{ server }}/user/1" },
+            "response": [
+                { "save": { "jmespath": { "user": "@" } } },
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ user['name'] == 'Alice' }}",
+                            "{{ 'email' in user and 'nick' not in user }}",
+                            "{{ user.get('nick', 'anon') == 'anon' }}"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "vars_object",
+            "description": "vars objects read by key, dashed keys included; one whose templates render keeps its key access",
+            "fixtures": ["server"],
+            "substitutions": [
+                { "vars": { "profile": { "Display-Name": "{{ user['name'] }}", "id": "{{ user['id'] }}" } } }
+            ],
+            "request": {
+                "url": "{{ server }}/headers",
+                "headers": {
+                    "X-Request-Id": "{{ trace['X-Request-Id'] }}",
+                    "X-Display-Name": "{{ profile['Display-Name'] }}"
+                }
+            },
+            "response": [
+                { "save": { "jmespath": { "received": "received_headers" } } },
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ received['X-Request-Id'] == trace['X-Request-Id'] }}",
+                            "{{ received['X-Display-Name'] == 'Alice' and profile['id'] == 1 }}",
+                            "{{ len(trace) == 3 and [k for k in trace] == ['X-Request-Id', 'items', '_id'] }}",
+                            "{{ list(profile.keys()) == ['Display-Name', 'id'] and list(profile.values()) == ['Alice', 1] }}",
+                            "{{ dict(profile.items()) == {'Display-Name': 'Alice', 'id': 1} }}",
+                            "{{ trace.items == trace['items'] == ['a', 'b'] and trace['_id'] == 7 }}",
+                            "{{ response['status'] == 200 and 'headers' in response }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

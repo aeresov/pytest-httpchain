@@ -17,6 +17,10 @@ from tests.integration.helpers import named
         # literally (regression: a double template pass re-evaluated rendered
         # values, executing response-derived text as expressions).
         "preserves_template_literals",
+        # An HTML page: a form's token, a named group, every match of a
+        # pattern (none of another's: an empty list), and a pattern templated
+        # with a prior step's save, sent back in the next stage's form.
+        "regex",
     ],
 )
 def test_save_then_use_in_next_stage(run_scenario, scenario):
@@ -33,6 +37,8 @@ def test_save_then_use_in_next_stage(run_scenario, scenario):
         # Compiles, but errors at search time: still no raw traceback.
         ("jmespath_runtime_error", {"failed": 1}, "*Error saving variable*"),
         ("substitutions_error", {"failed": 1}, "*Error processing substitutions*"),
+        # A pattern the page does not match: the variable and the pattern are named.
+        ("regex_no_match", {"failed": 1}, """*Error saving variable session: regex 'name="session" value="(*)"' does not match the response body*"""),
     ),
 )
 def test_save_fails_cleanly(run_scenario, scenario, outcomes, line):

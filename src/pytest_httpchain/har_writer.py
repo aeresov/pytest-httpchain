@@ -1,4 +1,8 @@
-"""HAR 1.2 export of a test's httpx request/response pairs."""
+"""HAR 1.2 export of a test's httpx request/response pairs.
+
+Unredacted unless a `Redaction` is passed (``httpchain_har_redact``): a HAR is
+usually replayed, which needs the real credentials. Bodies are never redacted.
+"""
 
 import base64
 import functools
@@ -9,10 +13,11 @@ from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, parse_qsl, urlparse
+from urllib.parse import parse_qsl, urlparse
 
 import httpx
 
+from pytest_httpchain.redaction import NO_REDACTION, REDACTED, Redaction
 from pytest_httpchain.utils import request_content
 
 # One wire exchange: the request, its response (None when none arrived), and when
@@ -30,18 +35,20 @@ def _get_version() -> str:
         return "unknown"
 
 
-def _format_cookies(cookies: httpx.Cookies) -> list[dict[str, Any]]:
+def _format_cookies(cookies: httpx.Cookies, redaction: Redaction) -> list[dict[str, Any]]:
     """Serialize jar entries without collapsing cookies by name.
 
     ``httpx.Cookies.items()`` performs a name-only lookup and raises
     ``CookieConflict`` when the same name exists at different paths/domains — a
     valid and common response. Iterating the jar preserves each scoped cookie.
     """
+    # The jar is parsed from Set-Cookie, so that header's rule covers it.
+    redact = redaction.redacts_header("set-cookie")
     result: list[dict[str, Any]] = []
     for cookie in cookies.jar:
         item: dict[str, Any] = {
             "name": cookie.name,
-            "value": cookie.value or "",
+            "value": REDACTED if redact and cookie.value else cookie.value or "",
             "secure": bool(cookie.secure),
             "httpOnly": cookie.has_nonstandard_attr("HttpOnly"),
         }
@@ -55,22 +62,24 @@ def _format_cookies(cookies: httpx.Cookies) -> list[dict[str, Any]]:
     return result
 
 
-def _parse_cookie_header(cookie_header: str) -> list[dict[str, str]]:
+def _parse_cookie_header(cookie_header: str, redaction: Redaction) -> list[dict[str, str]]:
     # An empty header splits to [""], which carries no "=" and so yields nothing.
     pairs = (pair.partition("=") for pair in cookie_header.split(";"))
-    return [{"name": name.strip(), "value": value.strip()} for name, separator, value in pairs if separator]
+    redact = redaction.redacts_header("cookie")
+    return [{"name": name.strip(), "value": REDACTED if redact and value.strip() else value.strip()} for name, separator, value in pairs if separator]
 
 
-def _format_headers(headers: httpx.Headers) -> list[dict[str, str]]:
+def _format_headers(headers: httpx.Headers, redaction: Redaction) -> list[dict[str, str]]:
     # multi_items(), not items(): the latter comma-folds repeated names, which
     # RFC 6265 forbids for Set-Cookie precisely because cookie attributes
     # contain commas — folding two cookies corrupts both.
-    return [{"name": name, "value": value} for name, value in headers.multi_items()]
+    return [{"name": name, "value": value} for name, value in redaction.header_items(headers)]
 
 
-def _format_query_string(url: httpx.URL) -> list[dict[str, str]]:
-    params = parse_qs(urlparse(str(url)).query, keep_blank_values=True)
-    return [{"name": name, "value": value} for name, values in params.items() for value in values]
+def _format_query_string(url: httpx.URL, redaction: Redaction) -> list[dict[str, str]]:
+    # parse_qsl, not parse_qs: the latter groups a repeated name's values under
+    # its first occurrence, so `a=1&b=2&a=3` would be recorded as a, a, b.
+    return [{"name": name, "value": redaction.query_param(name, value)} for name, value in parse_qsl(urlparse(str(url)).query, keep_blank_values=True)]
 
 
 def _mime_type(content_type: str) -> str:
@@ -114,7 +123,8 @@ def _format_response_content(response: httpx.Response) -> dict[str, Any]:
 
 def _calculate_headers_size(headers: httpx.Headers) -> int:
     # ": " (2) + CRLF (2) per header line; multi_items() so repeated headers are
-    # counted as the separate wire lines they are.
+    # counted as the separate wire lines they are. Always the real values: the
+    # size is what went on the wire, which a redacted entry does not change.
     return sum(len(name) + len(value) + 4 for name, value in headers.multi_items())
 
 
@@ -132,12 +142,14 @@ def request_response_to_har_entry(
     request: httpx.Request,
     response: httpx.Response | None,
     started_datetime: datetime | None = None,
+    redaction: Redaction = NO_REDACTION,
 ) -> dict[str, Any]:
     """One HAR entry for a request and its response.
 
     ``response`` is None when none was received (timeout, connection error); the
     entry then carries a synthesized ``status: 0`` response, as browser exports
-    do for aborted requests.
+    do for aborted requests. ``redaction`` applies to the URLs, headers, cookies
+    and query string, not to the bodies.
     """
     if started_datetime is None:
         started_datetime = datetime.now(UTC)
@@ -151,10 +163,10 @@ def request_response_to_har_entry(
             "status": response.status_code,
             "statusText": response.reason_phrase or "",
             "httpVersion": http_version,
-            "cookies": _format_cookies(response.cookies),
-            "headers": _format_headers(response.headers),
+            "cookies": _format_cookies(response.cookies, redaction),
+            "headers": _format_headers(response.headers, redaction),
             "content": _format_response_content(response),
-            "redirectURL": response.headers.get("location", ""),
+            "redirectURL": redaction.header("location", response.headers.get("location", "")),
             "headersSize": _calculate_headers_size(response.headers),
             "bodySize": len(response.content),
         }
@@ -171,8 +183,9 @@ def request_response_to_har_entry(
             "bodySize": -1,
         }
 
-    # -1 is HAR's "unknown": a streaming (multipart) body was consumed on send
-    # and its bytes are no longer available.
+    # -1 is HAR's "unknown", for a body request_content does not capture: a
+    # stream that is not plain bytes, which the plugin never sends itself (its
+    # multipart bodies are encoded to bytes, and captured as any other body).
     content = request_content(request)
     body_size = -1 if content is None else len(content)
 
@@ -181,11 +194,11 @@ def request_response_to_har_entry(
         "time": elapsed_ms,
         "request": {
             "method": request.method,
-            "url": str(request.url),
+            "url": redaction.url(request.url),
             "httpVersion": http_version,
-            "cookies": _parse_cookie_header(request.headers.get("cookie", "")),
-            "headers": _format_headers(request.headers),
-            "queryString": _format_query_string(request.url),
+            "cookies": _parse_cookie_header(request.headers.get("cookie", ""), redaction),
+            "headers": _format_headers(request.headers, redaction),
+            "queryString": _format_query_string(request.url, redaction),
             "headersSize": _calculate_headers_size(request.headers),
             "bodySize": body_size,
         },
@@ -252,6 +265,7 @@ def write_har_file(
     output_dir: Path,
     test_name: str,
     exchanges: list[Exchange],
+    redaction: Redaction = NO_REDACTION,
 ) -> Path:
     """Write one test's exchanges to a HAR file and return its path.
 
@@ -263,7 +277,7 @@ def write_har_file(
 
     filepath = output_dir / _har_filename(test_name)
 
-    entries = [request_response_to_har_entry(request, response, started) for request, response, started in exchanges]
+    entries = [request_response_to_har_entry(request, response, started, redaction) for request, response, started in exchanges]
     har = create_har_log(entries, comment=f"Test: {test_name}")
 
     filepath.write_text(json.dumps(har, indent=2, ensure_ascii=False), encoding="utf-8")

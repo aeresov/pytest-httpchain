@@ -1,0 +1,11 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "https://x.test/a" },
+            "response": [
+                { "verify": { "jmespath": { "meta": { "page": 1 } } } }
+            ]
+        }
+    ]
+}

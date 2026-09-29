@@ -1,0 +1,22 @@
+{
+    "stages": [
+        {
+            "name": "bool_is_not_one",
+            "description": "JSON equality: a boolean never equals a number",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/schema-test"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "jmespath": {
+                            "id": 1,
+                            "active": 1
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

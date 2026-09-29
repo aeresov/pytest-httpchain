@@ -1,0 +1,10 @@
+{
+    "client": { "base_url": "{{ api_root }}" },
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "/me" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

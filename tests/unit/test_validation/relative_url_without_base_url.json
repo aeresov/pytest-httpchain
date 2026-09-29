@@ -1,0 +1,9 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "/users/1" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

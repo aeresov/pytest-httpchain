@@ -7,8 +7,934 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-29
+
+### Added
+
+- `HTTPCHAIN031` (error): an `xdist_group` in a stage's `marks` naming a group the scenario does
+  not declare. xdist joins every group on a test into one name, so under `--dist loadgroup` that
+  stage got a group of its own and ran on another worker, without the earlier stages' saved values.
+  The mark belongs in the scenario's `marks`; a stage repeating the scenario's group is accepted.
+- `HTTPCHAIN032` (error): a stage name containing `::` (`Users::list`). The name is part of the
+  stage's node id, where `::` separates the parts, so pytest could not run the stage by its node
+  id, and `--dist loadscope`, which groups tests by node id up to the last `::`, ran it apart from
+  the rest of the scenario.
+- `HTTPCHAIN033` (error): a scenario `xdist_group` name with a `]` after its last `@`, such as
+  `xdist_group('db[main]')`. xdist ignores such a group, so under `--dist loadgroup` every stage was
+  scheduled on its own, and a later stage could fail on another worker; `validate` reported the
+  scenario as OK.
+- Credentials are redacted in failure reports. A failing stage printed `authorization: Bearer <token>`,
+  its cookies and any `?access_token=...` verbatim in the HTTP Request/Response sections, so they
+  landed in CI logs. The values of the headers listed in the new `httpchain_redact_headers` ini
+  option (default `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-API-Key`,
+  `API-Key`, `X-Auth-Token`) and of the query parameters in `httpchain_redact_query_params`
+  (default `access_token`, `refresh_token`, `id_token`, `api_key`, `apikey`, `client_secret`,
+  `password`, `token`) now print as `[REDACTED]`, names kept: `cookie: a=[REDACTED]; b=[REDACTED]`,
+  `set-cookie: sid=[REDACTED]; Path=/; HttpOnly`. Names match case-insensitively, a list replaces
+  its default, and an empty value disables it. The rules also cover a redirect's `Location`, a
+  URL's userinfo (the password of `https://user:password@host`, the user name of
+  `https://<token>@host`), the value a failed header check echoes (`Header 'Set-Cookie' doesn't
+  match: expected sid=[REDACTED]; Path=/, got ...`, and a `not_contains` operand found in the
+  hidden part), a request error quoting a header value (`Illegal header value b'[REDACTED]'` for
+  a token with a trailing newline) and the `HTTP Request: GET <url>` line httpx logs at INFO.
+  Bodies and DEBUG logs are not redacted. HAR files stay complete by default, as a HAR is usually
+  replayed; the new `httpchain_har_redact = true` applies the same rules to their URLs, headers,
+  cookies and query strings.
+- A scenario-level `client` block configures the HTTP client all its stages share:
+  `{"client": {"base_url": "https://api.example.com/v1", "headers": {"Accept": "application/json"}}}`.
+  With `base_url`, a stage's `request.url` may be relative (`/users/1`), and httpx appends it to
+  the base URL's path: `https://api.example.com/v1` and `/users/1` give
+  `https://api.example.com/v1/users/1` (a leading `/` does not return to the host's root, as it
+  would in a browser), an absolute stage URL ignores `base_url`, and both are still sent as
+  written. `headers` go with every request, a stage's `request.headers` overriding them by name,
+  case-insensitively; a `Content-Type` among them labels every request body except a `form` or
+  `files` one, which keeps the type it is encoded in (`application/x-www-form-urlencoded`, or
+  `multipart/form-data` with the boundary between its parts). `params` are added to every request's
+  query unless the stage already sets the key, in its URL or its `params`, and like those they are
+  merged into the URL's query without re-encoding it. `timeout` and `follow_redirects` are the
+  defaults for the stages that do not set `request.timeout` or `request.allow_redirects` (30
+  seconds and `true` when neither does): a stage's own value wins, including one written equal to
+  the default or brought in by `$include`/`$merge`. `max_redirects`, `proxy` (which replaces the
+  proxy environment variables), `http2` (default `true`), `max_connections` and
+  `max_keepalive_connections` (default 20) map onto httpx's settings. An `https://` proxy's own
+  TLS connection follows the scenario's `ssl` as the servers' do once `ssl` sets `verify: false`, a
+  CA bundle or a `cert` (given the URL alone, httpx checks the proxy against certifi's bundle
+  whatever `ssl` says); with the default `ssl` it is checked as httpx checks a proxy from
+  `HTTPS_PROXY`, against the system's CA store and certifi's bundle. Templates in `client` resolve
+  once per scenario, against the scenario substitutions only, like `ssl` and `auth`
+  (`HTTPCHAIN016`/`HTTPCHAIN017` cover them), and one rendering to `null` on `base_url`, `proxy` or
+  a pool limit fails initialization rather than dropping the setting, and so does one rendering
+  to text that is still a template (`{{ ... }}`), which httpx would otherwise take as it is. A
+  `client` value that fails validation is reported without the value, which may be a credential
+  (a proxy URL's password, a header's token). `base_url` may not have a query or fragment (httpx
+  would append the path after them); put default query parameters in `params`. A URL without a
+  scheme is now a relative URL, so `not-a-url`, which failed schema validation, fails as
+  `HTTPCHAIN034` unless the scenario sets `base_url`.
+- `HTTPCHAIN034` (error): a stage `request.url` that is relative, all of it or the text before
+  its first template (`/users/{{ id }}`), while the scenario's `client` sets no `base_url`. A
+  template that renders to a relative URL without one fails its stage with the same message,
+  before anything is sent, instead of httpx's `Request URL is missing an 'http://' or 'https://'
+  protocol`.
+- Built-in authentication, without a Python function: `{"basic": {"username": "...", "password":
+  "..."}}`, `{"digest": {"username": "...", "password": "..."}}` and `{"bearer": "<token>"}`, in the
+  scenario's `auth` or a request's. The values take templates: a scenario's resolve once, against
+  the scenario substitutions (`HTTPCHAIN016`/`HTTPCHAIN017` cover them, as they cover `ssl` and
+  `client`), and a request's with the rest of the request, so `{"bearer": "{{ token }}"}` sends the
+  token a login stage saved, and `validate` reports a token used before the stage that saves it
+  (`HTTPCHAIN004`); `show` and `graph` draw the edge. A credential whose template renders to
+  `null` fails the stage rather than sending the request without credentials, a bearer token may
+  not be empty, and a credential that fails validation is not quoted. The whole `auth` may be one
+  template (`"{{ creds }}"` over a `vars` object), at either level; a user function name a
+  template in `auth` rendered is not quoted when it fails to import either, since credentials
+  rendered as one `"user:password"` string have a name's shape. The scenario's digest auth
+  answers the server's first challenge and then every later request up front, parallel ones
+  included, counting each use of the nonce once as servers checking for replays require; a
+  request's is challenged on each request, and its challenge shows in the HAR export as a request
+  without credentials, as it went out (httpx added the answer to the challenged request). A
+  request's `"auth": false` sends it without the scenario's auth, for a public endpoint in an
+  authenticated scenario; at scenario level `false` fails validation, saying where it belongs.
+  User functions (`"module:function"` or `{"name": ..., "kwargs": ...}`) work as before, for any
+  other scheme; an object mixing `name` with a built-in's key, or two built-ins, fails validation
+  naming the extra key, and `validate --deep` imports only user functions.
+- `verify.status` takes a status class and a list besides one code. `"2xx"` passes any 200-299
+  response (the classes are `"1xx"` to `"5xx"`, in either case), and a non-empty list such as
+  `[200, 201]` or `["2xx", 304]` passes when the response matches any of its entries, each a code
+  (100-599, as before) or a class. A mismatch names what was expected the way it was written:
+  `expected 2xx, got 500`, `expected one of [200, 201], got 500`, and `expected 200, got 500` as
+  before for one code. A `status` template may render to any of these forms, and a list entry may
+  be a template of its own (`["{{ created_status }}", 409]`), which `validate` checks and
+  `show`/`graph` count as consuming the names it reads, like any other. A whole `status` that
+  renders to `null` still fails its stage naming the template; a list entry that does, an empty
+  list or a value that is neither a code nor a class fails it too, with the validation report on
+  the rendered value. A template that rendered to text which is itself a template, which failed
+  as `expected {{ y }}, got 200`, now fails as `verify.status must resolve to a status code or a
+  class such as 2xx, got '{{ y }}'`, even beside an entry that matched. A `$merge`/`$include`
+  sibling's `status` list is not concatenated onto a fragment's, as other lists are: a longer list
+  of alternatives accepts more, so a negative test's `[404]` beside a shared `["2xx"]` would have
+  passed on a 200. An equal list is kept and a different one is a merge conflict, as a differing
+  single code always was.
+- `verify.jmespath` asserts on the JSON response body directly, where a value had to be saved first
+  and then tested in an expression, leaving the saved name in the context. Each key is a JMESPath
+  expression, mapped to the value it must equal or to a matcher: `{"data.id": "{{ user_id }}",
+  "length(items)": 3, "price": {"gt": 0, "lt": 100}, "meta": {"eq": {"page":
+  1}}}`. Equality is JSON's: `true` never equals `1`, `1` equals `1.0`, and arrays and objects
+  compare element by element. An object written in the scenario is always a matcher, with the keys
+  `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `contains`, `not_contains`, `matches`, `not_matches`, `type`
+  and `length`, every one given must hold, and a value one cannot judge (`gt` on a string) fails
+  the check; a literal object written for equality fails validation pointing at `eq`, beside the
+  matcher's own errors when its keys are all a matcher's (`{"type": "admin"}`). A template written
+  where a value goes renders the value to compare with, an object included, whatever its keys:
+  `"meta": "{{ saved_meta }}"` compares by equality, and a matcher is written as an object, its
+  operands templated. A failure names the expression, the expected value and the actual one, cut
+  short when long: `JMESPath 'price' doesn't match: expected lt 100, got
+  120.5`. The checks run after `headers` and before `expressions`, the order of a verify step's
+  checks is now documented, and the body is parsed once per step, shared with `body.schema`; one
+  that is not JSON, or is nested too deeply to parse, fails the stage, and so does an expression
+  that cannot be evaluated against it, naming why (`keys() needs object, got [1, 2] (array)`,
+  `join() needs array-string, got an array holding 1 (number)`, `ceil()` of `1e400`). Keys are
+  never rendered: one holding a template fails validation, or gets `HTTPCHAIN029` when it is still
+  valid JMESPath (`'{{ x }}'`). Values and operands are rendered, in the response step's scope,
+  which `validate` checks and `show`/`graph` count as consuming what they read. A value template
+  rendering to `null` compares with `null`; an operand template rendering to `null` fails the stage
+  like other rendered-away checks, `eq` and `ne` included, since there `null` would be compared in
+  place of the lost value: the message says to write `null` for that. A missing path gives `null`,
+  as JMESPath has it; `contains` on the parent object tells a missing key from a null one.
+  `HTTPCHAIN006` counts `jmespath` as an assertion, and `HTTPCHAIN007`/`HTTPCHAIN008` flag a
+  matcher whose `contains` and `not_contains` are the same JSON value, or whose `matches` and
+  `not_matches` are the same pattern. A `$merge`/`$include` sibling's expectation for an expression
+  a fragment already checks merges whole, as `status` does: equal keeps, anything else is a merge
+  conflict. A reference written at the expectation itself, `{"$merge": "common.json#/price", "lt":
+  100}`, composes one matcher key by key, and an operand both sides give must agree whole: two `eq`
+  arrays or objects conflict rather than concatenate or blend, as two `gt` numbers do.
+- A failing stage's report has an `HTTP Request (curl)` section: the request as a curl command, to
+  send it again from a shell. It is shown whenever the `HTTP Request` section is, for the same
+  request and under the same label (`(after 1 redirect)`, `(failing of 3 parallel iterations)`).
+  Every argument is single-quoted for a POSIX shell, so quotes, newlines, shell syntax and non-ASCII
+  text in a header or body reach curl as sent. The headers curl writes itself (`Host`,
+  `Content-Length`, `Transfer-Encoding`, `Connection`) are left out, except a `Host` the request
+  set itself and the `Content-Length: 0` of a bodyless `POST`, which curl would not send; the
+  `Accept-Encoding` httpx sends on its own becomes `--compressed`, and one the request set
+  (`identity`) is kept, with `--compressed` to decode what comes back as httpx does; an empty
+  header is sent empty (`-H 'X-Empty;'`), and a body without a `Content-Type` is not labelled a
+  form, as curl would. A textual body is given as sent (`--data-raw`); a binary one, or one over
+  10,000 characters, is read from a file a comment above the command names (`--data-binary
+  @body.bin`), and a multipart body that was not captured, a stream the plugin does not send
+  itself, gets a comment saying to add its parts with `-F`. The report's redaction applies: a
+  hidden value stays `[REDACTED]`, and a comment says to fill it in. A digest `Authorization`,
+  which answered one challenge and cannot answer another, is left out, and a comment says to add
+  `--digest -u 'user:password'`. A URL holding brackets or braces gets `--globoff`, so curl does
+  not read them as ranges. The scenario's `ssl` and `client.proxy` settings are not part of the
+  request, and the command has none.
+- `save.regex` saves values from a body that is not JSON, such as a CSRF token in an HTML form or an
+  id in plain text: `{"regex": {"csrf": "name=\"csrf\" value=\"([^\"]+)\"", "order_id": {"pattern":
+  "Order #(?P<id>\\d+)", "group": "id"}, "all_ids": {"pattern": "id=(\\d+)", "all": true}}}`. A
+  pattern is searched for in the body's text (`re.search`), and the variable is group 1 of the first
+  match when the pattern has groups, else the whole match. As an object, `group` picks a group by
+  number (`0` for the whole match) or by name, and `all` saves a list of that group from every
+  match, `[]` when none. A pattern that does not match fails the step, naming the variable and the
+  pattern; a group that took no part in its match saves `null`. Patterns may hold templates, so a
+  `{{` in one always opens a template and literal braces are escaped (`\\{\\{`), and `group` and
+  `all` may be templates. An invalid pattern, and a group a written-out pattern does not have, fail
+  `validate` and collection; once a template renders them, they fail the stage as a save error, as
+  does template text a template renders there. The saved names are known to `validate`'s order
+  checks and to `show`/`graph`, as a JMESPath save's are.
+- Template built-ins for the values a test otherwise needed a fixture or a user function for.
+  Time: `now()` is the current UTC time in ISO 8601 with its offset and always with microseconds
+  (`2026-09-27T12:34:56.789012+00:00`), `now('%Y-%m-%d')` formats it with `strftime` (except `%s`,
+  which the C library formats as local time: `timestamp()` is the epoch value), and `timestamp()`
+  and `timestamp_ms()` are Unix seconds and milliseconds. Encoding: `b64encode` and `b64decode`
+  (text as UTF-8, `urlsafe=true` or a second argument `true` for the URL-safe alphabet, padding
+  optional when decoding, so a JWT segment reads as it is), `json_dumps` (`json.dumps`' defaults,
+  a `vars` object written as the object it is) and `json_loads`. URLs: `urlencode` builds a query
+  string from an object as `params` sends one (a list repeats its key, `true`/`false`, an empty
+  value for `null`, bytes percent-encoded as they are rather than as their `b'...'` repr), and
+  `quote` percent-encodes a path segment, `/` included unless given in `safe`. Hashing: `sha256`,
+  `md5` and `hmac_sha256(key, message, encoding='hex')`, hex or `'base64'`, for signing a request.
+  Each returns plain text, a number or JSON data; a value it cannot take (a number to hash, text
+  that is not base64 or not JSON, an object or an uncalled function nested in `urlencode`) fails
+  the stage with a message naming the function, and so does a template that renders to a helper
+  uncalled (`{{ now }}`, or a save named `now` that has not landed), rather than sending
+  `<function now at 0x...>`. A name the scenario defines itself, a variable, fixture, parameter,
+  save or function substitution, still wins over a built-in of the same name where it is in scope,
+  `get()` and `exists()` excepted: `{{ timestamp }}` reads a saved `timestamp`, while
+  `{{ timestamp() }}` calls the built-in unless that `timestamp` is a fixture's or function
+  substitution's function. The docs' three "use a fixture for a timestamp" examples now use
+  `now()`.
+- `HTTPCHAIN035` (warning): a built-in function that is no use as a value, a helper above or
+  `uuid4`, `env`, `rand` or `randint`, used without calling it, such as `{{ now }}`, `{{ env }}`,
+  `str(timestamp)` or `dict(at=timestamp)`, which gets the function itself rather than its value. A
+  built-in handed to a function that may take one, a `key=`, a user function's argument or the
+  argument of a method of a fixture's object (`helper.ids(uuid4)`), is not reported, nor is one in
+  text the runtime never renders (a function substitution's `kwargs`). In the scenario-level
+  `substitutions` of a scenario whose parametrize values are templates, the warning says that the
+  scenario's collection fails, which resolves them there, not its initialization.
+- `HTTPCHAIN036` (warning): a built-in's name the scenario defines too, used as a function where
+  that definition is not in scope, such as `timestamp()` in another stage or in the scenario-level
+  `substitutions` when one stage fakes the clock with a `timestamp` function substitution, or
+  `sorted(rows, key=len)` ahead of a save named `len`. The built-in runs in its place, which is
+  never a failure, so it is a warning at every level, scenario level included. Handed to your own
+  function, the name counts only where your definition may hold a function, a fixture or function
+  substitution: `sign(timestamp)` ahead of a save named `timestamp` gives `sign` the built-in
+  function, not the saved text, and is reported as any read ahead of its save.
+- `HTTPCHAIN037` (warning): a template in a stage that the engine refuses from its text alone, with
+  the reason the stage fails with: a syntax error, more than one statement, an assignment or
+  another statement, a kind of expression the engine does not evaluate (a lambda, a set
+  comprehension, `*` unpacking outside a list literal, `yield`, `await`), an attribute it does not
+  read (`doc._id`, `'{}'.format(x)`) or a call of anything but a name or an attribute. The stages
+  before it still run, so it is a warning, as an undefined name there is (`HTTPCHAIN003`).
+- `HTTPCHAIN038` (error): the same in a template resolved before any stage runs, where it leaves
+  nothing to run: a scenario-level one (`substitutions`, `auth`, `ssl`, `client`), which fails
+  scenario initialization and every stage with it, as an undefined name there does
+  (`HTTPCHAIN017`), or a stage's parametrize value, which fails the scenario's collection, as do
+  the scenario's `substitutions` once a templated parametrize value resolves them there. It fails
+  collection and `validate`.
+- `verify.body.schema` checks a response against a schema inside a document you already have, an
+  OpenAPI 3.1 component or a file of shared definitions:
+  `"schema": "./openapi.json#/components/schemas/User"`. What follows the file's first `#` is an RFC
+  6901 JSON pointer written as a URI fragment (percent-decoded, `~1` for a `/` in a key, `~0` for a
+  `~`), so a path's response schema is
+  `openapi.json#/paths/~1users~1{id}/get/responses/200/content/application~1json/schema`. The schema
+  it selects keeps its `$ref`s to the rest of the document (`#/components/schemas/Address`), and a
+  `$ref` to another local file (`./address.json`, `common.json#/$defs/Email`) resolves relative to
+  the file it is written in; an inline schema's resolve relative to the scenario file's directory.
+  The dialect is the selected schema's own `$schema`, else the document root's, else Draft 2020-12,
+  and a schema a `$ref` reaches follows the same rule, so a definition in a Draft 7 file is Draft 7
+  however it is reached; `format` is checked in every schema a reference reaches. An `$id` in the
+  schema is the base of the references inside it, as JSON Schema specifies, at its root, on the
+  pointer's way, and in an OpenAPI component too, where JSON Schema itself does not look for one,
+  whether the pointer selects the component or a schema inside it: a bundled document's
+  `"$ref": "/schemas/address"` under `"$id": "https://example.com/schemas/customer"` finds its
+  embedded `/schemas/address` resource. A document a `$ref` reaches is resolved against where it is,
+  whatever `$id` its root declares, as jsonschema resolves one. A reference that names a local file
+  keeps the rules a scenario's `$include` path keeps: a relative path, at most
+  `httpchain_ref_parent_traversal_depth` `../`, to a file inside pytest's rootdir. Nothing is read
+  over the network: a remote reference is not fetched (see Changed), and a file on another host (a
+  UNC path on Windows) is refused before its path is looked up. Each file is parsed, meta-checked
+  and its `$id`s and anchors indexed once while it is unchanged, however many stages, parallel
+  iterations (which wait for the one reading it) and references use it, and each reference is looked
+  up once per verify step, not once per array item it validates. A missing or unreadable file, a
+  pointer that leads nowhere (`'#/components/schemas' has no key 'Usr'`), an `$id` on its way that
+  cannot be read (`$id 5 is not a string`), a selected schema that is not valid, a `$ref` that does
+  not resolve and a schema a `$ref` reaches that validating against shows to be invalid
+  (`$ref '#/components/schemas/Role' points to an invalid JSON Schema: ...`, as `validate --deep`
+  words it) each fail the stage as one verification error naming the file and the pointer. An
+  `http(s)` URL in place of the file, or a fragment that is not a pointer (`openapi.json#User`),
+  fails `validate` and collection. `validate --deep` checks the rest without a response: that the
+  file exists (`HTTPCHAIN020`), is JSON, that the pointer resolves, that the schema it selects is
+  valid, and that every `$ref` and `$dynamicRef` it reaches resolves under the same rules to a
+  schema valid in its dialect (`HTTPCHAIN021`, or `HTTPCHAIN020` for a local file that is not
+  there), following what the runtime follows: a reference beside a Draft 3 to 7 `$ref`, which they
+  ignore, is not reached. An OpenAPI 3.0 document's schemas are a dialect of their own (`nullable`,
+  boolean `exclusiveMinimum`); the docs say how to convert them.
+- A `multipart` request body sends form fields and files together, which `files` could not:
+  `{"multipart": {"fields": {"title": "Report", "tags": ["a", "b"], "draft": false}, "files":
+  {"document": "./report.pdf"}}}`. A field is text, a number or a boolean, sent as text the way a
+  form value is (`false` as `false`), and a list sends a field per item under the same name. Each
+  `files` entry is one file or a list of them, a part per file under the same name. A file is a
+  path, as before, or an object with exactly one of `path`, `content` (text, sent UTF-8 encoded)
+  and `base64` (binary data), and optionally `filename` (by default the path's last component, or
+  for inline content the field's name; `""` sends none, for a JSON part beside a file) and
+  `content_type` (by default guessed from the filename's extension, else
+  `application/octet-stream`). The fields go first, then the files, in the order written.
+  `files` takes the same file objects and lists; a path string is what it was. Templates work in
+  every value, a whole file object or list of files included, and a `filename` or `content_type`
+  template that renders to `null` fails the stage, `which would silently send the default filename
+  instead`, as other optional fields do; a `null` in a source a rendered file object does not use
+  is not set, as in the object written out. A file that is not there fails the stage naming its
+  path as the scenario gives it, tidied as any path is (`./report.pdf` as `File not found for
+  upload: report.pdf`), and `validate --deep` reports it (`HTTPCHAIN020`), a file object's `path`
+  and a list's items too. A stage's own `Content-Type` is sent as written, and the parts are
+  delimited by the boundary it names, a `multipart/related` or `multipart/mixed` one included,
+  where httpx only took the boundary of a `multipart/form-data` one and delimited the parts with
+  another. A multipart type naming no boundary, such as `multipart/form-data` written out of
+  habit, is sent with the body's added, where the server had none to find the parts by; one
+  naming an empty boundary fails the stage, as does one naming a boundary the parts cannot be
+  delimited by as written (holding a `;`, ending in whitespace, or starting or ending with a quote,
+  none of which RFC 2046 allows), where `boundary="a;b"` had the parts delimited by `a`.
+- A stage-level `skip_if` skips a stage when a condition holds, decided when the stage is about to
+  run, where marks are fixed at collection and `always_run` only counts after a failure:
+  `"skip_if": "{{ target == 'prod' }}"`, or `"skip_if": true`. A template sees what the stage's
+  request sees but the `parallel.foreach` parameters: fixtures, parametrize parameters, scenario
+  substitutions, earlier stages' saves and the stage's own `substitutions`, which run first. It
+  must evaluate to a boolean, as a verify expression must: a saved string `"false"`, a number or
+  a `null` fails the stage (`skip_if must evaluate to bool, got str from '{{ flag }}'`, the type
+  and never the value, which may be a token) rather than skip it or run it by truthiness. The
+  stage is reported skipped as `skip_if: <the template>`, sends nothing and saves nothing, and the
+  chain goes on: a skip is no failure. In a chain a failure aborted, a stage skips as before unless
+  `always_run` lets it through, and then its `skip_if` still counts. A literal `true` skips without
+  running the stage's substitutions. The validator checks a `skip_if`'s references like every
+  other template's (`HTTPCHAIN003`/`HTTPCHAIN004`, `HTTPCHAIN035`). Since the stages after a
+  skipped one run, it also reports a later stage reading a name that only stages with a `skip_if`
+  save, other than through `get()`, as potentially undefined (`HTTPCHAIN003`): `request references
+  'token', which only stage 'login' saves, and it has skip_if: when it skips, 'token' is undefined
+  here`. The saves of a stage that may fail still count as there, since the stages after a failure
+  do not run unless they are `always_run`. `show` lists a stage's `skip_if`, and `graph` draws the
+  edges out of such a stage dotted. A name re-saved by a stage with a `skip_if` comes from the
+  stage before that saved it when it skips, so both list every stage such a name may come from,
+  back to one without a `skip_if`: `token (from #2 refresh, else #1 login)`.
+- `parallel.collect_saves: true` keeps every iteration's saves. They merged into one value per
+  name, the highest iteration index winning, so a stage creating several resources kept the id
+  of one of them, and "create N, then clean them all up" could not be written. Now each name any
+  iteration saves becomes a list with one entry per iteration, in iteration order whichever
+  finished first (entry `i` lines up with iteration `i`'s `foreach` parameters), and `null` where
+  an iteration did not save the name. A later stage goes through them with `"foreach":
+  [{"individual": {"id": "{{ created_ids }}"}}]`, such as an `always_run` cleanup. It works with
+  `repeat` and `foreach` alike, a single iteration's lists included, and inside the stage an
+  iteration's later response steps still read the value it saved itself. Saves stay all or
+  nothing: a stage with a failed iteration commits no list at all. It can be a template, rendered
+  with the rest of the `parallel` config before any request is sent, against what the stage's
+  `skip_if` sees: a `foreach` parameter there is undefined, and `validate` reports it
+  (`HTTPCHAIN003`) as in any `parallel` setting. It must render to a boolean, the numbers `1` and
+  `0` counting as `true` and `false` as in `client.http2`; any other value, `null` included, fails
+  the stage before its iterations send anything. The default, `false`, merges as before, and the
+  validator, `show` and `graph` count the names as the stage's saves either way.
+- A stage's `retry` attempts it again while it fails, which polling an asynchronous job until it is
+  done needs, as does a read that is only eventually consistent: `"retry": {"attempts": 10, "delay":
+  0.5, "backoff": 2, "max_delay": 5, "on": ["verify", "save", "request"]}`. `attempts` counts the
+  first; `delay` (default 1 second) is the wait before the second attempt, multiplied by `backoff`
+  (default 1) after each, never more than `max_delay`. Each attempt renders the request anew, a
+  fresh `uuid4()` included, sends it and runs every response step in a context of its own: a failed
+  attempt's saves are discarded, and only the one that passes commits its saves. `on` (one kind or a
+  list, default all three) names the failures retried: a verify step's checks, a save step that
+  could not take its values from the response, and the request timing out or its connection failing.
+  A verify or save function is retried when it returns false or raises a `VerificationError` or
+  `SaveError` (`pytest_httpchain.errors`) to say "not yet". Never retried, as every attempt would
+  fail alike: a template that cannot be rendered or renders a value its field or check does not
+  take, a user function that cannot be imported or found or that crashed, a body schema that cannot
+  be read (a missing file, a pointer that leads nowhere, an invalid schema, a `$ref` that does not
+  resolve), a request httpx refuses to send, too many redirects, an auth function that raised, a
+  rate-limit slot that did not come, and a user function's `pytest.skip()`/`xfail()`/`fail()`. After
+  the last attempt the stage fails with that attempt's failure, `... (after 10 attempts)`, as does a
+  `pytest.fail()` or a failure never retried on a later attempt, and the report shows that attempt,
+  `HTTP Response (attempt 10 of 10)`; the HAR export records every attempt of every iteration, and
+  each retried failure logs a line at `INFO`. A sibling `on` beside a `$merge` of a shared `retry`
+  is a merge conflict, as a sibling `verify.status` list is, rather than concatenated: its kinds are
+  alternatives, and concatenated they would retry more than either side wrote. In a `parallel` stage
+  each iteration retries on its own, a wait ends at once when another iteration fails the stage, and
+  each attempt takes a `calls_per_sec` slot, a retried single iteration's too. What factory fixtures
+  enter during the attempts is exited when the iteration ends. The settings but `on` take templates,
+  rendered once per stage before any request against what `skip_if` sees; `validate` checks their
+  references like the `parallel` config's (`HTTPCHAIN003`/`HTTPCHAIN004`, `HTTPCHAIN035`), a setting
+  the stage cannot use fails it before the first request, and a `max_delay` rendered to `null` is
+  refused rather than lift the cap. A `delay`, `backoff` or `max_delay` that is not finite (JSON's
+  `1e999`) is refused at load, by `validate` too, and so is a `true` or `false` in any of the four,
+  written or rendered, which would have been read as `1`: `"attempts": "{{ poll }}"` with a flag for
+  `poll` attempted once.
+- Comments and trailing commas in scenario files. Every JSON file the plugin reads from disk, a
+  scenario, a file it `$include`s, `$merge`s or `$ref`s, a `verify.body.schema` file and the files
+  its `$ref`s reach, may hold `//` line comments, `/* */` block comments and one trailing comma
+  before a `]` or `}`, at collection, at runtime and in `validate` (`--deep` too), `resolve`, `show`
+  and `graph`. Strictly valid JSON reads as it did, so there is nothing to switch on. pytest also
+  collects `test_<name>.<suffix>.jsonc`, the extension editors open as JSON with comments, and
+  `validate` takes it without `HTTPCHAIN013`; a `.json` and a `.jsonc` of the same name are two
+  scenarios, their node ids told apart by the extension. Nothing inside a string is touched, and a
+  syntax error's line and column still point into the file as written, as comments are read as
+  whitespace. A `/*` never closed is a syntax error at its opening, and a leading or doubled comma
+  stays one: `HTTPCHAIN014` in a scenario or a file it includes, and in a `verify.body.schema` file
+  a failed stage, which `validate --deep` reports ahead of time as `HTTPCHAIN021`. A response body
+  stays strict JSON, and a file a request uploads is sent as it is. `resolve` prints strict JSON,
+  the comments gone.
+- `pytest-httpchain validate` takes directories as well as files, so a CI job can gate a whole
+  tree with `pytest-httpchain validate tests/`. A directory is searched as pytest collects it:
+  every `test_<name>.<suffix>.json` and `.jsonc` at any depth, passing over the directories pytest
+  skips by default (those its default `norecursedirs` matches: `*.egg`, `.*`, `_darcs`, `build`,
+  `CVS`, `dist`, `node_modules`, `venv`, `{arch}`; `__pycache__`; a virtual environment, known by
+  its `pyvenv.cfg`, or a conda environment by its `conda-meta/history`) and the entries pytest
+  passes over when they cannot be looked at (a symlink to itself), and never entering a symlink to
+  a directory, so a link cannot loop the search. The suffix is the `httpchain_suffix` set in the
+  configuration file pytest would read for the same paths (`pytest.toml`, `pytest.ini`,
+  `pyproject.toml`, `tox.ini` or `setup.cfg`, found as pytest documents finding its configfile),
+  else `http`. The new `--suffix` option overrides it, and a configuration file pytest could not
+  read, or a suffix it would refuse, stops `validate` with an `error:` line before anything is
+  checked; a run over files alone never reads it. Files named one by one are still validated
+  whatever their name. The report is sorted by path, whatever order the paths are given in (a
+  directory's files so in pytest's order, depth first, each directory's entries by name), a file
+  reached twice (`validate tests tests/api`) is checked once, and `--deep`, `--syspath`,
+  `--strict`, `--format json` and the reference options apply to every file found. A directory
+  holding no scenario file is reported as `HTTPCHAIN039` (error) and fails the run, so a mistyped
+  path, or a suffix that names no file, cannot pass CI as an empty run.
+- Templates read a `vars` object by key as well as by attribute, at any depth and in lists, as they
+  read an object a `save` took from a response: `{{ headers['Content-Type'] }}` for a key that is
+  no Python name, `{{ doc['_id'] }}` for one starting with `_`, `{{ 'name' in user }}`,
+  `{{ len(user) }}`, `{{ [k for k in user] }}` (the keys, in the order written), `user.keys()`,
+  `user.values()`, `user.items()` and `{{ user.get('nick', 'anon') }}`. The `response` metadata of
+  a response step reads by key too (`{{ response['status'] }}`). An attribute reads the object's
+  key first, as it always has, so for an object with a key named `keys`, `values`, `items` or `get`,
+  `{{ order.items }}` is still that key's value and `{{ order.items() }}` fails calling it, as do
+  `dict(order)` and `{**order}` for a key named `keys`, which they call; every form by key
+  (`order['items']`, `list(order)`, `[order[k] for k in order]`, `{k: order[k] for k in order}`)
+  reads the data. For an object without such a key, the attribute reaches the method only to call
+  it (`order.items()`) or to hand it as a `key=` (`{{ max(scores, key=scores.get) }}`); anywhere
+  else in an expression (`{{ order.items != [] }}`, `bool(order.get)`, `str(order.keys)`) it is
+  the missing attribute it was, so a check reading it still fails rather than pass on the method.
+  (A saved object is a dict, whose methods an attribute reads before its keys: `saved.items` is the
+  dict's method, so read a key named like one by key, `saved['items']`.) A missing key fails the
+  stage naming it, a missing attribute named like a method says how to call it, and an empty object
+  is now false (all under Changed). Nothing else changes: an object interpolated into text still
+  reads `namespace(...)`, however deep, it still equals another `vars` object with the same keys
+  and values and no dict, and a JSON body, `json_dumps` and `urlencode` take it as before.
+  `validate` reads a subscript, `in` and the methods as it reads an attribute: the object's name is
+  the one reference.
+- A backslash escapes a template's braces: `\{{` in a value renders as the text `{{` and opens no
+  template, so a Handlebars or Mustache payload, documentation text or a `{{placeholder}}` a server
+  expects is sent as written (`"X-Template": "\\{{name}}"` in the JSON file sends
+  `X-Template: {{name}}`). The escaped text runs to the first `}}` after it on its line, so
+  template syntax in it is sent as text, only the escaping backslash dropped (a Handlebars raw
+  block's `\{{{{raw}}}}`, Jinja's own `\{{ '{{' }}`, `\{{{{ id }}`, where `id` is not evaluated);
+  after that `}}` text is read as usual, so each tag of a payload takes its own backslash, and a
+  `}}` needs no escape.
+  Before `{{`, `\\` stands for one backslash, so a backslash before a template is written doubled
+  (`\\{{ id }}` renders a backslash, then the value), each pair before `{{` renders as one, and a
+  backslash anywhere else is left as it is. The escape is removed once, when the scenario's own
+  text renders: a value a template puts in, a save, a variable or a fixture's value, holding `{{`
+  or `\{{` is put in as it is. Every value that renders takes the escape (request fields, verify
+  operands and `jmespath` values, `save.regex` and `matches` patterns, `vars` and parametrize
+  values, file paths: a `binary` body, an upload, an `ssl` file). `validate` agrees: an escaped
+  template is no template, so no name in it is reported as undefined, a literal is checked as the
+  text it renders to (a GraphQL query or a JMESPath expression holding `\{{` in one of its strings,
+  whose own backslash escapes have none for `{`, is valid), `validate --deep` looks for the file
+  a path with an escape renders to, a field that takes only a whole template (`timeout`,
+  `skip_if`) refuses an escaped one as text, and the client's `base_url` and `proxy` and a
+  `verify.body.schema` file reference, which take no literal braces, refuse a backslash before
+  `{{` as the scenario loads. A key and a `functions` kwarg are never rendered, so they keep a
+  backslash as written, and `validate` warns of an escape there (`HTTPCHAIN029`, `HTTPCHAIN030`):
+  it does nothing, and the braces need none. The expression form `{{ '{{' }}` renders `{{` too, as
+  it did. See [Literal braces](docs/usage/substitutions.md#literal-braces).
+- A parallel stage measures its iterations and can be held to limits on the numbers: used as a small
+  load test, it reported only whether it passed. Its report has a `Parallel Summary` section, shown
+  where the `HTTP Request` and `HTTP Response` sections are (a failed stage's report, a passed one's
+  with `-rP` or `-rA`, under pytest-xdist too): how many iterations passed, failed and were
+  cancelled (and were skipped, when a user function skipped one), the success ratio, the wall time,
+  the throughput (completed and passed iterations per second of wall time) and the passed
+  iterations' latency, min, mean, p50, p95, p99 and max in milliseconds, the percentiles
+  nearest-rank. An iteration's duration is the time its requests spent in the HTTP client,
+  redirects, every attempt of a `retry` and the client's own wait for a pooled connection included,
+  but not the wait for a `calls_per_sec` slot or between attempts, so that a rate limit does not
+  read as a slow server. `parallel.thresholds` fails the stage once every iteration has ended below
+  a `min_success_ratio` or a `min_rps`, or above a `max_mean_ms`, `max_p50_ms`, `max_p95_ms` or
+  `max_p99_ms`, naming every limit missed with the value measured (`2 parallel thresholds not
+  met: 1. min_success_ratio: 0.666667 (6 of 9 iterations passed), below the limit 0.9 ...`). A
+  `min_success_ratio` below 1 lets the stage run on after failures: no iteration is cancelled, the
+  stage fails at the end only if too few passed, listing the first five failed iterations, and it
+  saves what the passed ones saved (with `collect_saves`, `null` in a failed iteration's place; at a
+  ratio of 0 with none passed, `null` for each name its steps declare, which a later stage can still
+  read). Without one, or at 1, the first failure cancels the rest and fails the stage as before, and
+  a user function's `pytest.skip()`, `xfail()` or `fail()`, or a factory fixture's context manager
+  raising on exit, still ends the stage at once, the exit error's failure listing the iterations
+  that failed on their own; the HAR file has what every one of them sent, however the stage ends.
+  `parallel.stats_as` saves the stats as an object (`iterations`, `passed`, `failed`,
+  `success_ratio`, `wall_ms`, `rps`, `completed_rps`, `min_ms`, `mean_ms`, `p50_ms`, `p95_ms`,
+  `p99_ms`, `max_ms`) for the stages after it to read (`{{ load.p95_ms }}`), only when the stage
+  passes; `show` and `graph` list the name among the stage's saves, `validate` reports a reference
+  to it from the stage's own steps (`HTTPCHAIN004`), and the new `HTTPCHAIN040` (warning) a name the
+  stage's response saves too, which the stats replace. The thresholds are numbers or templates,
+  rendered with the rest of the `parallel` config before any request: one that renders `null`, text,
+  `true` or `false`, or a value out of its range fails the stage before its iterations send
+  anything. See [Stats and thresholds](docs/advanced/parallel.md#stats-and-thresholds).
+- `pytest-httpchain import har FILE` and `pytest-httpchain import curl COMMAND` write a starter
+  scenario from traffic you already have: a browser's HAR export (or the plugin's own), or curl
+  commands from an API's docs, a browser's "Copy as cURL" or a failing stage's report, whose command
+  imports back into the request it stands for. Each request is a stage, in order, verifying the
+  status the HAR recorded (a curl command records none: `2xx`). The origin every request shares is
+  `client.base_url`, a query string `params` (or the URL's own, as written, where `params` would not
+  send it as it was: a name repeated apart from its first, escapes that are not UTF-8, a secret
+  `params` would send empty unset), a JSON, form or multipart body the `json`, `form` or
+  `multipart` form (anything else the raw `text`, bytes `base64` but for a multipart body, taken
+  apart as a text one is, a curl `--data-binary @file` `binary`; a recorded `$ref`, `$include` or `$merge` key,
+  which the file's loader would resolve, never becomes a key of the scenario, so a JSON Schema
+  posted to a registry is sent as the text it was), Basic and Bearer credentials the `basic` and
+  `bearer` auth shorthands (the scenario's `auth` when every request sends the same), and with
+  several requests a header they all send alike `client.headers`; transport headers (`Host`,
+  `Content-Length`, `Connection`, `Accept-Encoding`, HTTP/2 pseudo-headers, ...) are left out, and a
+  recorded `{{` is escaped, so it is sent as recorded. No secret is written: a token, a password,
+  a user name sent without one (curl's `-u key:`, a URL's `https://<key>@host`), the cookies, the headers and query parameters reports redact (and form fields, multipart parts and
+  JSON members, strings or numbers, named like those parameters), and a `Referer` or other
+  URL-valued header whose URL carries such a parameter become placeholders the scenario reads from
+  environment variables (`{{ env('API_TOKEN') }}`), which stderr lists; one left unset fails its
+  stage, and inside text kept as written they render as it needs them (`{{ quote(access_token) }}`
+  in a URL, which fails unset too). `import curl` takes the command as one argument, as its words or
+  from stdin (`-`), read with POSIX shell quoting (`$'...'`, `\` line continuations and comments
+  included; several commands make a stage each). The command is the one named `curl`: what comes
+  before the name (a prompt's `$`, `sudo -E`, a `NAME=value`, `watch -n 1`) and the rest of a
+  pipeline are left out with a warning, a command without the name must start with an option or a
+  URL, and another program's command (`wget ...`) is refused rather than its words taken for URLs;
+  what `-d @-` reads is the here-document, here-string, `< file` or plain `cat`/`echo` piped into
+  curl the text gives. It maps curl's request options (`-X`, `-H`, the `-d` family, `--json`, `-F`,
+  `-G`, `-u`, `-A`, `-e`, `-b`, `-L`, `-k`, `-m`, ...) as curl sends them (a `Cookie` header given
+  with `-H` in place of `-b`'s cookies), curl's default form type,
+  the line breaks it strips from a `-d @file`, its URL globbing (a stage per URL of `{a,b}` and
+  `[1-3]`, unless `-g`) and its not following redirects without `-L` included; output options are
+  ignored (`-o` with a warning, since it may have been meant as the import's), and any other option
+  is named in a warning, never dropped silently. `import har` leaves out the static assets a page
+  loaded (images, stylesheets, fonts and scripts, by MIME type or, for a `304` Chrome recorded as
+  `x-unknown`, by resource type, unless the page's code fetched them; `--all` keeps them) and the
+  entries `--include` and `--exclude` patterns filter out, follows no redirect (each is an entry),
+  and leaves a cookie an earlier response set to the scenario's client, which keeps it as the
+  browser did. The scenario is written to stdout or `-o`/`--output` (an existing file only with
+  `--force`), and only once the file passes the validator, read back as `validate` reads it: one
+  that would not, a URL or method the model refuses, fails the command with the findings; what
+  cannot be read (a malformed URL, a file name holding a NUL) is an `error:` line and exit status 1.
+  See [`import`](docs/cli.md#import).
+
+### Fixed
+
+- A JSON syntax error in a file a scenario `$include`s, `$merge`s or `$ref`s was reported by
+  `validate` and at collection as `HTTPCHAIN014` with a line and column but no file name, which
+  read as a position in the scenario itself; `HTTPCHAIN015` for such a file nested too deeply named
+  no file either. Both now name the file: `Invalid JSON syntax in .../common.json: Expecting value:
+  line 2 column 8 (char 9)`.
+- The warnings that a scenario's earlier stages were deselected, or that a fixture's params vary
+  across its stages, and the error that `--dist loadscope` would split it, named the scenario by
+  its name alone, which scenarios of one name in different directories share, as do the
+  `test_<name>.http.json` and `test_<name>.http.jsonc` now collected side by side. They now give
+  its node id, `test_login.http.jsonc::login`.
+- `{{ env }}`, the `env` built-in written without its parentheses, rendered the repr of
+  `os.environ`'s `get`, which lists every environment variable with its value, into the request,
+  and so into the HAR file and the report, and `validate` said nothing. A template that renders to
+  `env`, `uuid4`, `rand` or `randint` uncalled now fails the stage as one that renders to a helper
+  does (`Uncalled function in expression '{{ env }}': ... call it: env(...)`), `HTTPCHAIN035`
+  warns of it, and `env` inside an expression (`str(env)`) no longer carries the environment in its
+  text.
+- A name the scenario defines that a template built-in also has, such as a save called `max`,
+  `sum` or `round` (or, now, `timestamp` or `now`), was left out of `validate`'s checks and of
+  `show`/`graph`: every built-in's name was dropped from a template's references, so a later stage
+  reading the save drew no edge, and a read before the save was not reported, though it rendered
+  the built-in function (`<built-in function max>`) into the request. A name the scenario defines
+  is now a reference wherever a template reads it, which is what the runtime resolves: out of scope
+  it is reported, with a note that the built-in is used instead. A call to a fixture or function
+  substitution named like one, made where that fixture or function is not in scope, silently ran
+  the built-in, and still does; `HTTPCHAIN036` now says so, as a warning at scenario level too,
+  where such a call does not fail.
+- A header matcher's `matches` or `not_matches` that a template rendered to text `re` cannot
+  compile, such as `{{ ( }}` saved from a response (the field's template branch takes template
+  text as it is), escaped the stage as a raw `re.error` traceback, and one too big to compile
+  (`a{4294967296}`, or thousands of nested groups) as an `OverflowError` or `RecursionError`. It
+  now fails its check: `Header 'X-Request-Id' (value: '12345'): matches must resolve to a regular
+  expression, got '{{ ( }}' (missing ), unterminated subpattern at position 3)`.
+- A response body Python's `json` cannot read though it is not malformed, an integer longer than
+  4300 digits or an array nested some thousand levels deep, escaped `verify.body.schema` and a
+  JMESPath `save` as a raw `ValueError` or `RecursionError` traceback, past the chain's abort
+  handling, with no request/response report and no HAR entry. Both now fail the stage: `Cannot
+  ..., response is not valid JSON: ...`, or `... response JSON is nested too deeply to parse:
+  ...`. A `verify.body.schema` file nested that deeply fails with "Error reading body schema
+  file", and `validate --deep` reports it as `HTTPCHAIN021`. The HTTP report shows such a body as
+  text; it used to show an error placeholder that also dropped the start line and headers.
+- `verify.body.schema` no longer escapes as a bare `RecursionError` on a body or schema file that
+  parses but is some hundreds of levels deep. A violation found in such a body is reported
+  without the value pretty-printed, which recursed past Python's limit, and a schema that recurses
+  as deep as the body (`"items": {"$ref": "#"}`) fails the check with `Cannot validate schema,
+  response or schema is nested too deeply`. `validate --deep` no longer crashes while describing
+  why such a schema file is invalid, and reports `HTTPCHAIN021`.
+- A `$merge`/`$include` sibling beside a fragment at a position that merges whole, an inline
+  `verify.body.schema` or a `verify.status` list, was compared with Python's equality inside
+  lists and objects, where `true == 1`: `{"const": true}` beside `{"const": 1}` kept one and
+  dropped the other without a conflict. Equality there is now JSON's at every depth, as it was
+  for a single value.
+- A failing stage whose response came after a digest challenge (an auth function returning
+  `httpx.DigestAuth`, or the new built-in) was reported as `HTTP Request (after 1 redirect)`: httpx
+  keeps the challenge's `401` in the same history as redirects. The report now counts them apart,
+  `(after 1 auth exchange)`, or `(after 1 redirect and 1 auth exchange)` for both.
+- A request that failed validation once its templates rendered printed the refused value in
+  pydantic's report (`input_value=...`), such as a header's token that rendered to a number; the
+  failure now leaves the values out, as a `client` block's does.
+- A scenario `auth` written as one template (`"{{ creds }}"`) was validated, once rendered, as
+  the user function name it was declared as: one rendering a `{"name": ..., "kwargs": ...}`
+  object failed initialization with pydantic's report, which printed the rendered object, while
+  `validate` passed the file. A request's `auth` rendering a `vars` object failed its stage the
+  same way. Both now take any form of auth, and the scenario's failure leaves the value out.
+- An `auth` written as one template that rendered a string other than a `module:function` name,
+  typically a token (`"auth": "{{ token }}"` for `{"bearer": "{{ token }}"}`), failed with two
+  messages that each quoted it, putting the credential in the report. The failure is now one
+  message, at either level, that says what a string `auth` is and where a token goes without
+  quoting the string.
+- A `combinations` step whose combinations have a single key now hands the stage the bare value.
+  The stage got a one-element tuple instead: with `{"combinations": [{"id": 1}, {"id": 2}]}`,
+  `/item/{{ id }}` requested `/item/(1,)`, a stage that did not check the value still passed, and
+  `validate` reported nothing. Both a literal list and a template resolving to one were affected;
+  `parallel.foreach` was not. Such a step now behaves exactly like `individual`, generated test
+  ids included (`[1]` instead of `[id0]`). Because the ids now come from the values, a
+  template that draws them at random (`uuid4()`, `rand()`, `randint()`) gives every
+  pytest-xdist worker different ids, and the run stops with "Different tests were collected";
+  give such a step explicit `ids`, as `individual` and multi-key `combinations` already needed.
+- A template that renders to `null` no longer silently switches off an optional check or setting.
+  Only `verify.status` and `verify.body.schema` were guarded. A header matcher field such as
+  `{"Content-Type": {"contains": "{{ expected_ct }}", "not_contains": "text/html"}}`, with
+  `expected_ct` from a JMESPath save of a missing key, simply went unchecked and the stage passed;
+  `parallel.calls_per_sec: "{{ get('rate') }}"` without a `rate` ran the stage with no rate limit;
+  a stage-level `auth` sent the request unauthenticated, or with the scenario-level credentials
+  when the scenario had its own `auth`; `ssl.cert` connected without the client certificate.
+  Every model the engine renders is now compared with its declared form, and an optional field
+  whose template rendered to `null` fails the stage (for `ssl`, scenario initialization) naming
+  the field and the template as written:
+  `'verify.headers.Content-Type.contains' was declared as '{{ expected_ct }}' but rendered to None, which would silently disable it`.
+  Optional fields added later are covered too, and so is a matcher written as one template
+  (`"Content-Type": "{{ matcher }}"`, with `matcher` saved from the response): a key it sets to
+  `null` fails the same way, while a key it leaves out is simply not checked. The
+  `status`/`body.schema` failure now reads the same way, and so does a field where validation
+  rejects `null` anyway, with the message ending at "rendered to None": a matcher whose only
+  field rendered to `null` failed with "Header matcher must set at least one of: contains, ...",
+  asking for the field the scenario had set, and a required field such as `url` with pydantic's
+  type errors ("URL input should be a string or URL"); neither named the template. When
+  something else in the same model is invalid as well, pydantic's report on it follows the
+  message.
+- A JSON body of `null` is sent as the JSON document `null`. `{"json": null}`, or a `json` template
+  that rendered to `null`, went out as an empty request with no `Content-Type`, exactly like a
+  request without a body. It is now `null` with `Content-Type: application/json`, unless the
+  request sets its own content type.
+- `params` no longer throws away a query string already in `url`. With
+  `"url": "{{ server }}/items?page=2"` and `"params": {"limit": 10}` the request went to
+  `/items?limit=10`: httpx replaces the URL's query with `params` instead of adding to it, and
+  nothing reported the lost `page=2`. The two are now merged: the URL's parameters come first,
+  then the new keys from `params`, and a key present in both takes its value from `params`
+  (`/items?page=2&limit=10`). A list value still repeats the key. Every URL parameter that
+  `params` does not set goes out exactly as it would without `params`, order and encoding
+  included, so an escape that is not UTF-8 (`q=%E9`) or a bare `?flag` reaches the server
+  unchanged. The HTTP report section and the HAR export show the merged URL, as sent.
+- A request URL reaches httpx as written. It was validated as pydantic's `HttpUrl`, and the
+  WHATWG-normalized form that type hands back was what got sent: `{{ server }}/static/%2e%2e/ok`
+  went out as `/ok`, so a path-traversal probe hit a different endpoint and passed or failed for
+  the wrong reason; a `\` in the path went out as `/`; and a URL longer than 2083 characters was
+  refused, a limit httpx does not have. The URL is still checked, at collection for a literal
+  one and after rendering for a templated one, to be an absolute `http`/`https` URL with a
+  well-formed host and port, with the same messages as before, but the string itself is what
+  httpx now gets. These, which WHATWG accepted only by repairing them, are refused instead,
+  since they would now be sent unrepaired or to another host and port than the ones checked:
+  `http:/example.com`, a leading or trailing space, a control character anywhere (a tab or a
+  line break was dropped, `\x01` percent-encoded), a `\` before the path (`http://a\b/` went to
+  host `a`), a percent-encoded host (`http://ex%61mple.com/`), a host only a browser's IDNA
+  mapping accepts (fullwidth letters or a soft hyphen, folded to plain ASCII). Other Unicode
+  whitespace at either end, such as U+3000 or U+00A0, is part of the URL to both and is sent.
+  A literal URL with an empty `{{ }}` in it, which was sent with the braces percent-encoded, is
+  refused at collection like any other empty template. httpx itself still resolves a literal
+  `..` segment, as curl does; write it as `%2e%2e` to send it. A URL may now be up to 65,536
+  characters, httpx's own limit, and the editor schema drops the 2083-character `maxLength`.
+- A scenario that lists a `class`-scoped (or broader) fixture with `params` in its `fixtures` runs
+  its whole chain once per param. It ran every param's first stage before any second one: with a
+  `tenant` fixture over `[a, b]`, `create[a]`, `create[b]`, `read[a]`, `read[b]`. `read[a]` saw
+  what `create[b]` saved and failed, `read[b]` was skipped, and the fixture was set up four times,
+  once per test, instead of once per param. pytest runs such tests param by param (`create[a]`,
+  `read[a]`, `create[b]`, `read[b]`); the plugin's sorting of each scenario into stage order undid
+  that. Each param's stages now form a chain of their own, in stage order, run one chain after the
+  other, so the fixture is set up once per param. Each chain also starts like a new run of the
+  scenario: nothing the previous chain saved, no abort from its failure, and its own HTTP client,
+  where before only the end of the scenario reset them. The scenario's `substitutions`, `auth` and
+  `ssl` still resolve once for all its chains, so a user function there is not called again per
+  param. A `-k`, `--lf` or `--deselect` selection that keeps a later stage of one param's chain
+  but drops an earlier one draws the usual warning, naming the chain (`the chain for
+  tenant='a'`). A fixture with `params` that is function-scoped, or that only some stages
+  request, still varies in place like a stage's `parametrize`, within one chain, whichever of
+  those stages you run, with `-k` or by node id. When two or more stages, but not all, request
+  such a `class`-scoped (or broader) fixture, collection now warns: each of those stages runs for
+  every param before the next one does, so `read[a]` sees what `create[b]` saved, and the fixture
+  is set up again at each change of param. Requesting it from every stage, e.g. in the scenario's
+  `fixtures`, runs the chain once per param instead.
+- pytest-xdist `--dist loadgroup` and `--dist loadscope`, the modes documented as keeping a
+  scenario together, could still run one of its stages on another worker, where it failed without
+  the earlier stages' saved values. loadscope groups tests by node id up to the last `::`, and
+  loadgroup by their `xdist_group` names, which xdist appends to the node id after an `@`. Besides
+  the scenarios the new `HTTPCHAIN031` to `HTTPCHAIN033` reject (see Added), two more split a chain.
+  Under loadgroup, a scenario in a directory such as `[smoke]`: the automatic group is named after
+  the scenario's node id, and xdist ignores a group whose name has a `]` with no `@` after it, so
+  every stage was scheduled alone. The plugin now replaces `]` and `@` in that name. Under
+  loadscope, a test id containing `::`, from a parametrize step's `ids` or values (such as
+  `"::1"`) or from a class-scoped fixture's `params`. pytest itself handles such an id, so it
+  fails collection only under loadscope, naming the ids.
+- An `xdist_group` in a scenario's own `marks` now works as it does for any pytest test: scenarios
+  declaring the same group run on one worker under `--dist loadgroup`, one after the other, where
+  they used to run side by side. The plugin added its automatic group on top, and xdist joined the
+  two into a name of each scenario's own (`db_test_orders.http.json`). The plugin now adds its
+  group only to a scenario that declares none; every stage inherits the declared one, so the chain
+  still stays together.
+- A `parallel.foreach` `combinations` step written as one template over scenario `vars`, such as
+  `{"combinations": "{{ combos }}"}`, now runs the stage once per combination. It failed the stage
+  with pydantic's "Input should be a valid dictionary" report, while the same template worked in
+  stage `parametrize`: `vars` makes each object attribute-accessible, and only `parametrize` took
+  such an object for the combination it stands for. The model now does that for both, in a list
+  or any other sequence the template renders (`{{ tuple(combos) }}`), and one level deep, so an
+  object nested inside a combination keeps its attribute access (`{{ owner.name }}`).
+- A `verify.body.schema` or a header matcher written as one template over scenario `vars`, such
+  as `"schema": "{{ user_schema }}"` or `"Content-Type": "{{ ct }}"` with `ct` set to
+  `{"contains": "json"}`, now checks the response. Both failed the stage with pydantic's "Input
+  should be a valid dictionary" report, while the same template over a value saved from a response
+  worked: neither field took a `vars` object for the object it stands for. Now both do, a schema
+  down to every object nested in it.
+- A stage `parametrize` step whose template resolves to another template string now fails
+  collection with a message naming the step and the stage. Both step kinds also accept a template,
+  so the text passed re-validation: an `individual` step then ran one test per character, and a
+  `combinations` step failed collection with a pydantic error for each character. 0.15.2 closed
+  the same gap for `parallel.foreach`.
+- A context manager returned by a factory fixture (`{{ transaction() }}`) is exited when the stage
+  that entered it ends, while the fixtures it is built on are still there. It was exited only
+  once the whole scenario was done, after pytest had torn down the stage's fixtures and even the
+  `class`-scoped ones: a transaction on a `class`-scoped `connection` fixture was committed on a
+  connection already closed. An exception raised on exit was only logged, and the stage and the
+  run stayed green. The exit now happens at the end of the stage, whether it passed, failed or was
+  skipped, last entered first. One entered by the request or a response step is exited as soon as
+  the response steps are done, in the thread that ran them: in a `parallel` stage, each iteration
+  exits its own in its worker thread, so a context manager tied to its thread (a `sqlite3`
+  connection) works, and an iteration's transaction does not stay open while the others run. An
+  exception raised on exit fails the stage (in a `parallel` stage, the iteration, which cancels
+  the others), even one a user function skipped or xfailed, with a message naming the fixture:
+  `Exiting the context manager from fixture 'transaction' failed: RuntimeError: ...`. If the stage
+  had already failed, its own failure message comes first. A failing iteration of a `parallel`
+  stage cancels the others before its own exits, so a slow one (a rollback) does not let the
+  queued iterations send their requests meanwhile. An iteration still running when another one
+  fails or skips a `parallel` stage exits its own when it ends all the same. In a `parallel`
+  stage, what an iteration's exits raise is labelled with the iteration
+  (`Iteration 1: Exiting the context manager ...`), apart from the stage's own. Like any failure,
+  it discards the stage's saves and aborts the chain. A value the context manager yielded is
+  therefore no longer usable in a later stage.
+- A `parallel` stage whose iteration failed was reported skipped or xfailed when another
+  iteration, still running, then called `pytest.skip()` or `pytest.xfail()` from a user function,
+  and failed with that iteration's message instead of its own on a `pytest.fail()`. Those are now
+  secondary to the stage's failure, as any failure of the other iteration's own already was.
+- The HAR export has every request a stage sent. Of a `parallel` stage it left out those of the
+  iterations that failed, were cancelled, or skipped, xfailed or failed from a user function after
+  another iteration had ended the stage, and a stage a user function's `pytest.skip()`,
+  `pytest.xfail()` or `pytest.fail()` ended had no entry at all, not even the request the function
+  answered. They went on the wire all the same: the HAR file now records them, the other
+  iterations' first and the exchange the report shows last.
+- A scenario that is not UTF-8, or that `$include`s a file that is not, fails to load with a
+  message naming that file. On a Latin-1 file, `pytest-httpchain resolve`, `show` and `graph`
+  printed a raw `UnicodeDecodeError` traceback, and `validate` and collection reported the
+  catch-all `HTTPCHAIN015` "Failed to parse JSON file" with only the codec's complaint, so a bad
+  included file could not be told from a bad scenario. It is now `HTTPCHAIN014`, like any other
+  invalid JSON (`Invalid JSON: .../common.json is not valid UTF-8: ...`), and the three commands
+  print that message and exit 1. An integer longer than Python converts (4300 digits by default)
+  failed the same way and is now `HTTPCHAIN014` too (`.../common.json cannot be parsed: Exceeds
+  the limit ...`). A reference path the operating system rejects, such as
+  `"$include": "a\u0000.json"` or a lone surrogate, also printed a traceback; it is now
+  `HTTPCHAIN012` (`Reference path contains a NUL character: 'a\x00.json'`). A scenario, or a file
+  it includes, nested too deeply to parse stays `HTTPCHAIN015`, now worded "nested too deeply",
+  and `resolve`, `show` and `graph` print one `error:` line for it and exit 1 instead of a
+  traceback.
+- A UTF-8 file that starts with a byte-order mark, as some editors on Windows save one, is no
+  longer rejected as invalid JSON (`Unexpected UTF-8 BOM`). Scenarios, the files they `$include`,
+  `$merge` or `$ref`, and `verify.body.schema` files all accept the mark.
+- The HTTP report section and the HAR export show the body of a redirect follow-up that keeps the
+  original method. Such a follow-up was presented as a consumed upload: a plain `GET` after a `302`
+  was reported as `<Streaming body (e.g. multipart file upload): consumed on send, not captured>`
+  with HAR `bodySize: -1`, and a body re-sent by a `307` or `308`, or by a `301` answering a `PUT`,
+  `PATCH` or `DELETE`, was missing from the follow-up's `postData`, though the server did receive
+  it. httpx builds such a follow-up from the original request's body and never reads it; that
+  body is plain bytes, so it is now read back from the request, with nothing sent again. A
+  redirect that turns the request into a `GET` (a `302` or `303`, or a `301` answering a `POST`)
+  was never affected. Only a plain-bytes body is read back, which a `files` or `multipart` body
+  now is too (see the `files` entry under Changed), on the first request and on a `307`/`308`
+  follow-up alike.
+- A template holding more than one statement, such as the verify expression
+  `{{ ok == True; False }}`, fails the stage instead of evaluating only its first part. simpleeval,
+  which evaluates templates, stops at the first `;` and merely warns about the rest, so that
+  expression came out `True` and the stage passed on half of what it checks. It now fails with
+  `Invalid expression '{{ ok == True; False }}': a template holds one expression, not 2 statements
+  separated by ';'`. A `;` inside a string literal is unaffected, and `validate` reports the
+  template as `HTTPCHAIN037` (see below).
+- An assignment in a template, such as the verify expression `{{ user.active = True }}` written
+  for `==`, fails the stage instead of evaluating to its right-hand side. simpleeval evaluates `=`
+  and `+=` that way behind a mere warning, so that expression came out `True` and the stage passed
+  whatever `user.active` was. It now fails with `Invalid expression '{{ user.active = True }}': a
+  template holds one expression, not an assignment; to compare two values, write '=='`. An
+  augmented or annotated assignment, `:=` and any other statement in a template fail too, each
+  with a reason of its own instead of simpleeval's (`Sorry, AnnAssign is not available in this
+  evaluator`, `Sorry, 'import' is not allowed.`), and a syntax error with Python's reason alone
+  (`invalid syntax`, without `(<unknown>, line 1)`).
+- `validate` and pytest collection report a template the engine refuses from its text alone, with
+  the reason the stage fails with, as `HTTPCHAIN037` in a stage and `HTTPCHAIN038` at scenario
+  level or in a parametrize value (see Added), and that is its only finding. They reported nothing,
+  or undefined names, for what fails every run, such as `=` written for `==` or a dict literal whose
+  `}` runs into the template's closing `}}` (`{{ {'a': 1}}}`). An expression that did not parse was
+  read for names as a regex's identifiers, so `{{ response.status == 200 and True) }}` also had
+  `and`, `status` and `True` reported as undefined variables (`HTTPCHAIN003`), and one in a
+  scenario-level template the error `HTTPCHAIN017` over the words of its string literals; such a
+  template still fails `validate` and collection, as `HTTPCHAIN038`. A lambda's parameters are no
+  longer read as names a template defines. A template nested too deeply for Python's parser to read
+  (a few thousand `-` signs) crashed `validate` and collection with a `MemoryError`, and one holding
+  a lone surrogate (a `\ud800` escape in the JSON) with a `UnicodeEncodeError`. Both are reported
+  the same way now, and messages write the surrogate as its escape, which any terminal can print.
+- A value that cannot be turned into text fails the stage with a message naming where it was
+  used: the template it is interpolated into, or the query parameter it is the value of.
+  `"{{ server }}/items?n={{ 2 ** 100000 }}"`, a number past the 4300 digits Python converts to
+  text, or a value whose `__str__` raises, failed the stage with the raw `ValueError` (or whatever
+  `__str__` raised) and the plugin's internal traceback, without naming the template. It now
+  reads like any other failing expression:
+  `ValueError in expression '{{ 2 ** 100000 }}': Exceeds the limit (4300 digits) ...`. The same
+  template as the whole value of a query parameter, `"params": {"n": "{{ 2 ** 100000 }}"}`, keeps
+  the number as a number, which is turned into text only when the request is built; that failed
+  the same raw way and now fails with `Cannot convert query parameter 'n' to text: ValueError: ...`.
+- The HAR export records a request's query string in the order the URL carries it. A repeated
+  name's values were grouped under its first occurrence, so `?a=1&b=2&a=3` was recorded as `a=1`,
+  `a=3`, `b=2` in `queryString`; form `postData` params already kept their order.
+- A `parallel` stage is no longer held to 100 requests in flight whatever its `max_concurrency`.
+  The shared client kept httpx's default pool of 100 connections, so the rest of the iterations
+  waited for a free connection: 150 concurrent requests to an endpoint answering in a second took
+  over two seconds, and a load test measured the pool rather than the server. The pool now has no
+  connection limit unless the new `client.max_connections` sets one, leaving `max_concurrency` to
+  bound the connections. This is over HTTP/1.1. Under HTTP/2, which the client offers by default
+  and an HTTPS server may negotiate, all the requests to that server share one connection, which
+  httpx holds to 100 requests at once (fewer if the server allows fewer) whatever the pool: a
+  stage that needs more in flight sets `client.http2` to `false`.
+- A body schema file (`verify.body.schema: "./schemas/x.json"`) whose meta-check crashes now
+  fails the stage with `Invalid JSON Schema in file '...'`. The meta-schema's `format: regex`
+  check expects only `re.error`, so a `pattern` that `re.compile` rejects some other way escaped
+  raw: `a{4294967296}` raised `OverflowError` and about 1000 nested groups raised
+  `RecursionError`. A schema nested a few hundred levels deep overflowed the meta-validator's own
+  recursion the same way. The stage failed with a bare traceback, with no request/response report
+  and no HAR entry. Inline schemas and `validate --deep` already reported these cases cleanly.
+- The HTTP report no longer renders a deeply nested JSON body in full only to cut it to 1,000
+  characters. Indentation grows with depth, so the full rendering is quadratic in the body's size:
+  a 10 kB body 5,000 levels deep rendered to 50 MB. Rendering now stops at the cap.
+- `validate`, pytest collection, `show` and `graph` no longer crash with a `RecursionError` on a
+  scenario value nested a few hundred levels deep, such as a `vars` value, a query parameter or a
+  `parametrize` value. The file loaded fine, but the checks that find template references,
+  templated keys and scenario directives walked it recursively, two stack frames per level, and
+  overflowed near 450 levels. They now walk it iteratively, so any depth the loader accepts is
+  checked. So does model validation, which converted a `json` request body, an inline
+  `verify.body.schema` or a `verify.jmespath` operand recursively and crashed on one nested past
+  Python's recursion limit.
+- Running a stage with such a value no longer crashes either. Substituting templates in a nested
+  `vars` value took two stack frames per level, and stages failed from about 480 levels with a
+  bare traceback. It now takes one frame per level. A value nested past the interpreter's
+  recursion limit fails the stage with "Value nested too deeply to substitute".
+- A `base64` request body whose template rendered text holding another template, which its
+  template branch accepts, crashed the run with a traceback instead of failing the stage; it now
+  fails the stage, `The base64 body is not valid base64`, the text ASCII or not. So did a
+  `binary` or `files` path holding a NUL character (a JSON `"\u0000"`, or a template's), which
+  the filesystem refuses: it fails the stage as a file that cannot be read.
+
 ### Changed
 
+- **BREAKING**: three scenario mistakes that let pytest-xdist split a chain now fail collection
+  in every run, with or without xdist, and `validate` reports the scenario as invalid: a stage name
+  containing `::` (`HTTPCHAIN032`), an `xdist_group` in a stage's `marks` that the scenario does
+  not declare (`HTTPCHAIN031`), and a scenario `xdist_group` name with a `]` after its last `@`
+  (`HTTPCHAIN033`). Such a scenario used to collect and, without xdist, pass. Rename the stage
+  (`Users: list`), move the `xdist_group` to the scenario's `marks`, or take the `]` out of the
+  group name.
+- **BREAKING**: `format` in a `verify.body.schema` is now enforced. It used to be ignored: the
+  documented `{"type": "string", "format": "email"}` accepted `"not-an-email"`, and a stage whose
+  response broke any `format` still passed. The body is now validated with the schema dialect's
+  format checker, so a nonconforming value fails the stage (`'not-an-email' is not a 'email'`).
+  Heads-up: a scenario whose responses never matched their declared formats, and that passed
+  until now, fails after the upgrade. Out of the box `email`, `idn-email`, `ipv4`, `ipv6`, `date`,
+  `uuid`, `regex` and `idn-hostname` are checked. `regex` means Python `re` syntax, not ECMA-262:
+  a response that returns valid JavaScript patterns such as `(?<year>\d{4})` under
+  `"format": "regex"` also fails now. `date-time`, `time`, `hostname`, `uri`, `iri`,
+  `duration` and the other formats that need jsonschema's optional dependencies are checked only
+  once `jsonschema[format-nongpl]` (or `jsonschema[format]`) is installed, and pass any value
+  until then.
+- **BREAKING**: a factory fixture's context manager is exited at the end of the stage that
+  entered it, not when the scenario is done, and an exception raised on exit fails the stage
+  (see Fixed). Heads-up: a scenario that saved a value the context manager yielded and used it in
+  a later stage now gets it after the exit (a closed connection, say), and one whose exit raised,
+  which passed until now with the error only logged, fails after the upgrade. Call the factory in
+  each stage that needs the resource, or, to share one across stages, provide it from a
+  `class`-scoped fixture.
+- **BREAKING**: a backslash right before `{{` escapes the braces (see Added). `\{{ x }}` in a value
+  rendered a backslash, then the value of `x`; it now renders the text `{{ x }}`, and `x` is not
+  evaluated. Heads-up: to keep a backslash before a template, as in a Windows path
+  (`"C:\\{{ dir }}"` in the JSON file), double it (`"C:\\\\{{ dir }}"`), or write the path with
+  `/`. Every run of backslashes right before `{{` is doubled the same way: `\\{{ x }}`, which
+  rendered two backslashes and the value, now renders one. `client.base_url`, `client.proxy` and a
+  `verify.body.schema` file reference holding a backslash before `{{` fail validation. A key or a
+  `functions` kwarg holding one, never rendered, is sent as before, and now warned of
+  (`HTTPCHAIN029`, `HTTPCHAIN030`).
+- Report sections and header checks' failure messages redact credentials by default (see Added).
+  Heads-up: a tool or test that read a token back from a report, or matched a header check's
+  message on a cookie's value, sees `[REDACTED]` after the upgrade; set `httpchain_redact_headers`
+  and `httpchain_redact_query_params` to an empty value to get the previous output.
+- The shared client opens as many HTTP/1.1 connections as the requests in flight need (see
+  Fixed). Heads-up: a `parallel` stage with a `max_concurrency` above 100 now really runs that
+  many requests at once against a server that speaks HTTP/1.1; set `client.max_connections` to
+  keep a server from seeing more connections than it did.
+- The `httpx` floor is raised to 0.28.0, the first release that takes the `socks5h://` proxy URLs
+  the new `client.proxy` accepts (see Added). httpx 0.27.0 also percent-encoded a `\` in a URL
+  path, so `{{ server }}/a\b` reached the server as `/a%5Cb` there, not as written (see Fixed).
+  Heads-up: an environment that pins httpx below 0.28 has to lift the pin to upgrade.
+- A verify step runs all its checks and reports every one that failed, where it stopped at the
+  first, so fixing a scenario took one run per wrong assertion. Each header, header matcher field,
+  `jmespath` entry and matcher key, expression, user function and `body` operand is a check of its
+  own. One failure reads exactly as before; several are counted, `3 verification checks failed:`,
+  above one numbered line each, in the order the checks ran, where a user function is named by its
+  import name and index (`Function 'checks:is_valid' (user_functions[1]) verification failed`). A
+  check that cannot run fails once: a body that is not JSON is one failure however many `jmespath`
+  entries and `body.schema` wanted it, and a `jmespath` expression that cannot be evaluated is one,
+  not one per key of its matcher. The step's templates still all render before its first check
+  runs, but each check's on its own, so one that fails to render, an expression raising `KeyError`
+  on a missing header or a value that rendered to `null`, is one failure in its check's place,
+  where it ended the step before any check ran. Steps still run in order, and a step that fails
+  still ends the stage, since a later one may depend on it; a `save` step still stops at its first
+  error. Heads-up: a verify user function now runs even when a check before it in the step failed,
+  so one that assumed they held (calling `response.json()` on what a failed `status` check let
+  through) adds its own error to the list. Its `pytest.skip()` or `pytest.xfail()` ends the step
+  without skipping the stage then, as a failure found before it stands, and so does a template of
+  the step that did not render or called `pytest.fail()`, wherever it is; a `pytest.fail()`
+  message is listed with the others. Heads-up too for a function a verify template calls that
+  skips or xfails (`"expressions": ["{{ skip_unless_ready() }}"]`): it skipped the stage whatever
+  the step's checks would have found, since the whole step rendered before any check ran. Its
+  outcome now takes effect when the checks reach that template, so a check before it that failed
+  fails the stage instead.
+- A `$ref` in a `verify.body.schema` is resolved by the plugin, not by jsonschema's default
+  registry, which fetched an `http(s)` reference over the network (with a `DeprecationWarning`) and
+  failed on a local file. A reference to a local file now resolves (see Added), and a remote one
+  fails the stage as unresolvable, naming it. Heads-up: a schema that referenced a hosted schema
+  needs a local copy of it, and so does one whose root `$id` is a URL and whose relative
+  references meant documents published beside it (`"$ref": "address.json"` under `"$id":
+  "https://example.com/schemas/user.json"`): they resolve against the `$id`, as before, to a
+  remote document. Drop such an `$id`, or make it relative, and the reference names the file beside
+  the schema.
+- `HTTPCHAIN028` no longer flags a `$ref` to a file inside an inline `verify.body.schema`: such a
+  reference now resolves (see Added). It still flags `$include` and `$merge`, which JSON Schema
+  does not have.
+- The error for a schema `$ref` that does not resolve names what it looked for, `Cannot resolve
+  a reference in inline body schema: $ref '#/$defs/missing' points to nothing in the inline
+  schema`, where it quoted the whole document it looked in, an OpenAPI document included.
+- A `verify.body.schema` file reference is kept as written, where it was read as a path: a
+  `Path` folds the `//` and the trailing `/` a JSON pointer can hold. The editor schema describes it
+  as a plain string without `format: path`, with examples of both forms. Heads-up: the first `#`
+  now ends the file's path, so a schema file whose path holds a `#` (`schemas/v#1/user.json`)
+  cannot be named, even percent-encoded; rename it. A path that starts like a URI, with `http:`,
+  `https:` or `file:`, or a scheme and `//`, is refused as one at load; `./` in front keeps it a
+  path (`./http:v1/user.json`). Any other colon is a path's, as it was (`schemas:v1/user.json`).
 - A `vars` substitution step now builds the template evaluator once, not once per variable.
   Building it is a full pass over the context, so a step cost its number of variables times the
   size of the context, even for variables that hold no template. Values without a template are now
@@ -17,55 +943,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template is now the scenario's own list, not a fresh copy each time the step runs, as a JSON object
   value already was. A template or user function that changes it in place now changes it for later
   runs too.
-
-### Fixed
-
-- A body schema file (`verify.body.schema: "./schemas/x.json"`) whose meta-check crashes now
-  fails the stage with `Invalid JSON Schema in file '...'`. The meta-schema's `format: regex`
-  check expects only `re.error`, so a `pattern` that `re.compile` rejects some other way escaped
-  raw: `a{4294967296}` raised `OverflowError` and about 1000 nested groups raised
-  `RecursionError`. A schema nested a few hundred levels deep overflowed the meta-validator's own
-  recursion the same way. The stage failed with a bare traceback, with no request/response report
-  and no HAR entry. Inline schemas and `validate --deep` already reported these cases cleanly.
-- A deeply nested JSON response now fails the stage cleanly, with its HTTP report sections and HAR
-  entry. CPython's JSON decoder raises `RecursionError` on deep nesting: from 10,000 levels on
-  Python 3.13, and on 3.14 at a depth set by the stack size. `RecursionError` is not a
-  `ValueError`, so it escaped `verify.body.schema` and JMESPath `save` as a bare traceback. Both
-  now fail with "response is not valid JSON", as malformed JSON does. A `verify.body.schema` file
-  nested that deeply now fails the stage with "Error reading body schema file", and
-  `validate --deep` reports it as HTTPCHAIN021. The HTTP report shows such a body as text. Before,
-  the report showed an error placeholder that also dropped the start line and headers.
-- `verify.body.schema` no longer escapes as a bare `RecursionError` when the body or schema file
-  parses but is a few hundred levels deep. Validating against a self-referencing schema recursed
-  once per level of the body. Describing a failed check pretty-printed the nested value, inside the
-  handler meant to report it. Both now fail the stage cleanly. `validate --deep` no longer crashes
-  while describing why such a schema file is invalid, and reports HTTPCHAIN021.
-- The HTTP report no longer renders a deeply nested JSON body in full only to cut it to 1,000
-  characters. Indentation grows with depth, so the full rendering is quadratic in the body's size:
-  a 10 kB body 5,000 levels deep rendered to 50 MB. Rendering now stops at the cap.
-- `resolve`, `show` and `graph` now print one `error:` line and exit 1 on a scenario file that
-  is not UTF-8 or is nested too deeply, instead of crashing with a traceback. The reference
-  resolver reported only `OSError` and `JSONDecodeError` as load failures. A non-UTF-8 file raises
-  `UnicodeDecodeError` instead. Deep nesting raises `RecursionError`, which is not even a
-  `ValueError`: from CPython's decoder, as above, and from the resolver's own walk at under a
-  thousand levels. The same applies to a file pulled in through `$include`, `$merge` or `$ref`.
-- `validate` and pytest collection report a non-UTF-8 scenario file as `HTTPCHAIN014` (invalid
-  JSON), like a syntax error, instead of `HTTPCHAIN015`: RFC 8259 requires JSON to be UTF-8. A
-  file nested too deeply stays `HTTPCHAIN015`, now worded "nested too deeply". The JSON is valid,
-  but deeper than the parser or the resolver can go.
-- A reference path containing a NUL character (`"$include": "a\u0000b.json"`) is now rejected as
-  a reference error (`HTTPCHAIN012`). Before, `resolve`, `show` and `graph` crashed on the bare
-  `ValueError` from the path lookup, and `validate` reported it as `HTTPCHAIN015`.
-- `validate`, pytest collection, `show` and `graph` no longer crash with a `RecursionError` on a
-  scenario value nested a few hundred levels deep, such as a `vars` value, a query parameter or a
-  `parametrize` value. The file loaded fine, but the checks that find template references,
-  templated keys and scenario directives walked it recursively, two stack frames per level, and
-  overflowed near 450 levels. They now walk it iteratively, so any depth the loader accepts is
-  checked.
-- Running a stage with such a value no longer crashes either. Substituting templates in a nested
-  `vars` value took two stack frames per level, and stages failed from about 480 levels with a
-  bare traceback. It now takes one frame per level. A value nested past the interpreter's
-  recursion limit fails the stage with "Value nested too deeply to substitute".
+- A `files` body is sent as the bytes it is encoded to, so a failing stage's report shows it and
+  the HAR export records it. httpx streamed it, which neither could read back: the report said
+  `<Streaming body (e.g. multipart file upload): consumed on send, not captured>`, the HAR entry had
+  `bodySize: -1` and no `postData`, and the curl command asked for the parts to be added with `-F`.
+  The report now shows a multipart body part by part, each part's headers and its content, or a
+  binary part's size in place of it, where a single binary file made the whole body one
+  `<Binary content>`; the HAR entry has it as sent, base64-encoded when a part is binary; the
+  curl command sends it with the `Content-Type` naming its boundary, as it sends any other body.
+  The placeholder for a body that is still a stream now reads `<Streaming body: not captured>`.
+  What goes on the wire is unchanged but in three cases. `"files": {}` sent no body at all, and
+  now sends a multipart body without parts, as `multipart` does when its lists render empty. A
+  stage's own `Content-Type` of another multipart type naming a boundary (`multipart/mixed;
+  boundary=abc`) now has the parts delimited by that boundary, where httpx took one from
+  `multipart/form-data` alone and delimited them with a boundary the header did not name. And a
+  stage's own multipart `Content-Type` naming no boundary (`multipart/form-data`) is sent with the
+  body's added, where it named none for the server to find the parts by; one naming an empty
+  boundary, or one the parts cannot be delimited by as written (`boundary="a;b"`, which had them
+  delimited by `a`), fails the stage.
+- A template is refused for anything in its text the engine does not evaluate, wherever in the
+  template it sits: a lambda, a set comprehension, `*` unpacking outside a list literal, `yield`,
+  `await`, an attribute named with a leading `_` or `func_` or one such as `format`, and a call of
+  anything but a name or an attribute (`fns[0]()`). simpleeval refused each only once evaluation
+  reached it, so `{{ a if ok else doc._id }}` rendered while `ok` held; it now fails the stage
+  with a reason of its own (`the template engine does not read an attribute named '_id'; for a key
+  of that name, write ['_id']`) instead of simpleeval's (`Sorry, access to __attributes ... is not
+  available. (_id)`), and `validate` reports it (`HTTPCHAIN037`).
+- `validate`'s text report over more than one file ends with a summary line, `3 files checked, 1
+  with errors, 1 with warnings` (a file with errors counted under errors only; a path not found
+  counted apart, as no file checked), and a directory given to it is searched for scenario files
+  (see Added) where it was reported as `HTTPCHAIN011`, "Path is not a file". Files are reported
+  sorted by path, in the text report and the `--format json` payload alike, where they followed
+  the order they were given in: `validate b.http.json a.http.json` reports `a.http.json` first.
+  The payload keeps its shape.
+- A subscript of a key the object does not have, a saved object, `response.headers` or a `vars`
+  object (see Added), fails the stage naming the key as a missing attribute does:
+  `Key error in expression '{{ saved['nick'] }}': Key 'nick' does not exist in expression 'saved['nick']'`,
+  where it read `KeyError in expression '{{ saved['nick'] }}': 'nick'`. A user function raising a
+  `KeyError` is still reported as one. And a missing attribute of a `vars` object named like one of
+  its methods (`keys`, `values`, `items`, `get`; see Added) says how to call it after the message
+  it had:
+  `Attribute error in expression '{{ order.items }}': Attribute 'items' does not exist in expression 'order.items'; the object has no key 'items'; to call its method, write .items()`.
+  Heads-up: a test matching either old message in full sees the new one.
+- An empty `vars` object (`{}`) is false, as an empty object saved from a response is, where it
+  was true like any other: it reads as a mapping now (see Added). Heads-up: a template that tests
+  one for truth renders differently: `{{ opts or defaults }}` takes `defaults` for an empty
+  `opts`, `{{ 'a' if cfg else 'b' }}` renders `'b'`, and a stage whose template `always_run` names
+  one (`"always_run": "{{ cleanup_opts }}"`) no longer runs after a failure. Test what is meant
+  instead: `{{ opts is not None }}`, `{{ 'key' in opts }}` or `{{ len(opts) > 0 }}`.
 
 ## [0.15.2] - 2026-09-26
 
@@ -722,7 +1647,9 @@ This release carries a test-suite and CI pass.
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.2...v0.16.0
+[0.15.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.5...v0.15.0
 [0.14.5]: https://github.com/aeresov/pytest-httpchain/compare/v0.14.4...v0.14.5

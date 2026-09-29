@@ -1,0 +1,4 @@
+{
+    "client": { "base_url": "https://x.test/\\{{ tenant }}" },
+    "stages": [ { "name": "s", "request": { "url": "/users" }, "response": [ { "verify": { "status": 200 } } ] } ]
+}

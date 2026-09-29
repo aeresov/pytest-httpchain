@@ -1,0 +1,26 @@
+{
+    "stages": [
+        {
+            "name": "regex_no_match",
+            "description": "A pattern that finds nothing in the page fails the save, naming the variable and the pattern",
+            "fixtures": ["server"],
+            "request": {
+                "url": "{{ server }}/page"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "regex": {
+                            "session": "name=\"session\" value=\"([^\"]+)\""
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

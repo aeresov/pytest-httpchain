@@ -1,0 +1,36 @@
+{
+    "fixtures": ["server"],
+    "substitutions": [{ "vars": { "p95_budget": 250 } }],
+    "stages": [
+        {
+            "name": "warmup",
+            "request": { "url": "{{ server }}/limits" },
+            "response": [
+                { "verify": { "status": 200 } },
+                { "save": { "jmespath": { "min_rps": "rps" } } }
+            ]
+        },
+        {
+            "name": "load",
+            "parametrize": [{ "individual": { "ratio": [0.9, 1] } }],
+            "substitutions": [{ "vars": { "p99_budget": 500 } }],
+            "parallel": {
+                "repeat": 10,
+                "thresholds": {
+                    "min_success_ratio": "{{ ratio }}",
+                    "max_p95_ms": "{{ p95_budget }}",
+                    "max_p99_ms": "{{ p99_budget }}",
+                    "min_rps": "{{ min_rps }}"
+                },
+                "stats_as": "load_stats"
+            },
+            "request": { "url": "{{ server }}/ok" },
+            "response": [{ "verify": { "status": 200 } }]
+        },
+        {
+            "name": "report",
+            "request": { "url": "{{ server }}/report?p95={{ load_stats.p95_ms }}" },
+            "response": [{ "verify": { "status": 200, "expressions": ["{{ load_stats['passed'] >= 9 }}"] } }]
+        }
+    ]
+}

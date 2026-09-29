@@ -6,13 +6,43 @@ values, with variables, functions and comprehensions.
 """
 
 from pytest_httpchain.templates.exceptions import TemplatesError
-from pytest_httpchain.templates.expressions import TEMPLATE_PATTERN, TEMPLATE_PATTERN_ECMA, extract_template_expression, is_complete_template
-from pytest_httpchain.templates.substitution import TEMPLATE_BUILTINS, contains_template, get_max_comprehension_length, set_max_comprehension_length, walk, walker
+from pytest_httpchain.templates.expressions import (
+    TEMPLATE_PATTERN,
+    TEMPLATE_PATTERN_ECMA,
+    contains_escape,
+    escape,
+    extract_template_expression,
+    find_templates,
+    is_complete_template,
+    unescape,
+)
+from pytest_httpchain.templates.substitution import (
+    CALL_ONLY_BUILTINS,
+    CONTEXT_HELPERS,
+    TEMPLATE_BUILTINS,
+    call_form,
+    contains_template,
+    get_max_comprehension_length,
+    needs_rendering,
+    parse_expression,
+    set_max_comprehension_length,
+    template_form,
+    walk,
+    walker,
+)
 
 __all__ = [
     "walk",
     "walker",
+    "call_form",
     "contains_template",
+    "contains_escape",
+    "escape",
+    "find_templates",
+    "needs_rendering",
+    "unescape",
+    "parse_expression",
+    "template_form",
     "get_max_comprehension_length",
     "set_max_comprehension_length",
     "is_complete_template",
@@ -20,5 +50,7 @@ __all__ = [
     "TEMPLATE_PATTERN",
     "TEMPLATE_PATTERN_ECMA",
     "TEMPLATE_BUILTINS",
+    "CONTEXT_HELPERS",
+    "CALL_ONLY_BUILTINS",
     "TemplatesError",
 ]
