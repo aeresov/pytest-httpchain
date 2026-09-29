@@ -38,7 +38,7 @@ class GraphDirection(StrEnum):
 
 
 RefParentTraversalDepth = Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")]
-RootPath = Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: auto-detected project root).")]
+RootPath = Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: the rootdir pytest would use).")]
 OutputFormatOption = Annotated[OutputFormat, typer.Option("--format", help="Output format: human-readable text or machine-readable JSON.")]
 
 

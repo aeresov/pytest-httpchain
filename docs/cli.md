@@ -24,14 +24,17 @@ affect how `$include`/`$merge`/`$ref` resolve:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--root-path DIR` | auto-detected | Directory references must not escape. Collection uses pytest's `rootdir`; the CLI approximates it, so pass this explicitly when the two disagree. |
+| `--root-path DIR` | pytest's `rootdir` | Directory references must not escape. Collection uses pytest's `rootdir`, and so does the CLI by default: the one [pytest would determine](https://docs.pytest.org/en/stable/reference/customize.html#initialization-determining-rootdir-and-configfile) for a run on the same paths from the current directory (`validate a b` holds both to the rootdir of `pytest a b`). Pass it when a run uses `--rootdir` or `-c`. |
 | `--ref-parent-traversal-depth N` | `3` | How many `../` levels a reference may climb. Mirrors the `httpchain_ref_parent_traversal_depth` ini option. |
 
-The auto-detected root prefers a directory holding real pytest configuration
-(`pytest.ini`, or a `pyproject.toml` with a `[tool.pytest…]` section) over a bare
-project marker — so a sub-package's own `pyproject.toml` does not shrink the
-root below pytest's and make `validate` reject references that collection
-resolves fine.
+The default root is the directory of the configuration file pytest would read
+(`pytest.toml`, `pytest.ini`, or a `pyproject.toml` with a `[tool.pytest…]`
+table, ...), else of the nearest `setup.py`, else the common ancestor of the
+current directory and the paths, as pytest's is. A sub-package's own
+`pyproject.toml` without pytest configuration does not shrink the root below
+pytest's, and the files of one run share one root, so `validate` rejects no
+reference that collection resolves. A configuration file that cannot be read is
+passed over here; pytest itself would stop on it.
 
 ## `validate`
 

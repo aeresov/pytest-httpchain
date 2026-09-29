@@ -29,6 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under `validate --deep`), at their line and column: `NaN is not valid JSON: line 2 column 14`.
   Python's JSON parser reads them as numbers though JSON has none, so such a file passed
   `validate`, and `resolve`, documented to print strict JSON, printed them.
+- `validate`, `resolve`, `show` and `graph` hold references to the rootdir pytest would determine
+  for a run on the same paths, which collection holds them to, so `validate` no longer rejects
+  with `HTTPCHAIN012` a reference that collection resolves. The CLI's root was an approximation
+  of its own, which missed two cases: a `pytest.toml` or `.pytest.toml` configuration file, or a
+  `.pytest.ini`, was not seen, so a sub-package's plain `pyproject.toml` below it set a narrower
+  root; and each file of a `validate a b` run got a root of its own, the file's directory when
+  nothing marked a project, where `pytest a b` has one, their common ancestor. Heads-up: without a
+  pytest configuration file or a `setup.py`, the root is now what pytest's is, the common ancestor
+  of the current directory and the paths, in place of the nearest directory holding a `.git`, a
+  bare project file or named `tests`; pass `--root-path` for another.
 
 ## [0.16.0] - 2026-09-29
 

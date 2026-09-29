@@ -10,7 +10,7 @@ from pytest_httpchain.body_schema import ReferenceBounds
 from pytest_httpchain.constants import SCENARIO_FILE_EXTENSIONS
 from pytest_httpchain.validation.deep import check_scenario_deep
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ValidateResult, diag, result
-from pytest_httpchain.validation.discovery import configured_suffix, find_scenario_files
+from pytest_httpchain.validation.discovery import configured_suffix, find_scenario_files, pytest_rootdir
 from pytest_httpchain.validation.loader import load_with_diagnostics, resolve_root_path
 from pytest_httpchain.validation.semantic import check_scenario, describe_scenario
 
@@ -23,7 +23,10 @@ def validate_scenario(
     syspaths: list[Path] | None = None,
 ) -> ValidateResult:
     """Validate a scenario file: existence, JSON, ``$ref``, schema, then the
-    semantic checks — and with ``deep``, the opt-in import/file checks."""
+    semantic checks — and with ``deep``, the opt-in import/file checks.
+
+    References are held to ``root_path``, by default pytest's rootdir for a
+    run on the file (`resolve_root_path`)."""
     diagnostics: list[Diagnostic] = []
 
     if not path.exists():
@@ -41,6 +44,9 @@ def validate_scenario(
             )
         )
 
+    if root_path is None:
+        root_path = resolve_root_path(path)
+
     # Load diagnostics are collected rather than returned early, so ambiguity
     # warnings earned by earlier references are still reported.
     loaded, load_diagnostics = load_with_diagnostics(path, root_path=root_path, ref_parent_traversal_depth=ref_parent_traversal_depth)
@@ -53,7 +59,7 @@ def validate_scenario(
 
     if deep:
         # The bounds the load held the scenario's references to, for its body schemas'.
-        ref_bounds = ReferenceBounds(root_path if root_path is not None else resolve_root_path(path), ref_parent_traversal_depth)
+        ref_bounds = ReferenceBounds(root_path, ref_parent_traversal_depth)
         diagnostics.extend(check_scenario_deep(scenario, syspaths=syspaths, scenario_dir=path.parent, ref_bounds=ref_bounds))
 
     return result(diagnostics, describe_scenario(scenario, test_data))
@@ -87,7 +93,15 @@ def validate_paths(
     Every directory is searched before any file is validated, so the
     `DiscoveryError` of one that cannot be (or of a configuration file that
     cannot be read) stops the run before it has done any work.
+
+    References are held to ``root_path``, by default to the rootdir pytest
+    would determine for a run on ``paths`` (`pytest_rootdir`): one root for
+    every file, as a pytest run has, where a root derived for each file
+    alone could be narrower than the run's and reject a reference it
+    resolves.
     """
+    if root_path is None:
+        root_path = pytest_rootdir(paths)
     targets: list[tuple[Path, ValidateResult | None]] = []
     seen: set[str] = set()
 

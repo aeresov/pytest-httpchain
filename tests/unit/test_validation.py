@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-import pytest_httpchain.validation.loader as validation_loader
 import pytest_httpchain.validation.validate as validation_validate
 from pytest_httpchain.body_schema import BodySchema
 from pytest_httpchain.models import JMESPathMatcher
@@ -49,10 +48,12 @@ def _write(directory, stages, **top):
     return path
 
 
-def _hide_ancestor_project_markers(monkeypatch):
-    """Make markerless-root tests independent of TMPDIR's real ancestors."""
-    monkeypatch.setattr(validation_loader, "_ROOT_MARKERS", ())
-    monkeypatch.setattr(validation_loader, "_holds_pytest_config", lambda directory: False)
+def _skip_if_ancestors_set_a_rootdir(tmp_path):
+    """For a test of the rootdir pytest falls back to without a configuration
+    file: skip it when a directory above tmp_path holds one, or a setup.py."""
+    for directory in tmp_path.parents:
+        if any((directory / name).is_file() for name in ("pytest.toml", ".pytest.toml", "pytest.ini", ".pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg", "setup.py")):
+            pytest.skip(f"{directory} holds a configuration file or a setup.py")
 
 
 @pytest.mark.parametrize(
@@ -1301,8 +1302,11 @@ class TestFileContent:
 
 
 class TestRootPathDefault:
-    """The CLI's default $ref root (resolve_root_path) approximates pytest's
-    rootpath: nearest ancestor with a project marker, else the file's parent."""
+    """The CLI's default $ref root (resolve_root_path) is the rootdir pytest
+    would determine for a run on the file from the current directory, which
+    collection holds references to: the directory of the configuration file
+    pytest reads, else of the nearest setup.py, else the common ancestor of
+    the current directory and the file's."""
 
     @staticmethod
     def _scenario_in(directory):
@@ -1315,28 +1319,40 @@ class TestRootPathDefault:
         (tmp_path / "pyproject.toml").write_text("")
         assert resolve_root_path(self._scenario_in(tmp_path / "suites" / "api")) == tmp_path
 
-    def test_falls_back_to_file_parent(self, tmp_path, monkeypatch):
-        _hide_ancestor_project_markers(monkeypatch)
-        assert resolve_root_path(self._scenario_in(tmp_path / "a" / "b")) == tmp_path / "a" / "b"
+    def test_setup_py_is_a_rootdir(self, tmp_path):
+        (tmp_path / "setup.py").write_text("")
+        assert resolve_root_path(self._scenario_in(tmp_path / "suites" / "api")) == tmp_path
 
-    def test_markerless_tree_falls_back_to_tests_ancestor(self, tmp_path, monkeypatch):
-        """Without any project marker, the pre-marker default (nearest tests/
-        ancestor) still applies, so exported bundles keep their sandbox."""
-        _hide_ancestor_project_markers(monkeypatch)
-        assert resolve_root_path(self._scenario_in(tmp_path / "bundle" / "tests" / "api")) == tmp_path / "bundle" / "tests"
+    def test_without_a_configuration_the_current_directory_counts(self, tmp_path, monkeypatch):
+        """pytest's rootdir is then the common ancestor of the current
+        directory and the file's, as a run from the project's directory has."""
+        _skip_if_ancestors_set_a_rootdir(tmp_path)
+        scenario = self._scenario_in(tmp_path / "a" / "b")
+        monkeypatch.chdir(tmp_path)
+        assert resolve_root_path(scenario) == tmp_path
+
+    def test_without_a_configuration_from_elsewhere_the_file_parent(self, tmp_path, monkeypatch):
+        """A common ancestor that is the root of the file system is no
+        rootdir: the file's own directory is."""
+        _skip_if_ancestors_set_a_rootdir(tmp_path)
+        scenario = self._scenario_in(tmp_path / "a" / "b")
+        monkeypatch.chdir(tmp_path.anchor)
+        assert resolve_root_path(scenario) == tmp_path / "a" / "b"
 
     def test_bare_marker_used_when_no_pytest_config_anywhere(self, tmp_path):
         (tmp_path / "pyproject.toml").write_text('[project]\nname = "solo"\n')
         assert resolve_root_path(self._scenario_in(tmp_path)) == tmp_path
 
-    def test_ref_above_scenario_dir_resolves_within_project_root(self, tmp_path):
-        """A $ref reaching above the scenario's own tree but inside the project
-        resolves by default — matching what pytest collection accepts."""
-        (tmp_path / ".git").mkdir()
+    def test_ref_above_scenario_dir_resolves_within_project_root(self, tmp_path, monkeypatch):
+        """A $ref reaching above the scenario's own tree but inside the
+        project resolves by default, run from the project's directory, as
+        pytest collection accepts it."""
+        _skip_if_ancestors_set_a_rootdir(tmp_path)
         (tmp_path / "shared").mkdir()
         (tmp_path / "shared" / "common.json").write_text(json.dumps({"url": "http://server/x", "method": "GET"}))
         suite = tmp_path / "tests" / "api"
         suite.mkdir(parents=True)
+        monkeypatch.chdir(tmp_path)
 
         result = validate_scenario(_write(suite, [_stage(request={"$ref": "../../shared/common.json"})]))
 
@@ -1346,20 +1362,36 @@ class TestRootPathDefault:
         ("filename", "content"),
         [
             ("pyproject.toml", '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n'),
-            # pytest.ini counts unconditionally — it exists only for pytest, so
-            # it needs no section to prove intent.
+            ("pyproject.toml", '[tool.pytest]\ntestpaths = ["tests"]\n'),
+            # pytest.ini and pytest.toml count unconditionally — they exist
+            # only for pytest, so they need no section to prove intent.
             ("pytest.ini", "[pytest]\n"),
             ("pytest.ini", ""),
+            (".pytest.ini", ""),
+            ("pytest.toml", "[pytest]\n"),
+            ("pytest.toml", ""),
+            (".pytest.toml", ""),
             ("tox.ini", "[pytest]\ntestpaths = tests\n"),
             ("setup.cfg", "[tool:pytest]\ntestpaths = tests\n"),
         ],
-        ids=["pyproject.toml", "pytest.ini", "pytest.ini-empty", "tox.ini", "setup.cfg"],
+        ids=[
+            "pyproject.toml",
+            "pyproject.toml-native",
+            "pytest.ini",
+            "pytest.ini-empty",
+            ".pytest.ini",
+            "pytest.toml",
+            "pytest.toml-empty",
+            ".pytest.toml",
+            "tox.ini",
+            "setup.cfg",
+        ],
     )
     def test_pytest_config_beats_a_nearer_bare_marker(self, tmp_path, filename, content):
         """A sub-package's plain pyproject.toml is not a pytest rootdir.
         Preferring it would shrink the CLI's root below pytest's, so `validate`
         would reject $ref targets that collection resolves fine — for every
-        file pytest accepts as an inifile, not just pyproject.toml."""
+        file pytest accepts as a configuration file, not just pyproject.toml."""
         (tmp_path / filename).write_text(content)
         package = tmp_path / "packages" / "api"
         package.mkdir(parents=True)
@@ -1389,6 +1421,21 @@ class TestRootPathDefault:
         (package / "pyproject.toml").write_text('[project]\nname = "api"\n')
 
         assert resolve_root_path(self._scenario_in(package)) == package
+
+    def test_files_of_one_run_share_its_root(self, tmp_path, monkeypatch):
+        """`validate a b` holds both files to the rootdir `pytest a b` has,
+        the common ancestor here, where a root for each file alone was its
+        own directory, and a reference to a file beside the two failed."""
+        _skip_if_ancestors_set_a_rootdir(tmp_path)
+        (tmp_path / "shared.json").write_text(json.dumps({"url": "http://server/x"}))
+        for name in ("a", "b"):
+            (tmp_path / name).mkdir()
+            _write(tmp_path / name, [_stage(request={"$include": "../shared.json"})])
+        monkeypatch.chdir(tmp_path.anchor)
+
+        results = validate_paths([tmp_path / "a", tmp_path / "b"])
+
+        assert [result.diagnostics for _, result in results] == [[], []]
 
 
 class TestDiagnosticRegistry:
