@@ -174,6 +174,11 @@ def test_escape(text, escaped):
         pytest.param(r"a\{{b", r"a\\{{ '{{' }}b", id="backslash-before"),
         # Line by line: an escape ends with its line.
         pytest.param("a{{\nb}}", "a{{ '{{' }}\nb}}", id="closing-on-the-next-line"),
+        # Only whitespace around the braces would be one whole template,
+        # which renders to its value, the whitespace dropped: one template
+        # of the whole text instead.
+        pytest.param(" {{", "{{ ' {{' }}", id="whitespace-before"),
+        pytest.param("{{\n", "{{ '{{\\n' }}", id="line-break-after"),
     ],
 )
 def test_escape_closed(text, escaped):
@@ -182,6 +187,13 @@ def test_escape_closed(text, escaped):
     assert escape(text, closed=True) == escaped
     assert walk(escaped, {}) == text
     assert walk(escaped + "&{{ x }}", {"x": "X"}) == text + "&X"
+
+
+def test_escape_passes_a_run_of_backslashes_once():
+    """A long run of backslashes before no braces is passed over once, not
+    tried again from each backslash (100,000 took half a minute)."""
+    run = "\\" * 100_000
+    assert escape(run) == escape(run, closed=True) == run
 
 
 @pytest.mark.parametrize("text", [param.values[0] for param in ESCAPES])

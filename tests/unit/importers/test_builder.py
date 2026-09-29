@@ -4,6 +4,7 @@ scenario in the dialect, with no secret in it."""
 import base64
 import json
 from typing import Any
+from urllib.parse import unquote
 
 import pytest
 from pydantic import ValidationError
@@ -369,6 +370,23 @@ def test_url_userinfo_without_either_holds_no_secret():
             RecordedRequest("POST", "https://x.test/a", headers=[("Content-Type", "application/json")], body=TextData('{"$ref": "x", "note": "{{", "password": "s3cret"}')),
             id="json-text",
         ),
+        # A `}}` after the placeholder closes no escape before it: an
+        # object's end, or text of the JSON's own.
+        pytest.param(
+            RecordedRequest(
+                "POST", "https://x.test/a", headers=[("Content-Type", "application/json")], body=TextData('{"$ref": "#/x", "note": "{{", "creds": {"password": "s3cret"}}')
+            ),
+            id="json-text-nested",
+        ),
+        pytest.param(
+            RecordedRequest("POST", "https://x.test/a", headers=[("Content-Type", "application/json")], body=TextData('{"$ref":"x","note":"{{","password":"s3cret","z":"}}"}')),
+            id="json-text-closing-braces-after",
+        ),
+        # A repeated header's values are one field, a placeholder among them.
+        pytest.param(
+            RecordedRequest("GET", "https://x.test/a", headers=[("Referer", "https://r.test/{{x"), ("Referer", "https://r.test/?access_token=s3cret")]),
+            id="repeated-header",
+        ),
     ],
 )
 def test_recorded_braces_leave_a_placeholder_after_them_a_template(recorded, monkeypatch):
@@ -381,9 +399,22 @@ def test_recorded_braces_leave_a_placeholder_after_them_a_template(recorded, mon
     monkeypatch.setenv(placeholder.env, "s3cret")
     [sent] = sent_requests(result.scenario)
     assert "s3cret" not in json.dumps(result.scenario)
-    assert "quote(" not in str(sent.url)
-    assert b"json_dumps(" not in sent.content
-    assert "s3cret" in str(sent.url) or b"s3cret" in sent.content
+    sent_text = unquote(str(sent.url)) + sent.content.decode() + ", ".join(sent.headers.get_list("referer"))
+    # The placeholder rendered, not sent as its text; the secret sent.
+    assert not any(written in sent_text for written in ("quote(", "json_dumps(", "{{ referer }}"))
+    assert "s3cret" in sent_text
+    if isinstance(recorded.body, TextData) and "json" in recorded.headers[0][1]:
+        assert json.loads(sent.content) == json.loads(recorded.body.text)
+
+
+def test_recorded_text_keeps_its_whitespace():
+    """Text a placeholder does not follow is escaped as it is: a form body
+    that is whitespace and braces is sent exactly."""
+    form = [("Content-Type", "application/x-www-form-urlencoded")]
+    for text in (" {{", "{{ ", "\t{{"):
+        result = build_scenario([RecordedRequest("POST", "https://x.test/a", headers=form, body=TextData(text))], description="t")
+        [sent] = sent_requests(result.scenario)
+        assert sent.content == text.encode()
 
 
 def test_multipart_recorded_as_bytes_is_taken_apart():

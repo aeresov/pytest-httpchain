@@ -89,7 +89,12 @@ validator depend on them, so treat them as API, not internals):
   `escape(text, closed=True)` is for text a template follows on its line: an
   escape runs to the first `}}` on its line, so a `{{` no `}}` follows is
   written `{{ '{{' }}` instead, a template rendering to the braces, and no
-  escape reaches past the text (it holds templates then).
+  escape reaches past the text (it holds templates then). Text that would be
+  that template alone with whitespace around it (`" {{"`) is one template of
+  the whole text (`{{ ' {{' }}`): a string that is one template renders to
+  its value, the whitespace dropped. A caller splits its text at the
+  templates it writes and escapes each piece (the importers' `_joined_text`):
+  a `}}` after a template closes no escape before it.
 - `TEMPLATE_BUILTINS` — the set of names available inside an expression without
   the user defining them (safe functions, the helpers of `functions.py`, JSON
   literals, `exists`/`get`, and simpleeval defaults). The validator uses it to

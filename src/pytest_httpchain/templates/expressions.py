@@ -126,8 +126,9 @@ def unescape(value: str) -> str:
 
 
 # A `{{` and the run of backslashes right before it, the only text rendering
-# rewrites outside a template.
-_BRACES = re.compile(r"(\\*)\{\{")
+# rewrites outside a template. The lookbehind starts a match at a run's start
+# only, so a long run not before braces is passed over once, not per backslash.
+_BRACES = re.compile(r"(?<!\\)(\\*)\{\{")
 # A template rendering to the braces themselves, which ends where it is written.
 _LITERAL_BRACES = "{{ '{{' }}"
 
@@ -147,7 +148,10 @@ def escape(text: str, *, closed: bool = False) -> str:
     text's end, and it renders to ``text`` whatever follows it on its line
     after a separator (text ending in ``{`` or a backslash would still join
     braces right after it). It holds a template then, where it has such a
-    ``{{``."""
+    ``{{``; text that would be that template alone, whitespace around it
+    (``" {{"``), is written as one template of the whole text, since a
+    string that is one template renders to its value, the whitespace
+    dropped."""
 
     def escape_line(line: str) -> str:
         # An escape closes where a `}}` follows its braces: before the line's last.
@@ -159,4 +163,8 @@ def escape(text: str, *, closed: bool = False) -> str:
 
         return _BRACES.sub(rewrite, line)
 
-    return "\n".join(escape_line(line) for line in text.split("\n"))
+    escaped = "\n".join(escape_line(line) for line in text.split("\n"))
+    if closed and is_complete_template(escaped):
+        # Only whitespace and one `{{`, no `}}`: a literal of it holds none.
+        return "{{ " + repr(text) + " }}"
+    return escaped

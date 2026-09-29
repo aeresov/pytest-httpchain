@@ -59,7 +59,7 @@ from urllib.parse import parse_qsl, unquote, unquote_plus, urlsplit
 from pytest_httpchain.errors import HttpChainError
 from pytest_httpchain.jsonref import REF_KEYS
 from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, Redaction
-from pytest_httpchain.templates import TEMPLATE_BUILTINS, escape, unescape
+from pytest_httpchain.templates import TEMPLATE_BUILTINS, contains_template, escape, unescape
 from pytest_httpchain.validation import ValidateResult, validate_scenario
 
 
@@ -316,6 +316,20 @@ def _base64_bytes(data: str) -> bytes | None:
         return None
 
 
+def _joined_text(pieces: list[tuple[str, str | None]], separator: str) -> str:
+    """Recorded text and placeholders as one string: each piece's text,
+    escaped, then its template, if any, the pieces joined by
+    ``separator``. Text a template follows on its line is escaped
+    ``closed``, since an escape would otherwise run on into the template:
+    one before any of the templates, since a template of a later piece may
+    follow it on the same line too."""
+    written = []
+    last_template = max((index for index, (_, template) in enumerate(pieces) if template is not None), default=-1)
+    for index, (text, template) in enumerate(pieces):
+        written.append(escape(text, closed=index <= last_template) + (template or ""))
+    return separator.join(written)
+
+
 def _var_name(base: str) -> str:
     """``base`` as a variable name a template can read: lowercase words
     joined by ``_``, never a keyword, a built-in's name or ``response``,
@@ -479,19 +493,19 @@ class _Builder:
         the URL, a form body sent as text), escaped, with the value of each
         field the redaction rules hide a placeholder URL-encoded as it
         renders (``quote``, which an unset one fails: None is no text).
-        Each piece is escaped ``closed``: a recorded ``{{`` that no ``}}``
-        follows would otherwise cover a placeholder after it, sent then as
-        its text."""
-        pieces = []
+        The text before a placeholder is escaped ``closed``: a recorded
+        ``{{`` that no ``}}`` follows would otherwise cover the placeholder,
+        sent then as its text."""
+        pieces: list[tuple[str, str | None]] = []
         for piece in text.split("&"):
             raw_name, equals, raw_value = piece.partition("=")
             name = unquote_plus(raw_name)
             if equals and raw_value and self.redaction.redacts_query_param(name):
                 var = self.placeholder(name, unquote_plus(raw_value), f"{what} {name!r}", stage)
-                pieces.append(escape(raw_name, closed=True) + "={{ quote(" + var + ") }}")
+                pieces.append((raw_name + "=", "{{ quote(" + var + ") }}"))
             else:
-                pieces.append(escape(piece, closed=True))
-        return "&".join(pieces)
+                pieces.append((piece, None))
+        return _joined_text(pieces, "&")
 
     def hidden_header(self, name: str, value: str) -> str | None:
         """What a header stands for as a secret, or None for one the
@@ -608,11 +622,17 @@ class _Builder:
         walked = self._json(value, lambda string: string, secret)
         if not templates:
             return escape(text)
-        # Closed: a placeholder goes after the text's strings on its line.
-        written = escape(json.dumps(walked, ensure_ascii=False), closed=True)
-        for quoted, template in templates.items():
-            written = written.replace(quoted, template, 1)
-        return written
+        # The text between the placeholders escaped piece by piece, each
+        # before one closed: a `}}` of the JSON after a placeholder (an
+        # object's end) closes no escape before it.
+        dumped = json.dumps(walked, ensure_ascii=False)
+        pieces: list[tuple[str, str | None]] = []
+        start = 0
+        for found in re.finditer("|".join(re.escape(quoted) for quoted in templates), dumped):
+            pieces.append((dumped[start : found.start()], templates[found.group(0)]))
+            start = found.end()
+        pieces.append((dumped[start:], None))
+        return _joined_text(pieces, "")
 
     def multipart(self, parts: tuple[Part, ...], stage: str) -> dict[str, Any]:
         """``{"fields": ..., "files": ...}``: a text field without a type or
@@ -715,12 +735,14 @@ class _Builder:
         # as a host: absolute, that one URL ignores base_url.
         target = path if base_url is not None and not path.startswith("//") else f"{_origin(url.scheme, url.netloc)}{path}"
         params, query = self.query(url.query, stage)
-        # Closed before a query, which may hold a placeholder.
-        request["url"] = escape(target, closed=query is not None) + (f"?{query}" if query is not None else "")
+        # Closed before a query holding a placeholder.
+        request["url"] = escape(target, closed=query is not None and contains_template(query)) + (f"?{query}" if query is not None else "")
         if params:
             request["params"] = params
 
-        headers: list[tuple[str, str]] = []
+        # (name, value, whether it is recorded text): text is escaped once a
+        # repeated header's values are joined (`_joined_text`).
+        headers: list[tuple[str, str, bool]] = []
         cookies = list(recorded.cookies)
         authorization = None
         for name, value in recorded.headers:
@@ -729,7 +751,7 @@ class _Builder:
                 continue
             if lowered == "host":
                 if not _host_header_matches(value, url.scheme, url.netloc):
-                    headers.append((name, escape(value)))
+                    headers.append((name, value, True))
             elif lowered == "proxy-authorization":
                 self.notes.append(f"Stage {stage!r}: its Proxy-Authorization header is left out: a proxy's credentials go in client.proxy's URL.")
             elif lowered in TRANSPORT_HEADERS:
@@ -739,15 +761,15 @@ class _Builder:
             elif lowered == "authorization":
                 authorization = authorization or value
             elif (what := self.hidden_header(name, value)) is not None:
-                headers.append((_header_name(name), self.secret(name, value, what, stage)))
+                headers.append((_header_name(name), self.secret(name, value, what, stage), False))
             else:
-                headers.append((_header_name(name), escape(value)))
+                headers.append((_header_name(name), value, True))
 
         auth = None
         if authorization is not None:
             auth, header = self.authorization(authorization, stage)
             if header is not None:
-                headers.append(("Authorization", header))
+                headers.append(("Authorization", header, False))
         elif recorded.bearer:
             auth = {"bearer": self.secret("api_token", recorded.bearer, "the bearer token", stage)}
         elif recorded.user is not None or url.username is not None:
@@ -763,24 +785,20 @@ class _Builder:
             # one, where the report's redaction hides it.
             names = ", ".join(dict.fromkeys(name or "a nameless cookie" for name, _ in cookies))
             value = "; ".join(f"{name}={cookie}" if name else cookie for name, cookie in cookies)
-            headers.append(("Cookie", self.secret("cookie", value, f"the cookies {names}", stage)))
+            headers.append(("Cookie", self.secret("cookie", value, f"the cookies {names}", stage), False))
 
-        content_type = next((unescape(value) for name, value in headers if name.lower() == "content-type"), None)
+        content_type = next((value if text else unescape(value) for name, value, text in headers if name.lower() == "content-type"), None)
         body, implied = self.body(recorded.body, content_type, stage)
-        merged: dict[str, tuple[str, str]] = {}
-        for name, value in headers:
+        # One field per name, as RFC 9110 folds a repeated one: a mapping
+        # holds a name once.
+        merged: dict[str, tuple[str, list[tuple[str, str | None]]]] = {}
+        for name, value, text in headers:
             lowered = name.lower()
             if lowered == "content-type" and implied:
                 continue
-            if lowered in merged:
-                # One field, as RFC 9110 folds a repeated one: a mapping
-                # holds a name once.
-                first, joined = merged[lowered]
-                merged[lowered] = (first, f"{joined}, {value}")
-            else:
-                merged[lowered] = (name, value)
+            merged.setdefault(lowered, (name, []))[1].append((value, None) if text else ("", value))
         if merged:
-            request["headers"] = dict(merged.values())
+            request["headers"] = {name: _joined_text(values, ", ") for name, values in merged.values()}
         if auth is not None:
             request["auth"] = auth
         if body is not None:
