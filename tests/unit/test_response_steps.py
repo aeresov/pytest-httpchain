@@ -25,7 +25,7 @@ from pytest_httpchain.response_steps import RenderFailure, RenderOutcome, is_jso
 from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.userfunc import UserFunctionError
 from tests.unit import response_steps_test_helpers
-from tests.unit.helpers import LOADABLE_BUT_DEEP, TOO_DEEP_TO_PARSE, nested, on_bounded_stack
+from tests.unit.helpers import LOADABLE_BUT_DEEP, NOT_FOUND, TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, nested, on_bounded_stack
 
 NOT_JSON = httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
 # The decoder raises RecursionError, which is not a ValueError: a narrower except
@@ -340,11 +340,13 @@ class TestBodySchema:
         with pytest.raises(VerificationError, match=f"^Cannot validate schema, {message}: "):
             process_verify(Verify(body=ResponseBody(schema={"type": "object"})), response)
 
-    # json parses a body nested some thousands of levels deep, but jsonschema
-    # recurses on it, pretty-printing the value that failed or descending into
-    # it: a RecursionError escaped as a raw traceback, past the report. And
-    # once every check runs, past an unrelated status failure found first.
-    DEEP = httpx.Response(200, content=b"[" * 5000 + b"]" * 5000)
+    # json parses a body nested a thousand levels deep, on every platform, but
+    # jsonschema recurses on it, pretty-printing the value that failed or
+    # descending into it: a RecursionError escaped as a raw traceback, past the
+    # report. And once every check runs, past an unrelated status failure
+    # found first. (Five thousand levels is past what the decoder parses on
+    # Windows, where it fails as a body too deep to parse instead.)
+    DEEP = httpx.Response(200, content=TOO_DEEP_TO_WALK)
 
     def test_violation_in_a_body_too_deep_to_show(self):
         message = str(_failure({"status": 201, "body": {"schema": {"type": "object"}}}, self.DEEP))
@@ -493,7 +495,9 @@ class TestBodySchemaFileWithPointer:
     @pytest.mark.parametrize(
         ("name", "content", "error"),
         [
-            pytest.param("nope.json", None, "[Errno 2] No such file or directory: '{path}'", id="missing"),
+            # The OS's own words, the path quoted as Python quotes it (its
+            # backslashes doubled, on Windows).
+            pytest.param("nope.json", None, NOT_FOUND + ": {path}", id="missing"),
             pytest.param("bad.json", "{not json", "Expecting property name enclosed in double quotes", id="not-json"),
         ],
     )
@@ -502,7 +506,9 @@ class TestBodySchemaFileWithPointer:
         if content is not None:
             path.write_text(content)
         message = self._failure(f"api/{name}#/components/schemas/User", {}, api)
-        assert message.startswith(f"Error reading body schema file '{path}#/components/schemas/User': {error.format(path=path)}")
+        prefix = f"Error reading body schema file '{path}#/components/schemas/User': "
+        assert message.startswith(prefix)
+        assert re.match(error.format(path=re.escape(repr(str(path)))), message.removeprefix(prefix))
 
     def test_path_no_file_can_have_is_one_failure(self, tmp_path):
         """A NUL, one JSON \\u escape away: the OS call raises ValueError, which

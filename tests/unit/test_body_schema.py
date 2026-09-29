@@ -20,6 +20,7 @@ import referencing.jsonschema
 from pytest_httpchain import body_schema as body_schema_module
 from pytest_httpchain.body_schema import DEFAULT_DIALECT, InvalidReferencedSchema, ReferenceBounds, SchemaFile, file_body_schema, follow_pointer, inline_body_schema, schema_dialect
 from pytest_httpchain.errors import SchemaFileError, SchemaPointerError
+from tests.unit.helpers import NOT_FOUND
 
 DRAFT_04 = "http://json-schema.org/draft-04/schema#"
 DRAFT_07 = "http://json-schema.org/draft-07/schema#"
@@ -847,11 +848,13 @@ class TestReading:
     @pytest.mark.parametrize(
         ("name", "error"),
         [
-            pytest.param("nope.json", "No such file or directory", id="missing"),
+            pytest.param("nope.json", NOT_FOUND, id="missing"),
             # One JSON \u escape or a rendered template away: the OS call
             # raises ValueError, not OSError, which escaped as a traceback.
             pytest.param("a\x00b.json", "embedded null", id="nul"),
-            pytest.param("a\ud800b.json", "surrogates not allowed", id="lone-surrogate"),
+            # Windows names files in UTF-16, which holds a lone surrogate:
+            # there it is a name like any other, of no file.
+            pytest.param("a\ud800b.json", NOT_FOUND if os.name == "nt" else "surrogates not allowed", id="lone-surrogate"),
         ],
     )
     def test_unreadable_file(self, tmp_path, name, error):
