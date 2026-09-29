@@ -165,9 +165,9 @@ Parameter values can use template expressions:
 }
 ```
 
-Values that come from scenario `vars` are exposed as namespaces, so use attribute
-access (`{{ user.id }}`), not subscript (`{{ user['id'] }}`). Plain dicts from
-fixtures or `combinations` parameters keep subscript access.
+An object from scenario `vars` reads by attribute (`{{ user.id }}`) or by key
+(`{{ user['id'] }}`), as a dict from a fixture or a `combinations` parameter
+does (see [Reading objects](../usage/substitutions.md#reading-objects)).
 
 A `combinations` step can be one template for the whole list, such as
 `"combinations": "{{ test_users }}"`: each object in it is one combination, whose

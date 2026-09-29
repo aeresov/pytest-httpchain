@@ -19,6 +19,7 @@ from pytest_httpchain.models.entities import (
     Verify,
     VerifyStep,
 )
+from pytest_httpchain.models.types import VarsNamespace
 from tests.unit.models.helpers import assert_error_types, stage_dict
 
 V1 = VarsSubstitution(vars={"key1": "value1"})
@@ -90,9 +91,13 @@ def test_non_list_non_mapping_rejected(field):
 
 
 def test_vars_values_become_namespaces_recursively():
-    """So ``{{ user.roles[0].id }}`` attribute access works in templates."""
+    """So ``{{ user.roles[0].id }}`` attribute access works in templates, and
+    ``{{ user['roles'][0]['id'] }}`` key access: every object is a
+    `VarsNamespace`, one in a list too."""
     substitution = VarsSubstitution(vars={"user": {"name": "a", "roles": [{"id": 1}]}})
     assert substitution.vars == {"user": SimpleNamespace(name="a", roles=[SimpleNamespace(id=1)])}
+    user = substitution.vars["user"]
+    assert (type(user), type(user.roles[0])) == (VarsNamespace, VarsNamespace)
 
 
 @pytest.mark.parametrize(

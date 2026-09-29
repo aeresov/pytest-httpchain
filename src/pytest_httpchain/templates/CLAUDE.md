@@ -110,7 +110,10 @@ This only affects a literal `}` that is adjacent to the template close; a single
 - `dict`: Recursively processes values
 - `list`: Recursively processes items
 - `BaseModel` (Pydantic): Dumps, processes, and revalidates
-- `SimpleNamespace`: Processes namespace attributes
+- `SimpleNamespace`: Processes namespace attributes, rebuilt as its own type (`copy.replace`), so a `vars` object (the models' `VarsNamespace`, a SimpleNamespace that is a registered `Mapping`) keeps its key access once rendered
+
+### Objects read by key
+A subscript of a key the object (a `vars` object, a dict, headers) does not have fails as `Key error in expression '{{ user['nick'] }}': Key 'nick' does not exist in expression ...`, as the attribute path's `Attribute error` names an attribute: `_Evaluator` overrides simpleeval's `_eval_subscript`, which lets the bare KeyError out, and catches only the lookup's own KeyError (a user function's raising one is still `KeyError in expression`). simpleeval checks nothing of a subscript's key, so `doc['_id']` reads a key the attribute form refuses. An attribute a `vars` object has no key for falls through to its method of that name (`order.items` where `order` has no `items` key). `_Evaluator._eval_attribute` lets that method through only where the expression calls it (`order.items()`) or hands it as a call's `key=` (`max(s, key=s.get)`, the argument `scoping` takes for a function), read off the tree being evaluated (`_takes_a_method`); anywhere else, wherever it sits (`{{ order.items != [] }}`, `bool(order.get)`, `str(order.keys)`), it is refused as the missing attribute it was before the object had methods (`_MethodNotCalled`, an `AttributeDoesNotExist` whose message adds how to call the method), so a check reading it fails rather than pass on the method, and no text gets its repr, the whole object in it. `_is_object_method` tells such a method (a bound method of a SimpleNamespace that is a Mapping, so the package need not know the class by name); a fixture object's methods are left alone. A dict's are too: simpleeval reads a dict's method before its key, so `saved.items` on a saved object is the dict's method, key or no key, as it always was.
 
 ### Nesting depth
 `contains_template` walks iteratively, so any depth works. `walk` rebuilds the

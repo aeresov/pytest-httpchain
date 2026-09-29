@@ -10,6 +10,7 @@ import pytest
 from pydantic import BaseModel
 from simpleeval import InvalidExpression
 
+from pytest_httpchain.models.types import VarsNamespace, convert_dict_to_namespace
 from pytest_httpchain.templates import CONTEXT_HELPERS, TEMPLATE_BUILTINS, TemplatesError, contains_template, parse_expression, substitution, walk, walker
 from tests.unit.helpers import BEYOND_RECURSION_LIMIT, LOADABLE_BUT_DEEP, nested
 
@@ -269,7 +270,8 @@ class TestWalkErrorMessages:
             ("{{ 1 / 0 }}", {}, "ZeroDivisionError"),
             ("{{ 'text' + 5 }}", {}, "TypeError"),
             ("{{ [1, 2][10] }}", {}, "IndexError"),
-            ("{{ dict(a=1)['b'] }}", {}, "KeyError"),
+            # Named as the attribute path names an attribute, not as a bare KeyError.
+            ("{{ dict(a=1)['b'] }}", {}, r"^Key error in expression '\{\{ dict\(a=1\)\['b'\] \}\}': Key 'b' does not exist"),
             ("{{ 1 + }}", {}, "Invalid expression"),
         ],
     )
@@ -463,6 +465,214 @@ class TestWalkErrorMessages:
         tree = parse_expression("  sorted(rows, key=len)  ")
         assert isinstance(tree, ast.Call)
         assert ast.unparse(tree) == "sorted(rows, key=len)"
+
+
+class TestObjectAccess:
+    """A `vars` object (the models' `VarsNamespace`) read by attribute and by
+    key, as a dict saved from a response is read."""
+
+    @staticmethod
+    def _context() -> dict[str, Any]:
+        return {
+            "user": convert_dict_to_namespace({"name": "Alice", "Content-Type": "json", "address": {"city": "Oslo"}, "roles": [{"id": 1}, {"id": 2}]}),
+            "order": convert_dict_to_namespace({"items": [1, 2], "keys": "k", "_id": 7}),
+            "saved": {"name": "Bob", "X-Request-Id": "r-1"},
+        }
+
+    @pytest.mark.parametrize(
+        ("template", "expected"),
+        [
+            pytest.param("{{ user.name }}", "Alice", id="attribute"),
+            pytest.param("{{ user['name'] }}", "Alice", id="subscript"),
+            pytest.param("{{ user['Content-Type'] }}", "json", id="key-that-is-no-identifier"),
+            pytest.param("{{ user['address']['city'] }}", "Oslo", id="nested-subscript"),
+            pytest.param("{{ user.address['city'] + user['address'].city }}", "OsloOslo", id="mixed"),
+            pytest.param("{{ user.roles[1]['id'] }}", 2, id="object-in-a-list"),
+            pytest.param("{{ [role['id'] for role in user.roles] }}", [1, 2], id="objects-in-a-comprehension"),
+            pytest.param("{{ 'name' in user }}", True, id="in"),
+            pytest.param("{{ 'nick' not in user }}", True, id="not-in"),
+            pytest.param("{{ len(user) }}", 4, id="len"),
+            pytest.param("{{ [k for k in user] }}", ["name", "Content-Type", "address", "roles"], id="iteration-in-order"),
+            pytest.param("{{ sorted(user)[0] }}", "Content-Type", id="sorted"),
+            pytest.param("{{ list(user.keys()) }}", ["name", "Content-Type", "address", "roles"], id="keys"),
+            pytest.param("{{ list(user.values())[:2] }}", ["Alice", "json"], id="values"),
+            pytest.param("{{ {k: v for k, v in user.items() if k == 'name'} }}", {"name": "Alice"}, id="items"),
+            pytest.param("{{ user.get('nick', 'anon') }}", "anon", id="get-default"),
+            pytest.param("{{ user.get('nick') }}", None, id="get-none"),
+            pytest.param("{{ user.get('name') }}", "Alice", id="get"),
+            pytest.param("{{ dict(user)['name'] }}", "Alice", id="dict"),
+            pytest.param("{{ {**user}['Content-Type'] }}", "json", id="dict-spread"),
+            pytest.param("{{ 'x' if user.get('address') else 'y' }}", "x", id="truth"),
+            # A dict saved from a response reads the same way.
+            pytest.param("{{ saved['X-Request-Id'] + saved.name }}", "r-1Bob", id="saved-dict"),
+        ],
+    )
+    def test_access_forms(self, template, expected):
+        assert walk(template, self._context()) == expected
+
+    def test_key_named_like_a_method(self):
+        """The attribute reads the data, as it always did; so does every key
+        form. The shadowed method, called, calls the data."""
+        context = self._context()
+        assert walk("{{ order.items }}", context) == [1, 2]
+        assert walk("{{ order['items'] }}", context) == [1, 2]
+        assert walk("{{ order.keys }}", context) == "k"
+        assert walk("{{ [order[k] for k in order][0] }}", context) == [1, 2]
+        with pytest.raises(TemplatesError, match=r"^TypeError in expression '\{\{ order.items\(\) \}\}': 'list' object is not callable$"):
+            walk("{{ order.items() }}", context)
+
+    def test_underscore_key_reads_by_subscript_only(self):
+        """simpleeval refuses an attribute starting with `_`, from the text,
+        but never a key: `_eval_subscript` checks nothing of the key."""
+        context = self._context()
+        assert walk("{{ order['_id'] }}", context) == 7
+        with pytest.raises(TemplatesError, match=r"for a key of that name, write \['_id'\]$"):
+            walk("{{ order._id }}", context)
+
+    def test_subscript_reaches_the_data_only(self):
+        with pytest.raises(TemplatesError, match=r"^Key error in expression .*: Key '__class__' does not exist"):
+            walk("{{ user['__class__'] }}", self._context())
+
+    @pytest.mark.parametrize(
+        ("template", "message"),
+        [
+            pytest.param(
+                "{{ user['nick'] }}",
+                "Key error in expression '{{ user['nick'] }}': Key 'nick' does not exist in expression 'user['nick']'",
+                id="vars-object",
+            ),
+            pytest.param(
+                "{{ user['address']['zip'] == 1 }}",
+                "Key error in expression '{{ user['address']['zip'] == 1 }}': Key 'zip' does not exist in expression 'user['address']['zip'] == 1'",
+                id="nested",
+            ),
+            pytest.param(
+                "Name: {{ saved['nick'] }}",
+                "Key error in expression '{{ saved['nick'] }}': Key 'nick' does not exist in expression 'saved['nick']'",
+                id="saved-dict-interpolated",
+            ),
+            # As the attribute path names a missing attribute.
+            pytest.param(
+                "{{ user.nick }}",
+                "Attribute error in expression '{{ user.nick }}': Attribute 'nick' does not exist in expression 'user.nick'",
+                id="attribute",
+            ),
+        ],
+    )
+    def test_missing_key_names_it(self, template, message):
+        with pytest.raises(TemplatesError) as excinfo:
+            walk(template, self._context())
+        assert str(excinfo.value) == message
+
+    def test_key_error_of_a_function_is_not_taken_for_a_missing_key(self):
+        """Only the subscript's own lookup is: a user function's KeyError is
+        its own error, named by its type as any other."""
+
+        def lookup():
+            return {}["gone"]
+
+        with pytest.raises(TemplatesError, match=r"^KeyError in expression '\{\{ lookup\(\)\['x'\] \}\}': 'gone'$"):
+            walk("{{ lookup()['x'] }}", {"lookup": lookup})
+
+    @pytest.mark.parametrize(
+        ("template", "expression", "call"),
+        [
+            pytest.param("{{ user.keys }}", "user.keys", ".keys()", id="keys"),
+            pytest.param("{{ user.items }}", "user.items", ".items()", id="items"),
+            pytest.param("Values: {{ user.values }}", "user.values", ".values()", id="interpolated"),
+            pytest.param("{{ user.address.get }}", "user.address.get", ".get(...)", id="get-takes-a-key"),
+            # Inside an expression too: the method is a value there, always
+            # true and never equal to data, so each of these passed as a check.
+            pytest.param("{{ user.items != [] }}", "user.items != []", ".items()", id="compared"),
+            pytest.param("{{ user.get is not None }}", "user.get is not None", ".get(...)", id="is-not-none"),
+            pytest.param("{{ bool(user.values) }}", "bool(user.values)", ".values()", id="truth"),
+            pytest.param("{{ 'x' if user.keys else 'y' }}", "'x' if user.keys else 'y'", ".keys()", id="condition"),
+            pytest.param("{{ 'k=' + str(user.keys) }}", "'k=' + str(user.keys)", ".keys()", id="str"),
+            pytest.param("{{ [user.items][0] }}", "[user.items][0]", ".items()", id="in-a-list"),
+            pytest.param("{{ [r.get for r in user.roles] }}", "[r.get for r in user.roles]", ".get(...)", id="in-a-comprehension"),
+            # Handed to a call, but not as its key=: the call is not the method's.
+            pytest.param("{{ dict(at=user.get) }}", "dict(at=user.get)", ".get(...)", id="other-keyword"),
+            pytest.param("{{ sorted(user, user.get) }}", "sorted(user, user.get)", ".get(...)", id="positional"),
+        ],
+    )
+    def test_method_read_as_a_value_is_refused(self, template, expression, call):
+        """An attribute where the object has no key of that name was a missing
+        attribute; now that the object has methods, it would read one, a value
+        that compares as no data does and whose repr holds the whole object.
+        It stays the missing attribute wherever it sits, and the message adds
+        how the method is called."""
+        name = call.split("(")[0].removeprefix(".")
+        with pytest.raises(TemplatesError) as excinfo:
+            walk(template, self._context())
+        assert str(excinfo.value) == (
+            f"Attribute error in expression '{{{{ {expression} }}}}': Attribute '{name}' does not exist in expression '{expression}'; "
+            f"the object has no key '{name}'; to call its method, write {call}"
+        )
+
+    @pytest.mark.parametrize(
+        ("template", "expected"),
+        [
+            pytest.param("{{ user.get('nick', 'anon') }}", "anon", id="called"),
+            pytest.param("{{ user.get('address').get('city') }}", "Oslo", id="chained-calls"),
+            pytest.param("{{ [r.get('id') for r in user.roles] }}", [1, 2], id="called-in-a-comprehension"),
+            pytest.param("{{ max(scores, key=scores.get) }}", "b", id="key-of-a-built-in"),
+            pytest.param("{{ sorted(scores, key=scores.get) }}", ["c", "a", "b"], id="sorted-by-value"),
+        ],
+    )
+    def test_method_called_or_handed_as_a_key(self, template, expected):
+        """What a method is for: a call, or a ``key=``, which calls it."""
+        context = self._context() | {"scores": convert_dict_to_namespace({"a": 2, "b": 5, "c": 1})}
+        assert walk(template, context) == expected
+
+    def test_method_of_a_saved_object_is_the_dicts(self):
+        """A saved object is a dict, whose attribute simpleeval reads before
+        its key, as it always has: the docs point to the key forms for a key
+        named like a method."""
+        saved = {"items": 3}
+        assert walk("{{ saved.items }}", {"saved": saved}) == saved.items
+        assert walk("{{ saved['items'] }}", {"saved": saved}) == 3
+
+    def test_method_of_another_object_is_left_alone(self):
+        """A fixture's object may hand out a method on purpose: only a `vars`
+        object's are refused."""
+
+        class Helper(SimpleNamespace):
+            def ping(self) -> str:
+                return "pong"
+
+        helper = Helper()
+        assert walk("{{ helper.ping }}", {"helper": helper}) == helper.ping
+
+    def test_walk_keeps_the_type_at_every_depth(self):
+        """Rendered, a `vars` object keeps its key access: `_walk` rebuilt it
+        as a plain SimpleNamespace."""
+        value = convert_dict_to_namespace({"id": "{{ n }}", "inner": {"k": "{{ n }}"}, "list": [{"k": "{{ n }}"}]})
+        result = walk(value, {"n": 1})
+        assert (type(result), type(result.inner), type(result.list[0])) == (VarsNamespace, VarsNamespace, VarsNamespace)
+        assert (result["id"], result["inner"]["k"], result["list"][0]["k"]) == (1, 1, 1)
+        assert list(result) == ["id", "inner", "list"]
+
+    def test_object_nested_hundreds_deep_interpolates(self):
+        """Text reads the object's repr, which spent three frames a level
+        while it recursed, and failed the stage at a depth the loader
+        accepts."""
+        deep = convert_dict_to_namespace({"k": nested("x", LOADABLE_BUT_DEEP)})
+        assert walk("v={{ deep }}", {"deep": deep}) == f"v={deep!r}"
+        assert walk("v={{ deep }}", {"deep": deep}).startswith("v=namespace(k=[namespace(k=[")
+
+    def test_dict_copy_of_an_object_with_a_keys_key(self):
+        """`dict()` and `**` call `.keys()`, which such a key's data shadows;
+        a comprehension over the keys, or a JSON round trip, copies it."""
+        context = self._context()
+        with pytest.raises(TemplatesError, match=r"^TypeError in expression '\{\{ dict\(order\) \}\}': 'str' object is not callable$"):
+            walk("{{ dict(order) }}", context)
+        assert walk("{{ {k: order[k] for k in order} }}", context) == {"items": [1, 2], "keys": "k", "_id": 7}
+        assert walk("{{ json_loads(json_dumps(order)) }}", context) == {"items": [1, 2], "keys": "k", "_id": 7}
+
+    def test_walk_keeps_a_plain_namespace_plain(self):
+        result = walk(SimpleNamespace(a="{{ n }}"), {"n": 1})
+        assert type(result) is SimpleNamespace
+        assert result == SimpleNamespace(a=1)
 
 
 @pytest.mark.parametrize("name", sorted(TEMPLATE_BUILTINS))

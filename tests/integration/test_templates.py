@@ -28,6 +28,29 @@ def test_builtin_functions_in_a_round_trip(run_scenario):
     run_scenario("templates/test_template_functions.http.json").assert_outcomes(passed=2, warnings=0)
 
 
+def test_objects_read_by_key(run_scenario):
+    """A saved JSON object and `vars` objects read by key, keys with a dash
+    included, into request headers and verify expressions, with `in`, len(),
+    iteration and the keys/values/items/get methods; a `vars` object whose
+    templates render per stage keeps its key access, and `response` reads by
+    key too. Collection's validator flags none of it."""
+    run_scenario("templates/test_template_mapping_access.http.json").assert_outcomes(passed=2, warnings=0)
+
+
+def test_missing_key_fails_the_stage_naming_it(run_scenario):
+    """A subscript of a key the object does not have fails its stage as a
+    missing attribute does, naming the key, not with a bare KeyError."""
+    result = run_scenario(
+        {
+            "substitutions": [{"vars": {"trace": {"X-Request-Id": "req-42"}}}],
+            "stages": [stage("traced", request={"headers": {"X-Trace": "{{ trace['X-Trace-Id'] }}"}})],
+        }
+    )
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(["*Key error in expression '{{ trace[[]'X-Trace-Id'] }}': Key 'X-Trace-Id' does not exist in expression 'trace[[]'X-Trace-Id']'*"])
+    result.stdout.no_fnmatch_line("*Traceback*")
+
+
 def test_helper_without_parentheses_fails_the_stage(run_scenario):
     """`{{ now }}` for `{{ now() }}` would send `<function now at 0x...>`: the
     validator warns of it at collection (HTTPCHAIN035), and the request that

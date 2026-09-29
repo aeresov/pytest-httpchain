@@ -110,7 +110,7 @@ def test_failure_report_lists_every_failed_check_and_a_curl_command(run_scenario
             """  2. JMESPath 'received.note' doesn't match: expected "its", got "it's\"""",
             # Rendered with the step's other values, before any check ran, and
             # listed in its check's place: the status failure is not hidden.
-            "  3. KeyError in expression '{{ response.headers[[]'x-missing'] == 'a' }}': 'x-missing'",
+            "  3. Key error in expression '{{ response.headers[[]'x-missing'] == 'a' }}': Key 'x-missing' does not exist in expression 'response.headers[[]'x-missing'] == 'a''",
             "  4. Body doesn't contain 'nope'",
             "*HTTP Request (curl)*",
             "# [[]REDACTED] stands for a value this report hides: fill it in before running.",

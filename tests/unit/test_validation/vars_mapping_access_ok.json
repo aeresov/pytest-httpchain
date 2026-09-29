@@ -1,0 +1,36 @@
+{
+    "substitutions": [
+        {
+            "vars": {
+                "trace": { "X-Request-Id": "req-42", "items": ["a", "b"], "_id": 7 },
+                "users": [ { "id": 1, "name": "Alice" }, { "id": 2, "name": "Bob" } ]
+            }
+        }
+    ],
+    "stages": [
+        {
+            "name": "s",
+            "substitutions": [ { "vars": { "first": "{{ users[0]['id'] if 'id' in users[0] else 0 }}" } } ],
+            "request": {
+                "url": "https://x.test/users/{{ first }}",
+                "headers": { "X-Request-Id": "{{ trace['X-Request-Id'] }}" }
+            },
+            "response": [
+                { "save": { "jmespath": { "user": "@" } } },
+                {
+                    "verify": {
+                        "status": 200,
+                        "expressions": [
+                            "{{ 'X-Request-Id' in trace and trace['_id'] == 7 and 'nick' not in trace }}",
+                            "{{ trace['items'] == trace.items and len(trace) == 3 }}",
+                            "{{ [k for k in trace] == list(trace.keys()) and list(trace.values())[2] == 7 }}",
+                            "{{ {k: v for k, v in users[1].items()}['name'] == 'Bob' }}",
+                            "{{ trace.get('nick', 'anon') == 'anon' and 'name' in user }}",
+                            "{{ user['name'] == users[0]['name'] and response['status'] == 200 }}"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

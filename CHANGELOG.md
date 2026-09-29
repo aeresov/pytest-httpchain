@@ -391,6 +391,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--strict`, `--format json` and the reference options apply to every file found. A directory
   holding no scenario file is reported as `HTTPCHAIN039` (error) and fails the run, so a mistyped
   path, or a suffix that names no file, cannot pass CI as an empty run.
+- Templates read a `vars` object by key as well as by attribute, at any depth and in lists, as they
+  read an object a `save` took from a response: `{{ headers['Content-Type'] }}` for a key that is
+  no Python name, `{{ doc['_id'] }}` for one starting with `_`, `{{ 'name' in user }}`,
+  `{{ len(user) }}`, `{{ [k for k in user] }}` (the keys, in the order written), `user.keys()`,
+  `user.values()`, `user.items()` and `{{ user.get('nick', 'anon') }}`. The `response` metadata of
+  a response step reads by key too (`{{ response['status'] }}`). An attribute reads the object's
+  key first, as it always has, so for an object with a key named `keys`, `values`, `items` or `get`,
+  `{{ order.items }}` is still that key's value and `{{ order.items() }}` fails calling it, as do
+  `dict(order)` and `{**order}` for a key named `keys`, which they call; every form by key
+  (`order['items']`, `list(order)`, `[order[k] for k in order]`, `{k: order[k] for k in order}`)
+  reads the data. For an object without such a key, the attribute reaches the method only to call
+  it (`order.items()`) or to hand it as a `key=` (`{{ max(scores, key=scores.get) }}`); anywhere
+  else in an expression (`{{ order.items != [] }}`, `bool(order.get)`, `str(order.keys)`) it is
+  the missing attribute it was, so a check reading it still fails rather than pass on the method.
+  (A saved object is a dict, whose methods an attribute reads before its keys: `saved.items` is the
+  dict's method, so read a key named like one by key, `saved['items']`.) A missing key fails the
+  stage naming it, a missing attribute named like a method says how to call it, and an empty object
+  is now false (all under Changed). Nothing else changes: an object interpolated into text still
+  reads `namespace(...)`, however deep, it still equals another `vars` object with the same keys
+  and values and no dict, and a JSON body, `json_dumps` and `urlencode` take it as before.
+  `validate` reads a subscript, `in` and the methods as it reads an attribute: the object's name is
+  the one reference.
 
 ### Fixed
 
@@ -843,6 +865,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sorted by path, in the text report and the `--format json` payload alike, where they followed
   the order they were given in: `validate b.http.json a.http.json` reports `a.http.json` first.
   The payload keeps its shape.
+- A subscript of a key the object does not have, a saved object, `response.headers` or a `vars`
+  object (see Added), fails the stage naming the key as a missing attribute does:
+  `Key error in expression '{{ saved['nick'] }}': Key 'nick' does not exist in expression 'saved['nick']'`,
+  where it read `KeyError in expression '{{ saved['nick'] }}': 'nick'`. A user function raising a
+  `KeyError` is still reported as one. And a missing attribute of a `vars` object named like one of
+  its methods (`keys`, `values`, `items`, `get`; see Added) says how to call it after the message
+  it had:
+  `Attribute error in expression '{{ order.items }}': Attribute 'items' does not exist in expression 'order.items'; the object has no key 'items'; to call its method, write .items()`.
+  Heads-up: a test matching either old message in full sees the new one.
+- An empty `vars` object (`{}`) is false, as an empty object saved from a response is, where it
+  was true like any other: it reads as a mapping now (see Added). Heads-up: a template that tests
+  one for truth renders differently: `{{ opts or defaults }}` takes `defaults` for an empty
+  `opts`, `{{ 'a' if cfg else 'b' }}` renders `'b'`, and a stage whose template `always_run` names
+  one (`"always_run": "{{ cleanup_opts }}"`) no longer runs after a failure. Test what is meant
+  instead: `{{ opts is not None }}`, `{{ 'key' in opts }}` or `{{ len(opts) > 0 }}`.
 
 ## [0.15.2] - 2026-09-26
 

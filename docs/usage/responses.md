@@ -399,6 +399,9 @@ namespace holding the response's metadata:
 | `response.headers` | mapping | Response headers, case-insensitive keys |
 | `response.elapsed_ms` | float | Round-trip time in milliseconds |
 
+It reads by key too, as any object does ([Reading objects](substitutions.md#reading-objects)):
+`response['status']`.
+
 Use it directly in verify expressions:
 
 ```json

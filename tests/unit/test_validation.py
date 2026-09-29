@@ -77,6 +77,10 @@ def _hide_ancestor_project_markers(monkeypatch):
         "functions_substitution.json",  # a `functions` alias is callable
         "scenario_fixtures_available.json",
         "comprehension_vars.json",  # a comprehension target is a local binding
+        # A `vars` object, a saved one and `response` read by key, `in`, len(),
+        # iteration and their methods: the name is the reference, never a key
+        # or a method (`trace['X-Request-Id']`, `trace.get(...)`, `trace.items`).
+        "vars_mapping_access_ok.json",
         "always_run_refs_ok.json",  # fixtures, scenario substitutions, earlier saves
         # skip_if sees the stage's own substitutions and parametrize
         # parameters too. A name a stage that may skip saves is always there

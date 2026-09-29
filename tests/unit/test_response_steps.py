@@ -19,12 +19,13 @@ from pytest_httpchain.body_schema import ReferenceBounds
 from pytest_httpchain.errors import SaveError, VerificationError
 from pytest_httpchain.models import JSON_TYPE_NAMES, JMESPathSave, RegexSave, SubstitutionsSave, UserFunctionsSave, Verify
 from pytest_httpchain.models.entities import ResponseBody
+from pytest_httpchain.models.types import convert_dict_to_namespace
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
 from pytest_httpchain.response_steps import RenderFailure, RenderOutcome, is_json_type, process_save, process_verify
 from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.userfunc import UserFunctionError
 from tests.unit import response_steps_test_helpers
-from tests.unit.helpers import TOO_DEEP_TO_PARSE, on_bounded_stack
+from tests.unit.helpers import LOADABLE_BUT_DEEP, TOO_DEEP_TO_PARSE, nested, on_bounded_stack
 
 NOT_JSON = httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
 # The decoder raises RecursionError, which is not a ValueError: a narrower except
@@ -707,6 +708,9 @@ class TestExpressions:
             # guard: substitution rewrites the list element-wise, so a
             # rendered-away entry arrives here as None and fails the bool contract.
             pytest.param(None, "NoneType", id="rendered-away"),
+            # The failure quotes the value's repr, which a `vars` object this
+            # deep once overflowed, escaping as a bare RecursionError.
+            pytest.param(convert_dict_to_namespace({"deep": nested("x", LOADABLE_BUT_DEEP)}), "VarsNamespace", id="vars-object-nested-hundreds-deep"),
         ],
     )
     def test_non_bool_is_rejected_naming_its_type(self, value, type_name):

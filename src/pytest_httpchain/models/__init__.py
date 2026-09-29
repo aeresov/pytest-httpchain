@@ -82,6 +82,7 @@ from pytest_httpchain.models.entities import (
 from pytest_httpchain.models.types import (
     JSON_TYPE_NAMES,
     SchemaFileRef,
+    VarsNamespace,
     check_json_schema,
     is_relative_url,
     is_status_class,
@@ -151,6 +152,7 @@ __all__ = [
     "ClientConfig",
     "JSON_TYPE_NAMES",
     "SchemaFileRef",
+    "VarsNamespace",
     "check_json_schema",
     "is_relative_url",
     "is_status_class",

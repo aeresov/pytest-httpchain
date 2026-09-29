@@ -1,14 +1,16 @@
 """Validated type aliases for the scenario models: content validators (JMESPath,
 regex, XML, GraphQL, base64, templates, import names, identifiers, schemas,
-paths, URLs) and the ``SimpleNamespace``<->``dict`` round-trip that makes ``vars``
-attribute-accessible in templates and JSON-serializable in bodies."""
+paths, URLs) and the `VarsNamespace`<->``dict`` round-trip that makes ``vars``
+objects readable by attribute and by key in templates and JSON-serializable in
+bodies."""
 
 import base64
 import keyword
 import re
+import threading
 import types
 import xml.etree.ElementTree
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, ItemsView, Iterable, Iterator, KeysView, Mapping, ValuesView
 from pathlib import Path, PurePath
 from typing import Annotated, Any, Literal, NamedTuple, get_args
 from urllib.parse import unquote
@@ -254,12 +256,158 @@ def validate_function_import_name(v: str) -> str:
     return v
 
 
+class VarsNamespace(types.SimpleNamespace):
+    """An object a scenario writes in ``vars`` (at any depth), as templates
+    read it: by attribute, as a SimpleNamespace is (``{{ user.name }}``), and
+    as a mapping of its keys, as the same object saved from a response (a
+    dict) is: ``{{ headers['Content-Type'] }}`` for a key that is no
+    identifier, ``{{ 'name' in user }}``, ``{{ len(user) }}``, iteration over
+    the keys in the order written, ``keys()``, ``values()``, ``items()`` and
+    ``get(key, default=None)``. An empty object is false, as ``{}`` is.
+
+    Every method reads the instance's own dict, never an attribute. So a key
+    named like a method is data wherever a key is read (``order['items']``,
+    ``for k in order``), and an attribute still reads the data first, as it
+    always did (``order.items`` is the key's value), which shadows that method:
+    ``order.items()`` calls the data, and so do ``dict(order)`` and
+    ``{**order}`` for a key named ``keys``: both call ``order.keys()``
+    (``{k: order[k] for k in order}`` copies any object). A key starting with
+    ``_``, which the template engine never reads as an attribute, is read by
+    subscript (``doc['_id']``); only the data is reached that way, never the
+    class's attributes (``user['__class__']`` is a missing key).
+
+    Still a SimpleNamespace, so everything that takes one as the object it
+    stands for (a JSON body, ``json_dumps`` and ``urlencode``, the rendered
+    models' conversions) takes this, and equality is a SimpleNamespace's: the
+    same keys and values, a plain SimpleNamespace included. And a registered
+    `Mapping` (below), which pydantic's lax list refuses, as it refuses a
+    dict: iterable, an object rendered where a list goes (a parameter's
+    values, ``verify.status``) was otherwise taken for the list of its keys.
+
+    Read-only as templates use it (they assign nothing), so threads share one
+    freely. It pickles as a SimpleNamespace does, by class and dict, and its
+    repr is a SimpleNamespace's text, ``namespace(...)``, at any depth
+    (`_namespace_repr`).
+    """
+
+    def __getitem__(self, key: str) -> Any:
+        return vars(self)[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in vars(self)
+
+    def __len__(self) -> int:
+        return len(vars(self))
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(vars(self))
+
+    def keys(self) -> KeysView[str]:
+        return vars(self).keys()
+
+    def values(self) -> ValuesView[Any]:
+        return vars(self).values()
+
+    def items(self) -> ItemsView[str, Any]:
+        return vars(self).items()
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return vars(self).get(key, default)
+
+    def __repr__(self) -> str:
+        # A SimpleNamespace's own text (whose repr names a subclass by its
+        # class), so a `vars` object interpolated into text reads as it
+        # always has.
+        return _namespace_repr(self)
+
+
+Mapping.register(VarsNamespace)
+
+# The namespaces whose repr is being written, by (id, thread), as reprlib keys
+# its guard: one met again inside itself, directly or through a value whose
+# own repr it is written in, reads `namespace(...)`.
+_repr_running: set[tuple[int, int]] = set()
+
+# What `_namespace_repr` has pending: text to write as it stands, a value to
+# write the repr of, a container whose members are all written.
+_TEXT, _VALUE, _DONE = range(3)
+
+
+def _namespace_repr(root: types.SimpleNamespace) -> str:
+    """``repr(root)`` as SimpleNamespace's own would write it, for any depth.
+
+    Iterative over namespaces and the plain lists, tuples and dicts between
+    them, in which it writes what their C reprs write, recursion markers
+    included: a Python repr per level spent three frames on each, so an
+    object nested a few hundred levels deep, which the loader accepts and
+    SimpleNamespace's C repr wrote, overflowed. Any other value is its own
+    ``repr()``."""
+    thread = threading.get_ident()
+    pieces: list[str] = []
+    # The lists, tuples and dicts being written, from the root down to the one
+    # in hand: a member among them is a cycle; one met again elsewhere is
+    # only shared, and written again, as the C reprs do.
+    path: set[int] = set()
+    held: set[tuple[int, int]] = set()
+    pending: list[tuple[int, Any]] = [(_VALUE, root)]
+    try:
+        while pending:
+            action, item = pending.pop()
+            if action == _TEXT:
+                pieces.append(item)
+                continue
+            if action == _DONE:
+                if isinstance(item, types.SimpleNamespace):
+                    held.discard((id(item), thread))
+                    _repr_running.discard((id(item), thread))
+                else:
+                    path.discard(id(item))
+                continue
+            kind = type(item)
+            if kind is VarsNamespace or kind is types.SimpleNamespace:
+                key = (id(item), thread)
+                if key in _repr_running:
+                    pieces.append("namespace(...)")
+                    continue
+                _repr_running.add(key)
+                held.add(key)
+                opening, closing = "namespace(", ")"
+                # The C repr's: a key that is no text, or empty, is left out.
+                members = [(f"{name}=", value) for name, value in vars(item).items() if isinstance(name, str) and name]
+            elif kind is list or kind is tuple or kind is dict:
+                opening, closing = {list: "[]", tuple: "()", dict: "{}"}[kind]
+                if id(item) in path:
+                    pieces.append(f"{opening}...{closing}")
+                    continue
+                path.add(id(item))
+                if kind is dict:
+                    members = [(f"{key!r}: ", value) for key, value in item.items()]
+                else:
+                    members = [("", value) for value in item]
+                    if kind is tuple and len(item) == 1:
+                        closing = ",)"
+            else:
+                pieces.append(repr(item))
+                continue
+            pieces.append(opening)
+            # Pushed last member first, so the first comes off the stack first.
+            pending.append((_DONE, item))
+            pending.append((_TEXT, closing))
+            for index in range(len(members) - 1, -1, -1):
+                prefix, value = members[index]
+                pending.append((_VALUE, value))
+                pending.append((_TEXT, (", " if index else "") + prefix))
+    finally:
+        _repr_running.difference_update(held)
+    return "".join(pieces)
+
+
 def convert_dict_to_namespace(v: Any) -> Any:
-    """Recursively turn dicts into ``SimpleNamespace``, so ``{{ var.attr }}``
-    works in templates."""
+    """Recursively turn dicts into `VarsNamespace`, so ``{{ var.attr }}`` and
+    ``{{ var['key'] }}`` work in templates."""
     match v:
         case dict():
-            return types.SimpleNamespace(**{key: convert_dict_to_namespace(value) for key, value in v.items()})
+            return VarsNamespace(**{key: convert_dict_to_namespace(value) for key, value in v.items()})
         case list():
             return [convert_dict_to_namespace(item) for item in v]
         case _:
@@ -322,7 +470,8 @@ def convert_namespace_items_to_dict(v: Any) -> Any:
     A sequence is whatever pydantic's lax ``list`` takes, i.e. any iterable but
     text and mappings: a template can render a tuple (``{{ tuple(combos) }}``)
     and a user function an iterator, and one this skipped would reach the
-    ``list[dict]`` it feeds with its namespaces intact."""
+    ``list[dict]`` it feeds with its namespaces intact. A `VarsNamespace`,
+    iterable over its keys, is a mapping: one object is no list of them."""
     if isinstance(v, Iterable) and not isinstance(v, (str, bytes, bytearray, Mapping)):
         return [dict(vars(item)) if isinstance(item, types.SimpleNamespace) else item for item in v]
     return v

@@ -10,6 +10,7 @@ import httpx
 import pytest
 from simpleeval import FeatureNotAvailable
 
+from pytest_httpchain.models.types import convert_dict_to_namespace
 from pytest_httpchain.templates import CALL_ONLY_BUILTINS, TEMPLATE_BUILTINS, TemplatesError, call_form, functions, substitution, walk
 from tests.unit.helpers import TOO_DEEP_TO_PARSE, on_bounded_stack
 
@@ -155,6 +156,13 @@ class TestJson:
             pytest.param("{{ json_loads(raw) }}", {"raw": b'{"a": true}'}, {"a": True}, id="loads-bytes"),
             pytest.param("{{ json_loads('null') }}", {}, None, id="loads-null"),
             pytest.param("{{ json_loads(json_dumps(payload)) }}", {"payload": SimpleNamespace(a=SimpleNamespace(b=[1]))}, {"a": {"b": [1]}}, id="round-trip"),
+            # What `vars` builds: a SimpleNamespace that is a mapping too.
+            pytest.param(
+                "{{ json_dumps(payload) }}",
+                {"payload": convert_dict_to_namespace({"Content-Type": "json", "items": [{"id": 1}]})},
+                '{"Content-Type": "json", "items": [{"id": 1}]}',
+                id="vars-namespace",
+            ),
         ],
     )
     def test_values(self, template, context, expected):
@@ -203,6 +211,14 @@ class TestUrl:
 
     def test_urlencode_takes_a_vars_object(self):
         assert walk("{{ urlencode(query) }}", {"query": SimpleNamespace(q="a b", tags=["x", "y"])}) == "q=a+b&tags=x&tags=y"
+
+    def test_urlencode_takes_a_vars_namespace(self):
+        """Keys that are no identifiers too, in the order written; a nested
+        object is refused as the object it is."""
+        query = convert_dict_to_namespace({"filter[name]": "a b", "tags": ["x", "y"]})
+        assert walk("{{ urlencode(query) }}", {"query": query}) == "filter%5Bname%5D=a+b&tags=x&tags=y"
+        with pytest.raises(TemplatesError, match=r"'filter' holds an object$"):
+            walk("{{ urlencode(query) }}", {"query": convert_dict_to_namespace({"filter": {"a": 1}})})
 
     def test_urlencode_takes_bytes_as_they_are(self):
         """Bytes from a fixture or function are percent-encoded as they are, as

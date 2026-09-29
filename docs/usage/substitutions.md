@@ -97,12 +97,88 @@ Define static values:
 }
 ```
 
-Templates read an object in `vars` with attribute access
-(`{{ object_var.nested }}`). Where a field takes a whole object, one template
-naming it stands for that object: a JSON body
-(`"json": "{{ object_var }}"`), GraphQL `variables`, `verify.body.schema`, a
-header matcher, and the `combinations` of a `parametrize` or `parallel.foreach`
-step.
+Where a field takes a whole object, one template naming it stands for that
+object: a JSON body (`"json": "{{ object_var }}"`), GraphQL `variables`,
+`verify.body.schema`, a header matcher, and the `combinations` of a
+`parametrize` or `parallel.foreach` step.
+
+### Reading objects
+
+A template reads an object in `vars`, at any depth and in lists too, by
+attribute or by key, the way it reads an object a `save` took from a response:
+
+```json
+{
+    "substitutions": [
+        {
+            "vars": {
+                "user": {"name": "Alice", "roles": ["admin"], "address": {"city": "Oslo"}},
+                "trace": {"X-Request-Id": "req-42", "_id": 7}
+            }
+        }
+    ]
+}
+```
+
+| Template | Renders |
+|----------|---------|
+| `{{ user.name }}`, `{{ user['name'] }}` | `"Alice"` |
+| `{{ user.address.city }}`, `{{ user['address']['city'] }}` | `"Oslo"` |
+| `{{ trace['X-Request-Id'] }}` | `"req-42"`: a key that is no Python name reads only by key |
+| `{{ trace['_id'] }}` | `7`: so does a key starting with `_`, which the engine never reads as an attribute |
+| `{{ 'roles' in user }}`, `{{ 'nick' not in user }}` | `true` |
+| `{{ len(user) }}` | `3` |
+| `{{ [k for k in user] }}`, `{{ list(user.keys()) }}` | `["name", "roles", "address"]`: the keys, in the order written |
+| `{{ list(user.values())[0] }}` | `"Alice"` |
+| `{{ [k + '=' + str(v) for k, v in trace.items()] }}` | `["X-Request-Id=req-42", "_id=7"]` |
+| `{{ user.get('nick', 'anon') }}`, `{{ user.get('nick') }}` | `"anon"`, `null` |
+| `{{ dict(user)['name'] }}`, `{{ {k: user[k] for k in user}['name'] }}` | `"Alice"`: both copy the top level into a dict (`dict()` not for an object with a key named `keys`, see below) |
+
+A key the object does not have fails the stage, naming it, as a missing
+attribute does:
+`Key error in expression '{{ user['nick'] }}': Key 'nick' does not exist in expression 'user['nick']'`.
+For a key that may be missing, use `get()` or `in`. An empty object (`{}`) is
+false in a condition (`or`, `and`, `... if ... else ...`, a template
+`always_run`), as an empty saved object is; test `len(obj) == 0` or
+`'key' in obj` when that is what you mean. The `response` metadata of a
+response step reads the same way (`{{ response['status'] }}`).
+
+**Keys named like the methods.** An attribute reads the object's key first, as
+it always has, so for an object with a key named `keys`, `values`, `items` or
+`get`, the attribute is that key's value: `{{ order.items }}` is the order's
+items, and `{{ order.items() }}` fails, calling that value. Every form by key
+reads the data, never a method, so use those for such an object:
+`order['items']`, `list(order)` for the keys, `[order[k] for k in order]` for
+the values, `[(k, order[k]) for k in order]` for the pairs. `dict(order)` and
+`{**order}` call `order.keys()`, so for an object with a key named `keys` they
+fail as well (`'str' object is not callable`); copy it with
+`{k: order[k] for k in order}` (the top level) or `json_loads(json_dumps(order))`
+(all the way down).
+
+The other way round, for an object without such a key, the attribute reaches
+the method only to call it (`order.items()`) or to hand it as a `key=`
+(`{{ max(scores, key=scores.get) }}`, the key with the highest value).
+Anywhere else, wherever it sits in the expression, `order.items` is the
+missing attribute it always was, so a check such as `{{ order.items != [] }}`
+or `{{ bool(order.get) }}` fails rather than pass on the method (a value that
+is always true and never equal to data):
+`Attribute error in expression '{{ order.items != [] }}': Attribute 'items' does not exist in expression 'order.items != []'; the object has no key 'items'; to call its method, write .items()`.
+To test whether the object has a key, write `'items' in order`; to read it,
+`order['items']` (a `Key error` where it is missing) or `order.get('items')`.
+
+**A saved object's keys named like its methods.** An object a `save` took from
+a response is a dict, and an attribute reads a dict's method before its key:
+for a saved `{"items": 3}`, `{{ saved.items }}` is the dict's `items` method,
+never `3`, and no error says so, with or without such a key. The same goes for
+a key named like any other dict method (`keys`, `values`, `get`, `copy`, `pop`,
+`update`, ...). For those keys the forms by key are the only safe ones on a
+saved object: `saved['items']`, `saved.get('items')`.
+
+An object from `vars` equals another with the same keys and values, but never a
+dict, such as a saved object or a `{...}` literal: compare
+`json_loads(json_dumps(user))` with it instead, or, for an object with no
+object in it, `{k: user[k] for k in user}` (`dict(user)` too, unless the object
+has a key named `keys`).
 
 ## Function Substitutions
 
@@ -424,9 +500,11 @@ it.
 
 ### List/Dict Comprehensions
 
-When `items` comes from scenario `vars`, each element is a namespace, so use
-attribute access (`item.id`). Subscript (`item['id']`) is for plain dicts coming
-from fixtures or `combinations` parameters.
+An object in a list reads by attribute (`item.id`) or by key (`item['id']`),
+whether it comes from scenario `vars`, a save or a `combinations` parameter, or
+is a dict a fixture returned (see [Reading objects](#reading-objects)). An
+object of a fixture's own type reads as that type allows: a `SimpleNamespace`
+by attribute only.
 
 ```json
 {

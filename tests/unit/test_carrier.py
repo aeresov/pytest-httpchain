@@ -911,7 +911,7 @@ class TestVerifyRenderedValueByValue:
             "5 verification checks failed:",
             "  1. Status code doesn't match: expected 201, got 200",
             "  2. JMESPath 'id' doesn't match: expected 2, got 1",
-            "  3. KeyError in expression '{{ response.headers['x-missing'] == 'a' }}': 'x-missing'",
+            "  3. Key error in expression '{{ response.headers['x-missing'] == 'a' }}': Key 'x-missing' does not exist in expression 'response.headers['x-missing'] == 'a''",
             "  4. Expression 1 failed: evaluated to False",
             "  5. Body doesn't contain 'nope'",
         ]
@@ -1128,7 +1128,7 @@ class TestVerifyRenderedValueByValue:
             pytest.param(
                 "skips",
                 {"body": {"contains": ["{{ response.headers['x-missing'] }}"]}},
-                "KeyError in expression '{{ response.headers['x-missing'] }}': 'x-missing'",
+                "Key error in expression '{{ response.headers['x-missing'] }}': Key 'x-missing' does not exist in expression 'response.headers['x-missing']'",
                 id="skip-before-template-error",
             ),
             pytest.param(

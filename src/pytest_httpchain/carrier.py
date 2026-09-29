@@ -27,7 +27,6 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, ClassVar, LiteralString, NamedTuple, TypeGuard, cast
 
 import httpx
@@ -56,6 +55,7 @@ from pytest_httpchain.models import (
     Scenario,
     Stage,
     SubstitutionsSave,
+    VarsNamespace,
     Verify,
     VerifyStep,
     validate_rendered_scenario_auth,
@@ -201,14 +201,15 @@ def _exit_failure(outcome: BaseException | None, exit_errors: list[str]) -> str:
     return "\n".join(_failure_lines(outcome, exit_errors))
 
 
-def _response_meta(response: httpx.Response) -> SimpleNamespace:
+def _response_meta(response: httpx.Response) -> VarsNamespace:
     """The ``response`` namespace response-step templates see: metadata only,
-    since ``save`` is what extracts body data."""
+    since ``save`` is what extracts body data. Read by attribute or by key,
+    as a ``vars`` object is (``response['status']``)."""
     try:
         elapsed_ms = response.elapsed.total_seconds() * 1000
     except RuntimeError:
         elapsed_ms = None
-    return SimpleNamespace(
+    return VarsNamespace(
         status=response.status_code,
         reason=response.reason_phrase,
         headers=response.headers,

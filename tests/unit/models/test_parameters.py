@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from pytest_httpchain.models.entities import CombinationsParameter, IndividualParameter, Stage
+from pytest_httpchain.models.types import convert_dict_to_namespace
 from tests.unit.models.helpers import assert_error_types, stage_dict
 
 
@@ -45,6 +46,15 @@ class TestIndividualParameter:
         from ``vars`` stays a namespace, so ``{{ user.id }}`` keeps working."""
         users = [SimpleNamespace(id=1), SimpleNamespace(id=2)]
         assert IndividualParameter(individual={"user": users}).individual == {"user": users}
+
+    def test_one_vars_object_is_no_list_of_values(self):
+        """A template rendering one object where the values go is refused, as
+        a dict is, not parametrized over the object's keys: a `vars` object
+        iterates over them, and pydantic's lax list takes any iterable but a
+        mapping."""
+        with pytest.raises(ValidationError) as exc_info:
+            IndividualParameter(individual={"user": convert_dict_to_namespace({"id": 1, "name": "a"})})
+        assert_error_types(exc_info, "list_type", at="list[any]")
 
 
 class TestCombinationsParameter:
@@ -105,10 +115,12 @@ class TestCombinationsParameter:
         param = CombinationsParameter(combinations=container([SimpleNamespace(x=1), SimpleNamespace(x=2)]))
         assert param.combinations == [{"x": 1}, {"x": 2}]
 
-    def test_mapping_is_not_a_sequence_of_combinations(self):
-        """A mapping is not iterated for its keys: it is refused as a whole."""
+    @pytest.mark.parametrize("combinations", [{"x": 1}, convert_dict_to_namespace({"x": 1})], ids=["dict", "vars-object"])
+    def test_mapping_is_not_a_sequence_of_combinations(self, combinations):
+        """A mapping is not iterated for its keys: it is refused as a whole.
+        A `vars` object, iterable over its keys, is one."""
         with pytest.raises(ValidationError) as exc_info:
-            CombinationsParameter(combinations={"x": 1})
+            CombinationsParameter(combinations=combinations)
         assert_error_types(exc_info, "list_type", at="combinations")
 
     def test_namespace_combinations_must_have_same_keys(self):

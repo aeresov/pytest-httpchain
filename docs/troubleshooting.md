@@ -149,7 +149,7 @@ failure is its message alone:
 ```
 
 A template in the step that cannot be rendered is listed in its check's place,
-in the template engine's words (`KeyError in expression '{{ response.headers['x-missing'] == 'a' }}': 'x-missing'`),
+in the template engine's words (`Key error in expression '{{ response.headers['x-missing'] == 'a' }}': Key 'x-missing' does not exist in expression ...`),
 and only that check does not run. A user function's `pytest.skip()` or
 `pytest.xfail()` does not skip a stage whose step already has such a failure,
 or a check that failed before the function ran, or a template that calls

@@ -5,9 +5,13 @@ pass through unchanged, rejected ones raise with the validator's own message.
 """
 
 import json
+import pickle
 import re
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import jsonschema
 import pytest
@@ -25,13 +29,16 @@ from pytest_httpchain.models.types import (
     SchemaFileRefStr,
     TemplateExpression,
     VariableName,
+    VarsNamespace,
     XMLString,
     check_json_schema,
+    convert_dict_to_namespace,
+    convert_namespace_items_to_dict,
     convert_namespace_to_dict,
     json_schema_validator_class,
     parse_schema_file_ref,
 )
-from tests.unit.helpers import BEYOND_RECURSION_LIMIT, nested
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, LOADABLE_BUT_DEEP, nested
 
 
 def validate(annotated_type, value):
@@ -361,3 +368,231 @@ class TestConvertNamespaceToDict:
         cyclic.append(cyclic)
         with pytest.raises(ValueError, match="contains itself"):
             convert_namespace_to_dict(cyclic)
+
+
+class TestVarsNamespace:
+    """What a `vars` object is to a template: read by attribute, as a
+    SimpleNamespace always was, and by key, as a dict saved from a response is."""
+
+    @staticmethod
+    def _user() -> Any:
+        return convert_dict_to_namespace({"name": "Alice", "Content-Type": "json", "roles": [{"id": 1}], "address": {"city": "Oslo"}})
+
+    def test_every_object_at_every_depth_is_one(self):
+        """Nested objects and objects in lists too, so a template reads
+        ``user['address']['city']`` and ``user.roles[0]['id']``."""
+        user = self._user()
+        assert type(user) is VarsNamespace
+        assert type(user["address"]) is VarsNamespace
+        assert type(user.roles[0]) is VarsNamespace
+        assert (user["address"]["city"], user.roles[0]["id"]) == ("Oslo", 1)
+
+    def test_mapping_protocol_reads_the_keys_in_their_order(self):
+        user = self._user()
+        assert user["Content-Type"] == "json"
+        assert "name" in user
+        assert "nick" not in user
+        assert len(user) == 4
+        assert list(user) == ["name", "Content-Type", "roles", "address"]
+        assert list(user.keys()) == ["name", "Content-Type", "roles", "address"]
+        assert list(user.values())[:2] == ["Alice", "json"]
+        assert list(user.items())[:2] == [("name", "Alice"), ("Content-Type", "json")]
+        assert (user.get("name"), user.get("nick"), user.get("nick", "anon")) == ("Alice", None, "anon")
+
+    def test_attribute_access_is_unchanged(self):
+        assert self._user().name == "Alice"
+
+    def test_missing_key_raises_key_error(self):
+        """The template engine names the key in its own message."""
+        with pytest.raises(KeyError, match="nick"):
+            self._user()["nick"]
+
+    def test_key_named_like_a_method_is_data(self):
+        """As an attribute the data wins, as it always did, and shadows the
+        method: ``order.items()`` calls the data. Every other form reads the
+        key, since the methods read the instance's dict, never an attribute."""
+        order = convert_dict_to_namespace({"items": [1, 2], "keys": "k", "get": "g", "values": 0})
+        assert (order.items, order.keys, order.get, order.values) == ([1, 2], "k", "g", 0)
+        assert order["items"] == [1, 2]
+        assert list(order) == ["items", "keys", "get", "values"]
+        assert len(order) == 4
+        assert "items" in order
+        with pytest.raises(TypeError, match="not callable"):
+            order.items()
+        # The class's own methods still work around the shadowing.
+        assert list(VarsNamespace.items(order)) == [("items", [1, 2]), ("keys", "k"), ("get", "g"), ("values", 0)]
+
+    def test_underscore_and_dunder_keys_are_data_only(self):
+        """A key is data: ``_id`` reads by key. The class's attributes are
+        never reached by key, whatever the key."""
+        doc = convert_dict_to_namespace({"_id": 7, "__class__": "shadow"})
+        assert doc["_id"] == 7
+        assert doc["__class__"] == "shadow"
+        assert type(doc) is VarsNamespace
+        with pytest.raises(KeyError):
+            convert_dict_to_namespace({})["__class__"]
+
+    def test_special_methods_are_the_class_s_whatever_the_keys(self):
+        """Python looks special methods up on the class, so data cannot
+        replace them."""
+        odd = convert_dict_to_namespace({"__getitem__": 1, "__len__": 2, "__iter__": 3})
+        assert (odd["__len__"], len(odd), list(odd)) == (2, 3, ["__getitem__", "__len__", "__iter__"])
+
+    def test_equality_is_a_simple_namespace_s(self):
+        """Equal to a plain SimpleNamespace of the same members, as before; a
+        dict stays unequal, as it was."""
+        user = convert_dict_to_namespace({"a": 1, "b": {"c": 2}})
+        assert user == SimpleNamespace(a=1, b=SimpleNamespace(c=2))
+        assert user == convert_dict_to_namespace({"a": 1, "b": {"c": 2}})
+        assert user != convert_dict_to_namespace({"a": 1, "b": {"c": 3}})
+        assert user != {"a": 1, "b": {"c": 2}}
+
+    @pytest.mark.parametrize(("value", "expected"), [({}, False), ({"a": 0}, True)], ids=["empty", "non-empty"])
+    def test_truth_is_a_dict_s(self, value, expected):
+        """An empty object is false, as ``{}`` saved from a response is."""
+        assert bool(convert_dict_to_namespace(value)) is expected
+
+    def test_repr_is_a_simple_namespace_s(self):
+        """Interpolated into text, an object reads as it always has."""
+        ns = convert_dict_to_namespace({"a": 1, "Content-Type": "x", "b": {"c": [1]}, "": "unnamed"})
+        assert repr(ns) == repr(SimpleNamespace(**{"a": 1, "Content-Type": "x", "b": SimpleNamespace(c=[1]), "": "unnamed"}))
+        assert str(ns) == "namespace(a=1, Content-Type='x', b=namespace(c=[1]))"
+
+    def test_repr_of_an_object_that_contains_itself(self):
+        loop = VarsNamespace(a=1)
+        loop.self = loop
+        assert repr(loop) == "namespace(a=1, self=namespace(...))"
+
+    @staticmethod
+    def _both(build: Any) -> tuple[Any, Any]:
+        """``build(namespace_type)`` for this class and for SimpleNamespace,
+        whose C repr is the text to match."""
+        return build(VarsNamespace), build(SimpleNamespace)
+
+    @staticmethod
+    def _list_cycle(ns: Any) -> Any:
+        items: list[Any] = [1]
+        obj = ns(items=items)
+        items.extend([items, obj])
+        return obj
+
+    @staticmethod
+    def _dict_cycle(ns: Any) -> Any:
+        data: dict[str, Any] = {}
+        obj = ns(data=data)
+        data.update(data=data, obj=obj)
+        return obj
+
+    @staticmethod
+    def _shared(ns: Any) -> Any:
+        shared = ns(x=1)
+        return ns(a=shared, b=shared, c=[shared, shared])
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            # A template can render any of these into an object.
+            pytest.param(lambda ns: ns(d={"k": ns(a=1), 2: (ns(),)}, one=(1,), none=(), pair=(1, "b"), nested=[[], [{}]]), id="rendered-dicts-and-tuples"),
+            pytest.param(_list_cycle, id="list-that-contains-itself"),
+            pytest.param(_dict_cycle, id="dict-that-contains-itself"),
+            # Met again, but not inside itself: written again, as the C reprs do.
+            pytest.param(_shared, id="shared-not-a-cycle"),
+            pytest.param(lambda ns: ns(**{"a": b"x", "f": 1.5, "n": None, "t": True, "s": "it's"}), id="scalars"),
+        ],
+    )
+    def test_repr_writes_the_c_repr_s_text(self, build):
+        ours, plain = self._both(build)
+        assert repr(ours) == repr(plain)
+
+    def test_repr_of_an_object_nested_hundreds_deep(self):
+        """SimpleNamespace's C repr wrote an object the loader accepts at this
+        depth; a Python repr recursing per level spent three frames on each
+        and overflowed, so a verify expression rendering one failed as a bare
+        RecursionError and text interpolating one failed the stage."""
+        loaded = convert_dict_to_namespace({"deep": nested("x", LOADABLE_BUT_DEEP)})
+
+        def build(ns: Any) -> Any:
+            value: Any = "x"
+            for level in range(LOADABLE_BUT_DEEP):
+                value = [value] if level % 2 else ns(k=value)
+            return ns(deep=value)
+
+        ours, plain = self._both(build)
+        assert repr(loaded) == repr(ours) == repr(plain)
+
+    def test_repr_far_past_the_recursion_limit(self):
+        value: Any = "x"
+        for _ in range(BEYOND_RECURSION_LIMIT):
+            value = VarsNamespace(k=[value])
+        assert repr(value).startswith("namespace(k=[namespace(k=[")
+
+    def test_repr_through_another_object_s_repr(self):
+        """An object written by its own repr that holds the namespace writing
+        it: the guard is the thread's, not the loop's."""
+
+        class Box:
+            def __init__(self, value: Any) -> None:
+                self.value = value
+
+            def __repr__(self) -> str:
+                return f"Box({self.value!r})"
+
+        obj = VarsNamespace(a=1)
+        obj.box = Box(obj)
+        assert repr(obj) == "namespace(a=1, box=Box(namespace(...)))"
+
+    def test_repr_that_raises_leaves_no_guard_behind(self):
+        """Else the object would read ``namespace(...)`` from then on."""
+
+        class Unwritable:
+            def __repr__(self) -> str:
+                raise ValueError("no repr")
+
+        obj = VarsNamespace(a=1)
+        obj.bad = Unwritable()
+        with pytest.raises(ValueError, match="no repr"):
+            repr(obj)
+        del obj.bad
+        assert repr(obj) == "namespace(a=1)"
+
+    def test_pickles_with_its_type(self):
+        """Namespaces may cross into xdist's reports or a process pool."""
+        user = self._user()
+        copy = pickle.loads(pickle.dumps(user))
+        assert copy == user
+        assert (type(copy), type(copy.address), type(copy.roles[0])) == (VarsNamespace, VarsNamespace, VarsNamespace)
+
+    def test_shared_by_threads(self):
+        """Parallel iterations read one object at once: the methods only read."""
+        user = self._user()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: (user["name"], list(user), dict(user.items())["Content-Type"]), range(64)))
+        assert results == [("Alice", ["name", "Content-Type", "roles", "address"], "json")] * 64
+
+    def test_is_a_simple_namespace_and_a_mapping(self):
+        user = self._user()
+        assert isinstance(user, SimpleNamespace)
+        assert isinstance(user, Mapping)
+        assert dict(user) == {"name": "Alice", "Content-Type": "json", "roles": user.roles, "address": user.address}
+
+    @pytest.mark.parametrize("annotated_type", [list[Any], list[str], tuple[str, ...], set[str]], ids=["list", "list-str", "tuple", "set"])
+    def test_refused_where_a_list_goes_as_a_dict_is(self, annotated_type):
+        """pydantic's lax list takes any iterable but a mapping: as a plain
+        iterable, an object rendered where a list goes (a parameter's values)
+        was taken for the list of its keys."""
+        with pytest.raises(ValidationError, match="Input should be a valid (list|tuple|set)"):
+            validate(annotated_type, self._user())
+
+    def test_taken_where_an_object_goes_as_a_dict_is(self):
+        assert validate(dict[str, Any], convert_dict_to_namespace({"a": 1})) == {"a": 1}
+
+    def test_converts_to_json_data_as_a_simple_namespace(self):
+        user = self._user()
+        assert convert_namespace_to_dict(user) == {"name": "Alice", "Content-Type": "json", "roles": [{"id": 1}], "address": {"city": "Oslo"}}
+        assert json.loads(json.dumps(convert_namespace_to_dict(user))) == convert_namespace_to_dict(user)
+
+    def test_one_object_is_not_a_sequence_of_items(self):
+        """Iterable over its keys, but a mapping: not iterated for them."""
+        user = self._user()
+        assert convert_namespace_items_to_dict(user) is user
+        assert convert_namespace_items_to_dict((user,)) == [dict(vars(user))]

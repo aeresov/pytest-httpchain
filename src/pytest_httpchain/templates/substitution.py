@@ -1,9 +1,10 @@
 import ast
+import copy
 import inspect
 import os
 import re
 from collections.abc import Callable, Mapping
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -127,12 +128,98 @@ def template_form(expr: str) -> str:
     return ("{{ " + expr + " }}").encode("utf-8", "backslashreplace").decode("utf-8")
 
 
+class _KeyDoesNotExist(InvalidExpression):
+    """A subscript's key is not in the object (or dict) it reads, as
+    simpleeval's `AttributeDoesNotExist` says of an attribute."""
+
+    def __init__(self, key: object, expression: str):
+        self.message = f"Key {key!r} does not exist in expression '{expression}'"
+        super(InvalidExpression, self).__init__(self.message)
+
+
+class _MethodNotCalled(AttributeDoesNotExist):
+    """An attribute named like a method of a ``vars`` object that has no key
+    of that name, used other than as a method is (`_takes_a_method`): the
+    missing attribute it was before the object had methods, whose message
+    adds how the method is called."""
+
+    def __init__(self, method: MethodType, expression: str):
+        name = method.__name__
+        super().__init__(name, expression)
+        call = f".{name}(...)" if _takes_arguments(method) else f".{name}()"
+        self.message = f"{self.message}; the object has no key '{name}'; to call its method, write {call}"
+        self.args = (self.message,)
+
+
+def _is_object_method(value: Any) -> bool:
+    """Whether ``value`` is a method of an object a template reads by key and
+    by attribute (a ``vars`` object: a SimpleNamespace that is a Mapping, the
+    models' `VarsNamespace`, which this package does not know by name), which
+    an attribute reaches only where the object has no key of that name. A
+    fixture object's methods are left alone."""
+    return isinstance(value, MethodType) and isinstance(value.__self__, SimpleNamespace) and isinstance(value.__self__, Mapping)
+
+
+def _takes_a_method(tree: ast.AST, attribute: ast.Attribute) -> bool:
+    """Whether ``tree`` uses ``attribute`` as a method is used: called
+    (``user.get('nick')``), or handed as a call's ``key=``
+    (``max(scores, key=scores.get)``), the one argument `scoping` takes for a
+    function wherever it is handed."""
+    return any(
+        isinstance(node, ast.Call) and (node.func is attribute or any(keyword.arg == "key" and keyword.value is attribute for keyword in node.keywords)) for node in ast.walk(tree)
+    )
+
+
+class _Evaluator(EvalWithCompoundTypes):
+    """simpleeval's evaluator, with a subscript that names a missing key and
+    an attribute that reaches a ``vars`` object's method only to call it.
+
+    simpleeval lets the KeyError of ``user['nick']`` out as it is, whose
+    message is the bare key: `_eval_expr` fails it as the attribute path fails
+    ``user.nick``. Only the lookup's own KeyError is caught, not one raised
+    while evaluating the object or the key (a user function's).
+
+    An attribute a ``vars`` object has no key for falls through to the
+    object's method of that name, if any (``order.items`` where ``order``
+    holds no ``items``). Used anywhere but called or handed as a ``key=``, it
+    is refused where it is read (`_MethodNotCalled`), not only as a
+    template's whole value: in a comparison, ``bool()`` or ``str()`` the
+    method is a value too, always true and never equal to data, so
+    ``{{ order.items != [] }}`` would pass a check that failed while the
+    object had no methods, and ``str(order.keys)`` put the whole object into
+    text. How the attribute is used is read off the tree being evaluated,
+    only when it evaluates to such a method: the common path pays nothing,
+    and nothing hangs on the order simpleeval evaluates a call's parts in."""
+
+    # The expression `eval` is evaluating. A walker's evaluator serves one
+    # thread (see `walker`), as simpleeval's own ``expr`` requires.
+    _tree: ast.AST
+
+    def eval(self, expr: str, previously_parsed: ast.AST | None = None) -> Any:
+        self._tree = previously_parsed if previously_parsed is not None else self.parse(expr)
+        return super().eval(expr, self._tree)
+
+    def _eval_attribute(self, node: ast.Attribute) -> Any:
+        value = super()._eval_attribute(node)
+        if _is_object_method(value) and not _takes_a_method(self._tree, node):
+            raise _MethodNotCalled(value, self.expr)
+        return value
+
+    def _eval_subscript(self, node: ast.Subscript) -> Any:
+        container = self._eval(node.value)
+        key = self._eval(node.slice)
+        try:
+            return container[key]
+        except KeyError:
+            raise _KeyDoesNotExist(key, self.expr) from None
+
+
 # The expression kinds the engine evaluates: those simpleeval's evaluator
 # dispatches, read off one so that they follow its version. It refuses any
 # other kind ("Sorry, Lambda is not available in this evaluator"), but only
 # once evaluation reaches it, so `parse_expression` refuses them up front.
 # (`nodes` is typed as optional: simpleeval's __del__ clears it.)
-_EVALUATED_KINDS = frozenset(EvalWithCompoundTypes().nodes or ())
+_EVALUATED_KINDS = frozenset(_Evaluator().nodes or ())
 
 # How a refusal names an expression kind the engine does not evaluate. Any
 # other (one a later Python adds) goes by its node's name.
@@ -236,7 +323,7 @@ def parse_expression(expr: str) -> ast.expr:
     return expression
 
 
-def _build_evaluator(context: Mapping[str, Any]) -> EvalWithCompoundTypes:
+def _build_evaluator(context: Mapping[str, Any]) -> _Evaluator:
     """Build one evaluator for a ``walker()``, which every ``walk()`` binds.
 
     simpleeval is meant to be built once and fed many expressions. The maps
@@ -264,7 +351,7 @@ def _build_evaluator(context: Mapping[str, Any]) -> EvalWithCompoundTypes:
     # Merge order is load-bearing: last wins, so user callables shadow the safe
     # functions while `exists`/`get` (CONTEXT_HELPERS) cannot be overridden, and
     # user names shadow the JSON literals.
-    return EvalWithCompoundTypes(
+    return _Evaluator(
         functions=SAFE_FUNCTIONS
         | DEFAULT_FUNCTIONS
         | callables
@@ -284,7 +371,7 @@ class _UncalledBuiltin(Exception):
         self.name = name
 
 
-def _eval_expr(evaluator: EvalWithCompoundTypes, expr: str, *, as_text: bool = False) -> Any:
+def _eval_expr(evaluator: _Evaluator, expr: str, *, as_text: bool = False) -> Any:
     """Evaluate one expression; every failure becomes a `TemplatesError`.
 
     ``as_text`` returns the value's ``str()`` for interpolation. That runs in
@@ -293,7 +380,9 @@ def _eval_expr(evaluator: EvalWithCompoundTypes, expr: str, *, as_text: bool = F
 
     A value that is a call-only built-in itself (``{{ now }}``, parentheses
     forgotten, or a save of that name that has not landed) is refused rather
-    than rendered as its repr (`CALL_ONLY_BUILTINS`).
+    than rendered as its repr (`CALL_ONLY_BUILTINS`). A ``vars`` object's
+    method never gets this far uncalled: the evaluator refuses it where it is
+    read (`_Evaluator`).
     """
     display = template_form(expr)
     try:
@@ -323,6 +412,8 @@ def _eval_expr(evaluator: EvalWithCompoundTypes, expr: str, *, as_text: bool = F
         raise TemplatesError(f"Unknown function in expression '{display}': {e}") from e
     except AttributeDoesNotExist as e:
         raise TemplatesError(f"Attribute error in expression '{display}': {e}") from e
+    except _KeyDoesNotExist as e:
+        raise TemplatesError(f"Key error in expression '{display}': {e}") from e
     except OperatorNotDefined as e:
         raise TemplatesError(f"Operator not allowed in expression '{display}': {e}") from e
     except (NumberTooHigh, IterableTooLong) as e:
@@ -336,7 +427,7 @@ def _eval_expr(evaluator: EvalWithCompoundTypes, expr: str, *, as_text: bool = F
         raise TemplatesError(f"{type(e).__name__} in expression '{display}': {e}") from e
 
 
-def _sub_string(line: str, evaluator: EvalWithCompoundTypes) -> Any:
+def _sub_string(line: str, evaluator: _Evaluator) -> Any:
     # A whole-string expression keeps its evaluated type; anything else is
     # interpolated into the string.
     if (expr := extract_template_expression(line)) is not None:
@@ -371,7 +462,7 @@ def contains_template(obj: Any) -> bool:
     return False
 
 
-def _walk(obj: Any, evaluator: EvalWithCompoundTypes) -> Any:
+def _walk(obj: Any, evaluator: _Evaluator) -> Any:
     match obj:
         case str():
             return _sub_string(obj, evaluator)
@@ -392,8 +483,10 @@ def _walk(obj: Any, evaluator: EvalWithCompoundTypes) -> Any:
             if not contains_template(obj):
                 return obj
             # Walked in place, not by handing vars() to the dict case: that took
-            # two frames per level of a nested ``vars`` value.
-            return SimpleNamespace(**{key: _walk(value, evaluator) for key, value in vars(obj).items()})
+            # two frames per level of a nested ``vars`` value. Rebuilt as its
+            # own type, so a ``vars`` object keeps its key access (the models'
+            # `VarsNamespace`, which this package does not know by name).
+            return copy.replace(obj, **{key: _walk(value, evaluator) for key, value in vars(obj).items()})
         case _:
             return obj
 
