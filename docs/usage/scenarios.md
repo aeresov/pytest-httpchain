@@ -235,7 +235,41 @@ A `skip` mark decides at collection, and `always_run` only counts once a stage h
 -   **The result must be a boolean**, as a verify expression's must: a template that evaluates to anything else fails the stage, `skip_if must evaluate to bool, got str from '{{ flag }}'`, rather than skip it, or run it, by truthiness, which would silently read a saved string `"false"` as true or a `null` from a missing key as false. The message names the value's type, not the value, which may be a credential (`{{ token }}`). Compare explicitly (`{{ flag == 'yes' }}`) or convert (`{{ bool(count) }}`). `true` and `false` can be written as they are: `"skip_if": true` skips the stage without even running its substitutions.
 -   **A skip is no failure**: the stage is reported skipped with the reason `skip_if: <the template>`, sends nothing, saves nothing, and the stages after it run. A context manager a factory fixture returned for its `substitutions` or `skip_if` is exited as the stage ends, as for any stage.
 
-Because the chain goes on, a later stage finds nothing that a skipped stage would have saved, or, when an earlier stage saved the same name, that stage's value: a `refresh` stage with a `skip_if` that re-saves the `token` a `login` saved leaves the login's token in place when it skips. Read a name that may be missing with `get()` and a default (`{{ get('token', 'anonymous') }}`). The validator reports a name that only stages with a `skip_if` save, read directly by a later stage, as potentially undefined (`HTTPCHAIN003`), in whichever of the later stage's fields reads it. A stage that never skips (no `skip_if`, or `skip_if: false`) saving the same name too, or a fixture or substitution of that name where it is read, settles it. The validator does not evaluate conditions, so a stage that itself skips unless the name is there (`"skip_if": "{{ not exists('token') }}"`) is reported all the same: read the name with `get()` there too. The saves of a stage that may *fail* count as there: a failure aborts the chain, and a stage after it runs only with `always_run`, which is why the `always_run` example above guards with `exists()`. `skip_if` references themselves are checked against the scope above (`HTTPCHAIN003`/`HTTPCHAIN004`).
+Because the chain goes on, a later stage finds nothing that a skipped stage would have saved, or, when an earlier stage saved the same name, that stage's value: a `refresh` stage with a `skip_if` that re-saves the `token` a `login` saved leaves the login's token in place when it skips. Read a name that may be missing with `get()` and a default (`{{ get('token', 'anonymous') }}`). The validator reports a name that only stages with a `skip_if` save, read directly by a later stage, as potentially undefined (`HTTPCHAIN003`), in whichever of the later stage's fields reads it. The same goes for a stage that one of its own [marks](#stages-a-mark-may-skip) may skip. A stage that never skips (no `skip_if`, or `skip_if: false`, and no such mark) saving the same name too, or a fixture or substitution of that name where it is read, settles it. The validator does not evaluate conditions, so a stage that itself skips unless the name is there (`"skip_if": "{{ not exists('token') }}"`) is reported all the same: read the name with `get()` there too. The saves of a stage that may *fail* count as there: a failure aborts the chain, and a stage after it runs only with `always_run`, which is why the `always_run` example above guards with `exists()`. `skip_if` references themselves are checked against the scope above (`HTTPCHAIN003`/`HTTPCHAIN004`).
+
+### Stages a mark may skip
+
+A stage's own `skip`, `skipif` or `xfail` mark (see [Markers](#markers)) leaves the stages after it in the same place as a `skip_if` skip. pytest reports the stage skipped or xfailed, the chain goes on, and the stage commits no saves: an expected failure discards them, as any failure does. So a later stage that reads one of those saves directly fails with an undefined name, and the validator reports it as `HTTPCHAIN003`, naming the mark:
+
+```json
+{
+    "stages": [
+        {
+            "name": "login",
+            "marks": ["skip(reason='not deployed yet')"],
+            "request": {"url": "https://api.example.com/login", "method": "POST"},
+            "response": [{"save": {"jmespath": {"token": "token"}}}]
+        },
+        {
+            "name": "profile",
+            "request": {"url": "https://api.example.com/me", "headers": {"Authorization": "Bearer {{ token }}"}}
+        }
+    ]
+}
+```
+
+The validator reads a mark as pytest does:
+
+| Mark | The stage's saves |
+| --- | --- |
+| `skip` | Never made: pytest never calls the stage. |
+| `skipif(...)` | Never made when a condition is true, or when there is none. A string condition is an expression pytest evaluates at run time, so the stage may skip. A false condition (`skipif(False, reason='...')`) never skips it. |
+| `xfail(...)` | Discarded when the stage fails as expected. `xfail(run=False)` never runs the stage. Conditions work as for `skipif`. |
+
+As with `skip_if`, it is not reported when a stage that never skips saves the same name too, when a fixture or substitution of that name is in scope where it is read, or when the value is read with `get()`. Two more cases are not reported either:
+
+-   **The reading stage has a mark that skips it too.** pytest never calls that stage, so it reads nothing. A reader that only *may* skip, or one with an `xfail` that runs it, is still reported.
+-   **The mark is scenario-level.** Scenario `marks` apply to every stage, so they skip or xfail the reading stage along with the stage that saves the value.
 
 ### The shared HTTP client
 
@@ -426,6 +460,9 @@ Supported marker formats:
     `usefixtures` only runs the fixture (for its side effects/setup); it does **not**
     make the fixture's value available to `{{ }}` templates. To use a fixture value
     in templates, list it in the stage or scenario [`fixtures`](#fixtures) array.
+
+A stage that its own `skip`, `skipif` or `xfail` mark skips does not stop the
+chain, but it saves nothing: see [Stages a mark may skip](#stages-a-mark-may-skip).
 
 An `xdist_group` marker goes in the scenario's `marks`, never a stage's: see
 [pytest-xdist](../advanced/parallel.md#running-scenarios-in-parallel-with-pytest-xdist).

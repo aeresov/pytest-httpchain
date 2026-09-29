@@ -554,6 +554,19 @@ DIAGNOSED = [
             )
         ],
     ),
+    # So does a stage its own skip, skipif or xfail mark skips: pytest reports
+    # it skipped, which leaves the chain going.
+    (
+        "skip_mark_skippable_save.json",
+        [
+            (
+                C.UNDEFINED_VAR,
+                "stages[1].request",
+                r"^Stage 'profile': request references 'token', which only stage 'login' saves, and it has the mark \"skip\(reason='login is not "
+                r"deployed yet'\)\": when it skips, 'token' is undefined here — read it with get\('token', <default>\)$",
+            )
+        ],
+    ),
     # Template parametrize VALUES resolve at collection against scenario
     # substitutions only: an info that affects neither validity nor warnings,
     # plus an undefined-variable warning for a stage-scope name.

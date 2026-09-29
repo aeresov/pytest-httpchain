@@ -216,7 +216,7 @@ def _load_for_inspection(path: Path, depth: int, root_path: Path | None = None) 
 
 def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[str]:
     # Listed nearest first: a name has several producers when the nearer ones
-    # have a skip_if (analyze_dataflow), each read only when the nearer skipped.
+    # may skip (analyze_dataflow), each read only when the nearer skipped.
     producers_of: dict[tuple[int, str], list[int]] = {}
     for edge in flow.edges:
         for var_name in edge.vars:
@@ -285,9 +285,9 @@ def _to_mermaid(flow: DataFlow, direction: str = "TD") -> str:
         label = f"{s.index + 1} · {s.name}" if s.name else f"{s.index + 1}"
         lines.append(f'    S{s.index}["{_mermaid_label(label)}"]')
     for edge in flow.edges:
-        # Dotted from a stage that may skip (skip_if): the values may come from
-        # an earlier producer instead (its own edge), or never.
-        arrow = "-->" if flow.stages[edge.producer].skip_if is False else "-.->"
+        # Dotted from a stage that may skip (skip_if, or a skip or xfail mark):
+        # the values may come from an earlier producer instead (its own edge), or never.
+        arrow = "-.->" if flow.stages[edge.producer].may_skip else "-->"
         lines.append(f"    S{edge.producer} {arrow}|{', '.join(edge.vars)}| S{edge.consumer}")
     return "\n".join(lines)
 

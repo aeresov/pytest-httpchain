@@ -171,6 +171,13 @@ def test_stage_that_may_skip_is_marked():
     assert _edges(flow) == [{"producer": 0, "consumer": 2, "vars": ["x"]}]
 
 
+def test_may_skip_covers_skip_if_and_the_stages_own_marks():
+    """Not the scenario's marks: they skip the reader along with the writer."""
+    stages = [_stage("a", skip_if="{{ flag }}"), _stage("b", marks=["xfail"]), _stage("c", marks=["slow"]), _stage("d")]
+    flow = analyze_dataflow(*_scenario(stages, marks=["skip"]))
+    assert [stage.may_skip for stage in flow.stages] == [True, True, False, False]
+
+
 def _maybe(name: str, **saves: str) -> dict:
     """A producer with a skip_if: it may skip, the chain going on without its saves."""
     return {**_producer(name, **saves), "skip_if": "{{ flag }}"}
@@ -191,6 +198,11 @@ def _maybe(name: str, **saves: str) -> dict:
         pytest.param([_maybe("a", x="v"), _producer("b", x="v")], [1], id="skippable-then-unconditional"),
         # `skip_if: false` never skips.
         pytest.param([_producer("a", x="v"), {**_producer("b", x="v"), "skip_if": False}], [1], id="skip-if-false"),
+        # A stage's own skip or xfail mark leaves the chain going as a skip_if skip does.
+        pytest.param([_producer("login", x="v"), {**_producer("refresh", x="v"), "marks": ["skip"]}], [0, 1], id="skip-mark"),
+        pytest.param([_producer("login", x="v"), {**_producer("refresh", x="v"), "marks": ["xfail"]}], [0, 1], id="xfail-mark"),
+        # A mark whose condition is false never skips.
+        pytest.param([_producer("a", x="v"), {**_producer("b", x="v"), "marks": ["skipif(False, reason='on')"]}], [1], id="inactive-mark"),
     ],
 )
 def test_a_name_whose_last_writer_may_skip_comes_from_the_writers_before(writers, producers):

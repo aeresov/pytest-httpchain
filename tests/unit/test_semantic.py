@@ -559,7 +559,7 @@ def test_name_only_a_stage_that_may_skip_saves_is_potentially_undefined(reader, 
         # Absent only when both skipped.
         pytest.param(
             [_saving("a", "token", skip_if="{{ flag }}"), _saving("b", "token", skip_if=True), {**_STAGE, "request": {"url": READ_TOKEN}}],
-            "which only stages 'a', 'b' save, and each has skip_if: when they all skip, 'token' is undefined here",
+            "which only stages 'a' (skip_if), 'b' (skip_if) save: when none of them saves it, 'token' is undefined here",
             id="several-stages-that-may-skip",
         ),
         # A stage that never skips saves it too, before or after the one that may.
@@ -598,6 +598,68 @@ def test_builtin_named_save_of_a_stage_that_may_skip_says_what_is_read_instead()
         "— read it with get('timestamp', <default>); where no definition of 'timestamp' is in scope, the name is the template built-in function, "
         "not a value, and a template that renders to it fails the stage"
     ]
+
+
+@pytest.mark.parametrize(
+    ("mark", "cause"),
+    [
+        pytest.param("skip", "it has the mark 'skip': when it skips", id="skip"),
+        pytest.param("skipif('sys.version_info < (3, 99)')", "it has the mark \"skipif('sys.version_info < (3, 99)')\": when it skips", id="skipif"),
+        pytest.param("xfail", "it has the mark 'xfail': when it fails as expected", id="xfail"),
+    ],
+)
+def test_name_only_a_stage_a_mark_may_skip_saves_is_potentially_undefined(mark, cause):
+    """pytest reports a stage its own skip, skipif or xfail mark skips (or
+    expects to fail) as skipped, which leaves the chain going, as a skip_if
+    skip does; the message names the mark."""
+    diags = _check([_saving("login", "token", marks=[mark]), {**_STAGE, "name": "use", "request": {"url": READ_TOKEN}}])
+    assert [(d.code, d.location, d.message) for d in diags] == [
+        (
+            C.UNDEFINED_VAR,
+            "stages[1].request",
+            f"Stage 'use': request references 'token', which only stage 'login' saves, and {cause}, 'token' is undefined here — read it with get('token', <default>)",
+        )
+    ]
+
+
+def test_every_saver_is_named_with_its_cause():
+    stages = [_saving("a", "token", skip_if="{{ flag }}"), _saving("b", "token", marks=["xfail"]), {**_STAGE, "request": {"url": READ_TOKEN}}]
+    [message] = [d.message for d in _check(stages, substitutions=[{"vars": {"flag": True}}]) if d.code == C.UNDEFINED_VAR]
+    assert "which only stages 'a' (skip_if), 'b' (the mark 'xfail') save: when none of them saves it, 'token' is undefined here" in message
+
+
+@pytest.mark.parametrize(
+    ("reader", "flagged"),
+    [
+        # pytest never calls a stage its own mark skips, so it reads nothing.
+        pytest.param({"marks": ["skip"]}, False, id="reader-a-mark-skips"),
+        pytest.param({"marks": ["xfail(run=False)"]}, False, id="reader-an-xfail-never-runs"),
+        # One a mark only may skip may run; an xfail one runs.
+        pytest.param({"marks": ["skipif('sys.version_info < (3, 99)')"]}, True, id="reader-a-mark-may-skip"),
+        pytest.param({"marks": ["xfail"]}, True, id="reader-xfail"),
+        # skip_if: true is checked after always_run, which an aborted chain reads.
+        pytest.param({"skip_if": True}, True, id="reader-skip-if-true"),
+    ],
+)
+def test_reader_that_may_skip_itself(reader, flagged):
+    stages = [_saving("login", "token", marks=["skip"]), {**_STAGE, "request": {"url": READ_TOKEN}, **reader}]
+    assert any(d.code == C.UNDEFINED_VAR for d in _check(stages)) is flagged
+
+
+@pytest.mark.parametrize(
+    ("stages", "marks"),
+    [
+        pytest.param([_saving("a", "token", marks=["skipif(False, reason='on')"]), {**_STAGE, "request": {"url": READ_TOKEN}}], [], id="inactive-mark"),
+        pytest.param([_saving("a", "token", marks=["slow"]), {**_STAGE, "request": {"url": READ_TOKEN}}], [], id="unrelated-mark"),
+        # A stage no mark or skip_if may skip saves it too.
+        pytest.param([_saving("a", "token", marks=["skip"]), _saving("b", "token"), {**_STAGE, "request": {"url": READ_TOKEN}}], [], id="saved-for-sure-after"),
+        # Scenario-level marks skip (or xfail) the reader along with the saver.
+        pytest.param([_saving("a", "token"), {**_STAGE, "request": {"url": READ_TOKEN}}], ["skip"], id="scenario-skip"),
+        pytest.param([_saving("a", "token"), {**_STAGE, "request": {"url": READ_TOKEN}}], ["xfail"], id="scenario-xfail"),
+    ],
+)
+def test_marks_that_cannot_leave_a_reader_without_the_save(stages, marks):
+    assert [d.message for d in _check(stages, marks=marks) if d.code == C.UNDEFINED_VAR] == []
 
 
 def test_uncalled_builtin_in_skip_if_is_reported_there():

@@ -31,8 +31,8 @@ def _consumed(refs: set[str], earlier_saves: frozenset[str], shadows: frozenset[
 class DataFlowEdge(BaseModel):
     """A data dependency: ``vars`` saved by stage ``producer`` are referenced by
     stage ``consumer``. A name has more than one producer when its last writer
-    before the consumer has a ``skip_if``: one edge from each writer back to the
-    nearest that never skips (`analyze_dataflow`)."""
+    before the consumer may skip: one edge from each writer back to the nearest
+    that never skips (`analyze_dataflow`)."""
 
     producer: int
     consumer: int
@@ -40,9 +40,12 @@ class DataFlowEdge(BaseModel):
 
 
 class StageFlow(BaseModel):
-    """Per-stage data-flow summary. ``skip_if`` is the stage's as declared:
-    unless it is ``false``, the stage may skip, and a later stage then reads
-    the value an earlier stage saved under the same name, or finds none."""
+    """Per-stage data-flow summary. ``skip_if`` is the stage's as declared.
+    ``may_skip`` says whether the stage may end without its saves while the
+    chain goes on: a ``skip_if`` other than ``false``, or a ``skip``,
+    ``skipif`` or ``xfail`` mark of its own (`scoping.SkipCause`). A later
+    stage then reads the value an earlier stage saved under the same name, or
+    finds none."""
 
     index: int
     name: str
@@ -51,6 +54,7 @@ class StageFlow(BaseModel):
     fixtures: list[str]
     marks: list[str]
     skip_if: bool | str
+    may_skip: bool
     saves: list[str]
     consumes: list[str]
 
@@ -67,13 +71,13 @@ class DataFlow(BaseModel):
 def _producers(writers: list[int], stages: list[StageFlow]) -> list[int]:
     """The stages a consumer may read a name from, given its earlier writers in
     stage order: the last writer, as a later save shadows an earlier one — and
-    while that writer has a ``skip_if``, the writer before it too, since a
-    skipped stage leaves the chain running on the earlier value. The walk stops
-    at the nearest writer that never skips; nearest first."""
+    while that writer may skip, the writer before it too, since a skipped
+    stage leaves the chain running on the earlier value. The walk stops at the
+    nearest writer that never skips; nearest first."""
     producers: list[int] = []
     for index in reversed(writers):
         producers.append(index)
-        if stages[index].skip_if is False:
+        if not stages[index].may_skip:
             break
     return producers
 
@@ -89,10 +93,10 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     never saved values.
 
     A consumed name comes from its last writer before the consumer. When that
-    writer has a ``skip_if`` it may have skipped with the chain going on, and
-    the consumer then reads the writer before it: so the edges run from each
-    writer back to, and including, the nearest one that never skips — ``graph``
-    draws those from a stage with a ``skip_if`` dotted.
+    writer may skip (a ``skip_if``, or a skip or xfail mark) it may have skipped
+    with the chain going on, and the consumer then reads the writer before it:
+    so the edges run from each writer back to, and including, the nearest one
+    that never skips — ``graph`` draws those from a stage that may skip dotted.
     """
     raws = raw_stages(test_data)
     scopes = stage_scopes(scenario)
@@ -153,6 +157,7 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
                 fixtures=sorted(stage.fixtures),
                 marks=list(stage.marks),
                 skip_if=stage.skip_if,
+                may_skip=scope.skip_cause is not None,
                 saves=sorted(scope.saves),
                 consumes=sorted(consumes),
             )

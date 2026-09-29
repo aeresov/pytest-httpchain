@@ -12,6 +12,7 @@ from pytest_httpchain.scoping import TEMPLATE_BUILTINS as SCOPING_BUILTINS
 from pytest_httpchain.scoping import (
     DefinedNames,
     NameUnion,
+    SkipCause,
     base_global_context,
     defined_names,
     extract_builtin_stand_ins,
@@ -19,6 +20,7 @@ from pytest_httpchain.scoping import (
     extract_template_variables,
     extract_uncalled_builtins,
     iteration_context,
+    mark_skip_cause,
     response_step_context,
     response_step_templates,
     saved_in_response,
@@ -153,6 +155,53 @@ class TestStageScopes:
         assert last.request - last.when_skipped.request == {"token", "gone"}
         assert last.when_skipped.skippable_saves == set()
 
+    def test_a_stage_mark_that_may_skip_makes_its_saves_skippable(self):
+        """A skipped or xfailed stage is reported skipped, which leaves the
+        chain going, just as a skip_if skip does."""
+
+        def saving(name: str, marks: list[str]) -> dict:
+            return {"name": name, "marks": marks, "request": {"url": "http://server/"}, "response": [{"save": {"jmespath": {"token": "a"}}}]}
+
+        scopes = stage_scopes(
+            Scenario.model_validate(
+                {
+                    "stages": [
+                        saving("marked", ["skip"]),
+                        saving("expected_failure", ["xfail"]),
+                        saving("inactive", ["skipif(False, reason='never')"]),
+                        saving("last", []),
+                    ]
+                }
+            )
+        )
+        assert [scope.skippable_saves for scope in scopes] == [set(), {"token"}, {"token"}, set()]
+        assert [scope.skip_cause for scope in scopes] == [
+            SkipCause(mark="skip", never_called=True),
+            SkipCause(mark="xfail", fails_as_expected=True),
+            None,
+            None,
+        ]
+
+    @pytest.mark.parametrize(
+        ("fields", "expected"),
+        [
+            # One pytest never calls first: it reads nothing.
+            pytest.param({"skip_if": "{{ flag }}", "marks": ["xfail", "skip"]}, SkipCause(mark="skip", never_called=True), id="never-called-first"),
+            pytest.param({"skip_if": "{{ flag }}", "marks": ["xfail"]}, SkipCause(mark=None), id="then-skip-if"),
+            pytest.param({"marks": ["slow", "xfail", "skipif('sys.version_info < (3, 99)')"]}, SkipCause(mark="xfail", fails_as_expected=True), id="then-first-mark"),
+        ],
+    )
+    def test_skip_cause_of_a_stage_with_several(self, fields, expected):
+        stage = {"name": "s", "request": {"url": "http://server/"}, **fields}
+        assert stage_scopes(Scenario.model_validate({"stages": [stage]}))[0].skip_cause == expected
+
+    def test_scenario_marks_are_no_skip_cause(self):
+        """They apply to the stage that reads a save as much as to the one that
+        saves it, so they cannot skip one and not the other."""
+        stage = {"name": "s", "request": {"url": "http://server/"}, "response": [{"save": {"jmespath": {"token": "a"}}}]}
+        scopes = stage_scopes(Scenario.model_validate({"marks": ["skip"], "stages": [stage, {**stage, "name": "t"}]}))
+        assert [(scope.skip_cause, scope.skippable_saves) for scope in scopes] == [(None, frozenset())] * 2
+
     def test_stats_as_is_a_save_no_phase_of_its_stage_sees(self):
         """A stage's stats exist once every iteration has ended: the stages
         after it read them, none of its own response steps does, even after
@@ -242,6 +291,39 @@ class TestContextBuilders:
         base = {"svar": 1}
         context = with_saves(with_saves(base_global_context(base), {"a": 1}), {"b": 2})
         assert context.maps[-1] == base
+
+
+@pytest.mark.parametrize(
+    ("mark", "expected"),
+    [
+        pytest.param("skip", SkipCause(mark="skip", never_called=True), id="skip"),
+        pytest.param("skip(reason='wip')", SkipCause(mark="skip(reason='wip')", never_called=True), id="skip-with-reason"),
+        pytest.param("skipif(True, reason='off')", SkipCause(mark="skipif(True, reason='off')", never_called=True), id="skipif-true"),
+        # No condition at all is unconditional, as in pytest's skipping plugin.
+        pytest.param("skipif(reason='off')", SkipCause(mark="skipif(reason='off')", never_called=True), id="skipif-no-condition"),
+        # pytest applies the mark when ANY condition is true.
+        pytest.param("skipif(False, 1, reason='off')", SkipCause(mark="skipif(False, 1, reason='off')", never_called=True), id="skipif-any-true"),
+        # A string condition is an expression pytest evaluates at run time...
+        pytest.param("skipif('sys.version_info < (3, 99)')", SkipCause(mark="skipif('sys.version_info < (3, 99)')"), id="skipif-string"),
+        # ... unless it is a literal, which evaluates the same here.
+        pytest.param("skipif('True', reason='off')", SkipCause(mark="skipif('True', reason='off')", never_called=True), id="skipif-literal-string"),
+        pytest.param("skipif('False', reason='on')", None, id="skipif-false-literal-string"),
+        pytest.param("skipif(False, reason='on')", None, id="skipif-false"),
+        pytest.param("skipif(condition=0, reason='on')", None, id="skipif-falsy-kwarg"),
+        # An xfail runs the stage, and an expected failure discards its saves.
+        pytest.param("xfail", SkipCause(mark="xfail", fails_as_expected=True), id="xfail"),
+        pytest.param("xfail('sys.version_info < (3, 99)')", SkipCause(mark="xfail('sys.version_info < (3, 99)')", fails_as_expected=True), id="xfail-string"),
+        pytest.param("xfail(run=False)", SkipCause(mark="xfail(run=False)", never_called=True), id="xfail-not-run"),
+        pytest.param("xfail(condition=False, reason='on')", None, id="xfail-false"),
+        pytest.param("slow", None, id="unrelated"),
+        # A mark that does not parse is HTTPCHAIN019's to report.
+        pytest.param("skip(", None, id="unparseable"),
+    ],
+)
+def test_mark_skip_cause(mark, expected):
+    """Which stage marks leave a stage reported skipped, the chain going and
+    its saves missing, read as pytest's skipping plugin reads them."""
+    assert mark_skip_cause(mark) == expected
 
 
 @pytest.mark.parametrize(

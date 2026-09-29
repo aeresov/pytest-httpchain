@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A stage's own `skip`, `skipif` or `xfail` mark now counts as a way it may skip, as a `skip_if`
+  does. pytest reports such a stage skipped or xfailed, which does not stop the chain, but the
+  stage commits no saves: a later stage that read one of them failed at run time with an
+  undefined name, and `validate` reported nothing. It now reports HTTPCHAIN003 there, naming the
+  mark (`it has the mark 'skip': when it skips`, `it has the mark 'xfail': when it fails as
+  expected`). A `skipif` or `xfail` counts when a condition is true or may be at run time (a
+  string condition). Scenario-level marks do not count: they skip the reading stage too. A stage
+  that its own mark keeps pytest from ever calling reads nothing and is not reported. With
+  several stages saving a name, the message now names each with its cause, e.g.
+  `which only stages 'a' (skip_if), 'b' (the mark 'xfail') save`. `show` lists every stage a
+  name may come from past such a stage, `graph` draws its edges dotted, and `show --format json`
+  gives each stage a `may_skip`.
+
 ## [0.16.1] - 2026-09-30
 
 ### Fixed
