@@ -16,7 +16,7 @@ passed through here: it stays strict JSON.
 
 import json
 import re
-from typing import Any
+from typing import Any, NoReturn
 
 # JSON's whitespace, and nothing else: Python's \s would take a no-break space
 # the JSON parser refuses as whitespace.
@@ -112,8 +112,30 @@ def strip_jsonc(text: str) -> str:
     return "".join(parts)
 
 
+# A string, whole, or one of the words ``json.loads`` reads as a number JSON
+# cannot write. The words are found only outside strings, so the first match
+# with a ``constant`` is where the parser met it.
+_CONSTANT = re.compile(r'"[^"\\]*+(?:\\.[^"\\]*+)*+"|(?P<constant>-?Infinity|NaN)')
+
+
+class _NotJSON(Exception):
+    """A word the parser read that is no JSON, raised out of it."""
+
+
+def _refuse_constant(word: str) -> NoReturn:
+    raise _NotJSON(word)
+
+
 def loads_jsonc(text: str, **kwargs: Any) -> Any:
     """``json.loads`` of JSONC text (`strip_jsonc`), with ``json.loads``' keyword
     arguments. Raises `json.JSONDecodeError` as ``json.loads`` does, for an
-    unterminated comment too."""
-    return json.loads(strip_jsonc(text), **kwargs)
+    unterminated comment too, and for ``NaN``, ``Infinity`` and
+    ``-Infinity``, which ``json.loads`` reads as numbers though they are no
+    JSON: a file holding one is not a JSON file, and ``resolve``, which
+    prints strict JSON, would print it."""
+    stripped = strip_jsonc(text)
+    try:
+        return json.loads(stripped, parse_constant=_refuse_constant, **kwargs)
+    except _NotJSON as e:
+        position = next(match.start("constant") for match in _CONSTANT.finditer(stripped) if match["constant"])
+        raise json.JSONDecodeError(f"{e.args[0]} is not valid JSON", stripped, position) from None

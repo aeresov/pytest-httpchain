@@ -1260,6 +1260,9 @@ class TestFileContent:
             # A comment never closed, at its opening: line 3 of the file it is in.
             pytest.param(b'{\n  "a": 1,\n  /* never closed\n', C.INVALID_JSON, "Invalid JSON syntax{in_file}: Unterminated comment: line 3 column 3 (char 14)", id="syntax"),
             pytest.param(b'{"a": ' + TOO_DEEP_TO_PARSE + b"}", C.PARSE_ERROR, "Failed to parse JSON file{file}: nested too deeply (", id="too-deep"),
+            # A word json.loads reads as a number, though JSON has no such
+            # number: the file is no JSON file.
+            pytest.param(b'{\n  "timeout": NaN\n}', C.INVALID_JSON, "Invalid JSON syntax{in_file}: NaN is not valid JSON: line 2 column 14 (char 15)", id="nan"),
         ],
     )
     def test_error_in_an_included_file_names_it(self, tmp_path, include, content, code, message):

@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raw `TypeError` or `OverflowError` traceback. It reads as a `verify.jmespath` entry's does, and so
   does a save whose function is given the wrong type: `Error saving variable n: length() needs
   string or array or object, got 5 (number)`, where it quoted jmespath's message.
+- `NaN`, `Infinity` and `-Infinity` in a scenario, a file it `$include`s, `$merge`s or `$ref`s, or
+  a body schema file are syntax errors (`HTTPCHAIN014` at load, `HTTPCHAIN021` for a schema file
+  under `validate --deep`), at their line and column: `NaN is not valid JSON: line 2 column 14`.
+  Python's JSON parser reads them as numbers though JSON has none, so such a file passed
+  `validate`, and `resolve`, documented to print strict JSON, printed them.
 
 ## [0.16.0] - 2026-09-29
 

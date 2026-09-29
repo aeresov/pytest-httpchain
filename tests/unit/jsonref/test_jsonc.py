@@ -105,6 +105,11 @@ def test_strict_json_is_left_as_it_is(text):
         # An error after a comment is at its place in the text as written.
         pytest.param('/* one\n   two */ // three\n{"a": }', "Expecting value", (3, 7), id="error-after-comments"),
         pytest.param('// one\r\n{"a": 1,\r\n "b": ]}', "Expecting value", (3, 7), id="error-after-crlf-comment"),
+        # Words json.loads reads as numbers, which JSON has none of: at the
+        # first outside a string, as written, a comment's included.
+        pytest.param('{"a": NaN}', "NaN is not valid JSON", (1, 7), id="nan"),
+        pytest.param("[1,\n -Infinity]", "-Infinity is not valid JSON", (2, 2), id="negative-infinity"),
+        pytest.param('{"s": "NaN \\" Infinity", /* NaN */ "b": Infinity}', "Infinity is not valid JSON", (1, 41), id="infinity-after-strings-and-comments"),
     ],
 )
 def test_refused_at_its_position(text, message, position):

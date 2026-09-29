@@ -60,6 +60,10 @@ when a value is before it (the last significant character is not `[`, `{`, `,`
 or `:`): a leading or doubled comma is left for `json.loads` to refuse, at its
 position. A `/*` never closed raises `JSONDecodeError("Unterminated comment")`
 at its opening, a syntax error like any other; a lone `/` is left in place.
+`loads_jsonc` refuses `NaN`, `Infinity` and `-Infinity`, which `json.loads`
+reads as numbers, with a `JSONDecodeError` at the first one outside a string
+(`_CONSTANT`), so a file holding one is no more valid here than in any strict
+JSON parser, and `resolve` never prints one.
 Text with no `/` and no `,` before a closing bracket (whitespace between) is
 returned unchanged without the scan. Strictly valid JSON is never changed,
 which is why there is no opt-in. What arrives over HTTP never comes here: a
