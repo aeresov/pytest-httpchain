@@ -211,7 +211,10 @@ exhaustive = true
 layers = [
     "plugin : cli",
     "factory",
-    "carrier : dataflow : schema",
+    # importers is the cli's `import` command, beside carrier and independent
+    # of it: it builds on validation, templates and redaction, and nothing on
+    # a lower layer, the domain packages included, may import it.
+    "carrier : dataflow : schema : importers",
     "validation : har_writer : report_formatter : request_builder : response_steps : parallel_stats",
     "body_schema",
     "utils : scoping : redaction",

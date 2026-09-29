@@ -70,6 +70,10 @@ A scenario's `client` block sets up the HTTP client all its stages share, once: 
 
 Basic, digest and bearer authentication are built in, for the whole scenario or one request: `"auth": {"bearer": "{{ token }}"}` sends the token a login stage saved. `"auth": false` exempts a public endpoint, and a Python function covers any other scheme.
 
+### Import recorded traffic
+
+Start from traffic you already have: `pytest-httpchain import har session.har` turns a browser's HAR export into a scenario, a stage per request, and `pytest-httpchain import curl '...'` does the same for curl commands from an API's docs or a failing stage's report. It sets the base URL, maps query strings, JSON, form and multipart bodies and Basic or Bearer credentials into the dialect, leaves out the transport headers and static assets, and writes no secret: tokens, passwords and cookies become placeholders read from environment variables. What it writes passes `validate`.
+
 ### Full pytest integration
 
 Markers, fixtures, parametrization, and other plugins work as expected. You're not locked into a separate ecosystem.

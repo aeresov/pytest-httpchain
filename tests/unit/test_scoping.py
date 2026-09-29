@@ -11,6 +11,7 @@ from pytest_httpchain.models import Scenario
 from pytest_httpchain.scoping import TEMPLATE_BUILTINS as SCOPING_BUILTINS
 from pytest_httpchain.scoping import (
     DefinedNames,
+    NameUnion,
     base_global_context,
     defined_names,
     extract_builtin_stand_ins,
@@ -90,6 +91,39 @@ class TestStageScopes:
 
     def test_empty_scenario(self):
         assert stage_scopes(Scenario.model_validate({"stages": []})) == []
+
+    def test_phases_are_the_properties_uncopied(self):
+        """`phases` gives every phase at once as `NameUnion`s of the
+        ingredients, the same names the properties give as frozensets (the
+        validator's checks ask for all of them, stage by stage, and a
+        frozenset union copied a scenario's thousands of vars each time)."""
+        for scope in stage_scopes(make_scenario()):
+            phases = scope.phases()
+            assert (set(phases.always_run), set(phases.pre_iteration), set(phases.request), set(phases.response)) == (
+                scope.always_run,
+                scope.pre_iteration,
+                scope.request,
+                scope.response,
+            )
+            # Nothing skippable: the scope is its own when_skipped.
+            assert scope.when_skipped is scope
+
+    def test_name_union(self):
+        """Membership asks each part; ``|`` adds one, uncopied; any other set
+        operation gives a frozenset."""
+        union = NameUnion(frozenset({"a", "b"}), frozenset({"b", "c"}))
+        assert "c" in union
+        assert "d" not in union
+        assert sorted(union) == ["a", "b", "c"]
+        assert len(union) == 3
+        wider = union | {"d"}
+        assert isinstance(wider, NameUnion)
+        assert "d" in wider
+        assert "d" not in union
+        assert {"a", "x"} - union == {"x"}
+        assert union - {"a"} == frozenset({"b", "c"})
+        assert union & {"a", "z"} == frozenset({"a"})
+        assert union == {"a", "b", "c"}
 
     def test_names_only_stages_that_may_skip_save_are_skippable(self):
         """A skipped stage saves nothing and the chain goes on, so a name only

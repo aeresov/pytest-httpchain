@@ -123,3 +123,40 @@ def unescape(value: str) -> str:
     will use it (`types.as_rendered`), and for ``validate --deep``, which
     looks for the file a path renders to."""
     return _TOKENS.sub(lambda match: match.group(0) if match.group("expr") is not None else _rendered_escape(match), value)
+
+
+# A `{{` and the run of backslashes right before it, the only text rendering
+# rewrites outside a template.
+_BRACES = re.compile(r"(\\*)\{\{")
+# A template rendering to the braces themselves, which ends where it is written.
+_LITERAL_BRACES = "{{ '{{' }}"
+
+
+def escape(text: str, *, closed: bool = False) -> str:
+    """The scenario text that renders to ``text``, which holds no template
+    then: each ``{{`` escaped, the backslashes right before it doubled
+    (``\\{{`` is written ``\\\\\\{{``). The inverse of `unescape`, for a
+    tool writing values it did not author into a scenario (``import``): a
+    request body holding a Handlebars ``{{name}}`` is sent as recorded.
+
+    An escape covers the text after its braces up to the first ``}}`` on its
+    line, so text with a ``{{`` that no ``}}`` follows on its line would
+    cover a template written after it on that line too. ``closed`` writes
+    for text a template may follow: each such ``{{`` is instead a template
+    rendering to the braces (``{{ '{{' }}``), so no escape reaches past the
+    text's end, and it renders to ``text`` whatever follows it on its line
+    after a separator (text ending in ``{`` or a backslash would still join
+    braces right after it). It holds a template then, where it has such a
+    ``{{``."""
+
+    def escape_line(line: str) -> str:
+        # An escape closes where a `}}` follows its braces: before the line's last.
+        last_closing = line.rfind("}}") if closed else len(line)
+
+        def rewrite(match: re.Match[str]) -> str:
+            doubled = "\\" * (2 * len(match.group(1)))
+            return doubled + (_LITERAL_BRACES if match.end() > last_closing else "\\{{")
+
+        return _BRACES.sub(rewrite, line)
+
+    return "\n".join(escape_line(line) for line in text.split("\n"))

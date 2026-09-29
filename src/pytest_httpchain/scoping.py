@@ -44,7 +44,8 @@ built-in (see `extract_template_variables` and `extract_builtin_stand_ins`).
 
 import ast
 from collections import ChainMap
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from typing import Any, NamedTuple
 
@@ -571,6 +572,45 @@ def response_step_templates(stage: Stage, raw_response: Any) -> Iterator[tuple[A
 # --------------------------------------------------------------------------- #
 
 
+class NameUnion(AbstractSet[str]):
+    """The union of name sets, kept as its parts: a name is in it when it is
+    in one of them, asked of each in turn, and ``|`` adds a part. Nothing is
+    copied, where a frozenset union copies every name of every part: a
+    scenario an import wrote from a long HAR file has thousands of stages and
+    of scenario ``vars``, and a union of those per stage, per phase, made
+    validating it quadratic. Any other set operation gives a frozenset."""
+
+    __slots__ = ("_parts",)
+
+    def __init__(self, *parts: AbstractSet[str]) -> None:
+        self._parts = parts
+
+    def __contains__(self, name: object) -> bool:
+        return any(name in part for part in self._parts)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(dict.fromkeys(name for part in self._parts for name in part))
+
+    def __len__(self) -> int:
+        return len(frozenset().union(*self._parts))
+
+    def __or__(self, other: AbstractSet[str]) -> "NameUnion":
+        return NameUnion(*self._parts, other)
+
+    @classmethod
+    def _from_iterable(cls, iterable: Iterable[str]) -> frozenset[str]:
+        return frozenset(iterable)
+
+
+class Phases(NamedTuple):
+    """Every phase's names of one `StageScopes`, as its properties give them."""
+
+    always_run: NameUnion
+    pre_iteration: NameUnion
+    request: NameUnion
+    response: NameUnion
+
+
 @dataclass(frozen=True, slots=True)
 class StageScopes:
     """Statically-known names visible to one stage, per resolution phase.
@@ -604,6 +644,8 @@ class StageScopes:
         skipped: without `skippable_saves`. A name in a phase's scope here but
         not in the same phase of ``when_skipped`` is defined only when such a
         stage ran."""
+        if not self.skippable_saves:
+            return self
         return replace(self, earlier_saves=self.earlier_saves - self.skippable_saves, skippable_saves=frozenset())
 
     @property
@@ -630,6 +672,15 @@ class StageScopes:
         (see `response_step_templates`, whose runtime twin is `with_saves`).
         Twin: `response_step_context`."""
         return self.request | frozenset({RESPONSE_META_NAME})
+
+    def phases(self) -> Phases:
+        """Every phase's names as the properties give them, as `NameUnion`s
+        of the ingredients, not copies: for a check that asks for all of them
+        of every stage (see `NameUnion` for why)."""
+        always_run = NameUnion(self.scenario_substitutions, self.earlier_saves, self.scenario_fixtures, self.stage_fixtures, self.parametrize_params)
+        pre_iteration = always_run | self.stage_substitutions
+        request = pre_iteration | self.foreach_params
+        return Phases(always_run, pre_iteration, request, request | frozenset({RESPONSE_META_NAME}))
 
     # Shadow sets: names layered ABOVE the global context in each phase, behind
     # which a same-named earlier save is unreadable.

@@ -8,11 +8,13 @@ from pytest_httpchain.templates import (
     TEMPLATE_PATTERN,
     contains_escape,
     contains_template,
+    escape,
     extract_template_expression,
     find_templates,
     is_complete_template,
     needs_rendering,
     unescape,
+    walk,
 )
 from pytest_httpchain.templates.expressions import render_text
 
@@ -133,3 +135,58 @@ def test_unescape_leaves_templates_as_written():
     """`unescape` renders escapes only: a template, and the backslashes
     before it, are the engine's to render."""
     assert unescape(r"\{{ a }} \\{{ b }} {{ c }}") == r"{{ a }} \\{{ b }} {{ c }}"
+
+
+@pytest.mark.parametrize(
+    ("text", "escaped"),
+    [
+        pytest.param("plain", "plain", id="nothing-to-escape"),
+        pytest.param("{{ x }}", r"\{{ x }}", id="template"),
+        pytest.param("{{a}} and {{b}}", r"\{{a}} and \{{b}}", id="two"),
+        pytest.param("{{{{raw}}}}", r"\{{\{{raw}}}}", id="adjacent-braces"),
+        pytest.param("{{{x}}}", r"\{{{x}}}", id="three-braces"),
+        # A backslash before `{{` is doubled, then the braces escaped.
+        pytest.param(r"\{{ x }}", r"\\\{{ x }}", id="backslash-before"),
+        pytest.param(r"C:\dir\{x}", r"C:\dir\{x}", id="backslashes-elsewhere"),
+        pytest.param("a {{ b\n}}", "a \\{{ b\n}}", id="multiline"),
+        pytest.param("}} {", "}} {", id="closing-braces"),
+    ],
+)
+def test_escape(text, escaped):
+    """`escape` writes text so that it renders as itself: never a template."""
+    assert escape(text) == escaped
+    assert unescape(escaped) == text
+    assert render_text(escaped, lambda expr: f"<{expr}>") == text
+    assert not contains_template(escaped)
+
+
+@pytest.mark.parametrize(
+    ("text", "escaped"),
+    [
+        pytest.param("plain", "plain", id="nothing-to-escape"),
+        # A `}}` follows on its line: the escape ends there.
+        pytest.param("{{ x }}", r"\{{ x }}", id="closed-by-its-line"),
+        # None follows: a template rendering to the braces, which ends where
+        # it is written, for each `{{` from there on.
+        pytest.param("q={{x", "q={{ '{{' }}x", id="unclosed"),
+        pytest.param("{{a}} b{{c{{", r"\{{a}} b{{ '{{' }}c{{ '{{' }}", id="closed-then-unclosed"),
+        pytest.param("{{{", "{{ '{{' }}{", id="three-braces"),
+        pytest.param(r"a\{{b", r"a\\{{ '{{' }}b", id="backslash-before"),
+        # Line by line: an escape ends with its line.
+        pytest.param("a{{\nb}}", "a{{ '{{' }}\nb}}", id="closing-on-the-next-line"),
+    ],
+)
+def test_escape_closed(text, escaped):
+    """`escape(closed=True)` renders to the text, and a template after it on
+    its line (after a separator) is read as one, not covered by an escape."""
+    assert escape(text, closed=True) == escaped
+    assert walk(escaped, {}) == text
+    assert walk(escaped + "&{{ x }}", {"x": "X"}) == text + "&X"
+
+
+@pytest.mark.parametrize("text", [param.values[0] for param in ESCAPES])
+def test_escape_inverts_rendering(text):
+    """Every string of the escapes table, taken as literal text, escapes to
+    scenario text rendering gives back exactly: templates, escapes and
+    backslashes alike."""
+    assert render_text(escape(text), lambda expr: f"<{expr}>") == text

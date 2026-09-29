@@ -13,9 +13,11 @@ from pytest_httpchain.jsonref.equality import json_equal
 from pytest_httpchain.jsonref.exceptions import DuplicateKeyError, FileLoadError, InvalidJSONError, ReferenceResolverError
 from pytest_httpchain.jsonref.jsonc import loads_jsonc, strip_jsonc
 from pytest_httpchain.jsonref.loader import load_json
+from pytest_httpchain.jsonref.plumbing.reference import REF_KEYS
 
 __all__ = [
     "load_json",
+    "REF_KEYS",
     "ReferenceResolverError",
     "InvalidJSONError",
     "FileLoadError",

@@ -72,6 +72,10 @@ Run stages with different parameter values, similar to pytest's `@pytest.mark.pa
 
 Execute multiple requests concurrently for load testing, stress testing, or bulk operations. With [`collect_saves`](advanced/parallel.md#collecting-every-iterations-saves), every request's saved values are kept as lists, so a later stage can delete every resource a parallel stage created. The report sums a parallel stage up (iterations passed and failed, throughput, p50/p95/p99 latency), and [`thresholds`](advanced/parallel.md#thresholds) fail it below a success ratio or above a latency.
 
+### Import Recorded Traffic
+
+Start from traffic you already have: [`pytest-httpchain import`](cli.md#import) turns a browser's HAR export, or curl commands from an API's docs or a failing stage's report, into a scenario, a stage per request. Base URL, query parameters, JSON, form and multipart bodies and Basic or Bearer credentials map into the dialect, and no secret is written: tokens, passwords and cookies become placeholders read from environment variables.
+
 ### Full pytest Integration
 
 Markers, fixtures, parametrization, and other plugins work as expected. You're not locked into a separate ecosystem.
@@ -147,6 +151,13 @@ uvx pytest-httpchain schema > scenario.schema.json
 uvx pytest-httpchain resolve tests/test_login.http.json
 uvx pytest-httpchain show tests/test_login.http.json
 uvx pytest-httpchain graph tests/test_login.http.json
+```
+
+And `import` writes a starter scenario, which passes `validate`, from recorded traffic:
+
+```bash
+uvx pytest-httpchain import har session.har -o tests/test_checkout.http.json
+uvx pytest-httpchain import curl -o tests/test_orders.http.json 'curl https://api.example.com/v1/orders'
 ```
 
 Every command and option is documented in the [CLI reference](cli.md).

@@ -8,6 +8,7 @@ import re
 import warnings
 from collections import Counter
 from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Set as AbstractSet
 from typing import Any
 
 import pytest
@@ -32,6 +33,7 @@ from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     SCENARIO_TEMPLATE_FIELDS,
     DefinedNames,
+    NameUnion,
     defined_names,
     extract_builtin_stand_ins,
     extract_defined_variables,
@@ -145,8 +147,10 @@ def _fixture_diagnostics(scenario: Scenario, vars_saved: set[str]) -> Iterator[D
     var_conflicts: set[str] = set()
     for scope in stage_scopes(scenario):
         fixtures_in_stage = scope.scenario_fixtures | scope.stage_fixtures
-        vars_in_stage = scope.scenario_substitutions | scope.stage_substitutions | scope.parametrize_params | scope.foreach_params
-        var_conflicts |= fixtures_in_stage & vars_in_stage
+        # The fixtures looked up, not the vars copied: a stage has few
+        # fixtures, and a scenario may have thousands of vars.
+        vars_in_stage = NameUnion(scope.scenario_substitutions, scope.stage_substitutions, scope.parametrize_params, scope.foreach_params)
+        var_conflicts.update(name for name in fixtures_in_stage if name in vars_in_stage)
     if var_conflicts:
         yield diag(DiagnosticCode.FIXTURE_CONFLICT, f"Conflicting fixtures and vars with same names: {sorted(var_conflicts)}")
 
@@ -389,8 +393,9 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
 
     for i, stage in enumerate(scenario.stages):
         scope = scopes[i]
+        phases = scope.phases()
         # The same phases, as they are when every earlier stage with a skip_if skipped.
-        skipped = scope.when_skipped
+        skipped = phases if scope.when_skipped is scope else scope.when_skipped.phases()
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
         parametrize_refs, parametrize_stand_ins = _template_refs(_parametrize_rendered_values(raw.get("parametrize")), defined)
@@ -413,7 +418,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
 
         always_run_refs, always_run_stand_ins = _template_refs(raw.get("always_run"), defined)
         for name in sorted(always_run_refs):
-            if name in scope.always_run:
+            if name in phases.always_run:
                 if name not in skipped.always_run:
                     yield _skippable_save_diagnostic(scenario, i, "always_run", name, f"stages[{i}].always_run")
                 continue
@@ -432,7 +437,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
                     f"parametrize parameters, scenario substitutions, and variables saved by earlier stages are available{_builtin_fallback({name})}",
                     location=f"stages[{i}].always_run",
                 )
-        if always_run_stand_ins := always_run_stand_ins - scope.always_run:
+        if always_run_stand_ins := always_run_stand_ins - phases.always_run:
             yield _stand_in_diagnostic(f"Stage '{stage.name}': always_run", always_run_stand_ins, f"stages[{i}].always_run")
 
         # (phase, template text, names available to it, and those of them
@@ -444,18 +449,18 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
         # pre-response?" flag because it is also what the author needs told:
         # "undefined in this stage" sends them hunting, "undefined in this
         # stage's request" does not.
-        phase_checks: list[tuple[str, Any, frozenset[str], frozenset[str]]] = [
-            ("substitutions", templates, scope.always_run | prior_sub_names, skipped.always_run | prior_sub_names)
+        phase_checks: list[tuple[str, Any, AbstractSet[str], AbstractSet[str]]] = [
+            ("substitutions", templates, phases.always_run | prior_sub_names, skipped.always_run | prior_sub_names)
             for templates, prior_sub_names in substitution_step_templates(raw.get("substitutions"))
         ]
         phase_checks += [
-            ("skip_if", raw.get("skip_if"), scope.pre_iteration, skipped.pre_iteration),
-            ("parallel", raw.get("parallel"), scope.pre_iteration, skipped.pre_iteration),
-            ("retry", raw.get("retry"), scope.pre_iteration, skipped.pre_iteration),
-            ("request", raw.get("request"), scope.request, skipped.request),
+            ("skip_if", raw.get("skip_if"), phases.pre_iteration, skipped.pre_iteration),
+            ("parallel", raw.get("parallel"), phases.pre_iteration, skipped.pre_iteration),
+            ("retry", raw.get("retry"), phases.pre_iteration, skipped.pre_iteration),
+            ("request", raw.get("request"), phases.request, skipped.request),
         ]
         phase_checks += [
-            ("response", templates, scope.response | prior_saves, skipped.response | prior_saves) for templates, prior_saves in response_step_templates(stage, raw.get("response"))
+            ("response", templates, phases.response | prior_saves, skipped.response | prior_saves) for templates, prior_saves in response_step_templates(stage, raw.get("response"))
         ]
 
         # Insertion order, so output stays deterministic across runs.

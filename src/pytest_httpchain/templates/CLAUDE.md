@@ -82,6 +82,14 @@ validator depend on them, so treat them as API, not internals):
   templates renders to. The models judge a literal by it (`types.as_rendered`)
   and keep the text as written, which the engine renders once; `validate
   --deep` names the file a path with only escapes renders to.
+- `escape(text)` — the inverse: the scenario text that renders to `text`,
+  each `{{` escaped and the backslashes right before it doubled, so nothing in
+  it is a template (`unescape(escape(t)) == t`). For a tool writing values it
+  did not author into a scenario (`importers`, which write recorded traffic).
+  `escape(text, closed=True)` is for text a template follows on its line: an
+  escape runs to the first `}}` on its line, so a `{{` no `}}` follows is
+  written `{{ '{{' }}` instead, a template rendering to the braces, and no
+  escape reaches past the text (it holds templates then).
 - `TEMPLATE_BUILTINS` — the set of names available inside an expression without
   the user defining them (safe functions, the helpers of `functions.py`, JSON
   literals, `exists`/`get`, and simpleeval defaults). The validator uses it to

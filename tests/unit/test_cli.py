@@ -696,3 +696,297 @@ def test_graph_of_a_stageless_scenario_is_still_valid_mermaid(tmp_path):
     result = runner.invoke(app, ["graph", str(scenario)])
     assert result.exit_code == 0, result.output
     assert result.output == "flowchart TD\n    %% (no stages)\n"
+
+
+# --- import ---
+
+HAR_EXAMPLE = Path(__file__).parent / "importers" / "example.har"
+
+
+def _imported(result) -> dict:
+    """The scenario an import printed, checked to be what ``validate`` passes."""
+    assert result.exit_code == 0, result.output
+    return json.loads(result.stdout)
+
+
+def test_import_curl_prints_the_scenario_and_its_placeholders():
+    result = runner.invoke(app, ["import", "curl", "curl -H 'Authorization: Bearer s3cret' 'https://api.test/v1/me?page=2'"])
+    assert _imported(result) == {
+        "description": "Imported from a curl command",
+        "substitutions": [{"vars": {"api_token": "{{ env('API_TOKEN') }}"}}],
+        "client": {"base_url": "https://api.test", "follow_redirects": False},
+        "stages": [
+            {
+                "name": "get_v1_me",
+                "request": {"url": "/v1/me", "params": {"page": "2"}, "auth": {"bearer": "{{ api_token }}"}},
+                "response": [{"verify": {"status": "2xx"}}],
+            }
+        ],
+    }
+    assert result.stderr == ("note: secrets were left out of the scenario, which reads them from these environment variables:\n  API_TOKEN  the bearer token (stage get_v1_me)\n")
+
+
+def test_import_curl_takes_the_words_a_shell_split():
+    """Several arguments are the command's words; everything from the first
+    on is the command's, its own -o included, which a warning names, since
+    it may have been meant as the import's."""
+    result = runner.invoke(app, ["import", "curl", "curl", "-o", "response.json", "-X", "POST", "https://api.test/items", "--json", '{"name": "a b"}'])
+    stage = _imported(result)["stages"][0]
+    assert stage["request"] == {"method": "POST", "url": "/items", "headers": {"Accept": "application/json"}, "body": {"json": {"name": "a b"}}}
+    assert result.stderr == ("warning: Ignored -o 'response.json', the file curl writes its answer to: to write the scenario to a file, give import's -o before the command\n")
+
+
+@pytest.mark.parametrize("first", ["-sSL", "-k", "--compressed"])
+def test_import_curl_options_end_at_the_commands_first_word(first, tmp_path, monkeypatch):
+    """The command's words may start with a curl flag the import does not
+    have: a curl -o after it is still the command's, never the import's, so
+    the scenario is not written where curl was to write its answer."""
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["import", "curl", first, "-o", "page.html", "https://api.test/a"])
+    assert _imported(result)["stages"][0]["request"] == {"url": "/a"}
+    assert "warning: Ignored -o 'page.html', the file curl writes its answer to" in result.stderr
+    assert not (tmp_path / "page.html").exists()
+    # The import's own, given first, are its own.
+    result = runner.invoke(app, ["import", "curl", "--force", "-o", "out.json", first, "-o", "page.html", "https://api.test/a"])
+    assert result.exit_code == 0
+    assert json.loads((tmp_path / "out.json").read_text())["stages"][0]["request"] == {"url": "/a"}
+
+
+def test_import_curl_options_go_before_a_whole_command():
+    """A whole command in one argument, then more: the rest is refused, saying
+    where it goes, rather than the command's words read as a URL."""
+    result = runner.invoke(app, ["import", "curl", "curl https://api.test/a", "-o", "x.json"])
+    assert result.exit_code == 2
+    assert "the first argument holds a whole command, so nothing may follow it; give '-o x.json' before it, or the command as its words" in re.sub(
+        r"[\s│]+", " ", _ANSI.sub("", result.stderr)
+    )
+
+
+def test_import_curl_reads_data_files_where_it_runs(tmp_path, monkeypatch):
+    """curl reads a -d @file from the directory it runs in, and strips its
+    line breaks: so does the import."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "form.txt").write_text("a=1&b=2\n")
+    result = runner.invoke(app, ["import", "curl", "curl https://api.test/a -d @form.txt"])
+    assert _imported(result)["stages"][0]["request"]["body"] == {"form": {"a": "1", "b": "2"}}
+    assert result.stderr == ""
+
+
+def test_import_writes_what_passes_validate_as_a_file(tmp_path):
+    """What the import checks is the file as written, read back as
+    ``validate`` and collection read it: a recorded body with a ``$ref``
+    member, which the file's loader would resolve in a json body, passes
+    ``validate`` (it is text), and the placeholders it needs are listed."""
+    output = tmp_path / "test_schema.http.json"
+    body = '{"properties": {"a": {"$ref": "#/definitions/a"}}, "definitions": {"a": {"type": "string"}}, "token": "s3cret"}'
+    result = runner.invoke(app, ["import", "curl", "-o", str(output), f"curl https://api.test/schemas --json '{body}'"])
+    assert result.exit_code == 0, result.output
+    assert "note: Stage 'post_schemas': its JSON body is written as text: a json body could not hold its member '$ref'" in result.stderr
+    assert "  TOKEN  JSON body member 'token' (stage post_schemas)\n" in result.stderr
+    assert "s3cret" not in output.read_text()
+    assert runner.invoke(app, ["validate", "--strict", str(output)]).output == f"{output}: OK\n"
+
+
+@pytest.mark.parametrize(
+    ("args", "stdin"),
+    [
+        pytest.param(["curl", "curl -d $'bad \\ud800' https://api.test/a"], None, id="curl"),
+        pytest.param(
+            ["har", "-"],
+            '{"log": {"entries": [{"request": {"method": "POST", "url": "https://a.test/x", "postData": {"mimeType": "text/plain", "text": "bad \\ud800"}},'
+            ' "response": {"status": 200}}]}}',
+            id="har",
+        ),
+    ],
+)
+def test_import_of_a_lone_surrogate_exits_one(tmp_path, args, stdin):
+    """A lone surrogate is no text, which no request sends and no UTF-8 file
+    holds: a clean error, and no file."""
+    output = tmp_path / "test_x.http.json"
+    result = runner.invoke(app, ["import", args[0], "-o", str(output), *args[1:]], input=stdin)
+    assert result.exit_code == 1
+    assert re.search(r"error: What was recorded holds '\\ud800', a lone surrogate, which is no text \(line \d+ of the scenario\)\n$", result.stderr), result.stderr
+    assert not output.exists()
+
+
+def test_import_curl_lists_the_files_the_scenario_reads():
+    result = runner.invoke(app, ["import", "curl", "curl -F 'doc=@report.pdf' --data-binary @body.bin https://api.test/a"])
+    assert _imported(result)["stages"][0]["request"]["body"] == {"multipart": {"files": {"doc": "report.pdf"}}}
+    assert result.stderr.endswith("note: the scenario reads these files, a relative path from the scenario's own directory: report.pdf\n")
+
+
+def test_import_curl_reads_stdin():
+    result = runner.invoke(app, ["import", "curl", "-"], input="curl https://api.test/a \\\n  -H 'X-Trace: 1'\ncurl https://api.test/b\n")
+    scenario = _imported(result)
+    assert scenario["description"] == "Imported from 2 curl requests"
+    assert [stage["name"] for stage in scenario["stages"]] == ["get_a", "get_b"]
+
+
+def test_import_curl_options_go_before_stdin():
+    """Everything from the command's first word on is the command's, so an
+    option after ``-`` would be a curl word: refused, saying where it goes."""
+    result = runner.invoke(app, ["import", "curl", "-", "-o", "x.json"], input="curl https://api.test/a")
+    assert result.exit_code == 2
+    # typer boxes a usage error, wrapping its lines inside the box's borders.
+    assert "'-' reads the command from stdin, so nothing may follow it; give '-o x.json' before it" in re.sub(r"[\s│]+", " ", _ANSI.sub("", result.stderr))
+
+
+def test_import_curl_takes_the_curl_command_of_a_pipeline(tmp_path, monkeypatch):
+    """A command piped into curl is not taken for URLs: a plain cat's file is
+    what -d @- reads, and what curl's output goes to is named."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "order.json").write_text('{"sku": "A-1"}\n')
+    command = "cat order.json | curl -X POST https://api.test/orders -H 'Content-Type: application/json' -d @- | jq .id"
+    result = runner.invoke(app, ["import", "curl", command])
+    assert _imported(result)["stages"][0]["request"] == {"method": "POST", "url": "/orders", "body": {"json": {"sku": "A-1"}}}
+    assert result.stderr == "warning: Ignored what curl's output is piped to: jq .id\n"
+
+
+def test_import_curl_warns_of_what_it_does_not_map():
+    result = runner.invoke(app, ["import", "curl", "curl --retry 3 --frobnicate https://api.test/a"])
+    _imported(result)
+    assert result.stderr == "warning: Ignored the curl options the import does not map: --retry\nwarning: Ignored what is not a curl option: --frobnicate\n"
+
+
+def test_import_reports_the_validators_warnings():
+    """The scenario is validated as written; a warning is reported, and the
+    scenario still written."""
+    result = runner.invoke(app, ["import", "curl", """curl -H 'Content-Type: application/json' -d '{"{{k}}": 1}' https://api.test/a"""])
+    _imported(result)
+    assert "warning [HTTPCHAIN029]: " in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("args", "error"),
+    [
+        pytest.param(["curl -sS"], "error: The curl command has no URL\n", id="no-url"),
+        pytest.param(["curl 'https://api.test/a"], "error: The curl command has a single quote (') that is never closed\n", id="unclosed-quote"),
+        pytest.param(["curl", "ftp://x.test/"], "error: The curl command's URL 'ftp://x.test/' is not http or https\n", id="not-http"),
+        # Another program's command, whose words would be taken for URLs.
+        pytest.param(["wget https://x.test/a"], "error: The command is not a curl command: 'wget https://x.test/a'\n", id="not-curl"),
+        pytest.param(["wget", "https://x.test/a"], "error: The command is not a curl command: 'wget https://x.test/a'\n", id="not-curl-words"),
+        # What no URL parser reads, and a file no file name can be.
+        pytest.param(["curl -g 'http://[::1/x'"], "error: The curl command's URL 'http://[::1/x' is no URL: Invalid IPv6 URL\n", id="malformed-url"),
+        pytest.param(
+            ["curl 'http://[::1/x'"],
+            "error: curl refuses the URL 'http://[::1/x' ([ is no range): curl reads {a,b} and [1-3] in a URL as sets and ranges, and -g sends the URL as written\n",
+            id="malformed-glob",
+        ),
+        pytest.param(
+            ["curl -d $'@a\\x00b' https://x.test/"],
+            "error: The curl command reads the file 'a\\x00b', which cannot be: no file name holds a NUL character\n",
+            id="nul-in-file-name",
+        ),
+    ],
+)
+def test_import_curl_of_what_is_no_command_exits_one(args, error):
+    result = runner.invoke(app, ["import", "curl", *args])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == error
+
+
+def test_import_of_what_would_not_validate_writes_nothing(tmp_path):
+    """A scenario the validator refuses is not written, and the command
+    fails saying why."""
+    output = tmp_path / "test_x.http.json"
+    result = runner.invoke(app, ["import", "curl", "-o", str(output), "curl -X 'NOT A TOKEN' https://api.test/a"])
+    assert result.exit_code == 1
+    assert "error [HTTPCHAIN000]: Schema validation failed: stages -> 0 -> request -> method" in result.stderr
+    assert result.stderr.endswith("error: the imported scenario would not pass validate, so it was not written\n")
+    assert not output.exists()
+
+
+def test_import_writes_the_output_file(tmp_path):
+    output = tmp_path / "test_imported.http.json"
+    result = runner.invoke(app, ["import", "curl", "--output", str(output), "curl https://api.test/a"])
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+    assert runner.invoke(app, ["validate", "--strict", str(output)]).output == f"{output}: OK\n"
+
+
+@pytest.mark.parametrize(("args", "exit_code", "content"), [pytest.param([], 1, "keep", id="refused"), pytest.param(["--force"], 0, None, id="forced")])
+def test_import_overwrites_only_with_force(tmp_path, args, exit_code, content):
+    output = tmp_path / "test_imported.http.json"
+    output.write_text("keep")
+    result = runner.invoke(app, ["import", "curl", "-o", str(output), *args, "curl https://api.test/a"])
+    assert result.exit_code == exit_code, result.output
+    if content is None:
+        assert json.loads(output.read_text())["stages"][0]["name"] == "get_a"
+    else:
+        assert output.read_text() == content
+        assert result.stderr == f"error: {output} exists; pass --force to overwrite it\n"
+
+
+def test_import_into_a_missing_directory_exits_one(tmp_path):
+    output = tmp_path / "missing" / "test_x.http.json"
+    result = runner.invoke(app, ["import", "curl", "-o", str(output), "curl https://api.test/a"])
+    assert result.exit_code == 1
+    assert result.stderr.startswith(f"error: cannot write {output}: ")
+
+
+def test_import_har():
+    result = runner.invoke(app, ["import", "har", str(HAR_EXAMPLE)])
+    scenario = _imported(result)
+    assert scenario["description"] == "Imported from example.har"
+    assert len(scenario["stages"]) == 7
+    assert "note: Skipped 5 static assets: images, stylesheets, fonts and scripts the page loaded (--all keeps them)\n" in result.stderr
+    assert "  COOKIE     the cookies prefs (stage get_root)\n" in result.stderr
+
+
+def test_import_har_filters():
+    result = runner.invoke(app, ["import", "har", "--all", "--include", "/api/", "--include", "static", "--exclude", r"\.png$", str(HAR_EXAMPLE)])
+    assert [stage["name"] for stage in _imported(result)["stages"]] == [
+        "get_static_app_css",
+        "get_static_app_js",
+        "get_static_vendor_js",
+        "post_api_login",
+        "get_api_me",
+        "get_api_avatar_1",
+        "post_api_search",
+        "post_api_photos",
+    ]
+
+
+def test_import_har_reads_stdin():
+    result = runner.invoke(app, ["import", "har", "-"], input=HAR_EXAMPLE.read_text())
+    assert _imported(result)["description"] == "Imported from a HAR file"
+
+
+def test_import_har_reads_stdin_with_a_byte_order_mark():
+    """As a file may start with one, so may what stdin reads."""
+    result = runner.invoke(app, ["import", "har", "-"], input=b"\xef\xbb\xbf" + HAR_EXAMPLE.read_bytes())
+    assert _imported(result)["description"] == "Imported from a HAR file"
+
+
+@pytest.mark.parametrize("option", ["--include", "--exclude"])
+def test_import_har_refuses_a_pattern_that_is_no_regex(option):
+    result = runner.invoke(app, ["import", "har", option, "(", str(HAR_EXAMPLE)])
+    assert result.exit_code == 2
+    assert "'(' is not a regular expression" in _ANSI.sub("", result.stderr)
+
+
+@pytest.mark.parametrize(
+    ("content", "error"),
+    [
+        pytest.param(b"{}", "error: {path} is not a HAR file: it has no log.entries list\n", id="not-a-har"),
+        pytest.param(b"\xff\xfe", "error: cannot read {path}: ", id="not-utf8"),
+        pytest.param(
+            b'{"log": {"entries": [{"request": {"method": "GET", "url": "http://[::1/x"}, "response": {"status": 200}}]}}',
+            "error: {path} is not a HAR file: its entry 1 has the URL 'http://[::1/x', which is no URL (Invalid IPv6 URL)\n",
+            id="malformed-url",
+        ),
+    ],
+)
+def test_import_har_of_what_is_no_har_exits_one(tmp_path, content, error):
+    path = tmp_path / "x.har"
+    path.write_bytes(content)
+    result = runner.invoke(app, ["import", "har", str(path)])
+    assert result.exit_code == 1
+    assert result.stderr.startswith(error.format(path=path))
+
+
+def test_import_har_of_a_missing_file_exits_one(tmp_path):
+    result = runner.invoke(app, ["import", "har", str(tmp_path / "missing.har")])
+    assert result.exit_code == 1
+    assert result.stderr.startswith(f"error: cannot read {tmp_path / 'missing.har'}: ")

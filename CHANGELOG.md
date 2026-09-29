@@ -469,6 +469,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rendered with the rest of the `parallel` config before any request: one that renders `null`, text,
   `true` or `false`, or a value out of its range fails the stage before its iterations send
   anything. See [Stats and thresholds](docs/advanced/parallel.md#stats-and-thresholds).
+- `pytest-httpchain import har FILE` and `pytest-httpchain import curl COMMAND` write a starter
+  scenario from traffic you already have: a browser's HAR export (or the plugin's own), or curl
+  commands from an API's docs, a browser's "Copy as cURL" or a failing stage's report, whose command
+  imports back into the request it stands for. Each request is a stage, in order, verifying the
+  status the HAR recorded (a curl command records none: `2xx`). The origin every request shares is
+  `client.base_url`, a query string `params` (or the URL's own, as written, where `params` would not
+  send it as it was: a name repeated apart from its first, escapes that are not UTF-8, a secret
+  `params` would send empty unset), a JSON, form or multipart body the `json`, `form` or
+  `multipart` form (anything else the raw `text`, bytes `base64` but for a multipart body, taken
+  apart as a text one is, a curl `--data-binary @file` `binary`; a recorded `$ref`, `$include` or `$merge` key,
+  which the file's loader would resolve, never becomes a key of the scenario, so a JSON Schema
+  posted to a registry is sent as the text it was), Basic and Bearer credentials the `basic` and
+  `bearer` auth shorthands (the scenario's `auth` when every request sends the same), and with
+  several requests a header they all send alike `client.headers`; transport headers (`Host`,
+  `Content-Length`, `Connection`, `Accept-Encoding`, HTTP/2 pseudo-headers, ...) are left out, and a
+  recorded `{{` is escaped, so it is sent as recorded. No secret is written: a token, a password,
+  a user name sent without one (curl's `-u key:`, a URL's `https://<key>@host`), the cookies, the headers and query parameters reports redact (and form fields, multipart parts and
+  JSON members, strings or numbers, named like those parameters), and a `Referer` or other
+  URL-valued header whose URL carries such a parameter become placeholders the scenario reads from
+  environment variables (`{{ env('API_TOKEN') }}`), which stderr lists; one left unset fails its
+  stage, and inside text kept as written they render as it needs them (`{{ quote(access_token) }}`
+  in a URL, which fails unset too). `import curl` takes the command as one argument, as its words or
+  from stdin (`-`), read with POSIX shell quoting (`$'...'`, `\` line continuations and comments
+  included; several commands make a stage each). The command is the one named `curl`: what comes
+  before the name (a prompt's `$`, `sudo -E`, a `NAME=value`, `watch -n 1`) and the rest of a
+  pipeline are left out with a warning, a command without the name must start with an option or a
+  URL, and another program's command (`wget ...`) is refused rather than its words taken for URLs;
+  what `-d @-` reads is the here-document, here-string, `< file` or plain `cat`/`echo` piped into
+  curl the text gives. It maps curl's request options (`-X`, `-H`, the `-d` family, `--json`, `-F`,
+  `-G`, `-u`, `-A`, `-e`, `-b`, `-L`, `-k`, `-m`, ...) as curl sends them (a `Cookie` header given
+  with `-H` in place of `-b`'s cookies), curl's default form type,
+  the line breaks it strips from a `-d @file`, its URL globbing (a stage per URL of `{a,b}` and
+  `[1-3]`, unless `-g`) and its not following redirects without `-L` included; output options are
+  ignored (`-o` with a warning, since it may have been meant as the import's), and any other option
+  is named in a warning, never dropped silently. `import har` leaves out the static assets a page
+  loaded (images, stylesheets, fonts and scripts, by MIME type or, for a `304` Chrome recorded as
+  `x-unknown`, by resource type, unless the page's code fetched them; `--all` keeps them) and the
+  entries `--include` and `--exclude` patterns filter out, follows no redirect (each is an entry),
+  and leaves a cookie an earlier response set to the scenario's client, which keeps it as the
+  browser did. The scenario is written to stdout or `-o`/`--output` (an existing file only with
+  `--force`), and only once the file passes the validator, read back as `validate` reads it: one
+  that would not, a URL or method the model refuses, fails the command with the findings; what
+  cannot be read (a malformed URL, a file name holding a NUL) is an `error:` line and exit status 1.
+  See [`import`](docs/cli.md#import).
 
 ### Fixed
 

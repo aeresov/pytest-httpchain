@@ -201,6 +201,7 @@ curl -X POST 'https://api.example.com/users?access_token=[REDACTED]' \
 -   Nor is the scenario's `client.proxy`: the command connects directly, or through the proxy curl's own environment variables (`https_proxy`, `http_proxy`) name. For an API reachable only through the proxy, add `-x <proxy url>`.
 -   A [digest-authenticated](usage/requests.md#authentication) request's `Authorization` answered one challenge, with its one-time nonce, so it cannot be sent again: the command leaves it out, and the comment says to add `--digest -u 'user:password'`, which answers a new challenge. A basic or bearer `Authorization` is sent (as `[REDACTED]` to fill in, while redacted).
 -   For a parallel stage, a [retried](advanced/retry.md) stage or a followed redirect, the command is for the request the section's title names (`(failing of 3 parallel iterations)`, `(attempt 3 of 10)`, `(after 1 redirect)`), like the `HTTP Request` section's.
+-   [`pytest-httpchain import curl`](cli.md#import) reads the command back into a scenario sending the same request, to reproduce the failure on its own: paste it, `#` notes included, as one argument or on stdin (`import curl - < command.txt`). Its `[REDACTED]` values become placeholders the scenario reads from environment variables.
 
 ### `[REDACTED]` in a Report
 

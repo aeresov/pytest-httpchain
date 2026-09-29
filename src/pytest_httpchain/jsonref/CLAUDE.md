@@ -20,7 +20,7 @@ Features:
 ## Public API
 
 ```python
-from pytest_httpchain.jsonref import load_json, json_equal, loads_jsonc, strip_jsonc, ReferenceResolverError, InvalidJSONError, FileLoadError
+from pytest_httpchain.jsonref import load_json, json_equal, loads_jsonc, strip_jsonc, REF_KEYS, ReferenceResolverError, InvalidJSONError, FileLoadError
 
 # Load JSON with $ref resolution
 data = load_json(path, max_parent_traversal_depth=3, root_path=None, opaque=None, atomic=None)
@@ -32,6 +32,12 @@ json_equal([True], [1])  # False
 # JSON with comments: comments and trailing commas blanked out, then json.loads
 loads_jsonc('{"a": [1, 2,], /* note */}')  # {"a": [1, 2]}
 ```
+
+`REF_KEYS` are the directive keys (`$include`, `$merge`, `$ref`), read as a
+reference wherever they appear as a key, outside the opaque positions. A tool
+writing data it did not author into a scenario file (`importers`, which write
+recorded traffic) must keep them out of every mapping it writes, or the
+loader will resolve them.
 
 `json_equal` is the one definition of JSON equality in the plugin: the sibling
 merge uses it (an equal value keeps, a different one conflicts), and so do
