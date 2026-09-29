@@ -198,10 +198,11 @@ HAR files contain full requests/responses **including credential headers and sav
 
 ### Scenario validation
 
-Validate scenario files for structure and common problems — undefined variables, variables referenced before they are saved (data-flow ordering), duplicate stage names, fixture/variable conflicts, no-op `verify` steps, and contradictory body checks:
+Validate scenario files for structure and common problems — undefined variables, variables referenced before they are saved (data-flow ordering), duplicate stage names, fixture/variable conflicts, no-op `verify` steps, and contradictory body checks. Name the files, or a directory to check every scenario pytest would collect in it:
 
 ```bash
 uvx pytest-httpchain validate tests/test_login.http.json
+uvx pytest-httpchain validate tests/
 ```
 
 Each finding carries a stable diagnostic code (`HTTPCHAINxxx`) and a severity — the [full code reference](https://aeresov.github.io/pytest-httpchain/diagnostics/) is on the docs site, along with a recipe for filtering the `ScenarioValidationWarning` warnings the same checks emit at pytest collection. It exits non-zero when any file is invalid, so it doubles as a CI gate. Use `--format json` for machine-readable output (editor/CI integration):

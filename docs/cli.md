@@ -34,29 +34,16 @@ resolves fine.
 
 ## `validate`
 
-Check one or more scenario files and exit non-zero if any is invalid. This is
-the CI gate. A file named anything but `.json` or `.jsonc` is still validated,
-with an `HTTPCHAIN013` warning: pytest would not collect it.
+Check scenario files and exit non-zero if any is invalid. This is the CI gate.
+Name the files, or the directories that hold them:
 
 ```bash
-pytest-httpchain validate tests/test_login.http.json
+pytest-httpchain validate tests/
 pytest-httpchain validate tests/test_login.http.json tests/test_orders.http.jsonc
 ```
 
-To gate every scenario pytest collects, name both extensions. `find` reaches
-any depth, runs `validate` only when a file matched, and exits non-zero when
-`validate` does:
-
-```bash
-find tests \( -name 'test_*.http.json' -o -name 'test_*.http.jsonc' \) \
-    -exec pytest-httpchain validate {} +
-```
-
-A shell glob works too, but `tests/**/*.http.json` alone skips the `.jsonc`
-files, `**` spans directories in bash only after `shopt -s globstar`, and bash
-passes a glob that matches nothing through as-is, which `validate` reports as a
-missing file (`HTTPCHAIN010`). If you use a custom `httpchain_suffix`, put it in
-place of `http`.
+A file you name is validated whatever its name. One named anything but `.json`
+or `.jsonc` gets an `HTTPCHAIN013` warning: pytest would not collect it.
 
 Findings carry a stable `HTTPCHAINxxx` code and a severity — see
 [Validation diagnostics](diagnostics.md) for the full table.
@@ -65,6 +52,7 @@ Findings carry a stable `HTTPCHAINxxx` code and a severity — see
 | --- | --- |
 | `--format text\|json` | `json` emits the whole result, including each diagnostic's `code`, `severity`, `message` and `location`, for editor and CI integration. |
 | `--strict` | Treat warnings as failures for the exit code. |
+| `--suffix SUFFIX` | Search directories for `test_<name>.<SUFFIX>.json` and `.jsonc` files. Default: the `httpchain_suffix` your pytest configuration sets, else `http` (see [Directories](#directories)). |
 | `--deep` | Also import your `module:func` references and check their signatures, and confirm referenced files and schema files exist. A body schema is followed as the runtime follows it: its JSON pointer must resolve, the schema it selects must be valid, and every `$ref` and `$dynamicRef` it reaches must resolve to a valid schema, locally and under the path rules a scenario's `$include` keeps (`--root-path`, `--ref-parent-traversal-depth`) (see [JSON Schema validation](usage/responses.md#a-schema-inside-a-document-openapi-and-shared-schema-files)). |
 | `--syspath DIR` | Extra directory on `sys.path` for `--deep` import resolution. Repeatable. |
 
@@ -72,17 +60,75 @@ Findings carry a stable `HTTPCHAINxxx` code and a severity — see
 collection time:
 
 ```bash
-pytest-httpchain validate --deep --strict --syspath tests tests/test_login.http.json
+pytest-httpchain validate --deep --strict --syspath tests tests/
 ```
 
 In the JSON payload, the top-level `valid` is the gate result — it matches the
 exit code and accounts for `--strict` — while each file's own `result.valid` is
-pure validity. The sibling `strict` key tells the two apart.
+pure validity. The sibling `strict` key tells the two apart. `files` holds an
+entry per path reported, in the text report's order: each file checked, and
+each directory without scenario files, with its `HTTPCHAIN039`.
 
 The same semantic checks run at pytest collection time, so `pytest
 --collect-only` validates your whole suite: error-severity findings fail
 collection, warnings become `ScenarioValidationWarning`. A file that fails to
 load reports the identical diagnostic code either way.
+
+### Directories
+
+A directory is searched the way pytest collects it, so `validate tests/` checks
+the files `pytest tests/` runs:
+
+- every file named `test_<name>.<suffix>.json` or `test_<name>.<suffix>.jsonc`,
+  at any depth;
+- except in the directories pytest skips by default: those its default
+  `norecursedirs` matches (`*.egg`, `.*`, `_darcs`, `build`, `CVS`, `dist`,
+  `node_modules`, `venv`, `{arch}`), `__pycache__`, and virtual environments (a
+  directory holding a `pyvenv.cfg`, or a `conda-meta/history` for a conda
+  environment). A directory you name is searched whatever its name. Your
+  project's own `norecursedirs`, `--ignore` and `collect_ignore` are not read;
+- passing over an entry pytest passes over because it cannot be looked at, such
+  as a symlink to itself or a file deleted during the search; any other such
+  failure (a permission error) stops `validate` with an `error:` line, as it
+  stops pytest;
+- not entering a symlink to a directory (or a Windows junction), so a link
+  cannot send the search round in a loop. This is where `validate` differs from
+  pytest, which follows one. A symlink to a file is checked like the file, and a
+  directory you name may be a symlink.
+
+The suffix is the `httpchain_suffix` set in the configuration file pytest would
+read for the same paths (`pytest.toml`, `pytest.ini`, `pyproject.toml`,
+`tox.ini` or `setup.cfg`, found as pytest
+[finds its configfile](https://docs.pytest.org/en/stable/reference/customize.html#initialization-determining-rootdir-and-configfile)),
+else `http`. `--suffix` overrides it, as `-o httpchain_suffix=...` overrides it
+for pytest (`validate` reads neither `-o` nor `PYTEST_ADDOPTS`). A configuration
+file pytest could not read, or a suffix it would refuse, stops `validate` with
+an `error:` line before anything is checked. Files you name need no suffix, so
+the configuration is read only when a path is a directory.
+
+The report is sorted by path, whatever order the paths are given in, so it does
+not change with the order a shell or `find` lists them in. Paths are compared
+name by name, which puts a directory's files in pytest's order: depth first,
+each directory's entries by name. A file reached twice, as `validate tests
+tests/api` reaches `tests/api`'s, is checked once, under the path it was first
+reached by. After more than one file, a line sums the run up, counting a file
+with errors under errors only:
+
+```console
+$ pytest-httpchain validate tests/
+tests/api/test_orders.http.jsonc: OK with warnings
+  warning [HTTPCHAIN003]: Stage 'list': request references potentially undefined variable(s): ['order_id'] (at stages[0].request)
+tests/api/test_users.http.json: INVALID
+  error [HTTPCHAIN001]: Duplicate stage names found: ['get'] (at stages)
+tests/test_login.http.json: OK
+3 files checked, 1 with errors, 1 with warnings
+```
+
+A directory holding no scenario file fails the run with `HTTPCHAIN039`, and a
+path that does not exist with `HTTPCHAIN010`, so a mistyped path, or a suffix
+that names no file, cannot pass CI as an empty run. Neither is a file checked:
+the summary counts them apart, `..., 1 path not found, 1 directory without
+scenario files`.
 
 ## `show`
 

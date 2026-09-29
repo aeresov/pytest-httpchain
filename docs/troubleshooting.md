@@ -8,8 +8,12 @@ Ensure your test files follow the naming pattern `test_<name>.<suffix>.json` (or
 
 -   File name starts with `test_`
 -   File name contains the suffix (default: `.http.`)
--   File extension is `.json`
+-   File extension is `.json` or `.jsonc`
 -   Check `pytest.ini` if you've customized the suffix
+
+`pytest-httpchain validate tests/` searches a directory as pytest collects it,
+so the files it reports are the ones pytest finds, and a directory where it
+finds none fails with `HTTPCHAIN039`, naming the suffix it searched by.
 
 **Example valid names:**
 

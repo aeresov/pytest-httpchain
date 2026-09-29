@@ -14,9 +14,10 @@ from pathlib import Path
 import pytest
 
 import pytest_httpchain.validation.loader as validation_loader
+import pytest_httpchain.validation.validate as validation_validate
 from pytest_httpchain.body_schema import BodySchema
 from pytest_httpchain.models import JMESPathMatcher
-from pytest_httpchain.validation import SEVERITY, DiagnosticCode, load_scenario, resolve_root_path, validate_scenario
+from pytest_httpchain.validation import SEVERITY, DiagnosticCode, DiscoveryError, load_scenario, resolve_root_path, validate_paths, validate_scenario
 from tests.unit.helpers import LOADABLE_BUT_DEEP, TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, nested, on_bounded_stack
 
 C = DiagnosticCode
@@ -26,9 +27,12 @@ DOCS_PAGE = Path(__file__).resolve().parents[2] / "docs" / "diagnostics.md"
 
 
 def _validate(datadir, fixture):
-    """Fixtures named ``deep_*`` exercise deep validation (imports, signatures, files)."""
+    """Through `validate_paths`, as `validate` validates, so a fixture may be a
+    directory. Fixtures named ``deep_*`` exercise deep validation (imports,
+    signatures, files)."""
     deep = fixture.startswith("deep_")
-    return validate_scenario(datadir / fixture, deep=deep, syspaths=[USERFUNCS_DIR] if deep else None)
+    [(_, result)] = validate_paths([datadir / fixture], suffix="http", deep=deep, syspaths=[USERFUNCS_DIR] if deep else None)
+    return result
 
 
 def _codes(result):
@@ -175,6 +179,12 @@ def test_clean_fixture_has_no_diagnostics(datadir, fixture):
 
 DIAGNOSED = [
     ("does_not_exist.json", [(C.FILE_NOT_FOUND, None, "File not found")]),
+    # A directory holding no file pytest would collect: its one scenario is
+    # not named test_<name>.http.json.
+    (
+        "no_scenario_files",
+        [(C.NO_SCENARIO_FILES, None, r"^No scenario files named test_<name>\.http\.json or test_<name>\.http\.jsonc in directory: \S*no_scenario_files$")],
+    ),
     ("invalid_json.json", [(C.INVALID_JSON, None, "Invalid JSON syntax")]),
     # A duplicated organizational key is a JSON-content error at load, not
     # a silent last-wins, and not a $ref error.
@@ -753,6 +763,71 @@ def test_wrong_extension_warns(datadir):
 
 def test_directory_is_not_a_file(tmp_path):
     assert _codes(validate_scenario(tmp_path)) == [C.NOT_A_FILE]
+
+
+class TestValidatePaths:
+    """`validate_paths`, what `validate` runs on its paths: the files each one
+    stands for, in what order, and the finding for a directory without any.
+    (The search itself: test_discovery.py.)"""
+
+    @staticmethod
+    def _scenarios(root, *names):
+        for name in names:
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            _write((root / name).parent, [_stage()]).rename(root / name)
+
+    def test_each_file_once_sorted_by_path(self, tmp_path):
+        """Sorted by path, whatever order the arguments come in (a directory's
+        files so in pytest's order), a file reached twice once, under the path
+        first reached by. `other` holds a scenario, so it is no empty
+        directory, though its one file was reached before it."""
+        self._scenarios(tmp_path, "suite/test_b.http.json", "suite/api/test_a.http.json", "other/test_c.http.json")
+        paths = [
+            tmp_path / "suite" / "api",
+            tmp_path / "suite",
+            tmp_path / "other" / "test_c.http.json",
+            tmp_path / "other",
+            tmp_path / "suite" / ".." / "suite" / "api" / "test_a.http.json",
+        ]
+        results = validate_paths(paths, suffix="http")
+        assert [path.relative_to(tmp_path).as_posix() for path, _ in results] == ["other/test_c.http.json", "suite/api/test_a.http.json", "suite/test_b.http.json"]
+        assert all(result.diagnostics == [] for _, result in results)
+
+    def test_a_path_that_is_no_directory_is_validated_as_a_file(self, tmp_path):
+        """Whatever its name, or whether it exists: named, it is meant."""
+        self._scenarios(tmp_path, "scenario.txt")
+        results = validate_paths([tmp_path / "scenario.txt", tmp_path / "missing"], suffix="http")
+        assert [(path.name, _codes(result)) for path, result in results] == [("missing", [C.FILE_NOT_FOUND]), ("scenario.txt", [C.WRONG_EXTENSION])]
+
+    def test_a_directory_without_scenario_files_is_one_finding(self, tmp_path):
+        """Named by the suffix searched for; once, however often it is given."""
+        self._scenarios(tmp_path, "suite/test_a.http.json")
+        results = validate_paths([tmp_path / "suite", tmp_path, tmp_path / "suite"], suffix="api")
+        assert [(path, _codes(result)) for path, result in results] == [(tmp_path, [C.NO_SCENARIO_FILES]), (tmp_path / "suite", [C.NO_SCENARIO_FILES])]
+        assert results[1][1].errors == [f"No scenario files named test_<name>.api.json or test_<name>.api.jsonc in directory: {tmp_path / 'suite'}"]
+
+    def test_reads_the_suffix_from_pytests_configuration_only_for_a_directory(self, tmp_path):
+        """No directory, nothing to search: a configuration file pytest could
+        not read does not fail a run over files."""
+        self._scenarios(tmp_path, "suite/test_a.api.json")
+        (tmp_path / "pytest.ini").write_text("[pytest]\nhttpchain_suffix = api\n")
+        assert [path.name for path, _ in validate_paths([tmp_path / "suite"])] == ["test_a.api.json"]
+        (tmp_path / "pytest.ini").write_text("  not ini")
+        file = tmp_path / "suite" / "test_a.api.json"
+        assert [path for path, _ in validate_paths([file])] == [file]
+        assert [path for path, _ in validate_paths([tmp_path / "suite"], suffix="api")] == [file]
+        with pytest.raises(DiscoveryError, match="^cannot read pytest configuration from "):
+            validate_paths([tmp_path / "suite"])
+
+    def test_searches_every_directory_before_validating_a_file(self, tmp_path, monkeypatch):
+        """A run that cannot know its files does no work first."""
+        self._scenarios(tmp_path, "test_a.http.json")
+        (tmp_path / "pyproject.toml").write_text("[tool.pytest\n")
+        validated = []
+        monkeypatch.setattr(validation_validate, "validate_scenario", lambda path, **_: validated.append(path))
+        with pytest.raises(DiscoveryError):
+            validate_paths([tmp_path / "test_a.http.json", tmp_path])
+        assert validated == []
 
 
 @pytest.mark.parametrize(

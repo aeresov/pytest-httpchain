@@ -18,6 +18,10 @@ dependencies = [
     # digest auth (request_builder._DigestAuth) builds on DigestAuth's private
     # state, which its unit tests in tests/unit/test_request_builder.py pin.
     "httpx[http2]>=0.28.0",
+    # The parser pytest reads its ini files with: `validate` reads
+    # httpchain_suffix from one (validation.discovery) as pytest would. The
+    # floor pytest 9.0 itself requires.
+    "iniconfig>=1.0.1",
     "jmespath>=1.0.0",
     "jsonschema>=4.18.0",
     # The meta-schemas a body schema's registry holds (body_schema): the

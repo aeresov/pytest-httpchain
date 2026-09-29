@@ -21,7 +21,7 @@ import pytest
 
 from pytest_httpchain.body_schema import ReferenceBounds
 from pytest_httpchain.carrier import Carrier
-from pytest_httpchain.constants import SCENARIO_FILE_EXTENSIONS, ConfigOptions
+from pytest_httpchain.constants import DEFAULT_SUFFIX, ConfigOptions, check_suffix, scenario_file_pattern
 from pytest_httpchain.factory import create_test_class
 from pytest_httpchain.har_writer import write_har_file
 from pytest_httpchain.models import Scenario
@@ -504,7 +504,7 @@ def pytest_configure_node(node) -> None:
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     ini_options: list[tuple[ConfigOptions, str, Literal["string", "int", "args", "bool"], Any]] = [
-        (ConfigOptions.SUFFIX, "File suffix for HTTP test files.", "string", "http"),
+        (ConfigOptions.SUFFIX, "File suffix for HTTP test files.", "string", DEFAULT_SUFFIX),
         (ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "Maximum number of parent directory traversals allowed in $ref paths.", "int", 3),
         (ConfigOptions.MAX_COMPREHENSION_LENGTH, "Maximum length for list/dict comprehensions in template expressions.", "int", 50000),
         (ConfigOptions.MAX_PARALLEL_ITERATIONS, "Maximum number of parallel iterations allowed per stage.", "int", 10000),
@@ -625,9 +625,10 @@ def pytest_configure(config: pytest.Config) -> None:
         except (TypeError, ValueError) as e:
             raise pytest.UsageError(f"{option} must be a boolean: {e}") from None
 
-    suffix = str(config.getini(ConfigOptions.SUFFIX))
-    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,32}", suffix):
-        raise pytest.UsageError(f"{ConfigOptions.SUFFIX} must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars")
+    try:
+        check_suffix(str(config.getini(ConfigOptions.SUFFIX)))
+    except ValueError as e:
+        raise pytest.UsageError(f"{ConfigOptions.SUFFIX} {e}") from None
 
     _getint(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, minimum=0, minimum_message="must be non-negative")
     max_comprehension_length = _getint(ConfigOptions.MAX_COMPREHENSION_LENGTH, minimum=1, minimum_message="must be a positive integer", maximum=1_000_000)
@@ -664,8 +665,7 @@ def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> pytest.Col
     naming one names it by its class's node id (`_scenario_nodeid`).
     """
     suffix: str = parent.config.getini(ConfigOptions.SUFFIX)
-    extensions = "|".join(re.escape(extension) for extension in SCENARIO_FILE_EXTENSIONS)
-    if file_match := re.fullmatch(rf"test_(?P<name>.+)\.{re.escape(suffix)}(?:{extensions})", file_path.name):
+    if file_match := scenario_file_pattern(suffix).fullmatch(file_path.name):
         return JsonModule.from_parent(parent, path=file_path, name=file_match["name"])
     return None
 

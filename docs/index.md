@@ -121,10 +121,11 @@ See [Getting Started](getting-started.md) for detailed installation and configur
 
 `pytest-httpchain` ships a scenario validator to help AI agents (and humans) author and check test scenarios.
 
-Validate scenario files for structure and common problems (undefined variables, variables used before they are saved, duplicate stage names, fixture conflicts, no-op `verify` steps, contradictory body checks); every finding carries a stable `HTTPCHAINxxx` diagnostic code, and it exits non-zero on failure, so it works as a CI gate:
+Validate scenario files for structure and common problems (undefined variables, variables used before they are saved, duplicate stage names, fixture conflicts, no-op `verify` steps, contradictory body checks); every finding carries a stable `HTTPCHAINxxx` diagnostic code, and it exits non-zero on failure, so it works as a CI gate. Name the files, or a directory to check every scenario pytest would collect in it:
 
 ```bash
 uvx pytest-httpchain validate tests/test_login.http.json
+uvx pytest-httpchain validate tests/
 # machine-readable output for editors / CI:
 uvx pytest-httpchain validate --format json tests/test_login.http.json
 ```

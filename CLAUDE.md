@@ -42,8 +42,9 @@ uv run python scripts/generate_schema.py && git add -N docs/schema && git diff -
 # Format
 uv run ruff format .
 
-# Validate scenario file(s) (exits non-zero if invalid)
+# Validate scenario file(s), or every scenario under a directory (exits non-zero if invalid)
 uv run pytest-httpchain validate tests/integration/examples/save/test_save_jmespath.http.json
+uv run pytest-httpchain validate tests/integration/examples
 
 # Deep validation (opt-in): import user functions + check signatures + referenced files
 uv run pytest-httpchain validate --deep --syspath tests/integration/examples tests/integration/examples/save/test_save_user_function.http.json
@@ -74,7 +75,7 @@ The plugin is a single distribution; domain subpackages (models, templates, json
 ```
 src/pytest_httpchain/
 ├── cli.py                     # Typer CLI (validate, schema, resolve, show, graph)
-├── validation/                # Shared validator (CLI + collection-time), a package: diagnostics (codes/result types), loader ($ref + model validation), semantic (checks incl. order-aware data-flow), deep (imports/signatures/files, `validate --deep` only), validate (file-level entry point)
+├── validation/                # Shared validator (CLI + collection-time), a package: diagnostics (codes/result types), loader ($ref + model validation), semantic (checks incl. order-aware data-flow), deep (imports/signatures/files, `validate --deep` only), validate (entry points: one file, and the paths `validate` is given), discovery (the scenario files a directory given to `validate` holds, found as pytest collects them, and the suffix read from the config file pytest would read)
 ├── dataflow.py                # DataFlow model + analyze_dataflow() (stage data-flow analysis, used by show/graph)
 ├── scoping.py                 # Single encoding of the scope/visibility rules: StageScopes static name sets (used by validation + dataflow) and runtime ChainMap context builders (used by carrier)
 ├── schema.py                  # build_schema() — JSON Schema generation shared by the schema command
@@ -88,7 +89,7 @@ src/pytest_httpchain/
 ├── report_formatter.py        # HTTP request/response formatting for test reports
 ├── har_writer.py              # HAR file export for HTTP request/response logging
 ├── redaction.py               # Redaction: the one set of credential-hiding rules (headers, cookies, URL query) shared by reports, HAR, header verify and request-error messages
-├── constants.py               # ConfigOptions enum for pytest.ini settings, scenario file extensions + the shared user-function name grammar
+├── constants.py               # ConfigOptions enum for pytest.ini settings, the scenario file-name grammar (suffix + extensions, shared by collection and `validate`) + the shared user-function name grammar
 ├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response, and whether a stage's retry may retry it) + subclasses RequestError, SaveError, VerificationError
 ├── userfunc.py                # Dynamic function import/invocation, incl. the model-aware call_user_function dispatch
 ├── models/                    # Pydantic models (Scenario, Stage, Request, etc.)

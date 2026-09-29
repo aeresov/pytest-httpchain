@@ -20,7 +20,7 @@ Configuration options can be set in `pytest.ini` or `pyproject.toml` under `[too
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `httpchain_suffix` | `http` | File suffix for test discovery. Files must match `test_<name>.<suffix>.json` or `test_<name>.<suffix>.jsonc` |
+| `httpchain_suffix` | `http` | File suffix for test discovery. Files must match `test_<name>.<suffix>.json` or `test_<name>.<suffix>.jsonc`. [`pytest-httpchain validate`](cli.md#directories) searches directories by it too |
 | `httpchain_ref_parent_traversal_depth` | `3` | Maximum parent directory traversals allowed in `$include`/`$merge`/`$ref` paths, and in a `verify.body.schema`'s JSON Schema `$ref`s to files |
 | `httpchain_max_comprehension_length` | `50000` | Maximum length for list/dict comprehensions in template expressions |
 | `httpchain_max_parallel_iterations` | `10000` | Maximum number of parallel iterations (`repeat`/`foreach`) allowed per stage |

@@ -3,6 +3,7 @@
 
 import importlib.metadata
 import json
+from collections import Counter
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
@@ -10,11 +11,12 @@ from typing import Annotated
 import typer
 from pydantic import ValidationError
 
+from pytest_httpchain.constants import check_suffix
 from pytest_httpchain.dataflow import DataFlow, analyze_dataflow
 from pytest_httpchain.jsonref import ReferenceResolverError
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.schema import build_schema
-from pytest_httpchain.validation import ValidateResult, load_scenario, load_scenario_json, validate_scenario
+from pytest_httpchain.validation import DiagnosticCode, DiscoveryError, ValidateResult, load_scenario, load_scenario_json, validate_paths
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -50,25 +52,81 @@ def main(
     """pytest-httpchain command-line tools."""
 
 
+def _suffix_option(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return check_suffix(value)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+
+
+# The results that stand for no file checked, each the one diagnostic of a
+# path given that names nothing to check, and how the summary counts them
+# apart (singular, plural).
+_NOTHING_CHECKED = {
+    DiagnosticCode.FILE_NOT_FOUND: ("path not found", "paths not found"),
+    DiagnosticCode.NOT_A_FILE: ("path that is not a file", "paths that are not files"),
+    DiagnosticCode.NO_SCENARIO_FILES: ("directory without scenario files", "directories without scenario files"),
+}
+
+
+def _summary(results: list[tuple[Path, ValidateResult]]) -> str | None:
+    """The closing line of a text report, when it checked more than one file:
+    each file counted once, under errors if it has any, else under warnings if
+    it has any. A path that names nothing to check (`_NOTHING_CHECKED`) is no
+    file checked, and is counted apart."""
+    files: list[ValidateResult] = []
+    apart: Counter[DiagnosticCode] = Counter()
+    for _, result in results:
+        code = next((d.code for d in result.diagnostics if d.code in _NOTHING_CHECKED), None)
+        if code is None:
+            files.append(result)
+        else:
+            apart[code] += 1
+    if len(files) < 2:
+        return None
+    with_errors = sum(not result.valid for result in files)
+    with_warnings = sum(result.valid and bool(result.warnings) for result in files)
+    line = f"{len(files)} files checked, {with_errors} with errors, {with_warnings} with warnings"
+    for code, (one, many) in _NOTHING_CHECKED.items():
+        if count := apart[code]:
+            line += f", {count} {one if count == 1 else many}"
+    return line
+
+
 @app.command()
 def validate(
-    paths: Annotated[list[Path], typer.Argument(help="Scenario JSON file(s) to validate.")],
+    paths: Annotated[list[Path], typer.Argument(help="Scenario files to validate, or directories to search for them.")],
     ref_parent_traversal_depth: RefParentTraversalDepth = 3,
     root_path: RootPath = None,
     output_format: OutputFormatOption = OutputFormat.text,
     deep: Annotated[bool, typer.Option("--deep", help="Run deep checks: resolve user-function imports/signatures and referenced files. Imports user modules.")] = False,
     syspath: Annotated[list[Path] | None, typer.Option("--syspath", help="Extra directories to add to sys.path for --deep import resolution (repeatable).")] = None,
     strict: Annotated[bool, typer.Option("--strict", help="Treat warnings as failures for the exit code.")] = False,
+    suffix: Annotated[
+        str | None,
+        typer.Option(
+            "--suffix",
+            help="Find scenario files in directories as test_<name>.<SUFFIX>.json and .jsonc "
+            "(default: the httpchain_suffix pytest's configuration sets for these paths, else http).",
+            callback=_suffix_option,
+        ),
+    ] = None,
 ) -> None:
-    """Validate pytest-httpchain scenario file(s).
+    """Validate pytest-httpchain scenario files, given one by one or as the
+    directories holding them.
 
-    Reports errors and warnings (each with a stable HTTPCHAINxxx diagnostic code)
-    per file and exits non-zero if any file is invalid (or, with --strict, has any
-    warnings).
+    A directory is searched as pytest collects it. Reports errors and warnings
+    (each with a stable HTTPCHAINxxx diagnostic code) per file and exits
+    non-zero if any file is invalid (or, with --strict, has any warnings), or a
+    directory holds no scenario file.
     """
-    results = [
-        (path, validate_scenario(path, ref_parent_traversal_depth=ref_parent_traversal_depth, root_path=root_path, deep=deep, syspaths=list(syspath or []))) for path in paths
-    ]
+    try:
+        results = validate_paths(paths, suffix=suffix, ref_parent_traversal_depth=ref_parent_traversal_depth, root_path=root_path, deep=deep, syspaths=list(syspath or []))
+    except DiscoveryError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1) from e
 
     def passed(result: ValidateResult) -> bool:
         return result.valid and not (strict and result.warnings)
@@ -101,6 +159,8 @@ def validate(
                 # so a JSON consumer can route on it without parsing English.
                 at = f" (at {diagnostic.location})" if diagnostic.location and diagnostic.location not in diagnostic.message else ""
                 typer.echo(f"  {diagnostic.severity} [{diagnostic.code}]: {diagnostic.message}{at}")
+        if summary := _summary(results):
+            typer.echo(summary)
 
     raise typer.Exit(0 if all_passed else 1)
 

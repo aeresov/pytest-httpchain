@@ -1,0 +1,9 @@
+{
+    "stages": [
+        {
+            "name": "login",
+            "request": { "url": "https://api.example.com/login", "method": "POST" },
+            "response": [{ "verify": { "status": 200 } }]
+        }
+    ]
+}

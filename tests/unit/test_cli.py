@@ -2,6 +2,7 @@
 
 import importlib.metadata
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -28,6 +29,13 @@ def _write(path: Path, data: dict) -> Path:
 
 def _stage(name: str, url: str, **fields) -> dict:
     return {"name": name, "request": {"url": url}, "response": [{"verify": {"status": 200}}], **fields}
+
+
+@pytest.fixture
+def project(tmp_path) -> Path:
+    """A project root: its pytest.ini ends the search for the configured suffix."""
+    (tmp_path / "pytest.ini").write_text("[pytest]\n")
+    return tmp_path
 
 
 @pytest.fixture
@@ -160,9 +168,13 @@ def test_validate_invalid_expression(tmp_path, top, stage_url, exit_code, line):
 
 
 def test_validate_multiple_files_one_bad_exits_one(ok_scenario, dup_scenario):
+    """Sorted by path (bad.json before ok.json), not in the order given, and a
+    summary closing a run over more than one file."""
     result = runner.invoke(app, ["validate", str(ok_scenario), str(dup_scenario)])
     assert result.exit_code == 1, result.output
-    assert result.output.startswith(f"{ok_scenario}: OK\n{dup_scenario}: INVALID\n")
+    assert result.output == (
+        f"{dup_scenario}: INVALID\n  error [HTTPCHAIN001]: Duplicate stage names found: ['dup'] (at stages)\n{ok_scenario}: OK\n2 files checked, 1 with errors, 0 with warnings\n"
+    )
 
 
 def test_validate_json_format_ok(ok_scenario):
@@ -195,6 +207,7 @@ def test_validate_json_payload_reports_strictness(warn_scenario, args, exit_code
     assert payload["files"][0]["result"]["valid"] is True
 
 
+@pytest.mark.parametrize("given", ["file", "directory"])
 @pytest.mark.parametrize(
     ("args", "exit_code", "reports_import"),
     [
@@ -204,14 +217,204 @@ def test_validate_json_payload_reports_strictness(warn_scenario, args, exit_code
         pytest.param(["--deep", "--strict"], 1, True, id="deep-strict"),
     ],
 )
-def test_validate_deep(tmp_path, args, exit_code, reports_import):
+def test_validate_deep(project, args, exit_code, reports_import, given):
     f = _write(
-        tmp_path / "deep.json",
+        project / "test_deep.http.json",
         {"stages": [{"name": "s", "request": {"url": "https://x.test/a"}, "response": [{"verify": {"status": 200, "user_functions": ["userfuncs:does_not_exist"]}}]}]},
     )
-    result = runner.invoke(app, ["validate", *args, "--syspath", str(USERFUNCS_DIR), str(f)])
+    result = runner.invoke(app, ["validate", *args, "--syspath", str(USERFUNCS_DIR), str(f if given == "file" else project)])
     assert result.exit_code == exit_code, result.output
+    assert result.output.startswith(f"{f}: ")
     assert ("does_not_exist" in result.output) is reports_import
+
+
+# --- validate over directories ---
+
+
+def _tree(root: Path, scenarios: dict[str, dict]) -> None:
+    """Scenario files under ``root``, keyed by their path relative to it."""
+    for name, data in scenarios.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        _write(root / name, data)
+
+
+OK = {"stages": [_stage("s", "https://x.test/a")]}
+WARNS = {"stages": [_stage("s", "https://x.test/{{ ghost }}")]}
+DUPLICATE = {"stages": [_stage("dup", "https://x.test/a"), _stage("dup", "https://x.test/b")]}
+
+
+def test_validate_directory_checks_the_files_pytest_collects(project):
+    """In pytest's order, each file as when named alone, then the summary: a
+    file with errors counted once, under errors. `build/` is a directory
+    pytest skips, and `notes.json` no scenario name."""
+    tests = project / "tests"
+    _tree(
+        tests,
+        {"test_a.http.json": OK, "api/test_b.http.jsonc": WARNS, "api/test_c.http.json": DUPLICATE, "build/test_d.http.json": DUPLICATE, "notes.json": DUPLICATE},
+    )
+    result = runner.invoke(app, ["validate", str(tests)])
+    assert result.exit_code == 1, result.output
+    assert result.output == (
+        f"{tests / 'api' / 'test_b.http.jsonc'}: OK with warnings\n"
+        "  warning [HTTPCHAIN003]: Stage 's': request references potentially undefined variable(s): ['ghost'] (at stages[0].request)\n"
+        f"{tests / 'api' / 'test_c.http.json'}: INVALID\n"
+        "  error [HTTPCHAIN001]: Duplicate stage names found: ['dup'] (at stages)\n"
+        f"{tests / 'test_a.http.json'}: OK\n"
+        "3 files checked, 1 with errors, 1 with warnings\n"
+    )
+
+
+@pytest.mark.parametrize(("args", "exit_code"), [pytest.param([], 0, id="default"), pytest.param(["--strict"], 1, id="strict")])
+def test_validate_directory_passes_on_warnings_unless_strict(project, args, exit_code):
+    _tree(project, {"test_a.http.json": OK, "test_b.http.json": WARNS})
+    result = runner.invoke(app, ["validate", *args, str(project)])
+    assert result.exit_code == exit_code, result.output
+    assert result.output.endswith("\n2 files checked, 0 with errors, 1 with warnings\n")
+
+
+def test_validate_file_reached_twice_is_checked_once(project):
+    """Once, where first reached; one file, so no summary."""
+    _tree(project, {"test_a.http.json": OK})
+    result = runner.invoke(app, ["validate", str(project), str(project / "test_a.http.json"), str(project)])
+    assert result.exit_code == 0, result.output
+    assert result.output == f"{project / 'test_a.http.json'}: OK\n"
+
+
+@pytest.mark.parametrize(
+    "scenarios",
+    [
+        pytest.param({}, id="empty"),
+        # Only a name pytest does not collect, and a file in a directory it skips.
+        pytest.param({"login.http.json": OK, "build/test_a.http.json": OK}, id="nothing-pytest-collects"),
+    ],
+)
+def test_validate_directory_without_scenario_files_fails(project, scenarios):
+    """A typo'd path must not pass CI as an empty run: a missing path is
+    HTTPCHAIN010 as before, and a directory holding nothing to check is
+    HTTPCHAIN039, whatever else it holds."""
+    suite = project / "suite"
+    suite.mkdir()
+    _tree(suite, scenarios)
+    result = runner.invoke(app, ["validate", str(suite), str(project / "suiet")])
+    assert result.exit_code == 1, result.output
+    assert result.output == (
+        f"{project / 'suiet'}: INVALID\n"
+        f"  error [HTTPCHAIN010]: File not found: {project / 'suiet'}\n"
+        f"{suite}: INVALID\n"
+        f"  error [HTTPCHAIN039]: No scenario files named test_<name>.http.json or test_<name>.http.jsonc in directory: {suite}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("extra", "counted_apart"),
+    [
+        pytest.param(["empty"], ", 1 directory without scenario files", id="empty-directory"),
+        pytest.param(["missing"], ", 1 path not found", id="missing-path"),
+        pytest.param(
+            ["missing", "empty", "gone", "void"],
+            ", 2 paths not found, 2 directories without scenario files",
+            id="several",
+        ),
+    ],
+)
+def test_validate_summary_counts_paths_without_a_file_to_check_apart(project, extra, counted_apart):
+    """A path that names nothing to check is no file checked: the count is of
+    the files there are, and the rest is named for what it is."""
+    _tree(project, {"suite/test_a.http.json": OK, "suite/test_b.http.json": OK})
+    (project / "empty").mkdir()
+    (project / "void").mkdir()
+    result = runner.invoke(app, ["validate", str(project / "suite"), *(str(project / name) for name in extra)])
+    assert result.exit_code == 1, result.output
+    assert result.output.splitlines()[-1] == f"2 files checked, 0 with errors, 0 with warnings{counted_apart}"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs a FIFO")
+def test_validate_summary_counts_a_path_that_is_not_a_file_apart(project):
+    _tree(project, {"test_a.http.json": OK, "test_b.http.json": OK})
+    os.mkfifo(project / "pipe")
+    result = runner.invoke(app, ["validate", str(project / "test_a.http.json"), str(project / "test_b.http.json"), str(project / "pipe")])
+    assert result.exit_code == 1, result.output
+    assert result.output.splitlines()[-1] == "2 files checked, 0 with errors, 0 with warnings, 1 path that is not a file"
+
+
+def test_validate_summary_needs_two_files_checked(project):
+    """One file checked and a mistyped path: no summary, the two lines say it all."""
+    _tree(project, {"test_a.http.json": OK})
+    result = runner.invoke(app, ["validate", str(project / "test_a.http.json"), str(project / "test_b.http.json")])
+    assert result.exit_code == 1, result.output
+    assert result.output == (
+        f"{project / 'test_a.http.json'}: OK\n{project / 'test_b.http.json'}: INVALID\n  error [HTTPCHAIN010]: File not found: {project / 'test_b.http.json'}\n"
+    )
+
+
+def test_validate_sorts_the_files_of_every_argument_together(project):
+    """By path, name by name, whatever order the arguments come in: the report
+    does not depend on how a shell or `find` listed them. Within a directory
+    that is pytest's order."""
+    _tree(project, {"c/test_c.http.json": OK, "a/b/test_b.http.json": OK, "a/test_a.http.jsonc": OK, "test_z.http.json": OK})
+    result = runner.invoke(app, ["validate", str(project / "test_z.http.json"), str(project / "c"), str(project / "a")])
+    assert result.exit_code == 0, result.output
+    assert result.output == (
+        f"{project / 'a' / 'b' / 'test_b.http.json'}: OK\n"
+        f"{project / 'a' / 'test_a.http.jsonc'}: OK\n"
+        f"{project / 'c' / 'test_c.http.json'}: OK\n"
+        f"{project / 'test_z.http.json'}: OK\n"
+        "4 files checked, 0 with errors, 0 with warnings\n"
+    )
+
+
+def test_validate_json_lists_the_files_found_and_the_empty_directory(project):
+    """The payload's shape is unchanged: one entry per path reported."""
+    _tree(project, {"suite/test_a.http.json": OK, "suite/test_b.http.json": DUPLICATE})
+    (project / "empty").mkdir()
+    result = runner.invoke(app, ["validate", "--format", "json", str(project / "suite"), str(project / "empty")])
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.output)
+    assert payload["valid"] is False
+    assert [(entry["path"], [d["code"] for d in entry["result"]["diagnostics"]]) for entry in payload["files"]] == [
+        (str(project / "empty"), ["HTTPCHAIN039"]),
+        (str(project / "suite" / "test_a.http.json"), []),
+        (str(project / "suite" / "test_b.http.json"), ["HTTPCHAIN001"]),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("ini", "args", "found"),
+    [
+        pytest.param("[pytest]\n", [], "test_a.http.json", id="default"),
+        # The suffix pytest's configuration sets, as pytest would find it.
+        pytest.param("[pytest]\nhttpchain_suffix = api\n", [], "test_b.api.json", id="configured"),
+        pytest.param("[pytest]\n", ["--suffix", "api"], "test_b.api.json", id="option"),
+        pytest.param("[pytest]\nhttpchain_suffix = api\n", ["--suffix", "http"], "test_a.http.json", id="option-over-configured"),
+    ],
+)
+def test_validate_directory_by_suffix(tmp_path, ini, args, found):
+    (tmp_path / "pytest.ini").write_text(ini)
+    _tree(tmp_path, {"test_a.http.json": OK, "test_b.api.json": OK})
+    result = runner.invoke(app, ["validate", *args, str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert result.output == f"{tmp_path / found}: OK\n"
+
+
+@pytest.mark.parametrize("suffix", ["a.b", "", "a" * 33])
+def test_validate_rejects_a_suffix_pytest_would(suffix):
+    result = runner.invoke(app, ["validate", "--suffix", suffix, "."])
+    assert result.exit_code == 2, result.output
+    assert "Invalid value for '--suffix': must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars" in " ".join(
+        _ANSI.sub("", result.stderr).replace("│", "").split()
+    )
+
+
+def test_validate_directory_with_a_configuration_pytest_rejects_exits_one(tmp_path):
+    """Before any file is checked, one `error:` line: pytest would not run
+    either. Files named alone need no suffix, and do not read it."""
+    (tmp_path / "pytest.ini").write_text("[pytest]\nhttpchain_suffix = a.b\n")
+    _tree(tmp_path, {"test_a.http.json": OK})
+    result = runner.invoke(app, ["validate", str(tmp_path / "test_a.http.json"), str(tmp_path)])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == f"error: {tmp_path / 'pytest.ini'}: httpchain_suffix must contain only alphanumeric characters, underscores, hyphens, and be ≤32 chars\n"
+    assert runner.invoke(app, ["validate", str(tmp_path / "test_a.http.json")]).exit_code == 0
 
 
 # --- schema / resolve ---

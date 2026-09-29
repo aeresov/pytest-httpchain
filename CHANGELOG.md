@@ -372,6 +372,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a failed stage, which `validate --deep` reports ahead of time as `HTTPCHAIN021`. A response body
   stays strict JSON, and a file a request uploads is sent as it is. `resolve` prints strict JSON,
   the comments gone.
+- `pytest-httpchain validate` takes directories as well as files, so a CI job can gate a whole
+  tree with `pytest-httpchain validate tests/`. A directory is searched as pytest collects it:
+  every `test_<name>.<suffix>.json` and `.jsonc` at any depth, passing over the directories pytest
+  skips by default (those its default `norecursedirs` matches: `*.egg`, `.*`, `_darcs`, `build`,
+  `CVS`, `dist`, `node_modules`, `venv`, `{arch}`; `__pycache__`; a virtual environment, known by
+  its `pyvenv.cfg`, or a conda environment by its `conda-meta/history`) and the entries pytest
+  passes over when they cannot be looked at (a symlink to itself), and never entering a symlink to
+  a directory, so a link cannot loop the search. The suffix is the `httpchain_suffix` set in the
+  configuration file pytest would read for the same paths (`pytest.toml`, `pytest.ini`,
+  `pyproject.toml`, `tox.ini` or `setup.cfg`, found as pytest documents finding its configfile),
+  else `http`. The new `--suffix` option overrides it, and a configuration file pytest could not
+  read, or a suffix it would refuse, stops `validate` with an `error:` line before anything is
+  checked; a run over files alone never reads it. Files named one by one are still validated
+  whatever their name. The report is sorted by path, whatever order the paths are given in (a
+  directory's files so in pytest's order, depth first, each directory's entries by name), a file
+  reached twice (`validate tests tests/api`) is checked once, and `--deep`, `--syspath`,
+  `--strict`, `--format json` and the reference options apply to every file found. A directory
+  holding no scenario file is reported as `HTTPCHAIN039` (error) and fails the run, so a mistyped
+  path, or a suffix that names no file, cannot pass CI as an empty run.
 
 ### Fixed
 
@@ -817,6 +836,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a reason of its own (`the template engine does not read an attribute named '_id'; for a key
   of that name, write ['_id']`) instead of simpleeval's (`Sorry, access to __attributes ... is not
   available. (_id)`), and `validate` reports it (`HTTPCHAIN037`).
+- `validate`'s text report over more than one file ends with a summary line, `3 files checked, 1
+  with errors, 1 with warnings` (a file with errors counted under errors only; a path not found
+  counted apart, as no file checked), and a directory given to it is searched for scenario files
+  (see Added) where it was reported as `HTTPCHAIN011`, "Path is not a file". Files are reported
+  sorted by path, in the text report and the `--format json` payload alike, where they followed
+  the order they were given in: `validate b.http.json a.http.json` reports `a.http.json` first.
+  The payload keeps its shape.
 
 ## [0.15.2] - 2026-09-26
 
