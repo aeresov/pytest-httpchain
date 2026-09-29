@@ -74,7 +74,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagno
         *_stage_name_diagnostics(scenario),
         *_fixture_diagnostics(scenario, vars_saved),
         *_invalid_expression_diagnostics(scenario, test_data),
-        *_scenario_template_diagnostics(test_data, set(fixtures), scenario_sub_names, defined),
+        *_scenario_template_diagnostics(scenario, test_data, set(fixtures), scenario_sub_names, defined),
         *_reserved_name_diagnostics(vars_defined | vars_saved | set(fixtures)),
         *_dataflow_diagnostics(scenario, test_data, defined),
         *_uncalled_builtin_diagnostics(scenario, test_data, defined),
@@ -188,6 +188,19 @@ _FAILS_COLLECTION = "fails the scenario's collection"
 _FAILS_STAGE = "fails the stage"
 
 
+def _scenario_level_fails(scenario: Scenario, key: str) -> str:
+    """What a template that fails in the scenario-level field ``key`` fails.
+
+    The ``substitutions`` of a scenario with a stage whose parametrize values
+    are templates resolve at collection (HTTPCHAIN025, on the factory's own
+    predicate), so a failure there fails the scenario's collection. Otherwise
+    they, and ``auth``, ``ssl`` and ``client`` always, resolve at scenario
+    initialization."""
+    if key == "substitutions" and any(parametrize_values_contain_template(stage.parametrize) for stage in scenario.stages):
+        return _FAILS_COLLECTION
+    return _FAILS_SCENARIO_INIT
+
+
 def _template_refs(templates: Any, defined: DefinedNames) -> tuple[set[str], set[str]]:
     """``(references, stand-ins)`` of some template text: the names whose
     absence the undefined-name codes report, and the built-ins' names used only
@@ -215,11 +228,13 @@ def _stand_in_diagnostic(where: str, names: set[str], location: str, *, scope_no
     return diag(DiagnosticCode.BUILTIN_STANDS_IN, f"{where} uses {uses}, but {own}", location=location)
 
 
-def _scenario_template_diagnostics(test_data: dict[str, Any], fixtures: set[str], scenario_sub_names: set[str], defined: DefinedNames) -> Iterator[Diagnostic]:
+def _scenario_template_diagnostics(scenario: Scenario, test_data: dict[str, Any], fixtures: set[str], scenario_sub_names: set[str], defined: DefinedNames) -> Iterator[Diagnostic]:
     """HTTPCHAIN016/017/036: scenario-level templates resolve against only the
     scenario substitutions, so a fixture (016) or undefined (017) reference
-    there is a crash at scenario initialization, or for a read of a built-in's
-    name the built-in function in the value.
+    there is a crash at scenario initialization (at collection, for the
+    ``substitutions`` of a scenario that resolves them there,
+    `_scenario_level_fails`), or for a read of a built-in's name the built-in
+    function in the value.
 
     The ``substitutions`` list itself resolves strictly in order (the runtime
     computes each step's context before that step's names land), so its entries
@@ -236,6 +251,7 @@ def _scenario_template_diagnostics(test_data: dict[str, Any], fixtures: set[str]
             templates_and_scopes = list(substitution_step_templates(test_data.get(key)))
         else:
             templates_and_scopes = [(test_data.get(key), frozenset(scenario_sub_names))]
+        fails = _scenario_level_fails(scenario, key)
 
         fixture_refs: set[str] = set()
         forward_refs: set[str] = set()
@@ -253,24 +269,26 @@ def _scenario_template_diagnostics(test_data: dict[str, Any], fixtures: set[str]
             yield diag(
                 DiagnosticCode.FIXTURE_IN_SCENARIO_TEMPLATE,
                 f"Fixtures referenced in scenario-level '{key}' templates: {sorted(fixture_refs)} (the scenario-level context never includes fixture values"
-                f"{_builtin_fallback(fixture_refs, fails=_FAILS_SCENARIO_INIT)})",
+                f"{_builtin_fallback(fixture_refs, fails=fails)})",
                 location=key,
             )
         if forward_refs:
             # A built-in's name crashes only where a template renders to it,
             # which is what the fallback note says for it.
-            crash = "; this crashes at scenario initialization" if forward_refs - TEMPLATE_BUILTINS else ""
+            crash = ""
+            if forward_refs - TEMPLATE_BUILTINS:
+                crash = "; this crashes at scenario initialization" if fails == _FAILS_SCENARIO_INIT else f"; this {fails}"
             yield diag(
                 DiagnosticCode.SCENARIO_UNDEFINED_VAR,
                 f"Scenario-level '{key}' references name(s) before the substitution step that defines them: {sorted(forward_refs)} "
-                f"(steps resolve strictly in order{crash}{_builtin_fallback(forward_refs, fails=_FAILS_SCENARIO_INIT)})",
+                f"(steps resolve strictly in order{crash}{_builtin_fallback(forward_refs, fails=fails)})",
                 location=key,
             )
         if undefined_refs:
             yield diag(
                 DiagnosticCode.SCENARIO_UNDEFINED_VAR,
                 f"Undefined variable(s) in scenario-level '{key}' templates: {sorted(undefined_refs)} (resolved against only scenario substitutions, before any stage runs"
-                f"{_builtin_fallback(undefined_refs, fails=_FAILS_SCENARIO_INIT)})",
+                f"{_builtin_fallback(undefined_refs, fails=fails)})",
                 location=key,
             )
         if stand_ins:
@@ -481,12 +499,13 @@ def _rendered_template_fields(scenario: Scenario, test_data: dict[str, Any]) -> 
     a substitutions-save's ``description`` are never rendered, so a template
     there is dead text), how a message names the field, its location, and what
     a template that fails there fails (collection for a parametrize value,
-    scenario initialization at scenario level)."""
+    scenario initialization or collection at scenario level,
+    `_scenario_level_fails`)."""
     for key in SCENARIO_TEMPLATE_FIELDS:
         subtree = test_data.get(key)
         if key == "substitutions":
             subtree = [templates for templates, _ in substitution_step_templates(subtree)]
-        yield subtree, f"Scenario-level '{key}'", key, _FAILS_SCENARIO_INIT
+        yield subtree, f"Scenario-level '{key}'", key, _scenario_level_fails(scenario, key)
     raws = raw_stages(test_data)
     for i, stage in enumerate(scenario.stages):
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
@@ -528,15 +547,14 @@ def _uncalled_builtin_diagnostics(scenario: Scenario, test_data: dict[str, Any],
     (``{{ now }}``, ``{{ env }}``).
 
     A template that renders to the function itself fails its stage at runtime
-    (collection for a parametrize value, scenario initialization at scenario
-    level),
-    and inside an expression (``str(now)``) the function goes wherever the
-    value would. None of these built-ins (`CALL_ONLY_BUILTINS`) is any use as
-    a value, so each such use is flagged where it is written;
-    `scoping.extract_uncalled_builtins` leaves out a built-in handed to a
-    function that may take one (a ``key=``, a user
-    function's argument) and a name the scenario defines itself, which the
-    reference checks (003/004) cover. Only text the runtime renders is read, as
+    (collection for a parametrize value; at scenario level, initialization or
+    collection, `_scenario_level_fails`), and inside an expression
+    (``str(now)``) the function goes wherever the value would. None of these
+    built-ins (`CALL_ONLY_BUILTINS`) is any use as a value, so each such use
+    is flagged where it is written; `scoping.extract_uncalled_builtins` leaves
+    out a built-in handed to a function that may take one (a ``key=``, a user
+    function's argument, a fixture's method's) and a name the scenario defines
+    itself, which the reference checks (003/004) cover. Only text the runtime renders is read, as
     the reference checks read it (`_rendered_template_fields`).
     """
     for subtree, where, location, fails in _rendered_template_fields(scenario, test_data):

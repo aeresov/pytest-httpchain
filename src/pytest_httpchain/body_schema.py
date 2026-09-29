@@ -18,7 +18,6 @@ reaches (`BodySchema.unresolvable`), so both resolve the same way.
 import collections
 import functools
 import json
-import operator
 import os
 import re
 import threading
@@ -531,16 +530,24 @@ def _prepared(document: Any, uri: str, pointer: tuple[str, ...], specification: 
     reads a schema (in ``$defs``, ``properties``...). Where it does not, as
     in an OpenAPI ``components/schemas`` map, the walk is JSON Schema's again
     from the outermost schema the selected one is in through JSON Schema's
-    keywords alone (`_enters`), the component: its own ``$id`` moves the
-    base all the same, and it is added to the registry with the resources in
-    it, so a reference by one of their ``$id``s finds them, as the registry's
-    crawl finds those JSON Schema looks for.
+    keywords alone (`_component_depth`), the component: its own ``$id``
+    moves the base all the same, and it is added to the registry with the
+    resources in it, so a reference by one of their ``$id``s finds them, as
+    the registry's crawl finds those JSON Schema looks for.
 
     An ``$id`` that cannot be read raises an Unresolvable naming it
     (`_moved`): on the pointer's way, and, where the crawl fails on one, in
     the selected schema (`_id_problem`). One elsewhere in the document is
-    left to fail where jsonschema meets it, as it would."""
-    registry = _META_SCHEMAS.combine(referencing.Registry().with_resource(uri, specification.create_resource(document)))
+    left to fail where jsonschema meets it, as it would.
+
+    A crawl that fails (on such an ``$id``, or on what is no schema where one
+    belongs, a Draft 7 array ``items`` under 2020-12) indexes nothing, so the
+    document, and a component, is kept at its own ``$id`` all the same
+    (`_kept_at`), as jsonschema keeps the schema it is given: a reference
+    that needs no crawl, ``#/$defs/...`` under that ``$id``, resolves, and one
+    that does fails on what the crawl fails on, not as a remote document."""
+    resource = specification.create_resource(document)
+    registry = _META_SCHEMAS.combine(referencing.Registry().with_resource(uri, resource))
     try:
         # Once, for every lookup from here: referencing crawls the registry
         # a lookup misses.
@@ -550,6 +557,8 @@ def _prepared(document: Any, uri: str, pointer: tuple[str, ...], specification: 
     else:
         crawled = True
     base = _moved(uri, document, specification)
+    if not crawled:
+        registry = _kept_at(registry, base, resource)
     nodes = [document]
     keys: list[int | str] = []
     for segment in pointer:
@@ -557,7 +566,7 @@ def _prepared(document: Any, uri: str, pointer: tuple[str, ...], specification: 
         key = int(segment) if isinstance(nodes[-1], list) else segment
         nodes.append(nodes[-1][key])
         keys.append(key)
-    start = next(depth for depth in range(len(keys) + 1) if _enters(nodes[depth:], keys[depth:], specification))
+    start = _component_depth(nodes, keys, specification)
     if start:
         # The component: as JSON Schema reads the document, the way to it
         # moves the base, but only as far as it reads schemas on it.
@@ -565,12 +574,15 @@ def _prepared(document: Any, uri: str, pointer: tuple[str, ...], specification: 
         component = nodes[start]
         specification = _specification_of(component, specification)
         inside = _moved(base, component, specification)
+        resource = specification.create_resource(component)
         try:
             # The registry's own entry wins where both have one: the document
             # the component is in, at the base it had there.
-            registry = referencing.Registry().with_resource(base, specification.create_resource(component)).crawl().combine(registry)
+            registry = referencing.Registry().with_resource(base, resource).crawl().combine(registry)
         except Exception:
             crawled = False
+            if inside != base:
+                registry = _kept_at(registry, inside, resource)
         else:
             # The crawl that reaches the selected schema.
             crawled = True
@@ -580,6 +592,46 @@ def _prepared(document: Any, uri: str, pointer: tuple[str, ...], specification: 
     if not crawled and (problem := _id_problem(schema, base, specification)) is not None:
         raise problem
     return schema, registry, base
+
+
+def _kept_at(registry: referencing.Registry[Any], uri: str, resource: referencing.Resource[Any]) -> referencing.Registry[Any]:
+    """``registry`` with ``resource``, whose crawl failed, kept at ``uri``,
+    its own ``$id`` (`_prepared`). Uncrawled, as jsonschema keeps the schema
+    it is given: a lookup the registry misses crawls it, and fails where its
+    crawl failed. Where ``uri`` is the one it has already, it is left."""
+    if uri in registry:
+        return registry
+    return registry.with_resource(uri, resource)
+
+
+def _component_depth(nodes: list[Any], keys: list[int | str], specification: referencing.Specification[Any]) -> int:
+    """How deep in the pointer's way (``nodes``, through ``keys``) the
+    component is (`_prepared`): the outermost node from which the walk to the
+    selected schema is JSON Schema's keywords alone (`_enters`); 0 where the
+    document is such a schema.
+
+    Unless that walk reads a deeper such node as what a keyword holds, a map
+    or array of schemas (`_holds_schemas`), which that one cannot be: then
+    the deeper one is. A component named like a keyword that holds a map
+    (``properties``, ``$defs``, ``patternProperties``, ``definitions``) is
+    under ``components/schemas`` as a property is under ``properties``: read
+    from that map, the component was the map of properties, its ``$id`` a
+    property's schema, never its base."""
+    candidates = [depth for depth in range(len(keys) + 1) if _enters(nodes[depth:], keys[depth:], specification)]
+    start = candidates[0]
+    for later in candidates[1:]:
+        if not _enters(nodes[start : later + 1], keys[start:later], specification) and not _holds_schemas(nodes[later]):
+            start = later
+    return start
+
+
+def _holds_schemas(node: Any) -> bool:
+    """Whether ``node`` may be what a keyword holding schemas holds: a map or
+    an array of schemas (objects and booleans) or, as Draft 7's
+    ``dependencies`` may, of arrays of names. A schema itself holds text
+    (``type``, ``$id``, ``title``) or a number beside its subschemas."""
+    members = node.values() if isinstance(node, dict) else node if isinstance(node, list) else None
+    return members is not None and all(isinstance(member, dict | bool | list) for member in members)
 
 
 def _enters(nodes: list[Any], keys: list[int | str], specification: referencing.Specification[Any]) -> bool:
@@ -707,8 +759,15 @@ def _referencing(dialect: Dialect, max_parent_traversal: int | None) -> Any:
     One lookup stays jsonschema's: ``unevaluatedProperties`` and
     ``unevaluatedItems`` look a reference up themselves, to see what it
     evaluated. It goes through the same registry, local and inside the root,
-    but without the written-path rules; the ``$ref`` it looks up is followed
-    by `_reference` too, which keeps them."""
+    but without the written-path rules. So those two apply last in a schema
+    (`_unevaluated_last`), as the annotations they read come from the others:
+    each reference they look up is one `_reference` has followed by then,
+    held to the rules, in the schema they are in, in what that reaches, and
+    in the ``allOf``/``anyOf``/``oneOf``, ``if``/``then``/``else`` and
+    ``dependentSchemas`` subschemas they look into. Applied in the schema's
+    order, they had the file of a rule-breaking ``$ref`` written after them
+    read, which could make a body pass under ``not``; written before them,
+    the ``$ref`` failed the stage."""
     keywords = {keyword: functools.partial(_reference, keyword, dialect, max_parent_traversal) for keyword in _REFERENCE_KEYWORDS if keyword in dialect.VALIDATORS}
     validators: dict[str, Any] = {**dialect.VALIDATORS, **keywords}
     extended: Any = jsonschema.validators.create(
@@ -717,7 +776,7 @@ def _referencing(dialect: Dialect, max_parent_traversal: int | None) -> Any:
         type_checker=dialect.TYPE_CHECKER,
         format_checker=dialect.FORMAT_CHECKER,
         id_of=dialect.ID_OF,
-        applicable_validators=_ref_alone if dialect in _REF_ALONE_DIALECTS else operator.methodcaller("items"),
+        applicable_validators=_ref_alone if dialect in _REF_ALONE_DIALECTS else _unevaluated_last,
     )
 
     def evolve(self: Any, **changes: Any) -> Any:
@@ -738,6 +797,20 @@ def _referencing(dialect: Dialect, max_parent_traversal: int | None) -> Any:
 # The dialects in which a `$ref` stands alone, its sibling keywords ignored,
 # as they specify and as jsonschema validates them (its `ignore_ref_siblings`).
 _REF_ALONE_DIALECTS = frozenset({jsonschema.Draft3Validator, jsonschema.Draft4Validator, jsonschema.Draft6Validator, jsonschema.Draft7Validator})
+
+
+# The keywords whose jsonschema implementation looks references up itself
+# (`_referencing`), which apply last (`_unevaluated_last`).
+_UNEVALUATED = ("unevaluatedProperties", "unevaluatedItems")
+
+
+def _unevaluated_last(schema: Any) -> Any:
+    """The keywords that apply in a schema of a later dialect: all, in the
+    schema's order, but ``unevaluatedProperties`` and ``unevaluatedItems``
+    after the others (`_referencing`)."""
+    if not any(keyword in schema for keyword in _UNEVALUATED):
+        return schema.items()
+    return sorted(schema.items(), key=lambda item: item[0] in _UNEVALUATED)
 
 
 def _ref_alone(schema: Any) -> Any:
@@ -951,12 +1024,20 @@ def _moved(base: str, schema: Any, specification: referencing.Specification[Any]
     """The base URI inside ``schema``, reached under ``base``: its ``$id``
     joined to ``base``, as referencing's ``Resolver.in_subresource`` joins
     it, or ``base`` itself. An `_IdUnresolvable` for one that is not a
-    string (`_schema_id`) or that urljoin cannot join (``http://[x``)."""
+    string (`_schema_id`) or that urljoin cannot join (``http://[x``).
+
+    An empty fragment (``https://example.com/user.json#``, which the
+    2019-09 and 2020-12 meta-schemas allow) is dropped first, as
+    ``Resource.id`` drops it, and as the registry keys a resource: joined
+    as written, an absolute ``$id``'s ``#`` stayed on the base, which no
+    resource is kept under, so a lookup jsonschema makes itself (the
+    ``unevaluated*`` keywords', a ``$recursiveRef``) went to retrieval, and
+    was refused as a remote document."""
     identifier = _schema_id(schema, specification)
     if identifier is None:
         return base
     try:
-        return urljoin(base, identifier)
+        return urljoin(base, identifier.rstrip("#"))
     except ValueError as e:
         raise _id_unresolvable(identifier, specification) from e
 

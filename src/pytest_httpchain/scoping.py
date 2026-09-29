@@ -78,16 +78,58 @@ SCENARIO_TEMPLATE_FIELDS = ("substitutions", "auth", "ssl", "client")
 
 
 class _TemplateNames(NamedTuple):
-    """The free identifiers of some template text, by how each is used."""
+    """The free identifiers of some template text, by how each is used. A read
+    name is in each set of the ways it is used (see
+    `_extract_names_from_expr`)."""
 
     read: set[str]
     """Names used as a value anywhere but as a call's function."""
     called: set[str]
     """Names called (``now()``)."""
     loose: set[str]
-    """The read names that are not handed to a function that may take one:
-    ``{{ now }}``, ``str(now)`` and ``dict(at=now)``, not
-    ``sorted(rows, key=len)`` or ``sign(now)`` (see `_extract_names_from_expr`)."""
+    """The read names used where no function may take one: ``{{ now }}``,
+    ``str(now)``, ``dict(at=now)``, ``', '.join(now)``."""
+    keys: set[str]
+    """The read names handed as the ``key=`` of a built-in or a method
+    (``sorted(rows, key=len)``, ``rows.sort(key=len)``), which takes a
+    function."""
+    to_functions: set[str]
+    """The read names handed to a user's function (``sign(now)``,
+    ``sign(clock=now)``), which may take a function."""
+    to_methods: set[tuple[str, str]]
+    """``(receiver, name)`` for a read name handed to a method, not as its
+    ``key=``, of an object reached from the name ``receiver``
+    (``helper.ids(uuid4)``, ``helper().ids(uuid4)``: ``("helper",
+    "uuid4")``). It may take a function where ``receiver`` may be the user's
+    object (`DefinedNames.callables`); a method of data (a save, a variable)
+    takes none (`_used_as_values`)."""
+
+    @classmethod
+    def empty(cls) -> "_TemplateNames":
+        return cls(set(), set(), set(), set(), set(), set())
+
+    def update(self, other: "_TemplateNames") -> None:
+        """Add ``other``'s names, each to its set."""
+        self.read.update(other.read)
+        self.called.update(other.called)
+        self.loose.update(other.loose)
+        self.keys.update(other.keys)
+        self.to_functions.update(other.to_functions)
+        self.to_methods.update(other.to_methods)
+
+
+def _receiver(node: ast.expr) -> str | None:
+    """The name a method's object is reached from (``helper`` for
+    ``helper.api.ids``, ``helper().ids``, ``helper['x'].ids``), or None for an
+    object written in place (``', '.join``)."""
+    while True:
+        match node:
+            case ast.Attribute(value=inner) | ast.Subscript(value=inner) | ast.Call(func=inner):
+                node = inner
+            case ast.Name(id=name):
+                return name
+            case _:
+                return None
 
 
 def _extract_names_from_expr(expr: str) -> _TemplateNames:
@@ -104,42 +146,59 @@ def _extract_names_from_expr(expr: str) -> _TemplateNames:
     `extract_invalid_expressions`); read as a regex's identifiers, it had
     ``True``, keywords and attribute names reported undefined besides.
 
-    A read is loose unless it is handed to a function that may take a function:
-    any argument of a user's function (``sign(now)``, ``sign(clock=now)``), or
-    the ``key=`` of a built-in or a method (``sorted``, ``min``, ``max``,
-    ``list.sort``). Any other argument of a built-in or a method
-    (``str(now)``, ``dict(at=now)``, ``', '.join(now)``) is loose: none of
-    those takes a function, so each would work on its repr.
+    A read may be handed to a function that takes a function: the ``key=`` of
+    a built-in or a method (``sorted``, ``min``, ``max``, ``list.sort``), any
+    argument of a user's function (``sign(now)``, ``sign(clock=now)``), or any
+    argument of a method of an object reached from a name, which may be the
+    user's (``helper.ids(uuid4)``). Any other argument of a built-in, or of a
+    method of an object written in place (``str(now)``, ``dict(at=now)``,
+    ``', '.join(now)``), is loose: none of those takes a function, so each
+    would work on its repr.
     """
+    names = _TemplateNames.empty()
     try:
         tree = parse_expression(expr)
     except TemplatesError:
-        return _TemplateNames(set(), set(), set())
+        return names
 
     bound: set[str] = set()
     callees: set[int] = set()
-    arguments: set[int] = set()
+    # What each argument that may be a function is handed to, by node.
+    keys: set[int] = set()
+    to_functions: set[int] = set()
+    to_methods: dict[int, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.comprehension):
             bound |= {n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)}
         elif isinstance(node, ast.Call):
+            key = [keyword.value for keyword in node.keywords if keyword.arg == "key"]
+            others = [*node.args, *(keyword.value for keyword in node.keywords if keyword.arg != "key")]
+            match node.func:
+                case ast.Name(id=name) if name not in TEMPLATE_BUILTINS:
+                    to_functions.update(id(argument) for argument in (*key, *others))
+                case ast.Name():
+                    keys.update(id(argument) for argument in key)
+                case ast.Attribute(value=value):
+                    keys.update(id(argument) for argument in key)
+                    if (receiver := _receiver(value)) is not None:
+                        to_methods.update(dict.fromkeys(map(id, others), receiver))
             if isinstance(node.func, ast.Name):
                 callees.add(id(node.func))
-            if isinstance(node.func, ast.Name) and node.func.id not in TEMPLATE_BUILTINS:
-                takes_functions = [*node.args, *(keyword.value for keyword in node.keywords)]
-            else:
-                takes_functions = [keyword.value for keyword in node.keywords if keyword.arg == "key"]
-            arguments.update(id(argument) for argument in takes_functions)
 
-    names = _TemplateNames(set(), set(), set())
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id not in bound:
             if id(node) in callees:
                 names.called.add(node.id)
+                continue
+            names.read.add(node.id)
+            if id(node) in keys:
+                names.keys.add(node.id)
+            elif id(node) in to_functions:
+                names.to_functions.add(node.id)
+            elif (receiver := to_methods.get(id(node))) is not None and receiver not in bound:
+                names.to_methods.add((receiver, node.id))
             else:
-                names.read.add(node.id)
-                if id(node) not in arguments:
-                    names.loose.add(node.id)
+                names.loose.add(node.id)
     return names
 
 
@@ -165,12 +224,9 @@ def _template_expressions(obj: Any) -> Iterator[str]:
 
 def _template_names(obj: Any) -> _TemplateNames:
     """`_extract_names_from_expr` over every ``{{ expr }}`` in a structure."""
-    names = _TemplateNames(set(), set(), set())
+    names = _TemplateNames.empty()
     for expr in _template_expressions(obj):
-        expr_names = _extract_names_from_expr(expr)
-        names.read.update(expr_names.read)
-        names.called.update(expr_names.called)
-        names.loose.update(expr_names.loose)
+        names.update(_extract_names_from_expr(expr))
     return names
 
 
@@ -205,6 +261,15 @@ class DefinedNames:
     substitutions."""
 
 
+def _used_as_values(names: _TemplateNames, defined: DefinedNames) -> set[str]:
+    """The read names used where no function may take one: loose, or handed
+    to a method of an object reached from a name the scenario defines as data,
+    or does not define at all. Only a fixture or function substitution
+    (`DefinedNames.callables`) may be an object whose methods take functions:
+    a save or a variable is JSON data, and none of its methods does."""
+    return names.loose | {name for receiver, name in names.to_methods if receiver not in defined.callables}
+
+
 def extract_template_variables(obj: Any, *, defined: DefinedNames) -> set[str]:
     """Variable names referenced by every ``{{ expr }}`` in a structure: the
     names a template reads, and those it calls that are no built-in's.
@@ -235,18 +300,23 @@ def extract_builtin_stand_ins(obj: Any, *, defined: DefinedNames) -> set[str]:
     it as a fixture or function substitution (``defined.callables``), the names
     a call reaches before the built-in; ``get()`` and ``exists()``
     (`CONTEXT_HELPERS`) never, since a call always reaches those. It counts too
-    where it is handed to a function that takes one (``sorted(rows, key=len)``,
-    `_extract_names_from_expr`) and the scenario defines it at all, which that
-    read, a reference too (`extract_template_variables`), finds in scope. A
-    name the templates also use as a value (``{{ now }}``, ``str(now)``) does
-    not count: that use gets the built-in function out of scope, the reference
-    checks' business. The validator reports a stand-in out of scope as such
-    (HTTPCHAIN036), never as an undefined name.
+    where it is handed to a function that takes one (`_extract_names_from_expr`),
+    which that read, a reference too (`extract_template_variables`), finds in
+    scope: as a ``key=`` (``sorted(rows, key=len)``) where the scenario
+    defines it at all, and to the user's function or object (``sign(now)``,
+    ``helper.ids(uuid4)``) where, as for a call, the scenario's definition may
+    hold a function. Out of scope the user's function gets the built-in
+    function: a stand-in for a function, never for a save's or a variable's
+    value, which is then missing, the reference checks' business, as is a
+    name the templates also use as a value (``{{ now }}``, ``str(now)``). The
+    validator reports a stand-in out of scope as such (HTTPCHAIN036), never as
+    an undefined name.
     """
     names = _template_names(obj)
+    to_users = names.to_functions | {name for receiver, name in names.to_methods if receiver in defined.callables}
     called = (names.called & defined.callables) - CONTEXT_HELPERS
-    passed = (names.read - names.loose) & defined.names
-    return ((called | passed) & TEMPLATE_BUILTINS) - names.loose
+    passed = (names.keys & defined.names) | (to_users & defined.callables)
+    return ((called | passed) & TEMPLATE_BUILTINS) - _used_as_values(names, defined) - (to_users - defined.callables)
 
 
 def extract_uncalled_builtins(obj: Any, *, defined: DefinedNames) -> set[str]:
@@ -256,11 +326,12 @@ def extract_uncalled_builtins(obj: Any, *, defined: DefinedNames) -> set[str]:
     runtime refuses it.
 
     Handed to a function that may take one (``sorted(rows, key=sha256)``, a
-    user's ``sign(now)``) a built-in is used as a function, and a name the
-    scenario defines is the user's (and a reference,
-    `extract_template_variables`), so neither is reported.
+    user's ``sign(now)``, a method of a fixture's ``helper.ids(uuid4)``) a
+    built-in is used as a function, and a name the scenario defines is the
+    user's (and a reference, `extract_template_variables`), so neither is
+    reported.
     """
-    return (_template_names(obj).loose & CALL_ONLY_BUILTINS) - defined.names
+    return (_used_as_values(_template_names(obj), defined) & CALL_ONLY_BUILTINS) - defined.names
 
 
 def substitution_names(substitutions: Substitutions) -> set[str]:

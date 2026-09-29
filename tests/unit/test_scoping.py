@@ -252,6 +252,15 @@ def test_template_references_to_builtin_names(template, expected):
         # scope; out of scope the built-in stands in, and works.
         pytest.param("{{ sorted(rows, key=len) }}", {"len"}, id="builtin-named-save-passed-as-key"),
         pytest.param("{{ sign(sha256) }}", {"sha256"}, id="builtin-named-fixture-passed-to-a-user-function"),
+        pytest.param("{{ fetch().ids(sha256) }}", {"sha256"}, id="builtin-named-fixture-passed-to-a-method-of-a-users-object"),
+        # A save is data: out of its scope the user's function gets the
+        # built-in function in the value's place, and fails on it. The save is
+        # missing there, which the reference checks report.
+        pytest.param("{{ sign(timestamp) }}", set(), id="builtin-named-save-passed-to-a-user-function"),
+        pytest.param("{{ fetch().ids(timestamp) }}", set(), id="builtin-named-save-passed-to-a-method-of-a-users-object"),
+        pytest.param("{{ sorted(rows, key=timestamp) + sign(timestamp) }}", set(), id="builtin-named-save-passed-as-key-and-to-a-user-function"),
+        # A method of data takes no function: the argument is a value.
+        pytest.param("{{ rows.index(sha256) }}", set(), id="builtin-named-fixture-passed-to-a-method-of-data"),
         # Also used as a value: out of scope that use gets the built-in
         # function, which the reference checks report.
         pytest.param("{{ sha256(body) + str(sha256) }}", set(), id="also-a-value"),
@@ -292,6 +301,12 @@ def test_runtime_resolves_builtin_names_as_the_reference_model_says():
         pytest.param("{{ rows.sort(key=sha256) }}", set(), id="key-of-a-method"),
         pytest.param("{{ sign(now) }}", set(), id="argument-of-a-user-function"),
         pytest.param("{{ sign(clock=now) }}", set(), id="keyword-argument-of-a-user-function"),
+        # A method of an object reached from a fixture or function
+        # substitution may take one too; one of data, a save or a variable, not.
+        pytest.param("{{ fetch().ids(uuid4) }}", set(), id="argument-of-a-method-of-a-users-object"),
+        pytest.param("{{ sha256.api.ids(n=2, gen=uuid4) }}", set(), id="keyword-argument-of-a-method-of-a-users-object"),
+        pytest.param("{{ rows.index(now) }}", {"now"}, id="argument-of-a-method-of-data"),
+        pytest.param("{{ [row.get(now) for row in rows] }}", {"now"}, id="argument-of-a-method-of-a-comprehension-target"),
         # Any other keyword of a built-in or a method is a value: dict() is how
         # a mapping is built for urlencode() without the `}}` gotcha.
         pytest.param("{{ urlencode(dict(sort=timestamp_ms)) }}", {"timestamp_ms"}, id="keyword-argument-of-a-builtin"),

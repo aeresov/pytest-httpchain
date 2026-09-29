@@ -239,7 +239,10 @@ def process_verify(
         if not failures and not ending:
             raise outcome
         if not failures and len(ending) == 1 and (fail := ending[0][2]) is not None:
-            raise fail
+            # Raised where a function's skip or xfail is being handled: `from`
+            # keeps that outcome out of the report, which would otherwise open
+            # with it, as the aggregate's does (`_Failures.error`).
+            raise fail from fail.__cause__
         # Each a value that did not render or a pytest.fail(), neither of
         # which a stage's retry retries.
         for message, cause, _outcome in ending:

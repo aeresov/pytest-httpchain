@@ -174,6 +174,48 @@ def test_scenario_level_builtin_name_passed_as_a_function(template, expected):
     assert [(d.code, d.location) for d in diags] == expected
 
 
+_SAVES_TIMESTAMP = {**_STAGE, "name": "clock", "response": [{"verify": {"status": 200}}, {"save": {"jmespath": {"timestamp": "data.ts"}}}]}
+_SIGN = [{"functions": {"sign": "hmacs:sign"}}]
+
+
+@pytest.mark.parametrize(
+    ("stages", "top", "expected"),
+    [
+        pytest.param(
+            [{**_STAGE, "name": "early", "substitutions": _SIGN, "request": {"url": "https://x.test/", "headers": {"X": "{{ sign(timestamp) }}"}}}, _SAVES_TIMESTAMP],
+            {},
+            (C.FORWARD_REF, "warning", "stages[0].request", "Stage 'early': variable 'timestamp' is referenced before it is saved (saved in stage 'clock')"),
+            id="stage",
+        ),
+        pytest.param(
+            [_SAVES_TIMESTAMP],
+            {"substitutions": [*_SIGN, {"vars": {"sig": "{{ sign(timestamp) }}"}}]},
+            (C.SCENARIO_UNDEFINED_VAR, "error", "substitutions", "Undefined variable(s) in scenario-level 'substitutions' templates: ['timestamp']"),
+            id="scenario-level",
+        ),
+    ],
+)
+def test_builtin_named_save_handed_to_a_user_function_is_a_reference(stages, top, expected):
+    """Out of the save's scope `sign` gets the built-in function in its
+    value's place, and fails on it: the save is missing there, as any, and
+    never the built-in standing in for it (HTTPCHAIN036), which only a
+    fixture or function substitution, a definition that may hold a function,
+    has."""
+    [diag] = _check(stages, **top)
+    assert (diag.code, diag.severity, diag.location) == expected[:3]
+    assert diag.message.startswith(expected[3]), diag.message
+
+
+def test_builtin_named_fixture_handed_to_a_user_function_stands_in():
+    """A fixture may hold a function: out of its scope the built-in function
+    is what `sign` gets in its place."""
+    stages = [
+        {**_STAGE, "name": "early", "substitutions": _SIGN, "request": {"url": "https://x.test/", "headers": {"X": "{{ sign(timestamp) }}"}}},
+        {**_STAGE, "name": "clock", "fixtures": ["timestamp"]},
+    ]
+    assert [(d.code, d.location) for d in _check(stages)] == [(C.BUILTIN_STANDS_IN, "stages[0].request")]
+
+
 def test_reads_of_several_builtin_names_name_every_builtin_used_instead():
     """Called ``max`` and ``min`` are used as the value; a call-only built-in
     (`test_reads_of_call_only_and_other_builtin_names_get_a_note_each`) is not."""
@@ -316,11 +358,61 @@ def test_uncalled_helper_in_text_never_rendered_is_not_reported(stage):
             "value, and one that renders to a function crashes scenario initialization. Write now()",
             id="scenario-level",
         ),
+        # A templated parametrize value resolves the scenario's substitutions
+        # at collection (HTTPCHAIN025), which their failure then fails.
+        pytest.param(
+            {"substitutions": [{"vars": {"started": "{{ now }}"}}]},
+            {"parametrize": [{"individual": {"n": ["{{ 1 + 1 }}"]}}]},
+            "substitutions",
+            "Scenario-level 'substitutions' uses the built-in function 'now' without calling it: the template gets the function itself, not its "
+            "value, and one that renders to a function fails the scenario's collection. Write now()",
+            id="scenario-substitutions-resolved-at-collection",
+        ),
+        # auth, ssl and client resolve at initialization all the same.
+        pytest.param(
+            {"auth": "{{ now }}"},
+            {"parametrize": [{"individual": {"n": ["{{ 1 + 1 }}"]}}]},
+            "auth",
+            "Scenario-level 'auth' uses the built-in function 'now' without calling it: the template gets the function itself, not its "
+            "value, and one that renders to a function crashes scenario initialization. Write now()",
+            id="scenario-auth-with-collection-resolution",
+        ),
     ],
 )
 def test_uncalled_builtin_says_what_fails(top, stage, location, message):
     diags = [d for d in _check([{**_STAGE, **stage}], **top) if d.code == C.UNCALLED_BUILTIN]
     assert [(d.location, d.message) for d in diags] == [(location, message)]
+
+
+@pytest.mark.parametrize(
+    ("substitutions", "code", "message"),
+    [
+        pytest.param(
+            [{"vars": {"started": "{{ now }}"}}],
+            C.FIXTURE_IN_SCENARIO_TEMPLATE,
+            "Fixtures referenced in scenario-level 'substitutions' templates: ['now'] (the scenario-level context never includes fixture values; "
+            "where no definition of 'now' is in scope, the name is the template built-in function, not a value, and a template that renders to it "
+            "fails the scenario's collection)",
+            id="read-of-a-fixture",
+        ),
+        pytest.param(
+            [{"vars": {"top": "{{ b }}"}}, {"vars": {"b": 3}}],
+            C.SCENARIO_UNDEFINED_VAR,
+            "Scenario-level 'substitutions' references name(s) before the substitution step that defines them: ['b'] "
+            "(steps resolve strictly in order; this fails the scenario's collection)",
+            id="forward-read",
+        ),
+    ],
+)
+def test_scenario_substitutions_resolved_at_collection_say_so(substitutions, code, message):
+    """The notes of HTTPCHAIN016/017 name the failure as 035's does: the
+    scenario's collection, where a templated parametrize value resolves the
+    substitutions there (`test_scenario_level_builtin_names_read_and_called`
+    has them at initialization)."""
+    stage = {**_STAGE, "parametrize": [{"individual": {"n": ["{{ 1 + 1 }}"]}}]}
+    fixtures = [] if len(substitutions) > 1 else ["now"]
+    diags = [d for d in _check([stage], substitutions=substitutions, fixtures=fixtures) if d.code != C.PARAMETRIZE_COLLECTION_RESOLUTION]
+    assert [(d.code, d.location, d.message) for d in diags] == [(code, "substitutions", message)]
 
 
 @pytest.mark.parametrize(

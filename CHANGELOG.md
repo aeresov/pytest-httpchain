@@ -201,13 +201,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `HTTPCHAIN035` (warning): a built-in function that is no use as a value, a helper above or
   `uuid4`, `env`, `rand` or `randint`, used without calling it, such as `{{ now }}`, `{{ env }}`,
   `str(timestamp)` or `dict(at=timestamp)`, which gets the function itself rather than its value. A
-  built-in handed to a function that may take one, a `key=` or a user function's argument, is not
-  reported, nor is one in text the runtime never renders (a function substitution's `kwargs`).
+  built-in handed to a function that may take one, a `key=`, a user function's argument or the
+  argument of a method of a fixture's object (`helper.ids(uuid4)`), is not reported, nor is one in
+  text the runtime never renders (a function substitution's `kwargs`). In the scenario-level
+  `substitutions` of a scenario whose parametrize values are templates, the warning says that the
+  scenario's collection fails, which resolves them there, not its initialization.
 - `HTTPCHAIN036` (warning): a built-in's name the scenario defines too, used as a function where
   that definition is not in scope, such as `timestamp()` in another stage or in the scenario-level
   `substitutions` when one stage fakes the clock with a `timestamp` function substitution, or
   `sorted(rows, key=len)` ahead of a save named `len`. The built-in runs in its place, which is
-  never a failure, so it is a warning at every level, scenario level included.
+  never a failure, so it is a warning at every level, scenario level included. Handed to your own
+  function, the name counts only where your definition may hold a function, a fixture or function
+  substitution: `sign(timestamp)` ahead of a save named `timestamp` gives `sign` the built-in
+  function, not the saved text, and is reported as any read ahead of its save.
 - `HTTPCHAIN037` (warning): a template in a stage that the engine refuses from its text alone, with
   the reason the stage fails with: a syntax error, more than one statement, an assignment or
   another statement, a kind of expression the engine does not evaluate (a lambda, a set
@@ -217,8 +223,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `HTTPCHAIN038` (error): the same in a template resolved before any stage runs, where it leaves
   nothing to run: a scenario-level one (`substitutions`, `auth`, `ssl`, `client`), which fails
   scenario initialization and every stage with it, as an undefined name there does
-  (`HTTPCHAIN017`), or a stage's parametrize value, which fails the scenario's collection. It
-  fails collection and `validate`.
+  (`HTTPCHAIN017`), or a stage's parametrize value, which fails the scenario's collection, as do
+  the scenario's `substitutions` once a templated parametrize value resolves them there. It fails
+  collection and `validate`.
 - `verify.body.schema` checks a response against a schema inside a document you already have, an
   OpenAPI 3.1 component or a file of shared definitions:
   `"schema": "./openapi.json#/components/schemas/User"`. What follows the file's first `#` is an RFC

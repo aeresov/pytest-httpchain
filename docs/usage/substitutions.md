@@ -404,10 +404,16 @@ scope is reported as any name used out of scope (`HTTPCHAIN003`, `004` or, at
 scenario level, the errors `016`/`017`), with a note on what the read gets:
 the built-in in your value's place or, for a built-in that is no use as a
 value (`now`, `timestamp`, `env`, ...), a function no template may render to,
-which fails the stage (at scenario level, scenario initialization). A use as a
-function cannot fail there: a call where your fixture or function substitution
-is out of scope, or the name handed to a function (`key=len`) where your
-definition is. Each is the warning `HTTPCHAIN036`, at every level.
+which fails the stage (at scenario level, scenario initialization, or the
+scenario's collection where a templated parametrize value resolves the
+`substitutions` there). Handed to your own function, a saved value or variable
+out of scope is such a read: `sign(timestamp)` ahead of the save gives `sign`
+the built-in function. A use as a function cannot fail there: a call where
+your fixture or function substitution is out of scope, or the name handed to a
+function that takes one where your definition is, as a `key=` (`key=len`), or
+to your own function or a method of your fixture's object where your
+definition is a fixture or function substitution. Each is the warning
+`HTTPCHAIN036`, at every level.
 A stage that fakes the clock with `{"functions": {"timestamp": "clock:fixed"}}`
 leaves every other stage, and the scenario-level `substitutions`, calling the
 real `timestamp()`, and `validate` says so:

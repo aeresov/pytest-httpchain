@@ -320,6 +320,47 @@ class TestReferences:
             schema.validate({"billing": {}})
         assert list(schema.unresolvable()) == []
 
+    # jsonschema's own lookups: the `unevaluatedProperties` of the idiomatic
+    # 2020-12 composition looks its `$ref` up itself, and so does 2019-09's
+    # `$recursiveRef`.
+    UNEVALUATED = {
+        "$schema": DRAFT_2020_12,
+        "$id": "https://example.com/schemas/user.json#",
+        "allOf": [{"$ref": "#/$defs/base"}],
+        "properties": {"name": {"type": "string"}},
+        "unevaluatedProperties": False,
+        "$defs": {"base": {"properties": {"id": {"type": "integer"}}}},
+    }
+    RECURSIVE = {
+        "$schema": "https://json-schema.org/draft/2019-09/schema",
+        "$id": "https://example.com/tree#",
+        "$recursiveAnchor": True,
+        "type": "object",
+        "properties": {"child": {"$recursiveRef": "#"}, "name": {"type": "string"}},
+    }
+
+    @pytest.mark.parametrize(
+        ("document", "valid", "invalid", "error"),
+        [
+            pytest.param(UNEVALUATED, {"id": 1, "name": "a"}, {"id": 1, "extra": True}, "Unevaluated properties are not allowed", id="unevaluated-properties"),
+            pytest.param(RECURSIVE, {"child": {"name": "a"}}, {"child": {"name": 1}}, "1 is not of type 'string'", id="recursive-ref"),
+        ],
+    )
+    @pytest.mark.parametrize("how", ["inline", "file"])
+    def test_id_with_an_empty_fragment(self, tmp_path, how, document, valid, invalid, error):
+        """The meta-schemas allow an `$id` to end in `#`, which says nothing:
+        the base is the `$id` without it, as referencing keys the resource.
+        Kept on the base, jsonschema's own lookups missed the registry, and
+        every body failed on a reference refused as a remote document, where
+        `validate --deep` saw nothing wrong."""
+        _write(tmp_path / "schema.json", document)
+        schema = _inline(document, tmp_path, tmp_path) if how == "inline" else _file("schema.json", tmp_path, tmp_path)
+        jsonschema.validators.validator_for(document)(document).validate(valid)
+        schema.validate(valid)
+        with pytest.raises(jsonschema.ValidationError, match=f"^{error}"):
+            schema.validate(invalid)
+        assert list(schema.unresolvable()) == []
+
     ADDRESS = {"type": "object", "required": ["street"]}
 
     @pytest.mark.parametrize(
@@ -350,6 +391,22 @@ class TestReferences:
         with pytest.raises(jsonschema.ValidationError, match="'street' is a required property"):
             schema.validate({})
         assert list(schema.unresolvable()) == []
+
+    @pytest.mark.parametrize("name", ["properties", "definitions", "patternProperties", "$defs", "allOf", "Deps"])
+    def test_id_of_a_component_named_like_a_keyword(self, tmp_path, name):
+        """Read from the `components/schemas` map, a component named like a
+        keyword that holds schemas was a map (or array) of them, the map a
+        schema: its `$id` was a property's schema, not its base, and
+        `#/$defs/Dep` pointed to nothing in the OpenAPI document. Selected
+        whole, it was read right; the pointer into it reads it the same."""
+        deps = {"$id": "https://example.com/deps", "type": "object", "additionalProperties": {"$ref": "#/$defs/Dep"}, "$defs": {"Dep": {"type": "string"}}}
+        _write(tmp_path / "openapi.json", {"openapi": "3.1.0", "components": {"schemas": {name: deps}}})
+        escaped = name.replace("$", "%24")
+        for ref, instance in ((f"openapi.json#/components/schemas/{escaped}", {"x": 1}), (f"openapi.json#/components/schemas/{escaped}/additionalProperties", 1)):
+            schema = _file(ref, tmp_path, tmp_path)
+            with pytest.raises(jsonschema.ValidationError, match="1 is not of type 'string'"):
+                schema.validate(instance)
+            assert list(schema.unresolvable()) == []
 
     def test_id_of_what_is_not_a_schema_is_not_a_base(self, tmp_path):
         """An `$id` in an object JSON Schema does not read as a schema, one
@@ -408,6 +465,44 @@ class TestReferences:
             with pytest.raises(jsonschema.ValidationError, match="^1 is not of type 'string'"):
                 schema.validate(instance)
             assert list(schema.unresolvable()) == []
+
+    # A Draft 7 array `items`, where 2020-12 wants a schema, outside the
+    # schema the pointer selects: the crawl indexing the resources fails on it.
+    UNCRAWLABLE = {
+        "$id": "https://example.com/u",
+        "properties": {"a": {"$ref": "#/$defs/Pos"}, "b": {"$ref": "https://example.com/elsewhere"}, "tags": {"type": "array", "items": [{"type": "string"}]}},
+        "$defs": {"Pos": {"type": "integer"}},
+    }
+
+    @pytest.mark.parametrize(
+        ("document", "pointer"),
+        [
+            pytest.param({"openapi": "3.1.0", "components": {"schemas": {"U": UNCRAWLABLE}}}, "/components/schemas/U/properties", id="component"),
+            pytest.param(UNCRAWLABLE, "/properties", id="document"),
+        ],
+    )
+    def test_id_is_the_base_where_the_crawl_fails(self, tmp_path, document, pointer):
+        """Kept at its `$id` uncrawled, as jsonschema keeps the schema it is
+        given: `#/$defs/...` under it needs no crawl, and resolves, where it
+        was refused as a remote document. A reference that misses the
+        registry crawls it, and fails on what the crawl fails on."""
+        _write(tmp_path / "o.json", document)
+        schema = _file(f"o.json#{pointer}/a", tmp_path, tmp_path)
+        schema.validate(5)
+        with pytest.raises(jsonschema.ValidationError, match="'x' is not of type 'integer'"):
+            schema.validate("x")
+        assert list(schema.unresolvable()) == []
+        # referencing's own words for the array it cannot crawl.
+        reason, missing = _unresolved(_file(f"o.json#{pointer}/b", tmp_path, tmp_path), 5)
+        assert (reason.startswith("$ref 'https://example.com/elsewhere' cannot be resolved: "), missing) == (True, False), reason
+
+    def test_embedded_id_where_the_crawl_fails_on_another(self, tmp_path):
+        """What the crawl fails on is the reason, as jsonschema, given the
+        component, fails on it: never a remote document, which it is not."""
+        user = {"$id": "https://example.com/u", "properties": {"a": {"$ref": "addr"}, "b": {"$id": "http://[x"}, "c": {"$id": "addr", "type": "integer"}}}
+        _write(tmp_path / "o.json", {"openapi": "3.1.0", "components": {"schemas": {"U": user}}})
+        schema = _file("o.json#/components/schemas/U/properties/a", tmp_path, tmp_path)
+        assert _unresolved(schema, "x") == ("$ref 'addr' cannot be resolved: Invalid IPv6 URL", False)
 
     def test_pointer_under_an_id_is_relative_to_its_resource(self, tmp_path):
         """Inside a component that declares an `$id`, `#/...` is relative to
@@ -613,6 +708,38 @@ class TestReferenceBounds:
             f"$ref {ref!r} exceeds the maximum parent traversal depth of {depth} (httpchain_ref_parent_traversal_depth), as a scenario's $include path would",
             False,
         )
+
+    @pytest.mark.parametrize(
+        "schema",
+        [
+            # Under `not`, jsonschema stops at the first error: the helper's
+            # own lookup of the `$ref` was all there was, and it read the file.
+            pytest.param({"not": {"unevaluatedProperties": False, "$ref": "../../shared.json"}}, id="under-not"),
+            pytest.param({"unevaluatedProperties": False, "$ref": "../../shared.json"}, id="written-first"),
+            pytest.param({"unevaluatedProperties": False, "allOf": [{"$ref": "../../shared.json"}]}, id="in-an-allof"),
+            pytest.param({"unevaluatedItems": False, "$ref": "../../shared.json"}, id="unevaluated-items"),
+        ],
+    )
+    def test_unevaluated_keywords_look_up_no_reference_the_rules_refuse(self, tmp_path, schema, monkeypatch):
+        """``unevaluatedProperties`` and ``unevaluatedItems`` look references up
+        themselves, without the rules. Applied after the other keywords, they
+        look up only what `_reference` has followed, and refused, first:
+        written before the `$ref`, they read the file, and its properties
+        decided the step, which could pass. As `validate --deep` says."""
+        _write(tmp_path / "shared.json", {"properties": {"y": {}}})
+        read = []
+        monkeypatch.setattr(body_schema_module, "_parsed", lambda path, stamp: read.append(path) or {"properties": {"y": {}}})
+        refused = ("$ref '../../shared.json' exceeds the maximum parent traversal depth of 1 (httpchain_ref_parent_traversal_depth), as a scenario's $include path would", False)
+        body = _inline(schema, tmp_path / "a" / "b", tmp_path, 1)
+        assert _unresolved(body, {"x": 1, "y": 2} if "unevaluatedItems" not in schema else [1]) == refused
+        assert list(body.unresolvable()) == [refused]
+        assert read == []
+
+    def test_unevaluated_keywords_apply_after_the_others(self):
+        """Which the annotations they read come from: in the schema's order
+        otherwise."""
+        schema = {"unevaluatedItems": False, "type": "array", "unevaluatedProperties": False, "$ref": "#/$defs/a", "maxItems": 0, "$defs": {}}
+        assert [keyword for keyword, _ in body_schema_module._unevaluated_last(schema)] == ["type", "$ref", "maxItems", "$defs", "unevaluatedItems", "unevaluatedProperties"]
 
     @pytest.mark.parametrize(
         ("ref", "kind"),

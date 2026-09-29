@@ -159,8 +159,10 @@ the built-in. `scoping` models this statically: a built-in's name counts as a
 reference (`extract_template_variables`) where the scenario defines that name
 and a template reads it; a call under it is none. A name used only as a
 function, called where the scenario defines it as a fixture or function
-substitution (a possible callable; `exists`/`get` never) or handed to a
-function (`key=len`) where the scenario defines it at all, never fails out of
+substitution (a possible callable; `exists`/`get` never), handed as a `key=`
+(`key=len`) where the scenario defines it at all, or handed to the user's own
+function or a method of a fixture's object (`sign(now)`, `helper.ids(uuid4)`)
+where the scenario defines it as a possible callable, never fails out of
 the scope of the user's definition, since the built-in stands in:
 `extract_builtin_stand_ins` has those, which the validator reports out of
 scope as a warning (HTTPCHAIN036), never as an undefined name.

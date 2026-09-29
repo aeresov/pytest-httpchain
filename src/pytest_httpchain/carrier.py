@@ -28,11 +28,12 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar, NamedTuple, TypeGuard
+from typing import Any, ClassVar, LiteralString, NamedTuple, TypeGuard, cast
 
 import httpx
 import pytest
 from pydantic import BaseModel, RootModel, ValidationError
+from pydantic_core import InitErrorDetails, PydanticCustomError
 from pyrate_limiter import Duration, Limiter, Rate
 
 from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds
@@ -545,6 +546,10 @@ def _none_would(model: BaseModel, field: str) -> str:
 # Where a value sits in a dumped model: field names and dict keys, list indices.
 type _Keys = tuple[str | int, ...]
 
+# Where a value sits in a model built to validate it, to where the scenario
+# declares it (`_validate_substituted`).
+type _Relocation = Callable[[_Keys], _Keys]
+
 
 class _Vanished(NamedTuple):
     """A declared field a template rendered to None: where it sits, the
@@ -707,19 +712,30 @@ def _render_declared[M: BaseModel](
 
 
 def _validate_substituted[M: BaseModel](
-    declared: M, substituted: Any, where: str, error: type[StageExecutionError] = StageExecutionError, validate: Callable[[Any], M] | None = None
+    declared: M,
+    substituted: Any,
+    where: str,
+    error: type[StageExecutionError] = StageExecutionError,
+    validate: Callable[[Any], M] | None = None,
+    relocate: _Relocation | None = None,
 ) -> M:
     """`_render_declared` from the substitution on: ``substituted`` is
     ``declared`` dumped (its declared fields) with its templates rendered,
-    validated here, and refused where a template rendered a field to None."""
+    validated here, and refused where a template rendered a field to None.
+
+    ``relocate`` maps where a value sits in ``declared`` to where its messages
+    say it is, when ``declared`` holds it elsewhere than the scenario does
+    (`_validated_values`): the guard's refusal and pydantic's report alike."""
     validate = validate or type(declared).model_validate
+    if relocate is not None:
+        validate = _relocating(validate, relocate)
     vanished = list(_rendered_away(declared, substituted))
     try:
         rendered = validate(substituted)
     except ValidationError as e:
         if not vanished:
             raise
-        refusal = _rendered_to_none(where, vanished[0])
+        refusal = _rendered_to_none(where, vanished[0], relocate)
         restored = substituted
         for keys, template, *_ in vanished:
             restored = _replaced(restored, keys, template)
@@ -731,8 +747,49 @@ def _validate_substituted[M: BaseModel](
     vanished = vanished or list(_rendered_whole_away(declared, rendered))
     if vanished:
         first = vanished[0]
-        raise error(_rendered_to_none(where, first) if first.compared else f"{_rendered_to_none(where, first)}, which would silently {first.would}")
+        refusal = _rendered_to_none(where, first, relocate)
+        raise error(refusal if first.compared else f"{refusal}, which would silently {first.would}")
     return rendered
+
+
+def _relocation(in_part: _Keys, at: _Keys) -> _Relocation | None:
+    """Keys in a verify step cut down to one value (`_verify_part`), which
+    holds it at ``in_part``, as they are in the step, which holds it at
+    ``at``: a list item validated alone, at index 0, keeps its own index. None
+    where the two are the same place."""
+    if in_part == at:
+        return None
+    return lambda keys: (*at, *keys[len(in_part) :]) if keys[: len(in_part)] == in_part else keys
+
+
+def _relocating[M](validate: Callable[[Any], M], relocate: _Relocation) -> Callable[[Any], M]:
+    """``validate``, its `ValidationError` located by ``relocate``."""
+
+    def relocated(value: Any) -> M:
+        try:
+            return validate(value)
+        except ValidationError as e:
+            raise _relocated(e, relocate) from None
+
+    return relocated
+
+
+def _relocated(e: ValidationError, relocate: _Relocation) -> ValidationError:
+    """``e``, each error at the location ``relocate`` gives its own: the same
+    errors, in the same order, each of its type, message and input. One of
+    pydantic's own (it has a ``url``) is rebuilt as that type with its
+    context, which writes its message, the link included, as pydantic did; a
+    custom one, whose template is not kept, as a custom error of the same type
+    and message."""
+    details: list[InitErrorDetails] = []
+    for error in e.errors():
+        detail: InitErrorDetails = {"type": error["type"], "loc": relocate(error["loc"]), "input": error["input"]}
+        if "url" not in error:
+            detail["type"] = PydanticCustomError(cast(LiteralString, error["type"]), cast(LiteralString, error["msg"]))
+        elif "ctx" in error:
+            detail["ctx"] = error["ctx"]
+        details.append(detail)
+    return ValidationError.from_exception_data(e.title, details)
 
 
 def _verify_renderer(declared: Verify, context: Mapping[str, Any]) -> VerifyRender:
@@ -794,12 +851,14 @@ def _validated_values(declared: Verify, dumped: dict[str, Any], substituted: dic
     whole. Otherwise each value is validated in a model of it alone
     (`_verify_part`), so that each that fails is a failure of its own: a
     ``headers`` or ``jmespath`` entry alone in its map, a list item alone in
-    its list, so every item of a list costs the list once, not once per item.
+    its list, so every item of a list costs the list once, not once per item,
+    failing or not, and no value is rendered twice.
 
-    A list item that fails is validated again with its list whole (the rest as
-    declared, which it validated as), for the messages to give its index as it
-    is in the step (``body.contains.1``, ``verify.user_functions[1]``) rather
-    than 0. Only a failure pays for that, and no value is rendered twice.
+    A list item's messages give its index as it is in the step
+    (``body.contains.1``, ``verify.user_functions[1]``), not the 0 it has
+    alone (`_relocation`). Validated again with its list whole to have that
+    index, a failing item cost the list once more, and a list of templates
+    that all failed took time quadratic in its length.
     """
     for at, value in substituted.items():
         _at(dumped, at[:-1])[at[-1]] = value
@@ -813,26 +872,18 @@ def _validated_values(declared: Verify, dumped: dict[str, Any], substituted: dic
     for at, value in substituted.items():
         part, in_part = _verify_part(declared, at)
         try:
-            values[at] = _at(_validated_verify(part, _replaced(part.model_dump(mode="python", exclude_unset=True), in_part, value)), in_part)
-            continue
-        except VerificationError as e:
-            if in_part == at:
-                values[at] = RenderFailure(e)
-                continue
-        whole, _ = _verify_part(declared, at, whole_list=True)
-        try:
-            values[at] = _at(_validated_verify(whole, _replaced(whole.model_dump(mode="python", exclude_unset=True), at, value)), at)
+            values[at] = _at(_validated_verify(part, _replaced(part.model_dump(mode="python", exclude_unset=True), in_part, value), _relocation(in_part, at)), in_part)
         except VerificationError as e:
             values[at] = RenderFailure(e)
     return values
 
 
-def _validated_verify(declared: Verify, substituted: Any) -> Verify:
+def _validated_verify(declared: Verify, substituted: Any, relocate: _Relocation | None = None) -> Verify:
     """``substituted``, ``declared`` dumped with its templates substituted,
-    validated as it rendered (`_validate_substituted`), or the
-    `VerificationError` saying why it is not valid."""
+    validated as it rendered (`_validate_substituted`, ``relocate`` locating
+    its messages), or the `VerificationError` saying why it is not valid."""
     try:
-        return _validate_substituted(declared, substituted, "verify", VerificationError, functools.partial(validate_rendered_verify, declared))
+        return _validate_substituted(declared, substituted, "verify", VerificationError, functools.partial(validate_rendered_verify, declared), relocate)
     except ValidationError as e:
         raise VerificationError(str(e)) from e
 
@@ -862,37 +913,36 @@ _NO_VERIFY = Verify.model_construct()
 _NO_BODY = ResponseBody.model_construct()
 
 
-def _verify_part(declared: Verify, at: _Keys, whole_list: bool = False) -> tuple[Verify, _Keys]:
+def _verify_part(declared: Verify, at: _Keys) -> tuple[Verify, _Keys]:
     """``declared`` cut down to the value at ``at`` (the body's field, for the
     body's), and where the value sits in it: a map to the one entry, a list to
-    the one item, at index 0, or with ``whole_list`` kept whole."""
+    the one item, at index 0."""
     match at:
         case ("body", str() as name, *rest):
-            values, in_part = _one_value(getattr(declared.body, name), name, rest, whole_list)
+            values, in_part = _one_value(getattr(declared.body, name), name, rest)
             return _NO_VERIFY.model_copy(update={"body": _NO_BODY.model_copy(update=values)}), ("body", *in_part)
         case (str() as name, *rest):
-            values, in_part = _one_value(getattr(declared, name), name, rest, whole_list)
+            values, in_part = _one_value(getattr(declared, name), name, rest)
             return _NO_VERIFY.model_copy(update=values), in_part
         case _:
             raise RuntimeError(f"Unhandled verify location: {at!r}")
 
 
-def _one_value(whole: Any, name: str, rest: list[str | int], whole_list: bool) -> tuple[dict[str, Any], _Keys]:
+def _one_value(whole: Any, name: str, rest: list[str | int]) -> tuple[dict[str, Any], _Keys]:
     """The field ``name`` holding only the value at ``rest`` within it (none:
     the field's own value), and where the value is in the field so cut."""
     match rest:
         case [str() as key]:
             return {name: {key: whole[key]}}, (name, key)
-        case [int() as i] if not whole_list:
-            return {name: [whole[i]]}, (name, 0)
         case [int() as i]:
-            return {name: whole}, (name, i)
+            return {name: [whole[i]]}, (name, 0)
         case _:
             return {name: whole}, (name,)
 
 
-def _rendered_to_none(where: str, vanished: _Vanished) -> str:
-    path = where + "".join(map(path_segment, vanished.keys))
+def _rendered_to_none(where: str, vanished: _Vanished, relocate: _Relocation | None = None) -> str:
+    keys = vanished.keys if relocate is None else relocate(vanished.keys)
+    path = where + "".join(map(path_segment, keys))
     message = f"'{path}' was declared as {vanished.template!r} but rendered to None"
     return f"{message}; to compare with null, write null" if vanished.compared else message
 

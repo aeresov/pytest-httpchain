@@ -1354,6 +1354,14 @@ def _outcome(raise_it) -> RenderOutcome:
     raise AssertionError("raised no outcome")
 
 
+def _shown_chain(error: BaseException | None):
+    """The exceptions a report shows for ``error``: it, then what it was
+    raised from, or while handling unless that is suppressed."""
+    while error is not None:
+        yield error
+        error = error.__cause__ if error.__cause__ is not None or error.__suppress_context__ else error.__context__
+
+
 class TestRender:
     """``render`` renders the step's values (the carrier renders templates),
     once, before the first check runs, given each where it is declared: a
@@ -1485,6 +1493,9 @@ class TestRender:
             assert (excinfo.type, str(excinfo.value)) == (pytest.fail.Exception, "template failed")
         else:
             assert (excinfo.type, str(excinfo.value).split("\n")) == (VerificationError, expected)
+        # Raised while the function's outcome was handled, the failure must not
+        # show it: a report of a failed stage opened with "Skipped: ...".
+        assert list(_shown_chain(excinfo.value)) == [excinfo.value]
 
     @pytest.mark.parametrize("later", [pytest.skip, pytest.xfail], ids=["skip", "xfail"])
     def test_template_skip_after_a_function_outcome_is_dropped(self, later):

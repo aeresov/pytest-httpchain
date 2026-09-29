@@ -24,6 +24,7 @@ import httpx
 import pytest
 import trustme
 from pydantic import ValidationError
+from pydantic_core import PydanticCustomError
 from pyrate_limiter import Duration, Limiter, Rate
 
 import pytest_httpchain.carrier as carrier_module
@@ -918,8 +919,8 @@ class TestVerifyRenderedValueByValue:
     @pytest.mark.parametrize(
         ("verify", "message"),
         [
-            # An item keeps its index: rendered with its list whole, only it
-            # rendered.
+            # An item keeps its index: validated alone, where its messages say it
+            # sits is where the step has it.
             pytest.param(
                 {"body": {"contains": ["a", "{{ gone }}"]}},
                 "1 validation error for Verify\nbody.contains.1\n  Input should be a valid string [type=string_type, input_value=None, input_type=NoneType]",
@@ -1053,11 +1054,10 @@ class TestVerifyRenderedValueByValue:
     def test_list_item_is_validated_alone(self, monkeypatch):
         """Once the step fails validation whole. Validated with its list whole,
         every item of a list of n templated ones cost the list: n² for the
-        step. Only an item that fails is validated again with its list, for its
-        index in the message."""
+        step. So did an item that fails, validated again with its list for its
+        index in the message, when many did: its index is put there instead."""
         validated = self._spy_validation(monkeypatch)
-        items = ["{{ 'id' }}", "{{ 'tags' }}", "{{ gone }}"]
-        lines = str(self._failure({"expressions": ["{{ true }}"] * 3, "body": {"contains": items}}, {"gone": None})).split("\n")
+        lines = str(self._failure({"expressions": ["{{ true }}"] * 3, "body": {"contains": ["{{ 'id' }}", "{{ 'tags' }}", "{{ gone }}"]}}, {"gone": None})).split("\n")
         assert lines[:2] == ["1 validation error for Verify", "body.contains.2"]
         assert validated == [
             {"expressions": [True] * 3, "body": {"contains": ["id", "tags", None]}},
@@ -1065,7 +1065,48 @@ class TestVerifyRenderedValueByValue:
             {"body": {"contains": ["id"]}},
             {"body": {"contains": ["tags"]}},
             {"body": {"contains": [None]}},
-            {"body": {"contains": [*items[:2], None]}},
+        ]
+
+    def test_failing_list_items_each_keep_their_index(self):
+        """As their list whole gave it: pydantic's report, each error of its
+        type, message and input (its link left out here: it names pydantic's
+        version), and the guard's refusal, at the index each item has in the
+        step."""
+        verify = {
+            "user_functions": ["{{ gone }}", "tests.unit.response_steps_test_helpers:returns_true", {"name": "{{ gone }}"}],
+            "body": {"matches": ["{{ paren }}", "a", "{{ gone }}"]},
+        }
+        error = self._failure(verify, {"gone": None, "paren": "("})
+        assert [line for line in str(error).split("\n") if "For further information visit" not in line] == [
+            "4 verification checks failed:",
+            "  1. 'verify.user_functions[0]' was declared as '{{ gone }}' but rendered to None",
+            "  2. 'verify.user_functions[2].name' was declared as '{{ gone }}' but rendered to None",
+            "  3. 1 validation error for Verify",
+            "     body.matches.0",
+            "       Value error, Invalid regular expression [type=value_error, input_value='(', input_type=str]",
+            "  4. 1 validation error for Verify",
+            "     body.matches.2",
+            "       Input should be a valid string [type=string_type, input_value=None, input_type=NoneType]",
+        ]
+
+    def test_relocated_report_reads_as_pydantic_wrote_it(self):
+        """Its own errors rebuilt with their context, link included; a custom
+        one, whose template is gone, with its type and message."""
+        custom = PydanticCustomError("custom_kind", "Custom {text}", {"text": "words"})
+        error = ValidationError.from_exception_data(
+            "Verify",
+            [
+                {"type": "value_error", "loc": ("body", "matches", 0), "input": "(", "ctx": {"error": ValueError("Invalid regular expression")}},
+                {"type": custom, "loc": ("body", "matches", 0, "x"), "input": 1},
+                {"type": "missing", "loc": ("status",), "input": {}},
+            ],
+        )
+        moved = carrier_module._relocated(error, carrier_module._relocation(("body", "matches", 0), ("body", "matches", 7)))
+        assert str(moved) == str(error).replace("body.matches.0", "body.matches.7")
+        assert [(e["type"], e["loc"], e["msg"]) for e in moved.errors()] == [
+            ("value_error", ("body", "matches", 7), "Value error, Invalid regular expression"),
+            ("custom_kind", ("body", "matches", 7, "x"), "Custom words"),
+            ("missing", ("status",), "Field required"),
         ]
 
     @staticmethod
