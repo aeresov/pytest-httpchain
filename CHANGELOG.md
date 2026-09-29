@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scenario. A part named as a redacted query parameter (`password`, `token`, ...) whose content
   is not text, as a HAR records it, was written as its `base64` value where a text part became
   a placeholder. It is a placeholder too now, which holds the part base64-encoded, as recorded.
+- A `save.jmespath` expression that Python cannot evaluate against a response, such as
+  `contains(s, n)` looking for a number in a string or `ceil(x)` of a number too large for a
+  float, fails the stage as a save error, which `retry.on: save` retries, instead of escaping as a
+  raw `TypeError` or `OverflowError` traceback. It reads as a `verify.jmespath` entry's does, and so
+  does a save whose function is given the wrong type: `Error saving variable n: length() needs
+  string or array or object, got 5 (number)`, where it quoted jmespath's message.
 
 ## [0.16.0] - 2026-09-29
 

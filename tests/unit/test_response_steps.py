@@ -57,6 +57,27 @@ def test_jmespath_save_rejects_non_json_response(response, message):
         on_bounded_stack(process_save, JMESPathSave(jmespath={"value": "key"}), response, ChainMap())
 
 
+@pytest.mark.parametrize(
+    ("expression", "body", "reason"),
+    [
+        pytest.param("length(id)", {"id": 5}, "length() needs string or array or object, got 5 (number)", id="jmespath-type-error"),
+        pytest.param("lenght(id)", {"id": 5}, "Unknown function: lenght()", id="unknown-function"),
+        # Python's, from what jmespath hands its functions unchecked: json
+        # reads 1e400 as inf.
+        pytest.param("contains(s, n)", {"s": "abc", "n": 1}, "'in <string>' requires string as left operand, not int", id="number-in-string"),
+        pytest.param("ceil(x)", b'{"x": 1e400}', "cannot convert float infinity to integer", id="ceil-of-inf"),
+    ],
+)
+def test_jmespath_save_evaluation_error_fails_cleanly(expression, body, reason):
+    """An expression that cannot be evaluated against this body is a save
+    failure naming why, which `retry.on: save` retries, never a traceback."""
+    response = httpx.Response(200, content=body) if isinstance(body, bytes) else httpx.Response(200, json=body)
+    with pytest.raises(SaveError) as excinfo:
+        process_save(JMESPathSave(jmespath={"v": expression}), response, ChainMap())
+    assert str(excinfo.value) == f"Error saving variable v: {reason}"
+    assert excinfo.value.retryable is True
+
+
 PAGE = httpx.Response(
     200,
     text='<form><input name="csrf" value="tok-1"></form>\n<p>Order #42</p>\n<a href="?id=7">7</a> <a href="?id=8">8</a>',

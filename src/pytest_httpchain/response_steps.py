@@ -58,8 +58,12 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
             for var_name, jmespath_expr in save_model.jmespath.items():
                 try:
                     step_saved[var_name] = jmespath.search(jmespath_expr, response_json)
-                except jmespath.exceptions.JMESPathError as e:
-                    raise SaveError(f"Error saving variable {var_name}: {e}") from e
+                except (ValueError, ArithmeticError, TypeError) as e:
+                    # What a verify.jmespath entry fails on (`_verify_jmespath`):
+                    # jmespath's own errors, and Python's from what it hands
+                    # its functions unchecked (`contains(s, n)`, `ceil()` of
+                    # inf). Another response may hold what it needs: retryable.
+                    raise SaveError(f"Error saving variable {var_name}: {_evaluation_error(e)}") from e
 
         case RegexSave():
             for var_name, entry in save_model.regex.items():
