@@ -154,9 +154,39 @@ def configured_suffix(paths: Sequence[Path]) -> str:
         raise DiscoveryError(f"{file}: {ConfigOptions.SUFFIX} {e}") from None
 
 
+def pytest_rootdir(paths: Sequence[Path]) -> Path:
+    """The rootdir pytest would determine for a run on ``paths`` from the
+    current directory, given no ``-c`` or ``--rootdir``: the directory of the
+    configuration file it would read (see `configured_suffix`); failing that,
+    the nearest directory holding a ``setup.py``, at or above the common
+    ancestor of the paths; failing that, the common ancestor of the current
+    directory and the paths', or the paths' alone when that is the root of
+    the file system, or when there is none (on Windows, paths on another
+    drive than the current directory, where pytest keeps the current
+    directory, which holds none of them).
+
+    Collection sandboxes ``$ref`` targets in pytest's rootdir, so the CLI's
+    default reference root is this: `validate` rejects no reference a run
+    on the same paths resolves, and one run's files share one root.
+
+    A configuration file that cannot be read, which pytest stops on, is
+    passed over here, as one holding no pytest configuration is: a run over
+    files needs no setting from it (`configured_suffix` reports it when a
+    directory needs the suffix)."""
+    return _setup(paths, strict=False)[0]
+
+
 def _locate_config(paths: Sequence[Path]) -> tuple[Path, dict[str, object]] | None:
     """The configuration file pytest would read for ``paths`` and the settings
     it holds, or None when it would read none (see `configured_suffix`)."""
+    return _setup(paths, strict=True)[1]
+
+
+def _setup(paths: Sequence[Path], *, strict: bool) -> tuple[Path, tuple[Path, dict[str, object]] | None]:
+    """pytest's rootdir for ``paths``, and the configuration file it reads
+    with its settings, or None (see `pytest_rootdir`); ``strict`` raises
+    `DiscoveryError` for a configuration file that cannot be read, else it is
+    passed over."""
     dirs: list[Path] = []
     for path in paths:
         # Made absolute as pytest makes an argument absolute: `..` and `.`
@@ -165,10 +195,22 @@ def _locate_config(paths: Sequence[Path]) -> tuple[Path, dict[str, object]] | No
         if os.path.exists(absolute):
             dirs.append(absolute if os.path.isdir(absolute) else absolute.parent)
     ancestor = _common_ancestor(dirs) if dirs else Path.cwd()
-    found = _find_config([ancestor])
-    if found is None and dirs != [ancestor] and not any(os.path.isfile(base / "setup.py") for base in (ancestor, *ancestor.parents)):
-        found = _find_config(dirs)
-    return found
+    if (found := _find_config([ancestor], strict=strict)) is not None:
+        return found[0].parent, found
+    for base in (ancestor, *ancestor.parents):
+        if os.path.isfile(base / "setup.py"):
+            return base, None
+    if dirs != [ancestor] and (found := _find_config(dirs, strict=strict)) is not None:
+        return found[0].parent, found
+    try:
+        rootdir = Path(os.path.commonpath([Path.cwd(), ancestor]))
+    except ValueError:
+        # On another drive than the current directory (Windows): pytest keeps
+        # the current directory then, a rootdir that holds none of the paths,
+        # so their own common ancestor is taken instead.
+        return ancestor, None
+    # The root of the file system (of a drive, on Windows) is no rootdir.
+    return (ancestor if os.path.splitdrive(rootdir)[1] == os.sep else rootdir), None
 
 
 def _common_ancestor(dirs: list[Path]) -> Path:
@@ -182,9 +224,12 @@ def _common_ancestor(dirs: list[Path]) -> Path:
     return ancestor
 
 
-def _find_config(starts: Iterable[Path]) -> tuple[Path, dict[str, object]] | None:
+def _find_config(starts: Iterable[Path], *, strict: bool = True) -> tuple[Path, dict[str, object]] | None:
     """The first configuration file holding pytest configuration in each of
-    ``starts`` or above it, in turn; else the first ``pyproject.toml`` met."""
+    ``starts`` or above it, in turn; else the first ``pyproject.toml`` met.
+    Not ``strict``, one that cannot be read, or that pytest would refuse, is
+    passed over as one holding no pytest configuration is: a
+    ``pyproject.toml`` of the kind is still the one met, if first."""
     bare_pyproject: Path | None = None
     for start in starts:
         for base in (start, *start.parents):
@@ -192,7 +237,12 @@ def _find_config(starts: Iterable[Path]) -> tuple[Path, dict[str, object]] | Non
                 file = base / name
                 if not os.path.isfile(file):
                     continue
-                settings = _read_config(file)
+                try:
+                    settings = _read_config(file)
+                except DiscoveryError:
+                    if strict:
+                        raise
+                    settings = None
                 if settings is not None:
                     return file, settings
                 if name == "pyproject.toml" and bare_pyproject is None:

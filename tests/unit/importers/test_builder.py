@@ -301,6 +301,15 @@ SECRETS = [
         [("PASSWORD", "multipart part 'password'"), ("TOKEN", "multipart part 'token'")],
         id="multipart-file-parts",
     ),
+    # A part recorded as bytes that are no text ("s3cretAA" decodes to
+    # them) is a secret by its name all the same, the placeholder holding it
+    # base64-encoded.
+    pytest.param(
+        {"body": PartsData((Part("password", base64="s3cretAA", filename="p.bin"), Part("avatar", base64="AAE=", filename="a.bin")))},
+        {"body": {"multipart": {"files": {"password": {"base64": "{{ password }}", "filename": "p.bin"}, "avatar": {"base64": "AAE=", "filename": "a.bin"}}}}},
+        [("PASSWORD", "multipart part 'password', base64-encoded")],
+        id="multipart-base64-part",
+    ),
 ]
 
 
@@ -415,6 +424,23 @@ def test_recorded_text_keeps_its_whitespace():
         result = build_scenario([RecordedRequest("POST", "https://x.test/a", headers=form, body=TextData(text))], description="t")
         [sent] = sent_requests(result.scenario)
         assert sent.content == text.encode()
+
+
+def test_secret_base64_part_is_sent_as_recorded(monkeypatch):
+    """The placeholder for a secret part recorded as bytes holds them
+    base64-encoded: set to the recorded base64, the part sends the bytes it
+    was recorded with; unset, the request fails rather than go without it."""
+    secret = b"\xffs3cret-pw"
+    recorded = RecordedRequest("POST", "https://x.test/a", body=PartsData((Part("password", base64=base64.b64encode(secret).decode(), filename="p.bin"),)))
+    result = build_scenario([recorded], description="t")
+    [placeholder] = result.placeholders
+    assert base64.b64encode(secret).decode() not in json.dumps(result.scenario)
+    monkeypatch.delenv(placeholder.env, raising=False)
+    with pytest.raises((TemplatesError, ValidationError)):
+        sent_requests(result.scenario)
+    monkeypatch.setenv(placeholder.env, base64.b64encode(secret).decode())
+    [request] = sent_requests(result.scenario)
+    assert secret in request.content
 
 
 def test_multipart_recorded_as_bytes_is_taken_apart():

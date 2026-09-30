@@ -24,14 +24,20 @@ affect how `$include`/`$merge`/`$ref` resolve:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--root-path DIR` | auto-detected | Directory references must not escape. Collection uses pytest's `rootdir`; the CLI approximates it, so pass this explicitly when the two disagree. |
+| `--root-path DIR` | pytest's `rootdir` | Directory references must not escape. Collection uses pytest's `rootdir`, and so does the CLI by default: the one [pytest would determine](https://docs.pytest.org/en/stable/reference/customize.html#initialization-determining-rootdir-and-configfile) for a run on the same paths from the current directory (`validate a b` holds both to the rootdir of `pytest a b`). Pass it when a run uses `--rootdir` or `-c`. |
 | `--ref-parent-traversal-depth N` | `3` | How many `../` levels a reference may climb. Mirrors the `httpchain_ref_parent_traversal_depth` ini option. |
 
-The auto-detected root prefers a directory holding real pytest configuration
-(`pytest.ini`, or a `pyproject.toml` with a `[tool.pytest…]` section) over a bare
-project marker — so a sub-package's own `pyproject.toml` does not shrink the
-root below pytest's and make `validate` reject references that collection
-resolves fine.
+The default root is the directory of the configuration file pytest would read
+(`pytest.toml`, `pytest.ini`, or a `pyproject.toml` with a `[tool.pytest…]`
+table, ...), else of the nearest `setup.py`, else the common ancestor of the
+current directory and the paths, as pytest's is. A sub-package's own
+`pyproject.toml` without pytest configuration does not shrink the root below
+pytest's, and the files of one run share one root, so `validate` rejects no
+reference that collection resolves. A file that root does not hold, as when one
+run names the files of two projects (a pre-commit hook in a monorepo), is held
+to the root pytest gives it alone, its own project's. A configuration file that
+cannot be read, or that pytest would refuse, is passed over here as one without
+pytest configuration is; pytest itself would stop on it.
 
 ## `validate`
 
@@ -105,7 +111,7 @@ else `http`. `--suffix` overrides it, as `-o httpchain_suffix=...` overrides it
 for pytest (`validate` reads neither `-o` nor `PYTEST_ADDOPTS`). A configuration
 file pytest could not read, or a suffix it would refuse, stops `validate` with
 an `error:` line before anything is checked. Files you name need no suffix, so
-the configuration is read only when a path is a directory.
+that happens only when a path is a directory.
 
 The report is sorted by path, whatever order the paths are given in, so it does
 not change with the order a shell or `find` lists them in. Paths are compared
@@ -463,7 +469,7 @@ the docs pass a secret (see [Authentication](usage/requests.md#authentication)):
   [redacts](getting-started.md#secrets-in-reports) by default (`X-API-Key`,
   `access_token`, `password`, `token`, ...), named after them (`x_api_key`),
   and the form fields, multipart parts (a text field, or a file's recorded
-  text) and JSON members named as those query
+  text, or its bytes, base64-encoded as recorded) and JSON members named as those query
   parameters are, at any depth of a JSON body: a string or a number there (a
   number is read with `json_loads`, to be sent as the number it was), each of
   a list's under that name. An object under the name is judged by its own

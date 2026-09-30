@@ -518,6 +518,17 @@ def test_resolve_prints_strict_json(jsonc_scenario):
     assert result.output == json.dumps(expected, indent=2) + "\n"
 
 
+def test_resolve_refuses_numbers_json_cannot_write(tmp_path):
+    """``NaN`` and ``Infinity``, which ``json.loads`` reads, are no JSON: a
+    file holding one fails to load rather than print them as strict JSON."""
+    scenario = tmp_path / "test_x.http.json"
+    scenario.write_text('{"stages": [{"name": "s", "request": {"url": "https://x.test/a", "timeout": Infinity}}]}')
+    result = runner.invoke(app, ["resolve", str(scenario)])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "Infinity is not valid JSON: line 1 column 77 (char 76)" in result.stderr
+
+
 @pytest.mark.parametrize(("command", "line"), [("validate", "test_x.http.jsonc: OK"), ("show", "1 · s    GET https://x.test/a"), ("graph", 'S0["1 · s"]')])
 def test_every_command_reads_jsonc(jsonc_scenario, command, line):
     result = runner.invoke(app, [command, str(jsonc_scenario)])

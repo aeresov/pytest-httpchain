@@ -638,7 +638,7 @@ class _Builder:
         """``{"fields": ..., "files": ...}``: a text field without a type or
         filename is a field, anything else a file object (a path alone
         where that says all). A secret's text, a field's or a file object's
-        ``content`` (a field sent with a type is one), is a placeholder,
+        ``content`` or ``base64`` (a field sent with a type is one), is a placeholder,
         which fails the stage unset (a field or a file's only source is no
         null). A part named as a reference key cannot be written, and is
         left out with a note."""
@@ -656,7 +656,13 @@ class _Builder:
                 self.files.append(part.path)
                 spec["path"] = escape(part.path)
             elif part.base64 is not None:
-                spec["base64"] = part.base64
+                # Bytes that are no text (a password sent in another
+                # encoding) are as secret as text: the placeholder holds
+                # them base64-encoded, as recorded.
+                if self.is_secret_field(part.name, part.base64):
+                    spec["base64"] = self.secret(part.name, part.base64, f"multipart part {part.name!r}, base64-encoded", stage)
+                else:
+                    spec["base64"] = part.base64
             elif self.is_secret_field(part.name, content := part.value if part.value is not None else part.content or ""):
                 spec["content"] = self.secret(part.name, content, f"multipart part {part.name!r}", stage)
             else:

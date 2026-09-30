@@ -57,6 +57,27 @@ def test_jmespath_save_rejects_non_json_response(response, message):
         on_bounded_stack(process_save, JMESPathSave(jmespath={"value": "key"}), response, ChainMap())
 
 
+@pytest.mark.parametrize(
+    ("expression", "body", "reason"),
+    [
+        pytest.param("length(id)", {"id": 5}, "length() needs string or array or object, got 5 (number)", id="jmespath-type-error"),
+        pytest.param("lenght(id)", {"id": 5}, "Unknown function: lenght()", id="unknown-function"),
+        # Python's, from what jmespath hands its functions unchecked: json
+        # reads 1e400 as inf.
+        pytest.param("contains(s, n)", {"s": "abc", "n": 1}, "'in <string>' requires string as left operand, not int", id="number-in-string"),
+        pytest.param("ceil(x)", b'{"x": 1e400}', "cannot convert float infinity to integer", id="ceil-of-inf"),
+    ],
+)
+def test_jmespath_save_evaluation_error_fails_cleanly(expression, body, reason):
+    """An expression that cannot be evaluated against this body is a save
+    failure naming why, which `retry.on: save` retries, never a traceback."""
+    response = httpx.Response(200, content=body) if isinstance(body, bytes) else httpx.Response(200, json=body)
+    with pytest.raises(SaveError) as excinfo:
+        process_save(JMESPathSave(jmespath={"v": expression}), response, ChainMap())
+    assert str(excinfo.value) == f"Error saving variable v: {reason}"
+    assert excinfo.value.retryable is True
+
+
 PAGE = httpx.Response(
     200,
     text='<form><input name="csrf" value="tok-1"></form>\n<p>Order #42</p>\n<a href="?id=7">7</a> <a href="?id=8">8</a>',
@@ -714,14 +735,22 @@ class TestExpressions:
             # guard: substitution rewrites the list element-wise, so a
             # rendered-away entry arrives here as None and fails the bool contract.
             pytest.param(None, "NoneType", id="rendered-away"),
-            # The failure quotes the value's repr, which a `vars` object this
-            # deep once overflowed, escaping as a bare RecursionError.
+            # The failure once quoted the value's repr, which a `vars` object
+            # this deep overflowed, escaping as a bare RecursionError.
             pytest.param(convert_dict_to_namespace({"deep": nested("x", LOADABLE_BUT_DEEP)}), "VarsNamespace", id="vars-object-nested-hundreds-deep"),
         ],
     )
     def test_non_bool_is_rejected_naming_its_type(self, value, type_name):
         with pytest.raises(VerificationError, match=f"Verify expression 0 must evaluate to bool, got {type_name}"):
             process_verify(Verify(expressions=[value]), httpx.Response(200))
+
+    def test_non_bool_failure_leaves_the_value_out(self):
+        """The value can be a credential (`{{ response.headers['Set-Cookie'] }}`),
+        which the report redacts among the headers: the failure names its
+        type only, as skip_if's does."""
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(Verify(expressions=["sid=s3cr3t; Path=/"]), httpx.Response(200))
+        assert str(excinfo.value) == "Verify expression 0 must evaluate to bool, got str, a value written where a condition belongs"
 
 
 @pytest.mark.parametrize(
@@ -1222,7 +1251,7 @@ class TestEveryFailureIsReported:
             "  6. JMESPath 'count' doesn't match: expected gt 5, got 3",
             "  7. JMESPath 'count' doesn't match: expected type string, got 3 (number)",
             "  8. Expression 1 failed: evaluated to False",
-            "  9. Verify expression 2 must evaluate to bool, got str ('x'), a value written where a condition belongs",
+            "  9. Verify expression 2 must evaluate to bool, got str, a value written where a condition belongs",
             # Among several, a function is named by its import name and index.
             f"  10. Function '{HELPERS}:returns_false' (user_functions[0]) verification failed",
             f"  11. Error calling user function '{HELPERS}:raises' (user_functions[1]): Error calling function '{HELPERS}:raises': boom",

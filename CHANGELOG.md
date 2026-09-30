@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-09-30
+
+### Fixed
+
+- A verify expression that renders to something other than a boolean no longer prints the value
+  in its failure: `{{ response.headers['Set-Cookie'] }}` put the session cookie in the pytest
+  report, past the redaction that hides it among the headers. The failure names the type alone,
+  as `skip_if`'s does: `Verify expression 0 must evaluate to bool, got str, a value written where
+  a condition belongs`.
+- `pytest-httpchain import` no longer writes a secret multipart part recorded as bytes into the
+  scenario. A part named as a redacted query parameter (`password`, `token`, ...) whose content
+  is not text, as a HAR records it, was written as its `base64` value where a text part became
+  a placeholder. It is a placeholder too now, which holds the part base64-encoded, as recorded.
+- A `save.jmespath` expression that Python cannot evaluate against a response, such as
+  `contains(s, n)` looking for a number in a string or `ceil(x)` of a number too large for a
+  float, fails the stage as a save error, which `retry.on: save` retries, instead of escaping as a
+  raw `TypeError` or `OverflowError` traceback. It reads as a `verify.jmespath` entry's does, and so
+  does a save whose function is given the wrong type: `Error saving variable n: length() needs
+  string or array or object, got 5 (number)`, where it quoted jmespath's message.
+- `NaN`, `Infinity` and `-Infinity` in a scenario, a file it `$include`s, `$merge`s or `$ref`s, or
+  a body schema file are syntax errors (`HTTPCHAIN014` at load, `HTTPCHAIN021` for a schema file
+  under `validate --deep`), at their line and column: `NaN is not valid JSON: line 2 column 14`.
+  So is a number too large for a float, such as `1e400`, which is JSON but reads as infinity.
+  Python's JSON parser reads them as numbers though JSON has none, so such a file passed
+  `validate`, and `resolve`, documented to print strict JSON, printed them. Heads-up: a scenario
+  that wrote one as a literal, such as an expected `Infinity` in `verify.jmespath`, collected on
+  0.16.0 and now fails to load; write the value as a template, `"{{ float('inf') }}"`. A response
+  body is read as before, its `NaN` and `Infinity` as numbers, as httpx reads them.
+- `validate`, `resolve`, `show` and `graph` hold references to the rootdir pytest would determine
+  for a run on the same paths, which collection holds them to, so `validate` no longer rejects
+  with `HTTPCHAIN012` a reference that collection resolves. The CLI's root was an approximation
+  of its own, which missed two cases: a `pytest.toml` or `.pytest.toml` configuration file, or a
+  `.pytest.ini`, was not seen, so a sub-package's plain `pyproject.toml` below it set a narrower
+  root; and with nothing marking a project, a file's root was its own directory, one per file of a
+  `validate a b` run, where pytest's is one for the run, the common ancestor of the current
+  directory and the paths. A file that root does not hold, as when one run names the files of two
+  projects (a pre-commit hook in a monorepo), is held to the root pytest gives it alone.
+  Heads-up: in a project with no pytest configuration file, `pyproject.toml` or `setup.py` (one
+  marked only by a `.git`, or by a `tox.ini` or `setup.cfg` without pytest configuration), the root
+  is now what pytest's is, the common ancestor of the current directory and the paths (the paths'
+  own when that is the root of the file system, or on Windows when they are on another drive than
+  the current directory), in place of the nearest directory holding such a marker, else the nearest
+  one named `tests`, else the file's own. Run from inside such a tree, the root can be narrower than
+  before, and a reference climbing above the current directory fails with `HTTPCHAIN012`; run from
+  the project's directory, or pass `--root-path`. A configuration file that cannot be read, or that
+  pytest would refuse, is passed over in finding the root, as a file without pytest configuration
+  is.
+
 ## [0.16.0] - 2026-09-29
 
 ### Added
@@ -1647,7 +1695,8 @@ This release carries a test-suite and CI pass.
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.2...v0.16.0
 [0.15.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.0...v0.15.1

@@ -76,7 +76,7 @@ The plugin is a single distribution; domain subpackages (models, templates, json
 src/pytest_httpchain/
 ├── cli.py                     # Typer CLI (validate, schema, resolve, show, graph, import har|curl)
 ├── importers/                 # `import`: recorded traffic -> starter scenario. builder (RecordedRequest -> scenario dict: base_url, params, headers, body forms, auth shorthands, secrets -> env-read vars placeholders, no recorded `$ref`/`$include`/`$merge` as a key; the text written validated as a file, through the loader, before it is written), curl (shlex-based POSIX reader of curl commands, incl. format_curl's: the pipeline's command named curl, redirections and here-documents as the stdin `@-` reads, curl's URL globbing), har (HAR entries, static-asset/--include/--exclude filters, response-set cookies left to the client); CLI side, nothing below imports it
-├── validation/                # Shared validator (CLI + collection-time), a package: diagnostics (codes/result types), loader ($ref + model validation), semantic (checks incl. order-aware data-flow), deep (imports/signatures/files, `validate --deep` only), validate (entry points: one file, and the paths `validate` is given), discovery (the scenario files a directory given to `validate` holds, found as pytest collects them, and the suffix read from the config file pytest would read)
+├── validation/                # Shared validator (CLI + collection-time), a package: diagnostics (codes/result types), loader ($ref + model validation), semantic (checks incl. order-aware data-flow), deep (imports/signatures/files, `validate --deep` only), validate (entry points: one file, and the paths `validate` is given), discovery (the scenario files a directory given to `validate` holds, found as pytest collects them, the suffix read from the config file pytest would read, and the rootdir pytest would determine, the CLI's default reference root)
 ├── dataflow.py                # DataFlow model + analyze_dataflow() (stage data-flow analysis, used by show/graph)
 ├── scoping.py                 # Single encoding of the scope/visibility rules: StageScopes static name sets (used by validation + dataflow) and runtime ChainMap context builders (used by carrier)
 ├── schema.py                  # build_schema() — JSON Schema generation shared by the schema command
@@ -103,7 +103,7 @@ The models, templates, and jsonref subpackages carry their own CLAUDE.md next to
 
 ## Test File Pattern
 
-Test scenarios are discovered by pattern: `test_<name>.http.json` or `test_<name>.http.jsonc` (suffix configurable via `httpchain_suffix` ini option; the extensions are `constants.SCENARIO_FILE_EXTENSIONS`). Every file read from disk, whatever its extension, is parsed as JSONC — comments and trailing commas allowed — by the one scanner in `jsonref/jsonc.py`; response bodies stay strict JSON.
+Test scenarios are discovered by pattern: `test_<name>.http.json` or `test_<name>.http.jsonc` (suffix configurable via `httpchain_suffix` ini option; the extensions are `constants.SCENARIO_FILE_EXTENSIONS`). Every file read from disk, whatever its extension, is parsed as JSONC — comments and trailing commas allowed — by the one scanner in `jsonref/jsonc.py`, which also refuses `NaN`/`Infinity`; response bodies stay plain `json.loads` JSON (no comments, `NaN`/`Infinity` read as numbers, as httpx reads them).
 
 ## Key Execution Flow
 

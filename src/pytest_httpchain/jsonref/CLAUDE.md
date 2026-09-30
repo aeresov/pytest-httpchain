@@ -60,10 +60,16 @@ when a value is before it (the last significant character is not `[`, `{`, `,`
 or `:`): a leading or doubled comma is left for `json.loads` to refuse, at its
 position. A `/*` never closed raises `JSONDecodeError("Unterminated comment")`
 at its opening, a syntax error like any other; a lone `/` is left in place.
+`loads_jsonc` refuses `NaN`, `Infinity` and `-Infinity`, which `json.loads`
+reads as numbers, and a number too large for a float (`1e400`), which it reads
+as infinity, with a `JSONDecodeError` at the first one outside a string
+(`_WORD`), so a file holding one is no more valid here than in any strict JSON
+parser, and `resolve` never prints `Infinity`.
 Text with no `/` and no `,` before a closing bracket (whitespace between) is
 returned unchanged without the scan. Strictly valid JSON is never changed,
 which is why there is no opt-in. What arrives over HTTP never comes here: a
-response body is strict JSON.
+response body is plain `json.loads` JSON, no comments or trailing commas, its
+`NaN` and `Infinity` read as numbers, as httpx's `response.json()` reads them.
 
 ### Load errors
 

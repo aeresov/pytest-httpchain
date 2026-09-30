@@ -80,8 +80,8 @@ A referenced file may have any name: `common.jsonc` works as `common.json` does.
 A relative reference path is looked up against **two** bases, in order:
 
 1. the **referencing file's directory** (the file containing the `$ref`);
-2. the **root path** — pytest's rootdir when collecting, or `--root-path` /
-   the auto-detected project root when using the CLI.
+2. the **root path** — pytest's rootdir when collecting, and when using the
+   CLI the rootdir pytest would determine for the same paths, or `--root-path`.
 
 The first base under which the file exists wins. This lets a suite keep
 fragments next to the scenarios that use them *and* reference shared
@@ -430,9 +430,13 @@ reference that resolves outside it is rejected even when the file exists and the
 link pointing out of the tree is rejected too. Absolute paths are refused
 outright.
 
-The root is pytest's `rootdir` during collection. For the CLI it is inferred
-from the nearest ancestor holding a real pytest config, and `--root-path` sets
-it explicitly:
+The root is pytest's `rootdir` during collection. The CLI determines the
+rootdir pytest would for a run on the paths it is given, from the current
+directory: the directory of the configuration file pytest would read
+(`pytest.toml`, `pytest.ini`, a `pyproject.toml` with a `[tool.pytest]` or
+`[tool.pytest.ini_options]` table, ...), else of the nearest `setup.py`, else
+the common ancestor of the current directory and the paths. `--root-path` sets
+it explicitly, as a run with `--rootdir` or `-c` needs:
 
 ```bash
 pytest-httpchain validate --root-path . tests/test_login.http.json

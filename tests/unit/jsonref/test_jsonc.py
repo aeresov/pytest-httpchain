@@ -105,12 +105,28 @@ def test_strict_json_is_left_as_it_is(text):
         # An error after a comment is at its place in the text as written.
         pytest.param('/* one\n   two */ // three\n{"a": }', "Expecting value", (3, 7), id="error-after-comments"),
         pytest.param('// one\r\n{"a": 1,\r\n "b": ]}', "Expecting value", (3, 7), id="error-after-crlf-comment"),
+        # Words json.loads reads as numbers, which JSON has none of: at the
+        # first outside a string, as written, a comment's included.
+        pytest.param('{"a": NaN}', "NaN is not valid JSON", (1, 7), id="nan"),
+        pytest.param("[1,\n -Infinity]", "-Infinity is not valid JSON", (2, 2), id="negative-infinity"),
+        pytest.param('{"s": "NaN \\" Infinity", /* NaN */ "b": Infinity}', "Infinity is not valid JSON", (1, 41), id="infinity-after-strings-and-comments"),
+        # JSON, but too large for a float, which json.loads reads as infinity:
+        # the file holds a number no JSON can write back.
+        pytest.param('{"s": "1e400", "b": 1.5, "c": 1e400}', r"1e400 is too large a number \(it reads as infinity\)", (1, 31), id="number-too-large"),
+        pytest.param("[\n  -1E+400]", r"-1E\+400 is too large a number", (2, 3), id="negative-number-too-large"),
     ],
 )
 def test_refused_at_its_position(text, message, position):
     with pytest.raises(json.JSONDecodeError, match=message) as excinfo:
         loads_jsonc(text)
     assert (excinfo.value.lineno, excinfo.value.colno) == position
+
+
+def test_numbers_a_float_holds_read_as_before():
+    """Only a number past the largest float is refused: the largest, one
+    that rounds to zero and a large integer read as ``json.loads`` reads
+    them."""
+    assert loads_jsonc("[1.7976931348623157e308, 1e-400, 100000000000000000000]") == [1.7976931348623157e308, 0.0, 10**20]
 
 
 def test_unterminated_comment_names_the_text():
