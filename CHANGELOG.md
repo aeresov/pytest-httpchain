@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-09-30
+
+### Fixed
+
+- Scenario validation and `show`/`graph` now track comprehension variables and values saved by earlier substitutions in their actual scope and order.
+- Explicit parameter IDs must match their values, required positional-only function arguments are reported as missing, and malformed JSON pointer escapes are rejected.
+- Template scanning terminates for cyclic data, and importing recorded requests preserves empty query components and a bare `?`.
+- HTTP reports and HAR output recognize mixed-case media types; dynamic user functions are looked up once.
+
+### Changed
+
+- Refresh the lockfile for `graphql-core` 3.3.0, `coverage` 7.16.2, `platformdirs` 4.12.2, and Werkzeug 3.1.9.
+
 ## [0.17.0] - 2026-09-30
 
 ### Added
@@ -1729,7 +1742,8 @@ This release carries a test-suite and CI pass.
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.17.1...HEAD
+[0.17.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.2...v0.16.0
