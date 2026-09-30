@@ -610,6 +610,7 @@ DIAGNOSED = [
     # never fill a positional-only parameter.
     ("deep_auth_required_missing.json", [(C.MISSING_ARG, "auth", "missing required argument 'token'")]),
     ("deep_auth_posonly.json", [(C.MISSING_ARG, "auth", "missing required argument 'token'")]),
+    ("deep_auth_posonly_kwarg.json", [(C.MISSING_ARG, "auth", "missing required argument 'token'")]),
     ("deep_binary_missing.json", [(C.REFERENCED_FILE_NOT_FOUND, "stages[0].request.body.binary", "definitely_missing_file")]),
     # A path with only an escape names the file it renders to: the one the
     # stage opens, braces and all.

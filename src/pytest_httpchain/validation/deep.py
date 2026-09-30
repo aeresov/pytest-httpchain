@@ -186,12 +186,16 @@ def _signature_problems(func: Any, provided: set[str]) -> Iterator[tuple[Diagnos
 
     params = list(signature.parameters.values())
     keyword_acceptable = {p.name for p in params if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
-    required = {p.name for p in params if p.default is p.empty and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY, p.POSITIONAL_ONLY)}
+    required_keywords = {p.name for p in params if p.default is p.empty and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
+    required_positionals = {p.name for p in params if p.default is p.empty and p.kind is p.POSITIONAL_ONLY}
 
     if not any(p.kind is p.VAR_KEYWORD for p in params):
         for name in sorted(provided - keyword_acceptable):
             yield DiagnosticCode.UNKNOWN_ARG, f"unexpected argument '{name}'"
-    for name in sorted(required - provided):
+    # A keyword with the same name cannot fill a positional-only parameter.
+    # With **kwargs it is accepted into kwargs, but the positional argument is
+    # still missing when the function is called.
+    for name in sorted(required_positionals | (required_keywords - provided)):
         yield DiagnosticCode.MISSING_ARG, f"missing required argument '{name}'"
 
 

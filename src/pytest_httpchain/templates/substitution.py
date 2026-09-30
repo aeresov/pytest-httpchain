@@ -133,7 +133,7 @@ class _KeyDoesNotExist(InvalidExpression):
 
     def __init__(self, key: object, expression: str):
         self.message = f"Key {key!r} does not exist in expression '{expression}'"
-        super(InvalidExpression, self).__init__(self.message)
+        super().__init__(self.message)
 
 
 class _MethodNotCalled(AttributeDoesNotExist):
@@ -462,11 +462,20 @@ def _any_string(obj: Any, predicate: Callable[[str], bool]) -> bool:
     """True when ``predicate`` holds for any string anywhere in the structure.
 
     Iterative on purpose: a recursive walk spent two stack frames per level of
-    nesting, so a value a few hundred levels deep overflowed it.
+    nesting, so a value a few hundred levels deep overflowed it. Track objects
+    already visited so a fixture's cyclic container cannot loop forever.
     """
     pending = [obj]
+    # Keep the objects alive while scanning: a set of IDs alone could confuse
+    # a newly dumped model with an earlier object whose ID was reused.
+    seen: dict[int, Any] = {}
     while pending:
-        match pending.pop():
+        current = pending.pop()
+        if isinstance(current, dict | list | tuple | BaseModel | SimpleNamespace):
+            if id(current) in seen:
+                continue
+            seen[id(current)] = current
+        match current:
             case str() as text:
                 if predicate(text):
                     return True

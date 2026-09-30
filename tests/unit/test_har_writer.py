@@ -237,6 +237,11 @@ class TestSerializationFamilies:
             {"name": "empty", "value": ""},
         ]
 
+    def test_form_media_type_is_case_insensitive(self):
+        req = httpx.Request("POST", "https://x.com", content=b"a=1", headers={"content-type": "Application/X-WWW-Form-Urlencoded"})
+        post = request_response_to_har_entry(req, httpx.Response(200, request=req))["request"]["postData"]
+        assert post["params"] == [{"name": "a", "value": "1"}]
+
     def test_binary_request_body_base64_encoded(self):
         raw = b"\xff\xfe\x00"
         req = httpx.Request("POST", "https://x.com", content=raw, headers={"content-type": "application/octet-stream"})

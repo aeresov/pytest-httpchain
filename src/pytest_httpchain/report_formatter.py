@@ -53,7 +53,7 @@ def format_request(request: httpx.Request, redaction: Redaction = DEFAULT_REDACT
             body = f"<Binary content: {len(content)} bytes>"
         else:
             body = _format_body_text(decoded)
-            if "application/json" in content_type:
+            if "application/json" in content_type.lower():
                 try:
                     body = _format_json(json.loads(decoded))
                 except JSON_PARSE_ERRORS:
@@ -137,7 +137,7 @@ def format_response(response: httpx.Response, redaction: Redaction = DEFAULT_RED
     body = None
     if response.content:
         content_type = response.headers.get("Content-Type", "")
-        if "application/json" in content_type:
+        if "application/json" in content_type.lower():
             try:
                 body = _format_json(response.json())
             except JSON_PARSE_ERRORS:
@@ -255,7 +255,7 @@ def format_curl(request: httpx.Request, redaction: Redaction = DEFAULT_REDACTION
         if lowered == "authorization" and value[: len(_DIGEST_SCHEME)].lower() == _DIGEST_SCHEME:
             notes.append("The Digest Authorization answered one challenge and is left out: add --digest -u 'user:password' to answer a new one.")
             continue
-        if lowered == "content-type" and content is None and value.startswith("multipart/"):
+        if lowered == "content-type" and content is None and value.lower().startswith("multipart/"):
             # Its boundary is the uncaptured body's: -F writes its own.
             continue
         shown = redaction.header(name, value)
@@ -265,7 +265,7 @@ def format_curl(request: httpx.Request, redaction: Redaction = DEFAULT_REDACTION
 
     data: str | None = None
     if content is None:
-        if content_type is not None and content_type.startswith("multipart/"):
+        if content_type is not None and content_type.lower().startswith("multipart/"):
             notes.append("The multipart body was not captured: add each part with -F 'name=@file'.")
         else:
             notes.append("The streamed body was not captured: add it with --data-binary @file.")

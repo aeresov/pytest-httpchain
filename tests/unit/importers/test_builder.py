@@ -76,6 +76,9 @@ def test_several_origins_keep_absolute_urls():
         pytest.param("https://x.test/a?a=1&b=2&a=3", {"url": "/a?a=1&b=2&a=3"}, id="query-kept-interleaved"),
         pytest.param("https://x.test/a?$ref=x&a=1", {"url": "/a?$ref=x&a=1"}, id="query-kept-reference-key"),
         pytest.param("https://x.test/a?$include=x.json", {"url": "/a?$include=x.json"}, id="query-kept-include"),
+        pytest.param("https://x.test/a?x=1&&y=2", {"url": "/a?x=1&&y=2"}, id="query-kept-empty-component"),
+        pytest.param("https://x.test/a?x=1&", {"url": "/a?x=1&"}, id="query-kept-trailing-ampersand"),
+        pytest.param("https://x.test/a?#fragment", {"url": "/a?"}, id="empty-query-kept"),
         # ... its secrets still placeholders, which fail the stage unset.
         pytest.param("https://x.test/a?access_token=S3CRET&q=caf%E9&{{x}}=1", {"url": "/a?access_token={{ quote(access_token) }}&q=caf%E9&\\{{x}}=1"}, id="query-kept-secret"),
         pytest.param("https://x.test/{{x}}?q={{y}}", {"url": "/\\{{x}}", "params": {"q": "\\{{y}}"}}, id="template-syntax"),
@@ -84,6 +87,13 @@ def test_several_origins_keep_absolute_urls():
 )
 def test_url(url, expected):
     assert _request(url=url) == expected
+
+
+@pytest.mark.parametrize("query", ["?x=1&&y=2", "?x=1&", "?"])
+def test_empty_query_components_are_sent_as_recorded(query):
+    scenario = _scenario(RecordedRequest("GET", f"https://x.test/a{query}"))
+    [sent] = sent_requests(scenario)
+    assert sent.url.raw_path == f"/a{query}".encode()
 
 
 # --- headers ---

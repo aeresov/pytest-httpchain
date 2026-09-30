@@ -164,6 +164,17 @@ def test_format_response(response, expected):
 
 
 @pytest.mark.parametrize(
+    ("formatter", "message"),
+    [
+        (format_request, httpx.Request("POST", "https://x.test/", headers={"content-type": "Application/JSON"}, content=b'{"a":1}')),
+        (format_response, httpx.Response(200, headers={"content-type": "Application/JSON"}, content=b'{"a":1}')),
+    ],
+)
+def test_json_content_type_is_case_insensitive(formatter, message):
+    assert formatter(message).split("\n\n", 1)[1] == '{\n  "a": 1\n}'
+
+
+@pytest.mark.parametrize(
     ("formatter", "message", "expected_body"),
     [
         pytest.param(
@@ -408,6 +419,16 @@ def _curl_arguments(command: str) -> list[str]:
 )
 def test_format_curl(request_, expected):
     assert format_curl(request_) == expected
+
+
+def test_format_curl_recognizes_multipart_media_type_case_insensitively():
+    request = httpx.Request("POST", "https://x.test/upload", files={"file": ("a.txt", b"abc")})
+    request.headers["content-type"] = request.headers["content-type"].replace("multipart/", "Multipart/")
+
+    assert format_curl(request) == _lines(
+        "# The multipart body was not captured: add each part with -F 'name=@file'.",
+        "curl -X POST 'https://x.test/upload'",
+    )
 
 
 @pytest.mark.parametrize(

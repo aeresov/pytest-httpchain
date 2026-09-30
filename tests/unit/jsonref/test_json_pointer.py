@@ -70,3 +70,10 @@ def test_fragment_must_be_a_slash_pointer(create_json_file, ref):
     file = create_json_file("test.json", {"data": {"value": 42}, "ref": {"$ref": ref}})
     with pytest.raises(ReferenceResolverError, match="Invalid .ref format"):
         load_json(file)
+
+
+@pytest.mark.parametrize("escape", ["~", "~2", "~~0", "~01~3"])
+def test_invalid_tilde_escape_rejected(create_json_file, escape):
+    file = create_json_file("test.json", {escape: "wrong target", "ref": {"$ref": f"#/{escape}"}})
+    with pytest.raises(ReferenceResolverError, match="invalid '~' escape"):
+        load_json(file)
