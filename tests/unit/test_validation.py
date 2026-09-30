@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import pytest_httpchain.validation.discovery as discovery
 import pytest_httpchain.validation.validate as validation_validate
 from pytest_httpchain.body_schema import BodySchema
 from pytest_httpchain.models import JMESPathMatcher
@@ -1337,6 +1338,21 @@ class TestRootPathDefault:
         _skip_if_ancestors_set_a_rootdir(tmp_path)
         scenario = self._scenario_in(tmp_path / "a" / "b")
         monkeypatch.chdir(tmp_path.anchor)
+        assert resolve_root_path(scenario) == tmp_path / "a" / "b"
+
+    def test_on_another_drive_than_the_current_directory_the_file_parent(self, tmp_path, monkeypatch):
+        """On Windows a path on another drive than the current directory has no
+        common ancestor with it, and pytest keeps the current directory as its
+        rootdir then, which holds none of the paths (a CI runner's checkout on
+        D:, its temporary directory on C:). The paths' own is taken instead, as
+        for a common ancestor that is the root of the file system."""
+        _skip_if_ancestors_set_a_rootdir(tmp_path)
+        scenario = self._scenario_in(tmp_path / "a" / "b")
+
+        def on_other_drives(paths):
+            raise ValueError("Paths don't have the same drive")
+
+        monkeypatch.setattr(discovery.os.path, "commonpath", on_other_drives)
         assert resolve_root_path(scenario) == tmp_path / "a" / "b"
 
     def test_bare_marker_used_when_no_pytest_config_anywhere(self, tmp_path):

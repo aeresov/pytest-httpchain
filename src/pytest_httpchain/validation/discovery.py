@@ -161,7 +161,9 @@ def pytest_rootdir(paths: Sequence[Path]) -> Path:
     the nearest directory holding a ``setup.py``, at or above the common
     ancestor of the paths; failing that, the common ancestor of the current
     directory and the paths', or the paths' alone when that is the root of
-    the file system.
+    the file system, or when there is none (on Windows, paths on another
+    drive than the current directory, where pytest keeps the current
+    directory, which holds none of them).
 
     Collection sandboxes ``$ref`` targets in pytest's rootdir, so the CLI's
     default reference root is this: `validate` rejects no reference a run
@@ -200,7 +202,13 @@ def _setup(paths: Sequence[Path], *, strict: bool) -> tuple[Path, tuple[Path, di
             return base, None
     if dirs != [ancestor] and (found := _find_config(dirs, strict=strict)) is not None:
         return found[0].parent, found
-    rootdir = _common_ancestor([Path.cwd(), ancestor])
+    try:
+        rootdir = Path(os.path.commonpath([Path.cwd(), ancestor]))
+    except ValueError:
+        # On another drive than the current directory (Windows): pytest keeps
+        # the current directory then, a rootdir that holds none of the paths,
+        # so their own common ancestor is taken instead.
+        return ancestor, None
     # The root of the file system (of a drive, on Windows) is no rootdir.
     return (ancestor if os.path.splitdrive(rootdir)[1] == os.sep else rootdir), None
 

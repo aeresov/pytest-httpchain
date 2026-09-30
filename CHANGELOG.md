@@ -39,8 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   root; and each file of a `validate a b` run got a root of its own, the file's directory when
   nothing marked a project, where `pytest a b` has one, their common ancestor. Heads-up: without a
   pytest configuration file or a `setup.py`, the root is now what pytest's is, the common ancestor
-  of the current directory and the paths, in place of the nearest directory holding a `.git`, a
-  bare project file or named `tests`; pass `--root-path` for another.
+  of the current directory and the paths (the paths' own when that is the root of the file system,
+  or on Windows when they are on another drive than the current directory), in place of the
+  nearest directory holding a `.git`, a bare project file or named `tests`; pass `--root-path` for
+  another.
 
 ## [0.16.0] - 2026-09-29
 
