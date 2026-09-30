@@ -67,7 +67,8 @@ JSON parser, and `resolve` never prints one.
 Text with no `/` and no `,` before a closing bracket (whitespace between) is
 returned unchanged without the scan. Strictly valid JSON is never changed,
 which is why there is no opt-in. What arrives over HTTP never comes here: a
-response body is strict JSON.
+response body is plain `json.loads` JSON, no comments or trailing commas, its
+`NaN` and `Infinity` read as numbers, as httpx's `response.json()` reads them.
 
 ### Load errors
 

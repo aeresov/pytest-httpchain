@@ -103,7 +103,7 @@ The models, templates, and jsonref subpackages carry their own CLAUDE.md next to
 
 ## Test File Pattern
 
-Test scenarios are discovered by pattern: `test_<name>.http.json` or `test_<name>.http.jsonc` (suffix configurable via `httpchain_suffix` ini option; the extensions are `constants.SCENARIO_FILE_EXTENSIONS`). Every file read from disk, whatever its extension, is parsed as JSONC — comments and trailing commas allowed — by the one scanner in `jsonref/jsonc.py`; response bodies stay strict JSON.
+Test scenarios are discovered by pattern: `test_<name>.http.json` or `test_<name>.http.jsonc` (suffix configurable via `httpchain_suffix` ini option; the extensions are `constants.SCENARIO_FILE_EXTENSIONS`). Every file read from disk, whatever its extension, is parsed as JSONC — comments and trailing commas allowed — by the one scanner in `jsonref/jsonc.py`, which also refuses `NaN`/`Infinity`; response bodies stay plain `json.loads` JSON (no comments, `NaN`/`Infinity` read as numbers, as httpx reads them).
 
 ## Key Execution Flow
 
