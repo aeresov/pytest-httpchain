@@ -1086,7 +1086,7 @@ class IndividualParameter(StrictModel):
 
     @model_validator(mode="after")
     def validate_ids_match_values(self) -> Self:
-        if self.ids and self.individual:
+        if self.ids is not None:
             values = next(iter(self.individual.values()))
             if isinstance(values, str):  # template form: count unknown until runtime
                 return self
@@ -1118,9 +1118,8 @@ class CombinationsParameter(StrictModel):
                 if combo_keys != first_keys:
                     raise ValueError(f"Combination {i} has different parameters than combination 0")
 
-        if self.ids and self.combinations:
-            if len(self.ids) != len(self.combinations):
-                raise ValueError(f"Number of ids ({len(self.ids)}) must match number of combinations ({len(self.combinations)})")
+        if self.ids is not None and len(self.ids) != len(self.combinations):
+            raise ValueError(f"Number of ids ({len(self.ids)}) must match number of combinations ({len(self.combinations)})")
         return self
 
 

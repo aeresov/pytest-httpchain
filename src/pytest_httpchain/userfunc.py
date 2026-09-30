@@ -46,10 +46,10 @@ def import_function(name: str, *, quoted: bool = True) -> Callable[..., Any]:
             raise UserFunctionError(f"importing its module raised {type(e).__name__}") from None
         raise UserFunctionError(f"Failed to import module '{module_path}': {e}") from e
 
-    if not hasattr(module, function_name):
-        raise UserFunctionError(f"Function '{function_name}' not found in module '{module_path}'" if quoted else "its module has no function of that name")
-
-    func = getattr(module, function_name)
+    try:
+        func = getattr(module, function_name)
+    except AttributeError:
+        raise UserFunctionError(f"Function '{function_name}' not found in module '{module_path}'" if quoted else "its module has no function of that name") from None
     if not callable(func):
         raise UserFunctionError(f"'{module_path}:{function_name}' is not callable" if quoted else "what it names is not callable")
 

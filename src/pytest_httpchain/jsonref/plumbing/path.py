@@ -1,5 +1,6 @@
 """Reference path and JSON pointer helpers for reference resolution."""
 
+import re
 import warnings
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -89,5 +90,10 @@ def parse_json_pointer(pointer: str) -> list[str]:
 
     if not pointer.startswith("/"):
         raise ReferenceResolverError(f"Invalid JSON pointer: {pointer} (must start with '/')")
+
+    # RFC 6901 reserves ``~`` for the two escapes below. Leaving any other
+    # sequence literal would silently select a key the pointer does not name.
+    if re.search(r"~(?![01])", pointer):
+        raise ReferenceResolverError(f"Invalid JSON pointer: {pointer} (invalid '~' escape)")
 
     return [part.replace("~1", "/").replace("~0", "~") for part in pointer[1:].split("/")]

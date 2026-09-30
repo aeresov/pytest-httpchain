@@ -13,9 +13,8 @@ from pytest_httpchain.scoping import (
     RESPONSE_META_NAME,
     defined_names,
     extract_template_variables,
-    raw_list_entries,
     raw_stages,
-    saved_in_step,
+    response_step_templates,
     stage_scopes,
     substitution_names,
     substitution_step_templates,
@@ -123,22 +122,12 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         consumes |= _consumed(extract_template_variables(raw.get("parallel"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
         consumes |= _consumed(extract_template_variables(raw.get("retry"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
         consumes |= _consumed(extract_template_variables(raw.get("request"), defined=defined), scope.earlier_saves, scope.request_shadows)
-        # Response steps resolve in order, each save layering its names over the
-        # context (the runtime's per-step with_saves): once a step re-saves a
-        # name, later steps read this stage's fresh value, not the earlier
-        # stage's — so accumulated own saves join the shadow set step by step.
-        # The `response` namespace likewise shadows a same-named save.
-        own_saves: frozenset[str] = frozenset()
-        # raw_list_entries, not an isinstance(list) guard: the name-keyed mapping
-        # form of `response` is first-class, and discarding it left every step's
-        # raw text unread — so show/graph reported a consuming stage as
-        # consuming nothing and dropped the dependency edge entirely.
-        raw_response = raw_list_entries(raw.get("response"))
-        for k, step in enumerate(stage.response):
-            step_raw = raw_response[k] if k < len(raw_response) else None
-            step_refs = extract_template_variables(step_raw, defined=defined) - {RESPONSE_META_NAME}
+        # The same order-aware iterator the validator uses also sees prior
+        # entries inside a substitutions-save step. Those entries resolve in
+        # sequence, and only their rendered values can consume an earlier save.
+        for templates, own_saves in response_step_templates(stage, raw.get("response")):
+            step_refs = extract_template_variables(templates, defined=defined) - {RESPONSE_META_NAME}
             consumes |= _consumed(step_refs, scope.earlier_saves, scope.request_shadows | own_saves)
-            own_saves |= frozenset(saved_in_step(step))
         consumes |= _consumed(extract_template_variables(raw.get("always_run"), defined=defined), scope.earlier_saves, scope.always_run_shadows)
 
         by_producer: dict[int, list[str]] = {}

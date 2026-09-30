@@ -21,9 +21,10 @@ class TestIndividualParameter:
         )
         assert param.ids == ["active_user", "inactive_user", "pending_user"]
 
-    def test_ids_count_must_match_values(self):
+    @pytest.mark.parametrize("ids", [["one", "two"], []], ids=["too-few", "empty"])
+    def test_ids_count_must_match_values(self, ids):
         with pytest.raises(ValidationError, match="Number of ids.*must match number of values"):
-            IndividualParameter(individual={"x": [1, 2, 3]}, ids=["one", "two"])
+            IndividualParameter(individual={"x": [1, 2, 3]}, ids=ids)
 
     def test_empty_values_rejected(self):
         with pytest.raises(ValidationError) as exc_info:
@@ -70,9 +71,10 @@ class TestCombinationsParameter:
         param = CombinationsParameter(combinations=[{"a": 1}, {"a": 2}], ids=["first", "second"])
         assert param.ids == ["first", "second"]
 
-    def test_ids_count_must_match(self):
+    @pytest.mark.parametrize("ids", [["one", "two"], []], ids=["too-few", "empty"])
+    def test_ids_count_must_match(self, ids):
         with pytest.raises(ValidationError, match="Number of ids.*must match number of combinations"):
-            CombinationsParameter(combinations=[{"x": 1}, {"x": 2}, {"x": 3}], ids=["one", "two"])
+            CombinationsParameter(combinations=[{"x": 1}, {"x": 2}, {"x": 3}], ids=ids)
 
     def test_combinations_must_have_same_keys(self):
         with pytest.raises(ValidationError, match="Combination 1 has different parameters than combination 0"):

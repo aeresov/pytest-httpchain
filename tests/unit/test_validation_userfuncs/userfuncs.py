@@ -23,6 +23,11 @@ def auth_posonly(token, /):
     return token
 
 
+def auth_posonly_with_kwargs(token, /, **kwargs):
+    """A keyword named token lands in kwargs; it cannot fill token."""
+    return token
+
+
 def needs_response(response):
     """A save/verify function that accepts only the injected response."""
     return True

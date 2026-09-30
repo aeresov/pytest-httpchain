@@ -741,8 +741,9 @@ class _Builder:
         # as a host: absolute, that one URL ignores base_url.
         target = path if base_url is not None and not path.startswith("//") else f"{_origin(url.scheme, url.netloc)}{path}"
         params, query = self.query(url.query, stage)
+        empty_query = not url.query and recorded.url.partition("#")[0].endswith("?")
         # Closed before a query holding a placeholder.
-        request["url"] = escape(target, closed=query is not None and contains_template(query)) + (f"?{query}" if query is not None else "")
+        request["url"] = escape(target, closed=query is not None and contains_template(query)) + (f"?{query or ''}" if query is not None or empty_query else "")
         if params:
             request["params"] = params
 
@@ -821,7 +822,12 @@ class _Builder:
         holds a secret, since ``params`` sends a value rendered to null
         empty, where the URL's placeholder fails the stage unset
         (`fields_text`). A piece without ``=`` is sent as an empty value."""
-        pairs = _decoded_pairs([piece for piece in query.split("&") if piece])
+        if not query:
+            return None, None
+        pieces = query.split("&")
+        # An empty component (a leading, repeated or trailing ampersand) is
+        # lost when a query is rewritten as params. Keep such queries intact.
+        pairs = _decoded_pairs(pieces) if all(pieces) else None
         if pairs is not None and _mappable([name for name, _ in pairs]) and not self.any_secret(pairs):
             return _grouped([(name, escape(value)) for name, value in pairs]), None
         return None, self.fields_text(query, "query parameter", stage)

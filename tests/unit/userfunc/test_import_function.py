@@ -47,6 +47,25 @@ def test_function_not_in_module():
         import_function("json:nonexistent_function_xyz")
 
 
+def test_module_dynamic_attribute_is_resolved_once(tmp_path, monkeypatch):
+    """A module may expose functions through __getattr__ with observable effects."""
+    (tmp_path / "dynamic_once_module.py").write_text(
+        "calls = 0\n"
+        "def __getattr__(name):\n"
+        "    global calls\n"
+        "    if name != 'handler':\n"
+        "        raise AttributeError(name)\n"
+        "    calls += 1\n"
+        "    if calls > 1:\n"
+        "        raise AttributeError('handler is only available once')\n"
+        "    return lambda: 'ok'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    assert import_function("dynamic_once_module:handler")() == "ok"
+
+
 def test_non_callable_attribute():
     with pytest.raises(UserFunctionError, match="'os:name' is not callable"):
         import_function("os:name")

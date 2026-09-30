@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
@@ -31,7 +31,7 @@ def _get_version() -> str:
     change in-process."""
     try:
         return version("pytest-httpchain")
-    except Exception:
+    except PackageNotFoundError:
         return "unknown"
 
 
@@ -103,7 +103,7 @@ def _format_post_data(request: httpx.Request) -> dict[str, Any] | None:
     body_text = _body_text(content)
     post_data: dict[str, Any] = {"mimeType": _mime_type(content_type), **body_text}
 
-    if "application/x-www-form-urlencoded" in content_type and "encoding" not in body_text:
+    if "application/x-www-form-urlencoded" in content_type.lower() and "encoding" not in body_text:
         # HAR params are repeated scalar name/value records, not one record with
         # an array value. parse_qsl also preserves the body's original ordering.
         post_data["params"] = [{"name": name, "value": value} for name, value in parse_qsl(body_text["text"], keep_blank_values=True)]

@@ -285,6 +285,18 @@ def test_needs_rendering_at_any_depth(leaf, expected):
     assert needs_rendering(nested(leaf, BEYOND_RECURSION_LIMIT)) is expected
 
 
+@pytest.mark.parametrize(
+    ("leaf", "template", "rendering"),
+    [("plain", False, False), ("{{ x }}", True, True), (r"\{{ x }}", False, True)],
+)
+def test_template_scan_handles_cyclic_containers(leaf, template, rendering):
+    root: dict[str, Any] = {}
+    root["items"] = [SimpleNamespace(parent=root, value=leaf)]
+
+    assert contains_template(root) is template
+    assert needs_rendering(root) is rendering
+
+
 class TestEscapedBraces:
     """`\\{{` renders as the text `{{`, the engine's one pass over the
     scenario's own strings, which never reads what a template put in again."""

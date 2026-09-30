@@ -127,18 +127,47 @@ class _TemplateNames(NamedTuple):
         self.to_methods.update(other.to_methods)
 
 
-def _receiver(node: ast.expr) -> str | None:
-    """The name a method's object is reached from (``helper`` for
+def _receiver(node: ast.expr) -> ast.Name | None:
+    """The name node a method's object is reached from (``helper`` for
     ``helper.api.ids``, ``helper().ids``, ``helper['x'].ids``), or None for an
     object written in place (``', '.join``)."""
     while True:
         match node:
             case ast.Attribute(value=inner) | ast.Subscript(value=inner) | ast.Call(func=inner):
                 node = inner
-            case ast.Name(id=name):
-                return name
+            case ast.Name():
+                return node
             case _:
                 return None
+
+
+def _local_comprehension_reads(tree: ast.expr) -> set[int]:
+    """The name nodes read from comprehension targets, rather than context.
+
+    A generator's iterable is evaluated before its target is bound. The
+    target is visible in its filters, later generators and result, but not in
+    an expression outside the comprehension. Keep this walk iterative as the
+    other expression walks are: valid expressions can be deeply nested.
+    """
+    local_reads: set[int] = set()
+    pending: list[tuple[ast.AST, frozenset[str]]] = [(tree, frozenset())]
+    while pending:
+        node, bound = pending.pop()
+        if isinstance(node, ast.Name):
+            if isinstance(node.ctx, ast.Load) and node.id in bound:
+                local_reads.add(id(node))
+        elif isinstance(node, ast.ListComp | ast.GeneratorExp | ast.DictComp):
+            for generator in node.generators:
+                pending.append((generator.iter, bound))
+                bound |= frozenset(name.id for name in ast.walk(generator.target) if isinstance(name, ast.Name))
+                pending.extend((condition, bound) for condition in generator.ifs)
+            if isinstance(node, ast.DictComp):
+                pending.extend(((node.key, bound), (node.value, bound)))
+            else:
+                pending.append((node.elt, bound))
+        else:
+            pending.extend((child, bound) for child in ast.iter_child_nodes(node))
+    return local_reads
 
 
 def _extract_names_from_expr(expr: str) -> _TemplateNames:
@@ -170,16 +199,16 @@ def _extract_names_from_expr(expr: str) -> _TemplateNames:
     except TemplatesError:
         return names
 
-    bound: set[str] = set()
-    callees: set[int] = set()
+    local_reads = _local_comprehension_reads(tree)
+    # simpleeval calls a bare name through its function table, even where a
+    # comprehension target of that name is bound as a value.
+    callees = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
     # What each argument that may be a function is handed to, by node.
     keys: set[int] = set()
     to_functions: set[int] = set()
     to_methods: dict[int, str] = {}
     for node in ast.walk(tree):
-        if isinstance(node, ast.comprehension):
-            bound |= {n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)}
-        elif isinstance(node, ast.Call):
+        if isinstance(node, ast.Call):
             key = [keyword.value for keyword in node.keywords if keyword.arg == "key"]
             others = [*node.args, *(keyword.value for keyword in node.keywords if keyword.arg != "key")]
             match node.func:
@@ -189,22 +218,22 @@ def _extract_names_from_expr(expr: str) -> _TemplateNames:
                     keys.update(id(argument) for argument in key)
                 case ast.Attribute(value=value):
                     keys.update(id(argument) for argument in key)
-                    if (receiver := _receiver(value)) is not None:
-                        to_methods.update(dict.fromkeys(map(id, others), receiver))
-            if isinstance(node.func, ast.Name):
-                callees.add(id(node.func))
+                    if (receiver := _receiver(value)) is not None and (id(receiver) not in local_reads or id(receiver) in callees):
+                        to_methods.update(dict.fromkeys(map(id, others), receiver.id))
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id not in bound:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             if id(node) in callees:
                 names.called.add(node.id)
+                continue
+            if id(node) in local_reads:
                 continue
             names.read.add(node.id)
             if id(node) in keys:
                 names.keys.add(node.id)
             elif id(node) in to_functions:
                 names.to_functions.add(node.id)
-            elif (receiver := to_methods.get(id(node))) is not None and receiver not in bound:
+            elif (receiver := to_methods.get(id(node))) is not None:
                 names.to_methods.add((receiver, node.id))
             else:
                 names.loose.add(node.id)

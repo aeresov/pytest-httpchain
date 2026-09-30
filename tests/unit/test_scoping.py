@@ -381,6 +381,10 @@ def test_marks_skip_cause_reads_marks_in_pytests_order(marks, expected):
     ("template", "expected"),
     [
         pytest.param("{{ [y for y in items] }}", {"items"}, id="comprehension-targets-are-local"),
+        pytest.param("{{ [x for x in items] + [x] }}", {"items", "x"}, id="target-does-not-hide-read-outside-comprehension"),
+        pytest.param("{{ [x for x in x] }}", {"x"}, id="target-does-not-hide-its-own-iterable"),
+        pytest.param("{{ [y for x in items for y in x] }}", {"items"}, id="earlier-target-is-visible-to-later-generator"),
+        pytest.param("{{ [f() for f in items] }}", {"f", "items"}, id="call-uses-function-even-when-target-has-same-name"),
         # Text the engine refuses to evaluate fails wherever it renders, which
         # HTTPCHAIN037 reports; it names nothing. A regex fallback read every
         # identifier in it, and had `True` and `status_code` reported undefined.
@@ -413,6 +417,13 @@ def test_template_references(template, expected):
     assert extract_template_variables(template, defined=NOTHING_DEFINED) == expected
 
 
+def test_comprehension_target_scope_matches_runtime():
+    context = {"items": [1], "x": 2, "f": lambda: 3}
+    assert walk("{{ [x for x in items] + [x] }}", context) == [1, 2]
+    assert walk("{{ [x for x in items] }}", context) == [1]
+    assert walk("{{ [f() for f in items] }}", context) == [3]
+
+
 @pytest.mark.parametrize(
     ("template", "expected"),
     [
@@ -433,6 +444,7 @@ def test_template_references(template, expected):
         # is no reference (see extract_builtin_stand_ins).
         pytest.param("{{ sha256(body) }}", {"body"}, id="call-of-a-builtin-named-fixture-is-no-reference"),
         pytest.param("{{ [len for len in rows] }}", {"rows"}, id="comprehension-target-is-local-builtin-name-too"),
+        pytest.param("{{ [len for len in rows] + [len] }}", {"rows", "len"}, id="builtin-named-target-does-not-hide-outside-read"),
     ],
 )
 def test_template_references_to_builtin_names(template, expected):
@@ -527,6 +539,7 @@ def test_runtime_resolves_builtin_names_as_the_reference_model_says():
         # The scenario's own name: a reference, checked as one.
         pytest.param("{{ timestamp }}", set(), id="user-name"),
         pytest.param("{{ [now for now in rows] }}", set(), id="comprehension-target"),
+        pytest.param("{{ [now for now in rows] + [now] }}", {"now"}, id="target-does-not-hide-uncalled-builtin-outside-comprehension"),
         pytest.param("{{ now( }}", set(), id="unparseable"),
     ],
 )

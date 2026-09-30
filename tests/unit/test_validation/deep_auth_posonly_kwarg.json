@@ -1,0 +1,12 @@
+{
+    "auth": {"name": "userfuncs:auth_posonly_with_kwargs", "kwargs": {"token": "secret"}},
+    "stages": [
+        {
+            "name": "s",
+            "request": {"url": "https://x.test/a"},
+            "response": [
+                {"verify": {"status": 200}}
+            ]
+        }
+    ]
+}

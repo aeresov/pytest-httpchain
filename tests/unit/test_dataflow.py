@@ -64,6 +64,16 @@ def _edges(flow) -> list[dict]:
         pytest.param({"response": [{"verify": {"expressions": ["{{ x != '' }}"]}}, {"save": {"jmespath": {"x": "b"}}}]}, ["x"], id="reference-before-own-resave"),
         # A regex save's names layer the same way, and its patterns are rendered.
         pytest.param({"response": [{"save": {"regex": {"x": "(b)"}}}, {"verify": {"expressions": ["{{ x != '' }}"]}}]}, [], id="own-regex-resave-shadows-later-steps"),
+        pytest.param(
+            {"response": [{"save": {"substitutions": [{"vars": {"x": "local"}}, {"vars": {"z": "{{ x }}"}}]}}]},
+            [],
+            id="prior-substitution-within-save-step-shadows",
+        ),
+        pytest.param(
+            {"response": [{"save": {"substitutions": [{"vars": {"z": "{{ x }}"}}, {"vars": {"x": "local"}}]}}]},
+            ["x"],
+            id="later-substitution-within-save-step-does-not-shadow",
+        ),
         pytest.param({"response": [{"save": {"regex": {"z": "id={{ x }}", "w": {"pattern": "(a)", "group": "{{ y }}"}}}}]}, ["x", "y"], id="regex-save-templates"),
         # An entry of a status list takes a template of its own.
         pytest.param({"response": [{"verify": {"status": ["{{ x }}", 304]}}]}, ["x"], id="verify-status-list-entry"),
