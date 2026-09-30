@@ -98,10 +98,17 @@ def validate_paths(
     would determine for a run on ``paths`` (`pytest_rootdir`): one root for
     every file, as a pytest run has, where a root derived for each file
     alone could be narrower than the run's and reject a reference it
-    resolves.
+    resolves. A file that root does not hold (files of two projects in one
+    run, the run's root the first one's) is held to the root pytest gives
+    it alone: the run's would fail every reference it makes.
     """
-    if root_path is None:
-        root_path = pytest_rootdir(paths)
+    run_root = root_path if root_path is not None else pytest_rootdir(paths)
+
+    def file_root(path: Path) -> Path:
+        if root_path is not None or Path(os.path.abspath(path)).is_relative_to(run_root):
+            return run_root
+        return pytest_rootdir([path])
+
     targets: list[tuple[Path, ValidateResult | None]] = []
     seen: set[str] = set()
 
@@ -130,7 +137,7 @@ def validate_paths(
     return [
         (
             path,
-            found if found is not None else validate_scenario(path, ref_parent_traversal_depth=ref_parent_traversal_depth, root_path=root_path, deep=deep, syspaths=syspaths),
+            found if found is not None else validate_scenario(path, ref_parent_traversal_depth=ref_parent_traversal_depth, root_path=file_root(path), deep=deep, syspaths=syspaths),
         )
         for path, found in targets
     ]

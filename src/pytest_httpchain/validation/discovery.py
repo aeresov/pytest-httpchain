@@ -227,7 +227,9 @@ def _common_ancestor(dirs: list[Path]) -> Path:
 def _find_config(starts: Iterable[Path], *, strict: bool = True) -> tuple[Path, dict[str, object]] | None:
     """The first configuration file holding pytest configuration in each of
     ``starts`` or above it, in turn; else the first ``pyproject.toml`` met.
-    Not ``strict``, one that cannot be read is passed over."""
+    Not ``strict``, one that cannot be read, or that pytest would refuse, is
+    passed over as one holding no pytest configuration is: a
+    ``pyproject.toml`` of the kind is still the one met, if first."""
     bare_pyproject: Path | None = None
     for start in starts:
         for base in (start, *start.parents):
@@ -240,7 +242,7 @@ def _find_config(starts: Iterable[Path], *, strict: bool = True) -> tuple[Path, 
                 except DiscoveryError:
                     if strict:
                         raise
-                    continue
+                    settings = None
                 if settings is not None:
                     return file, settings
                 if name == "pyproject.toml" and bare_pyproject is None:

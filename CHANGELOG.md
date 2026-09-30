@@ -41,17 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.pytest.ini`, was not seen, so a sub-package's plain `pyproject.toml` below it set a narrower
   root; and with nothing marking a project, a file's root was its own directory, one per file of a
   `validate a b` run, where pytest's is one for the run, the common ancestor of the current
-  directory and the paths. Heads-up: in a
-  project with no pytest configuration file, `pyproject.toml` or `setup.py` (one marked only by a
-  `.git`, or by a `tox.ini` or `setup.cfg` without pytest configuration), the root is now what
-  pytest's is, the common ancestor of the current directory and the paths (the paths' own when
-  that is the root of the file system, or on Windows when they are on another drive than the
-  current directory), in place of the nearest directory holding such a marker, else the
-  nearest one named `tests`, else the file's own. Run from inside such a tree, the root can be
-  narrower than before, and a reference climbing above the current directory fails with
-  `HTTPCHAIN012`; run from the project's directory, or pass `--root-path`. A configuration file
-  that cannot be read, or that pytest would refuse, is passed over in finding the root, as a file
-  without pytest configuration is.
+  directory and the paths. A file that root does not hold, as when one run names the files of two
+  projects (a pre-commit hook in a monorepo), is held to the root pytest gives it alone.
+  Heads-up: in a project with no pytest configuration file, `pyproject.toml` or `setup.py` (one
+  marked only by a `.git`, or by a `tox.ini` or `setup.cfg` without pytest configuration), the root
+  is now what pytest's is, the common ancestor of the current directory and the paths (the paths'
+  own when that is the root of the file system, or on Windows when they are on another drive than
+  the current directory), in place of the nearest directory holding such a marker, else the nearest
+  one named `tests`, else the file's own. Run from inside such a tree, the root can be narrower than
+  before, and a reference climbing above the current directory fails with `HTTPCHAIN012`; run from
+  the project's directory, or pass `--root-path`. A configuration file that cannot be read, or that
+  pytest would refuse, is passed over in finding the root, as a file without pytest configuration
+  is.
 
 ## [0.16.0] - 2026-09-29
 

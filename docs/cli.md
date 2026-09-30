@@ -33,8 +33,11 @@ table, ...), else of the nearest `setup.py`, else the common ancestor of the
 current directory and the paths, as pytest's is. A sub-package's own
 `pyproject.toml` without pytest configuration does not shrink the root below
 pytest's, and the files of one run share one root, so `validate` rejects no
-reference that collection resolves. A configuration file that cannot be read is
-passed over here; pytest itself would stop on it.
+reference that collection resolves. A file that root does not hold, as when one
+run names the files of two projects (a pre-commit hook in a monorepo), is held
+to the root pytest gives it alone, its own project's. A configuration file that
+cannot be read, or that pytest would refuse, is passed over here as one without
+pytest configuration is; pytest itself would stop on it.
 
 ## `validate`
 
@@ -108,7 +111,7 @@ else `http`. `--suffix` overrides it, as `-o httpchain_suffix=...` overrides it
 for pytest (`validate` reads neither `-o` nor `PYTEST_ADDOPTS`). A configuration
 file pytest could not read, or a suffix it would refuse, stops `validate` with
 an `error:` line before anything is checked. Files you name need no suffix, so
-the configuration is read only when a path is a directory.
+that happens only when a path is a directory.
 
 The report is sorted by path, whatever order the paths are given in, so it does
 not change with the order a shell or `find` lists them in. Paths are compared

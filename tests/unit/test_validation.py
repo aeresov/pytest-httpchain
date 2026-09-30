@@ -1438,6 +1438,38 @@ class TestRootPathDefault:
 
         assert resolve_root_path(self._scenario_in(package)) == package
 
+    def test_a_file_outside_the_runs_root_has_its_own(self, tmp_path, monkeypatch):
+        """Files of two projects in one run (a pre-commit hook passing the
+        changed files of a monorepo): pytest's rootdir for the run is the
+        first project's, which holds none of the second's files, so every
+        reference of theirs would fail. A file the run's root does not hold
+        gets the root pytest gives it alone, its own project's."""
+        for name in ("a", "b"):
+            (tmp_path / name).mkdir()
+            (tmp_path / name / "pyproject.toml").write_text(f'[project]\nname = "{name}"\n')
+            (tmp_path / name / "common.json").write_text(json.dumps({"url": "http://server/x"}))
+            (tmp_path / name / "sub").mkdir()
+            _write(tmp_path / name / "sub", [_stage(request={"$include": "../common.json"})])
+        monkeypatch.chdir(tmp_path)
+
+        results = validate_paths([Path("a/sub/test_x.http.json"), Path("b/sub/test_x.http.json")])
+
+        assert [result.diagnostics for _, result in results] == [[], []]
+
+    @pytest.mark.parametrize(
+        "content",
+        ["this is not [ valid toml", '[tool.pytest]\nx = 1\n[tool.pytest.ini_options]\ny = "2"\n'],
+        ids=["unparseable", "both-tables"],
+    )
+    def test_a_pyproject_pytest_would_refuse_is_still_a_bare_marker(self, tmp_path, monkeypatch, content):
+        """Passed over as one holding no pytest configuration is: its
+        directory is still the root when nothing else sets one, as 0.16.0
+        had it, not narrowed to the current directory."""
+        (tmp_path / "pyproject.toml").write_text(content)
+        scenario = self._scenario_in(tmp_path / "tests" / "api")
+        monkeypatch.chdir(tmp_path / "tests" / "api")
+        assert resolve_root_path(scenario) == tmp_path
+
     def test_files_of_one_run_share_its_root(self, tmp_path, monkeypatch):
         """`validate a b` holds both files to the rootdir `pytest a b` has,
         the common ancestor here, where a root for each file alone was its
