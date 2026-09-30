@@ -592,16 +592,40 @@ class SkipCause:
     """An ``xfail`` that runs the stage: its saves are lost when it fails as
     expected, where the others' are lost when it skips."""
     never_called: bool = False
-    """pytest skips the stage at setup and never calls it, so nothing it reads
-    can fail either. Not so for ``skip_if: true``: the stage checks it after
-    ``always_run``, which it reads on an aborted chain."""
+    """pytest never calls the stage: a skip at setup, or an ``xfail(run=False)``
+    (unless pytest runs with ``--runxfail``, which ignores xfail marks)."""
+
+
+# The marks pytest's skipping plugin turns into an outcome.
+_OUTCOME_MARKS = ("skip", "skipif", "xfail")
+
+
+def _outcome_marks(marks: Iterable[str]) -> list[tuple[str, pytest.Mark]]:
+    """The ``skip``, ``skipif`` and ``xfail`` marks among ``marks``, in order,
+    each with the mark as written. A mark that does not parse is HTTPCHAIN019's
+    to report, and left out."""
+    parsed: list[tuple[str, pytest.Mark]] = []
+    for mark_str in marks:
+        try:
+            # Constructing an unregistered mark warns; only the parse matters here.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                mark = make_marker(mark_str).mark
+        except Exception:
+            continue
+        if mark.name in _OUTCOME_MARKS:
+            parsed.append((mark_str, mark))
+    return parsed
 
 
 def _conditions_apply(mark: pytest.Mark) -> bool | None:
     """Whether a ``skipif``/``xfail`` mark applies, read as pytest's skipping
-    plugin reads it: with no condition it always does, otherwise when any
-    condition is true. ``None`` is pytest's to decide at run time: a string
-    condition is an expression it evaluates, unless the string is a literal."""
+    plugin reads it: with no condition it always does, otherwise when a
+    condition is true, tried in order. ``None`` is pytest's to decide at run
+    time: a string condition is an expression it evaluates, unless the string
+    is a literal. A non-string condition needs ``reason=``: without it pytest
+    fails the stage, true or not, and a failure aborts the chain, so from there
+    on the mark never skips it."""
     conditions = (mark.kwargs["condition"],) if "condition" in mark.kwargs else mark.args
     if not conditions:
         return True
@@ -615,51 +639,69 @@ def _conditions_apply(mark: pytest.Mark) -> bool | None:
                 # expression only pytest can evaluate.
                 verdict = None
                 continue
+        elif mark.kwargs.get("reason") is None:
+            return verdict
         if condition:
             return True
     return verdict
 
 
-def mark_skip_cause(mark_str: str) -> SkipCause | None:
-    """The skip cause one stage mark is, if any: a ``skip``; a ``skipif`` whose
-    conditions may hold; an ``xfail`` whose conditions may hold, which runs the
-    stage unless ``run=False``. A mark that does not parse is HTTPCHAIN019's
-    to report, and no cause."""
-    try:
-        # Constructing an unregistered mark warns; only the parse matters here.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            mark = make_marker(mark_str).mark
-    except Exception:
-        return None
-    match mark.name:
-        case "skip":
-            applies, runs = True, False
-        case "skipif":
-            applies, runs = _conditions_apply(mark), False
-        case "xfail":
-            applies, runs = _conditions_apply(mark), bool(mark.kwargs.get("run", True))
-        case _:
-            return None
-    if applies is False:
-        return None
-    return SkipCause(mark=mark_str, fails_as_expected=runs, never_called=applies is True and not runs)
+def marks_skip_cause(marks: Iterable[str]) -> SkipCause | None:
+    """The skip cause the marks on a stage give it, if any, read in the order
+    pytest's skipping plugin reads them.
+
+    At setup every ``skipif`` and ``skip`` is looked at before any ``xfail``:
+    one that certainly applies means pytest never calls the stage. Of the
+    ``xfail`` marks, the first that applies decides: with ``run=False`` pytest
+    never calls the stage, otherwise it runs, and an expected failure discards
+    its saves. One with ``raises=`` never fails as expected: a mark can give it
+    only a literal, never an exception type, so pytest reports every failure as
+    a real one. One pytest never calls is named first, then a ``skip``/``skipif``
+    that may apply, then the first ``xfail`` that may end the stage.
+    """
+    outcome_marks = _outcome_marks(marks)
+    may_skip: list[str] = []
+    for mark_str, mark in outcome_marks:
+        if mark.name == "xfail":
+            continue
+        applies = True if mark.name == "skip" else _conditions_apply(mark)
+        if applies:
+            return SkipCause(mark=mark_str, never_called=True)
+        if applies is None:
+            may_skip.append(mark_str)
+    xfail: SkipCause | None = None
+    for mark_str, mark in outcome_marks:
+        if mark.name != "xfail":
+            continue
+        applies = _conditions_apply(mark)
+        if applies is False:
+            continue
+        runs = bool(mark.kwargs.get("run", True))
+        if xfail is None and (not runs or mark.kwargs.get("raises") is None):
+            xfail = SkipCause(mark=mark_str, fails_as_expected=runs, never_called=applies is True and not runs)
+        if applies:
+            break  # this one decides; pytest looks at none after it
+    if xfail is not None and xfail.never_called:
+        return xfail
+    return SkipCause(mark=may_skip[0]) if may_skip else xfail
 
 
 def _stage_skip_cause(stage: Stage) -> SkipCause | None:
-    """Why ``stage`` may end without its saves, or ``None`` when it never does.
-    One pytest never calls comes first, since that stage reads nothing; then
-    its ``skip_if``; then its first mark that may skip it.
+    """Why ``stage`` may end without its saves, or ``None`` when it never does:
+    a mark that keeps pytest from calling it, else its ``skip_if``, else a mark
+    that may skip it (`marks_skip_cause`).
 
     Scenario-level ``marks`` are not read. They apply to every stage, the one
     that reads a save as much as the one that saves it: a scenario-wide
     ``skipif`` skips both or neither, and under a scenario-wide ``xfail`` the
     reader's failure is an expected one too.
     """
-    causes = [cause for cause in map(mark_skip_cause, stage.marks) if cause is not None]
+    cause = marks_skip_cause(stage.marks)
+    if cause is not None and cause.never_called:
+        return cause
     if stage.skip_if is not False:
-        causes.insert(0, SkipCause(mark=None))
-    return next((cause for cause in causes if cause.never_called), next(iter(causes), None))
+        return SkipCause(mark=None)
+    return cause
 
 
 # --------------------------------------------------------------------------- #
@@ -734,6 +776,9 @@ class StageScopes:
     is there when those stages skipped."""
     skip_cause: SkipCause | None
     """This stage's own, if it may skip."""
+    never_called: bool
+    """pytest never calls this stage, by its own marks or the scenario's, which
+    apply to every stage (`marks_skip_cause`): it reads nothing."""
 
     @property
     def when_skipped(self) -> "StageScopes":
@@ -823,6 +868,7 @@ def stage_scopes(scenario: Scenario) -> list[StageScopes]:
                 earlier_saves=earlier_saves,
                 skippable_saves=earlier_saves - unskippable_saves,
                 skip_cause=skip_cause,
+                never_called=(reader := marks_skip_cause([*stage.marks, *scenario.marks])) is not None and reader.never_called,
             )
         )
         earlier_saves |= saves

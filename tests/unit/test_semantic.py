@@ -637,8 +637,11 @@ def test_every_saver_is_named_with_its_cause():
         # One a mark only may skip may run; an xfail one runs.
         pytest.param({"marks": ["skipif('sys.version_info < (3, 99)')"]}, True, id="reader-a-mark-may-skip"),
         pytest.param({"marks": ["xfail"]}, True, id="reader-xfail"),
-        # skip_if: true is checked after always_run, which an aborted chain reads.
-        pytest.param({"skip_if": True}, True, id="reader-skip-if-true"),
+        # pytest calls it under the first xfail, which runs it.
+        pytest.param({"marks": ["xfail(reason='a')", "xfail(run=False, reason='b')"]}, True, id="reader-first-xfail-runs-it"),
+        # skip_if: true skips the stage right after always_run, which an aborted chain reads.
+        pytest.param({"skip_if": True}, False, id="reader-skip-if-true"),
+        pytest.param({"skip_if": True, "always_run": "{{ token != '' }}", "request": {"url": "https://x.test/"}}, True, id="reader-skip-if-true-always-run"),
     ],
 )
 def test_reader_that_may_skip_itself(reader, flagged):
@@ -656,6 +659,8 @@ def test_reader_that_may_skip_itself(reader, flagged):
         # Scenario-level marks skip (or xfail) the reader along with the saver.
         pytest.param([_saving("a", "token"), {**_STAGE, "request": {"url": READ_TOKEN}}], ["skip"], id="scenario-skip"),
         pytest.param([_saving("a", "token"), {**_STAGE, "request": {"url": READ_TOKEN}}], ["xfail"], id="scenario-xfail"),
+        # A scenario-level skip keeps pytest from calling the reader at all.
+        pytest.param([_saving("a", "token", marks=["xfail"]), {**_STAGE, "request": {"url": READ_TOKEN}}], ["skip"], id="scenario-skip-reader-never-called"),
     ],
 )
 def test_marks_that_cannot_leave_a_reader_without_the_save(stages, marks):
