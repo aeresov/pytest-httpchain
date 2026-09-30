@@ -20,7 +20,7 @@ from pytest_httpchain.scoping import (
     extract_template_variables,
     extract_uncalled_builtins,
     iteration_context,
-    mark_skip_cause,
+    marks_skip_cause,
     response_step_context,
     response_step_templates,
     saved_in_response,
@@ -188,12 +188,31 @@ class TestStageScopes:
             # One pytest never calls first: it reads nothing.
             pytest.param({"skip_if": "{{ flag }}", "marks": ["xfail", "skip"]}, SkipCause(mark="skip", never_called=True), id="never-called-first"),
             pytest.param({"skip_if": "{{ flag }}", "marks": ["xfail"]}, SkipCause(mark=None), id="then-skip-if"),
-            pytest.param({"marks": ["slow", "xfail", "skipif('sys.version_info < (3, 99)')"]}, SkipCause(mark="xfail", fails_as_expected=True), id="then-first-mark"),
+            # pytest looks at skip and skipif at setup, before any xfail.
+            pytest.param({"marks": ["slow", "xfail", "skipif('sys.version_info < (3, 99)')"]}, SkipCause(mark="skipif('sys.version_info < (3, 99)')"), id="then-skip-or-skipif"),
+            pytest.param({"marks": ["slow", "xfail"]}, SkipCause(mark="xfail", fails_as_expected=True), id="then-xfail"),
         ],
     )
     def test_skip_cause_of_a_stage_with_several(self, fields, expected):
         stage = {"name": "s", "request": {"url": "http://server/"}, **fields}
         assert stage_scopes(Scenario.model_validate({"stages": [stage]}))[0].skip_cause == expected
+
+    @pytest.mark.parametrize(
+        ("stage_marks", "scenario_marks", "never_called"),
+        [
+            pytest.param(["skip"], [], True, id="own-skip"),
+            pytest.param(["xfail(run=False)"], [], True, id="own-xfail-not-run"),
+            pytest.param(["xfail"], [], False, id="own-xfail-runs"),
+            # The scenario's marks apply to every stage: here they count.
+            pytest.param([], ["skip"], True, id="scenario-skip"),
+            pytest.param([], ["xfail(run=False)"], True, id="scenario-xfail-not-run"),
+            # The stage's own xfail comes first, and decides.
+            pytest.param(["xfail"], ["xfail(run=False)"], False, id="own-xfail-before-scenario-xfail"),
+        ],
+    )
+    def test_never_called_reads_the_stage_and_scenario_marks(self, stage_marks, scenario_marks, never_called):
+        stage = {"name": "s", "marks": stage_marks, "request": {"url": "http://server/"}}
+        assert stage_scopes(Scenario.model_validate({"marks": scenario_marks, "stages": [stage]}))[0].never_called is never_called
 
     def test_scenario_marks_are_no_skip_cause(self):
         """They apply to the stage that reads a save as much as to the one that
@@ -315,15 +334,47 @@ class TestContextBuilders:
         pytest.param("xfail('sys.version_info < (3, 99)')", SkipCause(mark="xfail('sys.version_info < (3, 99)')", fails_as_expected=True), id="xfail-string"),
         pytest.param("xfail(run=False)", SkipCause(mark="xfail(run=False)", never_called=True), id="xfail-not-run"),
         pytest.param("xfail(condition=False, reason='on')", None, id="xfail-false"),
+        # pytest fails the stage for a non-string condition without reason=,
+        # true or not, and a failure aborts the chain.
+        pytest.param("skipif(True)", None, id="skipif-bool-without-reason"),
+        pytest.param("xfail(condition=True)", None, id="xfail-bool-without-reason"),
+        pytest.param("skipif('True')", SkipCause(mark="skipif('True')", never_called=True), id="skipif-string-needs-no-reason"),
+        # A mark can give raises= only a literal, never an exception type, so
+        # pytest reports every failure as a real one.
+        pytest.param("xfail(raises='ValueError')", None, id="xfail-raises"),
+        pytest.param("xfail(run=False, raises='ValueError')", SkipCause(mark="xfail(run=False, raises='ValueError')", never_called=True), id="xfail-raises-not-run"),
         pytest.param("slow", None, id="unrelated"),
         # A mark that does not parse is HTTPCHAIN019's to report.
         pytest.param("skip(", None, id="unparseable"),
     ],
 )
-def test_mark_skip_cause(mark, expected):
+def test_marks_skip_cause(mark, expected):
     """Which stage marks leave a stage reported skipped, the chain going and
     its saves missing, read as pytest's skipping plugin reads them."""
-    assert mark_skip_cause(mark) == expected
+    assert marks_skip_cause([mark]) == expected
+
+
+@pytest.mark.parametrize(
+    ("marks", "expected"),
+    [
+        # Of the xfail marks, the first that applies decides whether pytest runs the stage.
+        pytest.param(["xfail(reason='a')", "xfail(run=False, reason='b')"], SkipCause(mark="xfail(reason='a')", fails_as_expected=True), id="first-xfail-decides"),
+        pytest.param(
+            ["xfail(False, reason='a')", "xfail(run=False, reason='b')"], SkipCause(mark="xfail(run=False, reason='b')", never_called=True), id="inapplicable-xfail-passed-over"
+        ),
+        # One that may apply comes first, so pytest may run the stage.
+        pytest.param(
+            ["xfail('sys.version_info < (3, 99)')", "xfail(run=False)"],
+            SkipCause(mark="xfail('sys.version_info < (3, 99)')", fails_as_expected=True),
+            id="xfail-that-may-apply-first",
+        ),
+        pytest.param(["xfail(raises='ValueError')", "xfail"], None, id="deciding-xfail-never-fails-as-expected"),
+        # skip and skipif are looked at before any xfail.
+        pytest.param(["xfail", "skip"], SkipCause(mark="skip", never_called=True), id="skip-before-xfail"),
+    ],
+)
+def test_marks_skip_cause_reads_marks_in_pytests_order(marks, expected):
+    assert marks_skip_cause(marks) == expected
 
 
 @pytest.mark.parametrize(

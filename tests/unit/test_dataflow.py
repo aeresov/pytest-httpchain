@@ -207,8 +207,9 @@ def _maybe(name: str, **saves: str) -> dict:
 )
 def test_a_name_whose_last_writer_may_skip_comes_from_the_writers_before(writers, producers):
     """A re-saved name is attributed to its last writer, but a skipped stage
-    leaves the chain running on the earlier value: while the writer has a
-    skip_if, the one before it is a producer too, back to one that never skips."""
+    leaves the chain running on the earlier value: while the writer may skip (a
+    skip_if, or a skip, skipif or xfail mark of its own), the one before it is a
+    producer too, back to one that never skips."""
     reader = _stage("reader", request={"url": "https://x.test/{{ x }}"})
     flow = analyze_dataflow(*_scenario([*writers, reader]))
     assert flow.stages[-1].consumes == ["x"]

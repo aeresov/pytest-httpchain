@@ -266,10 +266,14 @@ The validator reads a mark as pytest does:
 | `skipif(...)` | Never made when a condition is true, or when there is none. A string condition is an expression pytest evaluates at run time, so the stage may skip. A false condition (`skipif(False, reason='...')`) never skips it. |
 | `xfail(...)` | Discarded when the stage fails as expected. `xfail(run=False)` never runs the stage. Conditions work as for `skipif`. |
 
-As with `skip_if`, it is not reported when a stage that never skips saves the same name too, when a fixture or substitution of that name is in scope where it is read, or when the value is read with `get()`. Two more cases are not reported either:
+pytest reads a stage's `skip` and `skipif` marks before any `xfail`, and of several `xfail` marks the first that applies decides, `run=False` included. Two kinds of mark fail the stage rather than skip it, and a failure aborts the chain, so they are not counted: a condition that is not a string needs `reason=` (`skipif(True)` alone is an error), and an `xfail` with `raises=` reports every failure as a real one, since a mark can name the exception only as a string, never as its type. Under pytest's `--runxfail`, which ignores `xfail` marks, an `xfail` stage runs like any other.
 
--   **The reading stage has a mark that skips it too.** pytest never calls that stage, so it reads nothing. A reader that only *may* skip, or one with an `xfail` that runs it, is still reported.
--   **The mark is scenario-level.** Scenario `marks` apply to every stage, so they skip or xfail the reading stage along with the stage that saves the value.
+As with `skip_if`, it is not reported when a stage that never skips saves the same name too, when a fixture or substitution of that name is in scope where it is read, or when the value is read with `get()`. Nor is it reported where the reading stage reads nothing:
+
+-   **pytest never calls the reading stage**: its own `skip`, `skipif` or `xfail(run=False)` mark, or the scenario's, skips it. A reader that only *may* skip, or one with an `xfail` that runs it, is still reported.
+-   **The reading stage has `skip_if: true`**: it skips right after its `always_run`, so only a read in `always_run` is reported.
+
+A scenario-level mark never counts for the stage that saves a value: scenario `marks` apply to every stage, so they skip or xfail the reading stage along with it.
 
 ### The shared HTTP client
 

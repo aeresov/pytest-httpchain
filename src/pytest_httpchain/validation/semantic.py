@@ -386,7 +386,8 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
     skip (a ``skip_if``, or a ``skip``, ``skipif`` or ``xfail`` mark) save it,
     and nothing else of that name is in scope: a skipped stage, unlike a failed
     one, does not stop the stages after it. Not in a stage a mark keeps pytest
-    from ever calling, which reads nothing. A built-in's
+    from ever calling, which reads nothing, nor past the always_run of one whose
+    skip_if is true. A built-in's
     name the scenario defines too, called or passed as a function where that
     definition is not in scope, gets the built-in instead: a BUILTIN_STANDS_IN.
     """
@@ -405,9 +406,13 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
         scope = scopes[i]
         phases = scope.phases()
         # The same phases, as they are when every earlier stage that may skip
-        # skipped; unchanged in a stage pytest never calls, which reads nothing.
-        never_called = scope.skip_cause is not None and scope.skip_cause.never_called
-        skipped = phases if scope.when_skipped is scope or never_called else scope.when_skipped.phases()
+        # skipped. Unchanged where the stage reads nothing: pytest never calls
+        # it, or, past always_run, its skip_if is true (the carrier skips it
+        # right after always_run, before anything else renders).
+        skipped = phases if scope.when_skipped is scope or scope.never_called else scope.when_skipped.phases()
+        skipped_always_run = skipped.always_run
+        if stage.skip_if is True:
+            skipped = phases
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
         parametrize_refs, parametrize_stand_ins = _template_refs(_parametrize_rendered_values(raw.get("parametrize")), defined)
@@ -431,7 +436,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
         always_run_refs, always_run_stand_ins = _template_refs(raw.get("always_run"), defined)
         for name in sorted(always_run_refs):
             if name in phases.always_run:
-                if name not in skipped.always_run:
+                if name not in skipped_always_run:
                     yield _skippable_save_diagnostic(scenario, scopes, i, "always_run", name, f"stages[{i}].always_run")
                 continue
             if name in all_saved:
