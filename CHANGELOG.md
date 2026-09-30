@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `NaN`, `Infinity` and `-Infinity` in a scenario, a file it `$include`s, `$merge`s or `$ref`s, or
   a body schema file are syntax errors (`HTTPCHAIN014` at load, `HTTPCHAIN021` for a schema file
   under `validate --deep`), at their line and column: `NaN is not valid JSON: line 2 column 14`.
+  So is a number too large for a float, such as `1e400`, which is JSON but reads as infinity.
   Python's JSON parser reads them as numbers though JSON has none, so such a file passed
   `validate`, and `resolve`, documented to print strict JSON, printed them. Heads-up: a scenario
   that wrote one as a literal, such as an expected `Infinity` in `verify.jmespath`, collected on

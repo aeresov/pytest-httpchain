@@ -15,6 +15,7 @@ passed through here: it stays plain JSON, as ``json.loads`` reads it.
 """
 
 import json
+import math
 import re
 from typing import Any, NoReturn
 
@@ -112,31 +113,43 @@ def strip_jsonc(text: str) -> str:
     return "".join(parts)
 
 
-# A string, whole, or one of the words ``json.loads`` reads as a number JSON
-# cannot write. The words are found only outside strings, so the first match
-# with a ``constant`` is where the parser met it.
-_CONSTANT = re.compile(r'"[^"\\]*+(?:\\.[^"\\]*+)*+"|(?P<constant>-?Infinity|NaN)')
+# A string, whole, or a word ``json.loads`` reads as a number JSON cannot
+# write: ``NaN`` or ``Infinity``, or a number too large for a float, which it
+# reads as infinity. Words are found only outside strings, and the first one
+# spelled as the parser handed it over is where the parser met it.
+_WORD = re.compile(r'"[^"\\]*+(?:\\.[^"\\]*+)*+"|(?P<word>-?Infinity|NaN|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)')
 
 
 class _NotJSON(Exception):
-    """A word the parser read that is no JSON, raised out of it."""
+    """A word the parser read that is no JSON number, raised out of it with
+    why."""
 
 
 def _refuse_constant(word: str) -> NoReturn:
-    raise _NotJSON(word)
+    raise _NotJSON(word, f"{word} is not valid JSON")
+
+
+def _finite(word: str) -> float:
+    # 1e400 is JSON, but a float past the largest is infinity, which is not.
+    if math.isinf(value := float(word)):
+        raise _NotJSON(word, f"{word} is too large a number (it reads as infinity)")
+    return value
 
 
 def loads_jsonc(text: str, **kwargs: Any) -> Any:
     """``json.loads`` of JSONC text (`strip_jsonc`), with ``json.loads``' keyword
-    arguments but ``parse_constant``, which it sets. Raises
-    `json.JSONDecodeError` as ``json.loads`` does, for an
+    arguments but ``parse_constant`` and ``parse_float``, which it sets.
+    Raises `json.JSONDecodeError` as ``json.loads`` does, for an
     unterminated comment too, and for ``NaN``, ``Infinity`` and
     ``-Infinity``, which ``json.loads`` reads as numbers though they are no
-    JSON: a file holding one is not a JSON file, and ``resolve``, which
-    prints strict JSON, would print it."""
+    JSON, and a number too large for a float (``1e400``), which it reads as
+    infinity: a file holding one is not a JSON file, or holds a number no
+    JSON can write, and ``resolve``, which prints strict JSON, would print
+    ``Infinity``."""
     stripped = strip_jsonc(text)
     try:
-        return json.loads(stripped, parse_constant=_refuse_constant, **kwargs)
+        return json.loads(stripped, parse_constant=_refuse_constant, parse_float=_finite, **kwargs)
     except _NotJSON as e:
-        position = next(match.start("constant") for match in _CONSTANT.finditer(stripped) if match["constant"])
-        raise json.JSONDecodeError(f"{e.args[0]} is not valid JSON", stripped, position) from None
+        word, message = e.args
+        position = next(match.start("word") for match in _WORD.finditer(stripped) if match["word"] == word)
+        raise json.JSONDecodeError(message, stripped, position) from None
