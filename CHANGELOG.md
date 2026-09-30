@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-09-30
+
 ### Fixed
 
 - A verify expression that renders to something other than a boolean no longer prints the value
@@ -1680,7 +1682,8 @@ This release carries a test-suite and CI pass.
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.2...v0.16.0
 [0.15.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.0...v0.15.1
