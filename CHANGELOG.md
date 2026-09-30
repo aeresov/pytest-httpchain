@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-30
+
 ### Added
 
 - `show --format json` gives each stage a `may_skip`: whether its `skip_if`, or a `skip`, `skipif`
@@ -1727,7 +1729,8 @@ This release carries a test-suite and CI pass.
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.1...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.2...v0.16.0
 [0.15.2]: https://github.com/aeresov/pytest-httpchain/compare/v0.15.1...v0.15.2
