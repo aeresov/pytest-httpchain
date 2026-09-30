@@ -30,19 +30,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a body schema file are syntax errors (`HTTPCHAIN014` at load, `HTTPCHAIN021` for a schema file
   under `validate --deep`), at their line and column: `NaN is not valid JSON: line 2 column 14`.
   Python's JSON parser reads them as numbers though JSON has none, so such a file passed
-  `validate`, and `resolve`, documented to print strict JSON, printed them.
+  `validate`, and `resolve`, documented to print strict JSON, printed them. Heads-up: a scenario
+  that wrote one as a literal, such as an expected `Infinity` in `verify.jmespath`, collected on
+  0.16.0 and now fails to load; write the value as a template, `"{{ float('inf') }}"`. A response
+  body is read as before, its `NaN` and `Infinity` as numbers, as httpx reads them.
 - `validate`, `resolve`, `show` and `graph` hold references to the rootdir pytest would determine
   for a run on the same paths, which collection holds them to, so `validate` no longer rejects
   with `HTTPCHAIN012` a reference that collection resolves. The CLI's root was an approximation
   of its own, which missed two cases: a `pytest.toml` or `.pytest.toml` configuration file, or a
   `.pytest.ini`, was not seen, so a sub-package's plain `pyproject.toml` below it set a narrower
-  root; and each file of a `validate a b` run got a root of its own, the file's directory when
-  nothing marked a project, where `pytest a b` has one, their common ancestor. Heads-up: without a
-  pytest configuration file or a `setup.py`, the root is now what pytest's is, the common ancestor
-  of the current directory and the paths (the paths' own when that is the root of the file system,
-  or on Windows when they are on another drive than the current directory), in place of the
-  nearest directory holding a `.git`, a bare project file or named `tests`; pass `--root-path` for
-  another.
+  root; and with nothing marking a project, a file's root was its own directory, one per file of a
+  `validate a b` run, where pytest's is one for the run, the common ancestor of the current
+  directory and the paths. Heads-up: in a
+  project with no pytest configuration file, `pyproject.toml` or `setup.py` (one marked only by a
+  `.git`, or by a `tox.ini` or `setup.cfg` without pytest configuration), the root is now what
+  pytest's is, the common ancestor of the current directory and the paths (the paths' own when
+  that is the root of the file system, or on Windows when they are on another drive than the
+  current directory), in place of the nearest directory holding such a marker, else the
+  nearest one named `tests`, else the file's own. Run from inside such a tree, the root can be
+  narrower than before, and a reference climbing above the current directory fails with
+  `HTTPCHAIN012`; run from the project's directory, or pass `--root-path`. A configuration file
+  that cannot be read, or that pytest would refuse, is passed over in finding the root, as a file
+  without pytest configuration is.
 
 ## [0.16.0] - 2026-09-29
 

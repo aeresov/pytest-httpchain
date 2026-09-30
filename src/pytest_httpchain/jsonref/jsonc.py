@@ -128,7 +128,8 @@ def _refuse_constant(word: str) -> NoReturn:
 
 def loads_jsonc(text: str, **kwargs: Any) -> Any:
     """``json.loads`` of JSONC text (`strip_jsonc`), with ``json.loads``' keyword
-    arguments. Raises `json.JSONDecodeError` as ``json.loads`` does, for an
+    arguments but ``parse_constant``, which it sets. Raises
+    `json.JSONDecodeError` as ``json.loads`` does, for an
     unterminated comment too, and for ``NaN``, ``Infinity`` and
     ``-Infinity``, which ``json.loads`` reads as numbers though they are no
     JSON: a file holding one is not a JSON file, and ``resolve``, which
