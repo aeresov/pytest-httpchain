@@ -14,6 +14,7 @@ import httpx
 
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.utils import JSON_PARSE_ERRORS, request_content
+from pytest_httpchain.wire_codec import MSGPACK_DECODE_ERRORS, is_msgpack_content_type, unpack_msgpack
 
 _MAX_BODY_CHARS = 1000
 
@@ -21,6 +22,17 @@ _MAX_BODY_CHARS = 1000
 _DECODE_CHUNK = 1 << 20
 
 _PRETTY_JSON = json.JSONEncoder(indent=2, ensure_ascii=False)
+
+
+def _msgpack_display(value: Any) -> Any:
+    if isinstance(value, bytes):
+        shown = value[:64].hex()
+        suffix = f"... ({len(value)} bytes)" if len(value) > 64 else ""
+        return f"<bytes: {shown}{suffix}>"
+    raise TypeError(f"Cannot display {type(value).__name__} as MessagePack data")
+
+
+_PRETTY_MSGPACK = json.JSONEncoder(indent=2, ensure_ascii=False, default=_msgpack_display)
 
 
 def _is_textual_content_type(content_type: str) -> bool:
@@ -47,6 +59,12 @@ def format_request(request: httpx.Request, redaction: Redaction = DEFAULT_REDACT
     elif (parts := _format_multipart(content, content_type)) is not None:
         body = _format_body_text(parts)
     elif content:
+        if is_msgpack_content_type(content_type):
+            try:
+                body = _format_encoded(_PRETTY_MSGPACK, unpack_msgpack(content))
+            except MSGPACK_DECODE_ERRORS:
+                body = f"<Binary content: {len(content)} bytes>"
+            return _message_lines(f"{request.method} {redaction.url(request.url)}", request.headers, body, redaction)
         try:
             decoded = content.decode()
         except UnicodeDecodeError:
@@ -137,7 +155,13 @@ def format_response(response: httpx.Response, redaction: Redaction = DEFAULT_RED
     body = None
     if response.content:
         content_type = response.headers.get("Content-Type", "")
-        if "application/json" in content_type.lower():
+        codec = response.extensions.get("httpchain_response_codec", "auto")
+        if codec == "msgpack" or (codec == "auto" and is_msgpack_content_type(content_type)):
+            try:
+                body = _format_encoded(_PRETTY_MSGPACK, unpack_msgpack(response.content))
+            except MSGPACK_DECODE_ERRORS:
+                body = f"<Binary content: {len(response.content)} bytes>"
+        elif "application/json" in content_type.lower():
             try:
                 body = _format_json(response.json())
             except JSON_PARSE_ERRORS:
@@ -160,9 +184,13 @@ def _format_json(value: Any) -> str:
     50 MB) only to be cut to ``_MAX_BODY_CHARS``. The encoder streams, so stop
     once past the cap.
     """
+    return _format_encoded(_PRETTY_JSON, value)
+
+
+def _format_encoded(encoder: json.JSONEncoder, value: Any) -> str:
     chunks: list[str] = []
     length = 0
-    for chunk in _PRETTY_JSON.iterencode(value):
+    for chunk in encoder.iterencode(value):
         chunks.append(chunk)
         length += len(chunk)
         if length > _MAX_BODY_CHARS:

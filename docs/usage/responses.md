@@ -2,6 +2,18 @@
 
 Response processing is defined as a list of steps, each either a `verify` or `save` operation. Steps execute in order.
 
+For structured response checks (`verify.jmespath`, `save.jmespath`, and
+`verify.body.schema`), a MessagePack response is decoded when its
+`Content-Type` is `application/msgpack`, `application/x-msgpack`, or ends in
+`+msgpack`. Other responses retain JSON decoding, regardless of content type.
+When a server labels its response incorrectly, set `"response_codec":
+"msgpack"` (or `"json"`) on the stage. Binary MessagePack values remain bytes
+when saved; for example, `"{{ hexencode(binary) }}"` gives their hexadecimal
+text, and `"{{ b64encode(binary) }}"` gives base64. A JMESPath expectation may
+compare against `"{{ hex_bytes('00ff') }}"` directly. JSON Schema checks still
+use JSON Schema's types, so a MessagePack value containing binary data may
+need JMESPath assertions or a user function instead.
+
 ## Response Structure
 
 ```json

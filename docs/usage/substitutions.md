@@ -421,7 +421,7 @@ Available functions in expressions:
 -   `env(var, default)`
 -   `get(var, default)`, `exists(var)`
 -   time: `now()`, `timestamp()`, `timestamp_ms()`
--   encoding: `b64encode()`, `b64decode()`, `json_dumps()`, `json_loads()`
+-   encoding: `b64encode()`, `b64decode()`, `b64decode_bytes()`, `hex_bytes()`, `hexencode()`, `msgpack_pack()`, `json_dumps()`, `json_loads()`
 -   URLs: `urlencode()`, `quote()`
 -   hashing: `sha256()`, `md5()`, `hmac_sha256()`
 
@@ -480,6 +480,10 @@ moment in several places, bind it once in `vars`; an expiry an hour ahead is
 | Call | Returns |
 | --- | --- |
 | `b64encode(value, urlsafe=false)` | The base64 of `value`, padded: text is encoded as UTF-8 first, and bytes (from a fixture or function) are taken as they are. `urlsafe=true` (or `true` as the second argument) uses `-` and `_` for `+` and `/` |
+| `b64decode_bytes(text)` | Decode standard base64 to bytes, including data that is not UTF-8 text |
+| `hex_bytes(text)` | Decode hexadecimal text to bytes; use this for a MessagePack binary field |
+| `hexencode(bytes)` | Encode bytes as lowercase hexadecimal text |
+| `msgpack_pack(value)` | Encode a value as MessagePack bytes, for a raw body or a percent-encoded query parameter |
 | `b64decode(value, urlsafe=false)` | The text base64 `value` encodes, which must be UTF-8. Padding is optional; `urlsafe=true` reads the URL-safe alphabet |
 | `json_dumps(value)` | `value` as JSON text, as Python's `json.dumps` writes it by default: `{"a": 1, "b": [1, 2]}`, with non-ASCII characters escaped. A `vars` object is written as the object it is |
 | `json_loads(text)` | The JSON value `text` holds, objects as dicts |

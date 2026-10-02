@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import httpx
+import msgpack
 import pytest
 from simpleeval import FeatureNotAvailable
 
@@ -137,6 +138,14 @@ def _self_containing() -> SimpleNamespace:
     loop = SimpleNamespace()
     loop.me = loop
     return loop
+
+
+def test_messagepack_and_binary_helpers_keep_bytes():
+    packet = walk("{{ msgpack_pack({'b': hex_bytes('00ff'), 'name': 'device'}) }}", {})
+    assert msgpack.unpackb(packet, raw=False) == {"b": b"\x00\xff", "name": "device"}
+    assert walk("{{ hexencode(data) }}", {"data": b"\x00\xff"}) == "00ff"
+    assert walk("{{ b64decode_bytes('AP8=') }}", {}) == b"\x00\xff"
+    assert walk("{{ b64encode(data) }}", {"data": b"\x00\xff"}) == "AP8="
 
 
 class TestJson:
@@ -368,7 +377,26 @@ def test_call_form_covers_every_call_only_builtin():
     """The runtime refusal and HTTPCHAIN035 both write the call to make."""
     assert {name: call_form(name) for name in CALL_ONLY_BUILTINS} == {
         **{name: f"{name}()" for name in ("now", "timestamp", "timestamp_ms", "uuid4", "rand")},
-        **{name: f"{name}(...)" for name in ("b64encode", "b64decode", "json_dumps", "json_loads", "urlencode", "quote", "sha256", "md5", "hmac_sha256", "env", "randint")},
+        **{
+            name: f"{name}(...)"
+            for name in (
+                "b64encode",
+                "b64decode",
+                "b64decode_bytes",
+                "hex_bytes",
+                "hexencode",
+                "msgpack_pack",
+                "json_dumps",
+                "json_loads",
+                "urlencode",
+                "quote",
+                "sha256",
+                "md5",
+                "hmac_sha256",
+                "env",
+                "randint",
+            )
+        },
     }
 
 

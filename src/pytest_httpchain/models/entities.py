@@ -26,6 +26,7 @@ from pydantic import (
     PositiveFloat,
     PositiveInt,
     RootModel,
+    StrictBytes,
     Tag,
     TypeAdapter,
     ValidationError,
@@ -460,6 +461,14 @@ class BinaryBody(StrictModel):
     binary: SerializablePath | PartialTemplateStr = Field(description="Path to binary file.")
 
 
+class BytesBody(StrictModel):
+    bytes: StrictBytes | TemplateExpressionOnly = Field(description="Raw bytes from a template expression, such as msgpack_pack(value).")
+
+
+class MsgpackBody(StrictModel):
+    msgpack: Any = Field(description="MessagePack value to encode. Templates may provide binary values within it.")
+
+
 class FileSpec(StrictModel):
     """A file of a multipart body, written as an object: where its bytes come
     from (exactly one of path, content and base64), and the filename and
@@ -596,6 +605,8 @@ get_request_body_discriminator = _create_discriminator(
         TextBody: "text",
         Base64Body: "base64",
         BinaryBody: "binary",
+        BytesBody: "bytes",
+        MsgpackBody: "msgpack",
         FilesBody: "files",
         MultipartBody: "multipart",
         GraphQLBody: "graphql",
@@ -610,6 +621,8 @@ RequestBody = Annotated[
     | Annotated[TextBody, Tag("text")]
     | Annotated[Base64Body, Tag("base64")]
     | Annotated[BinaryBody, Tag("binary")]
+    | Annotated[BytesBody, Tag("bytes")]
+    | Annotated[MsgpackBody, Tag("msgpack")]
     | Annotated[FilesBody, Tag("files")]
     | Annotated[MultipartBody, Tag("multipart")]
     | Annotated[GraphQLBody, Tag("graphql")],
@@ -836,7 +849,7 @@ class HeaderMatcher(StrictModel):
 
 # An operand compared as JSON. A template over `vars` renders an object as a
 # SimpleNamespace, which stands for the object it was written as.
-_JsonOperand = Annotated[JsonValue, BeforeValidator(convert_namespace_to_dict)]
+_JsonOperand = Annotated[JsonValue | bytes, BeforeValidator(convert_namespace_to_dict)]
 
 
 def _operand_schema(schema: JsonDict) -> None:
@@ -965,7 +978,7 @@ def _declared_value(v: Any) -> Any:
 # A value compared by JSON equality: anything but an object, which is a matcher.
 # The schema says so, so an editor holds a literal object to the matcher's keys.
 _JsonEqualityValue = Annotated[
-    JsonValue,
+    JsonValue | bytes,
     WithJsonSchema({"type": ["string", "number", "boolean", "null", "array"], "description": "Equal to this JSON value (true is not 1; 1 equals 1.0)."}),
 ]
 
@@ -1334,6 +1347,10 @@ class Stage(Marked, Fixtured, Descripted):
         "With parallel, each iteration retries on its own.",
     )
     request: Request = Field(description="HTTP request details.")
+    response_codec: Literal["auto", "json", "msgpack"] = Field(
+        default="auto",
+        description="Codec for JMESPath and body schema checks: auto uses MessagePack for a MessagePack Content-Type, otherwise JSON.",
+    )
     response: Responses = Field(default_factory=list, description="Sequential steps to process the response.")
 
 

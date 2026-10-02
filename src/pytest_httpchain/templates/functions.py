@@ -20,6 +20,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
+from pytest_httpchain.wire_codec import pack_msgpack
+
 
 def _kind(value: Any) -> str:
     """How an error names a value's type: a ``vars`` object renders as a
@@ -114,6 +116,38 @@ def b64decode(value: str | bytes, urlsafe: bool = False) -> str:
         return decoded.decode("utf-8")
     except UnicodeDecodeError:
         raise ValueError(f"b64decode() decoded {len(decoded)} bytes that are not UTF-8 text") from None
+
+
+def b64decode_bytes(value: str | bytes) -> bytes:
+    """Decode standard base64 without interpreting the resulting bytes as text."""
+    if isinstance(value, str) and not value.isascii():
+        raise ValueError("b64decode_bytes() got text that is not base64: it holds a character outside ASCII")
+    try:
+        return base64.b64decode(_to_bytes("b64decode_bytes", value), validate=True)
+    except binascii.Error as e:
+        raise ValueError(f"b64decode_bytes() got text that is not base64 ({e})") from None
+
+
+def hex_bytes(value: str) -> bytes:
+    """Construct binary data from hexadecimal text."""
+    if not isinstance(value, str):
+        raise TypeError(f"hex_bytes() takes text, not {_kind(value)}")
+    try:
+        return bytes.fromhex(value)
+    except ValueError as e:
+        raise ValueError(f"hex_bytes() got invalid hexadecimal text ({e})") from None
+
+
+def hexencode(value: bytes) -> str:
+    """Readable hexadecimal for a binary value, including one saved from a response."""
+    if not isinstance(value, bytes | bytearray):
+        raise TypeError(f"hexencode() takes bytes, not {_kind(value)}")
+    return value.hex()
+
+
+def msgpack_pack(value: Any) -> bytes:
+    """MessagePack bytes for a raw body or a URL parameter."""
+    return pack_msgpack(value)
 
 
 def _namespace_to_dict(value: Any) -> Any:
@@ -225,6 +259,10 @@ HELPER_FUNCTIONS = {
     "timestamp_ms": timestamp_ms,
     "b64encode": b64encode,
     "b64decode": b64decode,
+    "b64decode_bytes": b64decode_bytes,
+    "hex_bytes": hex_bytes,
+    "hexencode": hexencode,
+    "msgpack_pack": msgpack_pack,
     "json_dumps": json_dumps,
     "json_loads": json_loads,
     "urlencode": urlencode,

@@ -52,11 +52,11 @@ A key-value store persists throughout scenario execution. Variables, fixtures, a
 
 ### Request bodies
 
-JSON, form, XML, text, base64, a binary file and GraphQL, and multipart uploads that mix form fields with files: each file read from a path or given inline, several under one name if need be, with its own filename and content type.
+JSON, MessagePack, form, XML, text, base64, a binary file and GraphQL, and multipart uploads that mix form fields with files: each file read from a path or given inline, several under one name if need be, with its own filename and content type.
 
 ### Response processing
 
--   **JMESPath** — Assert on values in JSON responses directly (`"jmespath": {"data.id": 42, "items": {"length": 3}}`), or extract them for later stages
+-   **JMESPath** — Assert on values in JSON or MessagePack responses directly (`"jmespath": {"data.id": 42, "items": {"length": 3}}`), or extract them for later stages
 -   **Regex** — Save values from bodies that are not JSON, such as a CSRF token from an HTML form (`"regex": {"csrf": "name=\"csrf\" value=\"([^\"]+)\""}`)
 -   **JSON Schema** — Validate response structure against a schema, inline or from a file, or one inside a document you already have: `"schema": "./openapi.json#/components/schemas/User"` checks the response against an OpenAPI component, its `$ref`s resolved across the document and into local files, never over the network
 -   **User functions** — Call Python functions for custom extraction, verification, or [authentication](https://www.python-httpx.org/advanced/authentication/#custom-authentication-schemes)

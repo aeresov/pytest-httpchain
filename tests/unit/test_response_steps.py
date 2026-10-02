@@ -13,6 +13,7 @@ from http import HTTPStatus
 
 import httpx
 import jsonschema
+import msgpack
 import pytest
 
 from pytest_httpchain.body_schema import ReferenceBounds
@@ -39,6 +40,32 @@ INT_TOO_LONG = httpx.Response(200, content=b'{"a": ' + b"1" * 5000 + b"}")
 # what comes over HTTP stays strict JSON: the server sent a broken body.
 COMMENTED_JSON = httpx.Response(200, content=b'{"a": 1 // c\n}', headers={"content-type": "application/json"})
 TRAILING_COMMA_JSON = httpx.Response(200, content=b'{"a": [1,]}', headers={"content-type": "application/json"})
+
+
+def test_msgpack_save_and_verify_preserve_binary_with_content_type_or_override():
+    packet = {"b": b"\x00\xff", "name": "device"}
+    packed = msgpack.packb(packet, use_bin_type=True)
+    response = httpx.Response(200, content=packed, headers={"content-type": "Application/Vnd.Device+Msgpack; version=1"})
+    assert process_save(JMESPathSave(jmespath={"packet": "@", "binary": "b"}), response, ChainMap()) == {"packet": packet, "binary": b"\x00\xff"}
+    process_verify(Verify.model_validate({"jmespath": {"b": {"eq": b"\x00\xff"}}}), response)
+
+    mislabeled = httpx.Response(200, content=packed, headers={"content-type": "application/octet-stream"})
+    assert process_save(JMESPathSave(jmespath={"binary": "b"}), mislabeled, ChainMap(), codec="msgpack") == {"binary": b"\x00\xff"}
+    process_verify(Verify.model_validate({"jmespath": {"b": b"\x00\xff"}}), mislabeled, codec="msgpack")
+
+
+def test_invalid_msgpack_is_step_failure():
+    response = httpx.Response(200, content=b"\xc1", headers={"content-type": "application/msgpack"})
+    with pytest.raises(SaveError, match="response is not valid MessagePack"):
+        process_save(JMESPathSave(jmespath={"b": "b"}), response, ChainMap())
+    with pytest.raises(VerificationError, match="response is not valid MessagePack"):
+        process_verify(Verify(jmespath={"b": 1}), response)
+
+
+def test_msgpack_mismatch_shows_nested_binary_as_hex():
+    response = httpx.Response(200, content=msgpack.packb({"b": b"\x00\xff"}, use_bin_type=True), headers={"content-type": "application/msgpack"})
+    with pytest.raises(VerificationError, match="0x00ff"):
+        process_verify(Verify.model_validate({"jmespath": {"@": {"eq": {"b": "wrong"}}}}), response)
 
 
 @pytest.mark.parametrize(
