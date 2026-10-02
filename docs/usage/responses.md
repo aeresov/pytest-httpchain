@@ -12,7 +12,8 @@ when saved; for example, `"{{ hexencode(binary) }}"` gives their hexadecimal
 text, and `"{{ b64encode(binary) }}"` gives base64. A JMESPath expectation may
 compare against `"{{ hex_bytes('00ff') }}"` directly. JSON Schema checks still
 use JSON Schema's types, so a MessagePack value containing binary data may
-need JMESPath assertions or a user function instead.
+need JMESPath assertions or a user function instead. An `eq` or `ne` JMESPath
+expectation can compare a saved object or array containing binary values.
 
 ## Response Structure
 

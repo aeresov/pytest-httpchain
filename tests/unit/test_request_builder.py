@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import unquote_to_bytes
 
 import httpx
 import msgpack
@@ -98,6 +99,29 @@ def test_msgpack_body_and_binary_query_parameter():
     assert msgpack.unpackb(sent.content, raw=False) == packet
     assert b"packet=%82" in sent.url.query
     assert b"%00%FF" in sent.url.query
+
+
+def test_form_preserves_packed_binary_field_and_ordinary_values():
+    packet = {"id": 42, "b": b"\x00\xff\x80&+=%"}
+    packed = msgpack.packb(packet, use_bin_type=True)
+    form = {"packet": packed, "note": "a b", "tag": ["one", "two"], "flag": True, "empty": None}
+    sent = _sent(Request(url="http://t/", method="POST", body={"form": form}), ClientConfig(headers={"Content-Type": "application/json"}))
+
+    def fields():
+        for part in sent.content.split(b"&"):
+            key, _, value = part.partition(b"=")
+            yield unquote_to_bytes(key.replace(b"+", b" ")), unquote_to_bytes(value.replace(b"+", b" "))
+
+    assert sent.headers["content-type"] == "application/x-www-form-urlencoded"
+    assert list(fields()) == [
+        (b"packet", packed),
+        (b"note", b"a b"),
+        (b"tag", b"one"),
+        (b"tag", b"two"),
+        (b"flag", b"true"),
+        (b"empty", b""),
+    ]
+    assert msgpack.unpackb(dict(fields())[b"packet"], raw=False) == packet
 
 
 def test_msgpack_body_overrides_client_content_type_but_not_stage_content_type():

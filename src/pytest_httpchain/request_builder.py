@@ -520,6 +520,34 @@ def _encode_param(key: str, value: Any) -> str:
         raise RequestError(f"Cannot convert query parameter '{key}' to text: {type(e).__name__}: {e}") from e
 
 
+def _encoded_binary_form(data: Mapping[str, Any]) -> bytes | None:
+    """URL-encode form data ourselves only when a field holds bytes.
+
+    httpx stringifies bytes in ``data=``, losing the packet. For forms without
+    bytes, its own encoder remains in use. Its scalar spellings and repeated
+    fields are kept here for the mixed binary/text case.
+    """
+    fields = [(key, item) for key, value in data.items() for item in (value if isinstance(value, list | tuple) else (value,))]
+    if not any(isinstance(value, bytes | bytearray) for _, value in fields):
+        return None
+
+    def scalar(value: Any) -> str | bytes:
+        if isinstance(value, bytes | bytearray):
+            return bytes(value)
+        if value is True:
+            return "true"
+        if value is False:
+            return "false"
+        if value is None:
+            return ""
+        return str(value)
+
+    try:
+        return urlencode([(key, scalar(value)) for key, value in fields]).encode("ascii")
+    except Exception as e:
+        raise RequestError(f"Cannot encode form data: {type(e).__name__}: {e}") from e
+
+
 def _merge_query(query: str, params: dict[str, Any], defaults: Mapping[str, Any]) -> str:
     """The URL's raw ``query`` with ``params`` merged in, and ``defaults``
     (``client.params``) for the keys neither sets.
@@ -655,7 +683,13 @@ def build_request_kwargs(
             request_kwargs["json"] = {"query": gql.query, "variables": gql.variables}
 
         case FormBody(form=data):
-            request_kwargs["data"] = data
+            encoded = _encoded_binary_form(data)
+            if encoded is None:
+                request_kwargs["data"] = data
+            else:
+                request_kwargs["content"] = encoded
+                if not _declares_content_type(request_model.headers):
+                    request_kwargs["headers"] = {**request_model.headers, "Content-Type": "application/x-www-form-urlencoded"}
             if data:
                 body_content_type = "application/x-www-form-urlencoded"
 

@@ -17,6 +17,7 @@ import msgpack
 import pytest
 
 from pytest_httpchain.body_schema import ReferenceBounds
+from pytest_httpchain.carrier import _verify_renderer
 from pytest_httpchain.errors import SaveError, VerificationError
 from pytest_httpchain.models import JSON_TYPE_NAMES, JMESPathSave, RegexSave, SubstitutionsSave, UserFunctionsSave, Verify
 from pytest_httpchain.models.entities import ResponseBody
@@ -66,6 +67,23 @@ def test_msgpack_mismatch_shows_nested_binary_as_hex():
     response = httpx.Response(200, content=msgpack.packb({"b": b"\x00\xff"}, use_bin_type=True), headers={"content-type": "application/msgpack"})
     with pytest.raises(VerificationError, match="0x00ff"):
         process_verify(Verify.model_validate({"jmespath": {"@": {"eq": {"b": "wrong"}}}}), response)
+
+
+@pytest.mark.parametrize("packet", [{"id": 42, "nested": {"b": b"\x00\xff"}}, [{"b": b"\x00\xff"}, 42]])
+@pytest.mark.parametrize("expectation", [{"eq": "{{ saved_packet }}"}, "{{ saved_packet }}"])
+def test_msgpack_saved_structured_value_compares_with_nested_bytes(packet, expectation):
+    verify = Verify.model_validate({"jmespath": {"d": expectation}})
+    response = httpx.Response(200, headers={"Content-Type": "application/msgpack"}, content=msgpack.packb({"d": packet}, use_bin_type=True))
+    process_verify(verify, response, render=_verify_renderer(verify, ChainMap({"saved_packet": packet})))
+
+    changed = msgpack.unpackb(msgpack.packb(packet, use_bin_type=True), raw=False)
+    if isinstance(changed, dict):
+        changed["nested"]["b"] = b"\x00\xfe"
+    else:
+        changed[0]["b"] = b"\x00\xfe"
+    wrong = httpx.Response(200, headers={"Content-Type": "application/msgpack"}, content=msgpack.packb({"d": changed}, use_bin_type=True))
+    with pytest.raises(VerificationError, match="doesn't match"):
+        process_verify(verify, wrong, render=_verify_renderer(verify, ChainMap({"saved_packet": packet})))
 
 
 @pytest.mark.parametrize(

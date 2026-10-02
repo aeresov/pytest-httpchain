@@ -26,13 +26,19 @@ from pydantic import (
     PositiveFloat,
     PositiveInt,
     RootModel,
+    Strict,
+    StrictBool,
     StrictBytes,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
     Tag,
     TypeAdapter,
     ValidationError,
     ValidationInfo,
     ValidatorFunctionWrapHandler,
     WithJsonSchema,
+    WrapValidator,
     model_validator,
 )
 from pydantic.json_schema import JsonDict
@@ -847,9 +853,28 @@ class HeaderMatcher(StrictModel):
         return self
 
 
-# An operand compared as JSON. A template over `vars` renders an object as a
-# SimpleNamespace, which stands for the object it was written as.
-_JsonOperand = Annotated[JsonValue | bytes, BeforeValidator(convert_namespace_to_dict)]
+# JSON's own validator keeps its exact rules for byte-free operands. If it
+# rejects nested MessagePack bin values, this strict recursive form accepts
+# those without admitting tuples or other values JSON itself would reject.
+type BinaryStructuredValue = (
+    StrictStr | StrictBool | StrictInt | StrictFloat | StrictBytes | None | Annotated[list[BinaryStructuredValue], Strict()] | Annotated[dict[str, BinaryStructuredValue], Strict()]
+)
+_BINARY_STRUCTURED = TypeAdapter(BinaryStructuredValue)
+
+
+def _allow_nested_bytes(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
+    try:
+        return handler(value)
+    except ValidationError as original:
+        try:
+            return _BINARY_STRUCTURED.validate_python(value)
+        except ValidationError:
+            raise original from None
+
+
+# A template over `vars` renders an object as a SimpleNamespace, which stands
+# for the object it was written as.
+_JsonOperand = Annotated[JsonValue | bytes, BeforeValidator(convert_namespace_to_dict), WrapValidator(_allow_nested_bytes)]
 
 
 def _operand_schema(schema: JsonDict) -> None:
@@ -978,7 +1003,7 @@ def _declared_value(v: Any) -> Any:
 # A value compared by JSON equality: anything but an object, which is a matcher.
 # The schema says so, so an editor holds a literal object to the matcher's keys.
 _JsonEqualityValue = Annotated[
-    JsonValue | bytes,
+    Annotated[JsonValue | bytes, WrapValidator(_allow_nested_bytes)],
     WithJsonSchema({"type": ["string", "number", "boolean", "null", "array"], "description": "Equal to this JSON value (true is not 1; 1 equals 1.0)."}),
 ]
 
