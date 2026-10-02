@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-10-02
+
 ### Fixed
 
 - URL-encoded form fields preserve MessagePack bytes instead of sending their
@@ -1759,7 +1761,8 @@ This release carries a test-suite and CI pass.
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.18.1...HEAD
+[0.18.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.16.1...v0.17.0
