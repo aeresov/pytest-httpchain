@@ -194,6 +194,15 @@ A failing stage's report shows the headers it sent, with the values of credentia
 }
 ```
 
+`form` can carry packed binary data in a named field:
+
+```json
+{"body": {"form": {"packet": "{{ msgpack_pack(packet) }}"}}}
+```
+
+The packet's bytes are percent-encoded in the `application/x-www-form-urlencoded`
+body. List values still send repeated fields.
+
 ### XML Body
 
 ```json

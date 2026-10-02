@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- URL-encoded form fields preserve MessagePack bytes instead of sending their
+  Python string representation.
+- JMESPath equality operands accept saved objects and arrays containing binary
+  MessagePack values at any depth.
+
 ## [0.18.0] - 2026-10-02
 
 ### Added

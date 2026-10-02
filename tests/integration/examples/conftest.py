@@ -234,6 +234,17 @@ def echo_msgpack_param():
     return Response(msgpack.packb(packet, use_bin_type=True), content_type="application/x-msgpack")
 
 
+@app.post("/echo/msgpack-form")
+def echo_msgpack_form():
+    if request.mimetype != "application/x-www-form-urlencoded":
+        return {"error": "expected URL-encoded form"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE
+    field = next((part.partition(b"=")[2] for part in request.get_data().split(b"&") if part.partition(b"=")[0] == b"packet"), None)
+    if field is None:
+        return {"error": "missing packet"}, HTTPStatus.BAD_REQUEST
+    packet = msgpack.unpackb(unquote_to_bytes(field.replace(b"+", b" ")), raw=False)
+    return Response(msgpack.packb(packet, use_bin_type=True), content_type="application/msgpack")
+
+
 @app.post("/echo/multipart")
 def echo_multipart():
     """Echo a multipart body. `form`: each form field's values, in the order
