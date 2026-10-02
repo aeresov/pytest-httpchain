@@ -45,6 +45,7 @@ from pytest_httpchain.models import (
     IndividualParameter,
     JMESPathMatcher,
     JsonBody,
+    MsgpackBody,
     ParallelConfig,
     ParallelForeachConfig,
     ParallelRepeatConfig,
@@ -564,7 +565,7 @@ def _none_is_a_value(model: BaseModel, field: str) -> bool:
     """The fields exempt from `_render_declared`: None there is something the
     scenario can mean, not a setting that vanished — a JSON body of ``null``
     (``request_builder`` sends it as such) and free-text descriptions."""
-    return field == "description" or (isinstance(model, JsonBody) and field == "json")
+    return field == "description" or (isinstance(model, JsonBody | MsgpackBody) and field in ("json", "msgpack"))
 
 
 def _none_is_compared(model: BaseModel, field: str) -> bool:
@@ -2132,6 +2133,7 @@ class Carrier:
         sending = time.perf_counter()
         try:
             response = cls._execute_http_request(request_kwargs)
+            response.extensions["httpchain_response_codec"] = stage.response_codec
         except StageExecutionError as e:
             e.started = started
             raise
@@ -2153,7 +2155,7 @@ class Carrier:
                         # derived text containing '{{ }}' would be executed as an
                         # expression.
                         save_model = step.save if isinstance(step.save, SubstitutionsSave) else _render_save(step.save, step_context)
-                        step_saved = process_save(save_model, response, step_context)
+                        step_saved = process_save(save_model, response, step_context, codec=stage.response_codec)
                         # The static HTTPCHAIN027 check cannot see dynamically
                         # produced keys, so the shadowing is surfaced here too.
                         if RESPONSE_META_NAME in step_saved:
@@ -2177,7 +2179,15 @@ class Carrier:
                         # Each check's value is rendered on its own, all before the
                         # first check, through the guard (`_verify_renderer`): a
                         # template that fails is one failure among the step's.
-                        process_verify(step.verify, response, cls.scenario_dir, cls.redaction, render=_verify_renderer(step.verify, step_context), ref_bounds=cls.ref_bounds)
+                        process_verify(
+                            step.verify,
+                            response,
+                            cls.scenario_dir,
+                            cls.redaction,
+                            render=_verify_renderer(step.verify, step_context),
+                            ref_bounds=cls.ref_bounds,
+                            codec=stage.response_codec,
+                        )
 
                     case _:
                         raise RuntimeError(f"Unhandled response step: {type(step).__name__}")

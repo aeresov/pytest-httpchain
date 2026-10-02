@@ -4,6 +4,7 @@ import tracemalloc
 from urllib.parse import quote
 
 import httpx
+import msgpack
 import pytest
 
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
@@ -21,6 +22,15 @@ _MULTIPART = (
     b'--XyZ\r\nContent-Disposition: form-data; name="image"; filename="a.png"\r\nContent-Type: image/png\r\n\r\n\x89PNG\r\n'
     b"--XyZ--\r\n"
 )
+
+
+def test_messagepack_report_shows_binary_values_readably():
+    payload = msgpack.packb({"b": b"\x00\xff", "name": "device"}, use_bin_type=True)
+    request = httpx.Request("POST", "https://example.com/", content=payload, headers={"content-type": "application/msgpack"})
+    response = httpx.Response(200, content=payload, headers={"content-type": "application/octet-stream"})
+    response.extensions["httpchain_response_codec"] = "msgpack"
+    assert '"b": "<bytes: 00ff>"' in format_request(request)
+    assert '"b": "<bytes: 00ff>"' in format_response(response)
 
 
 @pytest.mark.parametrize(

@@ -15,7 +15,7 @@ from collections import ChainMap
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, Literal, NoReturn
 
 import httpx
 import jmespath
@@ -46,15 +46,37 @@ from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, Redaction
 from pytest_httpchain.templates import TemplatesError, contains_template
 from pytest_httpchain.userfunc import UserFunctionError, call_target, call_user_function
 from pytest_httpchain.utils import optional_as_list, path_segment, process_substitutions, schema_error_text
+from pytest_httpchain.wire_codec import MSGPACK_DECODE_ERRORS, is_msgpack_content_type, unpack_msgpack
+
+type ResponseCodec = Literal["auto", "json", "msgpack"]
 
 
-def process_save(save_model: Save, response: httpx.Response, context: ChainMap[str, Any]) -> dict[str, Any]:
+def _selected_codec(response: httpx.Response, codec: ResponseCodec) -> Literal["json", "msgpack"]:
+    if codec == "auto":
+        return "msgpack" if is_msgpack_content_type(response.headers.get("content-type", "")) else "json"
+    return codec
+
+
+def _parse_structured(response: httpx.Response, codec: ResponseCodec) -> Any:
+    if _selected_codec(response, codec) == "msgpack":
+        return unpack_msgpack(response.content)
+    return response.json()
+
+
+def _parse_failure(error: Exception, codec: Literal["json", "msgpack"], purpose: str) -> str:
+    if isinstance(error, RecursionError) and codec == "json":
+        return f"Cannot {purpose}, response JSON is nested too deeply to parse: {error}"
+    label = "JSON" if codec == "json" else "MessagePack"
+    return f"Cannot {purpose}, response is not valid {label}: {str(error) or type(error).__name__}"
+
+
+def process_save(save_model: Save, response: httpx.Response, context: ChainMap[str, Any], *, codec: ResponseCodec = "auto") -> dict[str, Any]:
     """Extract one save step's ``{name: value}`` contribution to the context."""
     step_saved: dict[str, Any] = {}
 
     match save_model:
         case JMESPathSave():
-            response_json = _response_json(response, SaveError, "extract variables")
+            response_json = _response_data(response, SaveError, "extract variables", codec)
             for var_name, jmespath_expr in save_model.jmespath.items():
                 try:
                     step_saved[var_name] = jmespath.search(jmespath_expr, response_json)
@@ -167,6 +189,7 @@ def process_verify(
     redaction: Redaction = DEFAULT_REDACTION,
     render: VerifyRender | None = None,
     ref_bounds: ReferenceBounds = UNBOUNDED,
+    codec: ResponseCodec = "auto",
 ) -> None:
     """Run one verify step's assertions, raising one `VerificationError` that
     names every check that failed.
@@ -193,7 +216,7 @@ def process_verify(
     A check that cannot run fails once, not once per assertion it held: the
     body is parsed as JSON at most once for the step, by the first check that
     reads it, and one that is not JSON is one failure however many of the
-    step's checks wanted it, jmespath entries and body.schema (`_JsonBody`).
+    step's checks wanted it, jmespath entries and body.schema (`_StructuredBody`).
 
     A user function's pytest.skip(), xfail() or fail() ends the step there, as
     it ends the stage, and so does one that a function a template calls
@@ -221,7 +244,7 @@ def process_verify(
     may name any local file.
     """
     failures = _Failures()
-    body = _JsonBody(response, failures)
+    body = _StructuredBody(response, failures, codec)
     step = _RenderedStep(verify_model, render)
 
     def end_step(outcome: BaseException, raised_by: str, where: VerifyWhere) -> NoReturn:
@@ -554,29 +577,26 @@ def _status_failure(expected: Any, actual: int) -> str | None:
     return f"Status code doesn't match: expected {shown}, got {actual}"
 
 
-# A `_JsonBody` no check has read yet: None is a body, JSON's null.
+# A `_StructuredBody` no check has read yet: None is a body, JSON's null.
 _UNPARSED = object()
-# A `_JsonBody` json could not read, which the step has a failure for.
+# A `_StructuredBody` could not decode, which the step has a failure for.
 _UNPARSABLE = object()
 
 
-class _JsonBody:
-    """A verify step's response body as JSON, parsed by the first check that
+class _StructuredBody:
+    """A verify step's response body, parsed by the first check that
     reads it and kept for the next: jmespath and body.schema share one parse.
 
-    A body json cannot read is one failure of the step, recorded by the check
-    that asked first; the checks after it that need the body do not run. That
-    is a ValueError: JSONDecodeError and UnicodeDecodeError are ones, and so
-    is the error for an integer past Python's digit limit, which json raises
-    bare. Or it is a RecursionError, for valid JSON nested deeper than json
-    can parse (``[[[...]]]`` some thousand levels deep).
+    A body the codec cannot read is one failure of the step, recorded by the
+    check that asked first; the checks after it that need the body do not run.
     """
 
-    __slots__ = ("_failures", "_response", "_value")
+    __slots__ = ("_codec", "_failures", "_response", "_value")
 
-    def __init__(self, response: httpx.Response, failures: _Failures) -> None:
+    def __init__(self, response: httpx.Response, failures: _Failures, codec: ResponseCodec) -> None:
         self._response = response
         self._failures = failures
+        self._codec = codec
         self._value: Any = _UNPARSED
 
     def parsed(self, check: str) -> Any:
@@ -585,13 +605,10 @@ class _JsonBody:
         verify.jmespath"``) cannot be done on it."""
         if self._value is _UNPARSED:
             try:
-                self._value = self._response.json()
-            except ValueError as e:
+                self._value = _parse_structured(self._response, self._codec)
+            except MSGPACK_DECODE_ERRORS as e:
                 self._value = _UNPARSABLE
-                self._failures.add(f"Cannot {check}, response is not valid JSON: {e}", cause=e)
-            except RecursionError as e:
-                self._value = _UNPARSABLE
-                self._failures.add(f"Cannot {check}, response JSON is nested too deeply to parse: {e}", cause=e)
+                self._failures.add(_parse_failure(e, _selected_codec(self._response, self._codec), check), cause=e)
         return self._value
 
 
@@ -761,6 +778,8 @@ def json_type(value: Any) -> str:
             return "number"
         case str():
             return "string"
+        case bytes():
+            return "binary"
         case list():
             return "array"
         case dict():
@@ -792,8 +811,12 @@ def _shown(value: Any) -> str:
     back an expression reference (``&name``) as it is, from ``not_null(&a)``
     or ``to_array(&a)``, or names one in a type error (``length(&a)``).
     """
+    if isinstance(value, bytes):
+        shown = value[:64].hex()
+        suffix = f"... ({len(value)} bytes)" if len(value) > 64 else ""
+        return f"0x{shown}{suffix}"
     try:
-        text = json.dumps(value, ensure_ascii=False)
+        text = json.dumps(value, ensure_ascii=False, default=_shown_non_json)
     except ValueError:
         return f"(a {json_type(value)} too long to show)"
     except TypeError:
@@ -801,7 +824,13 @@ def _shown(value: Any) -> str:
     return text if len(text) <= _SHOWN_MAX else f"{text[:_SHOWN_MAX]}... ({len(text)} characters)"
 
 
-def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None, ref_bounds: ReferenceBounds, failures: _Failures) -> None:
+def _shown_non_json(value: Any) -> str:
+    if isinstance(value, bytes):
+        return _shown(value)
+    raise TypeError(f"Cannot show {type(value).__name__} as JSON")
+
+
+def _verify_body_schema(schema: Any, body: _StructuredBody, scenario_dir: Path | None, ref_bounds: ReferenceBounds, failures: _Failures) -> None:
     """Validate the response body against an inline JSON Schema, or one in a
     file, where a JSON pointer may select it (`body_schema`): one check, which
     fails once, for its first violation, or for why it cannot run.
@@ -873,15 +902,12 @@ def _verify_body_schema(schema: Any, body: _JsonBody, scenario_dir: Path | None,
         failures.add(f"Cannot validate against {body_schema.where}, a schema it references is not valid: {schema_error_text(e)}", cause=e, retryable=False)
 
 
-def _response_json(response: httpx.Response, error: type[StageExecutionError], purpose: str) -> Any:
-    """The body parsed as JSON, or ``error`` naming what it was needed for, in
-    the words `_JsonBody.parsed` uses for a verify step."""
+def _response_data(response: httpx.Response, error: type[StageExecutionError], purpose: str, codec: ResponseCodec) -> Any:
+    """A structured body, or an error naming why it could not be decoded."""
     try:
-        return response.json()
-    except ValueError as e:
-        raise error(f"Cannot {purpose}, response is not valid JSON: {e}") from e
-    except RecursionError as e:
-        raise error(f"Cannot {purpose}, response JSON is nested too deeply to parse: {e}") from e
+        return _parse_structured(response, codec)
+    except MSGPACK_DECODE_ERRORS as e:
+        raise error(_parse_failure(e, _selected_codec(response, codec), purpose)) from e
 
 
 def _schema_violation(error: jsonschema.ValidationError) -> str:

@@ -7,9 +7,11 @@ import threading
 import time
 from contextlib import contextmanager
 from http import HTTPStatus
+from urllib.parse import unquote_to_bytes
 
+import msgpack
 import pytest
-from flask import Flask, request
+from flask import Flask, Response, request
 from flask_httpauth import HTTPBasicAuth, HTTPDigestAuth, HTTPTokenAuth
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.serving import make_server
@@ -216,6 +218,20 @@ def echo_binary():
     """Echo back binary as base64"""
     data = request.get_data()
     return {"base64": base64.b64encode(data).decode(), "size": len(data)}, HTTPStatus.OK
+
+
+@app.post("/echo/msgpack")
+def echo_msgpack():
+    packet = msgpack.unpackb(request.get_data(), raw=False)
+    content_type = "application/octet-stream" if request.args.get("wrong_type") else "application/msgpack"
+    return Response(msgpack.packb(packet, use_bin_type=True), content_type=content_type)
+
+
+@app.get("/echo/msgpack-param")
+def echo_msgpack_param():
+    encoded = request.query_string.partition(b"=")[2].replace(b"+", b" ")
+    packet = msgpack.unpackb(unquote_to_bytes(encoded), raw=False)
+    return Response(msgpack.packb(packet, use_bin_type=True), content_type="application/x-msgpack")
 
 
 @app.post("/echo/multipart")

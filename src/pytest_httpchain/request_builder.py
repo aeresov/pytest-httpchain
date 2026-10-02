@@ -16,7 +16,7 @@ from collections.abc import Generator, Iterable, Iterator, Mapping
 from functools import partial
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote_plus
+from urllib.parse import unquote_plus, urlencode
 
 import httpx
 
@@ -27,6 +27,7 @@ from pytest_httpchain.models import (
     BasicAuth,
     BearerAuth,
     BinaryBody,
+    BytesBody,
     ClientConfig,
     DigestAuth,
     FilesBody,
@@ -34,6 +35,7 @@ from pytest_httpchain.models import (
     FormBody,
     GraphQLBody,
     JsonBody,
+    MsgpackBody,
     MultipartBody,
     Request,
     RequestAuth,
@@ -48,6 +50,7 @@ from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.templates import contains_template
 from pytest_httpchain.userfunc import UserFunctionError, call_target, call_user_function, import_function
 from pytest_httpchain.utils import resolve_scenario_path
+from pytest_httpchain.wire_codec import pack_msgpack
 
 
 def build_ssl_verify(config: SSLConfig, scenario_dir: Path | None) -> bool | ssl.SSLContext:
@@ -506,7 +509,13 @@ def _encode_param(key: str, value: Any) -> str:
     instead of escaping as the raw exception.
     """
     try:
+        if isinstance(value, list) and any(isinstance(item, bytes | bytearray) for item in value):
+            return "&".join(_encode_param(key, item) for item in value)
+        if isinstance(value, bytes | bytearray):
+            return urlencode({key: bytes(value)})
         return str(httpx.QueryParams({key: value}))
+    except RequestError:
+        raise
     except Exception as e:
         raise RequestError(f"Cannot convert query parameter '{key}' to text: {type(e).__name__}: {e}") from e
 
@@ -633,6 +642,15 @@ def build_request_kwargs(
         case JsonBody(json=data):
             request_kwargs["json"] = data
 
+        case MsgpackBody(msgpack=data):
+            try:
+                request_kwargs["content"] = pack_msgpack(data)
+            except (TypeError, ValueError, OverflowError, RecursionError) as e:
+                raise RequestError(f"Cannot encode MessagePack body: {e}") from e
+            if not _declares_content_type((*client.headers, *request_model.headers)):
+                request_kwargs["headers"] = {**request_model.headers, "Content-Type": "application/msgpack"}
+            body_content_type = "application/msgpack"
+
         case GraphQLBody(graphql=gql):
             request_kwargs["json"] = {"query": gql.query, "variables": gql.variables}
 
@@ -650,6 +668,11 @@ def build_request_kwargs(
         case BinaryBody(binary=file_path):
             path = resolve_scenario_path(scenario_dir, file_path)
             request_kwargs["content"] = _read_file(path, file_path, "Binary file not found", "Cannot read binary file")
+
+        case BytesBody(bytes=data):
+            if not isinstance(data, bytes):
+                raise RequestError("The bytes body must resolve to bytes")
+            request_kwargs["content"] = data
 
         case FilesBody(files=files):
             multipart_parts = list(_file_parts(files, scenario_dir))

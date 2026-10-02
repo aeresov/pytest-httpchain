@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
+import msgpack
 import pytest
 import trustme
 
@@ -88,6 +89,27 @@ def _sent(request: Request, client: ClientConfig | None = None) -> httpx.Request
     """The one request httpx puts on the wire for ``request``."""
     [sent], _ = _exchange(request, client)
     return sent
+
+
+def test_msgpack_body_and_binary_query_parameter():
+    packet = {"b": b"\x00\xff", "name": "device"}
+    sent = _sent(Request(url="http://t/", method="POST", body={"msgpack": packet}, params={"packet": msgpack.packb(packet, use_bin_type=True)}))
+    assert sent.headers["content-type"] == "application/msgpack"
+    assert msgpack.unpackb(sent.content, raw=False) == packet
+    assert b"packet=%82" in sent.url.query
+    assert b"%00%FF" in sent.url.query
+
+
+def test_msgpack_body_overrides_client_content_type_but_not_stage_content_type():
+    request = Request(url="http://t/", method="POST", body={"msgpack": None})
+    assert _sent(request, ClientConfig(headers={"Content-Type": "application/json"})).headers["content-type"] == "application/msgpack"
+    custom = Request(url="http://t/", method="POST", body={"msgpack": None}, headers={"Content-Type": "application/vnd.example+msgpack"})
+    assert _sent(custom, ClientConfig(headers={"Content-Type": "application/json"})).headers["content-type"] == "application/vnd.example+msgpack"
+
+
+def test_bytes_body_must_resolve_to_bytes():
+    with pytest.raises(RequestError, match="The bytes body must resolve to bytes"):
+        build_request_kwargs(Request(url="http://t/", method="POST", body={"bytes": "{{ packet }}"}))
 
 
 @pytest.mark.parametrize(

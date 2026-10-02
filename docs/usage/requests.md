@@ -253,6 +253,42 @@ A failing stage's report shows the headers it sent, with the values of credentia
 }
 ```
 
+### MessagePack
+
+`msgpack` packs a structured value as MessagePack and sends its bytes. It sends
+`Content-Type: application/msgpack` unless the stage sets its own type; a
+scenario-wide `client.headers.Content-Type` is replaced for this body type.
+Use `hex_bytes()` or `b64decode_bytes()` for a MessagePack binary field:
+
+```json
+{
+    "request": {
+        "url": "https://api.example.com/device",
+        "method": "POST",
+        "body": {
+            "msgpack": {"device": "sensor-1", "b": "{{ hex_bytes('00ff80') }}"}
+        }
+    }
+}
+```
+
+`msgpack_pack(value)` returns the same encoded bytes for a value placed
+elsewhere. Use `body.bytes` to send them as a raw body (with the Content-Type
+header you choose), or place them in a query parameter. A `params` value containing bytes is
+percent-encoded as bytes, without decoding it as text:
+
+```json
+{
+    "request": {
+        "url": "https://api.example.com/device",
+        "method": "POST",
+        "headers": {"Content-Type": "application/msgpack"},
+        "body": {"bytes": "{{ msgpack_pack(packet) }}"},
+        "params": {"packet": "{{ msgpack_pack(packet) }}"}
+    }
+}
+```
+
 ### File Uploads (Multipart)
 
 `multipart` sends a `multipart/form-data` body: form fields and files, each a
