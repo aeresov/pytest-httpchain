@@ -480,7 +480,7 @@ moment in several places, bind it once in `vars`; an expiry an hour ahead is
 | Call | Returns |
 | --- | --- |
 | `b64encode(value, urlsafe=false)` | The base64 of `value`, padded: text is encoded as UTF-8 first, and bytes (from a fixture or function) are taken as they are. `urlsafe=true` (or `true` as the second argument) uses `-` and `_` for `+` and `/` |
-| `b64decode_bytes(text)` | Decode standard base64 to bytes, including data that is not UTF-8 text |
+| `b64decode_bytes(value, urlsafe=false)` | Decode base64 to bytes, including data that is not UTF-8 text. Padding is optional; `urlsafe=true` accepts `-` and `_` |
 | `hex_bytes(text)` | Decode hexadecimal text to bytes; use this for a MessagePack binary field |
 | `hexencode(bytes)` | Encode bytes as lowercase hexadecimal text |
 | `msgpack_pack(value)` | Encode a value as MessagePack bytes, for a raw body or a percent-encoded query parameter |

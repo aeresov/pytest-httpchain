@@ -148,6 +148,17 @@ def test_messagepack_and_binary_helpers_keep_bytes():
     assert walk("{{ b64encode(data) }}", {"data": b"\x00\xff"}) == "AP8="
 
 
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        ("{{ b64decode_bytes('AP8') }}", b"\x00\xff"),
+        ("{{ b64decode_bytes('-_8', urlsafe=true) }}", b"\xfb\xff"),
+    ],
+)
+def test_b64decode_bytes_accepts_unpadded_and_urlsafe_values(template, expected):
+    assert walk(template, {}) == expected
+
+
 class TestJson:
     @pytest.mark.parametrize(
         ("template", "context", "expected"),
