@@ -95,6 +95,18 @@ def b64encode(value: str | bytes, urlsafe: bool = False) -> str:
     return encode(data).decode("ascii")
 
 
+def _decode_base64(function: str, value: str | bytes, urlsafe: bool) -> bytes:
+    urlsafe = _require_bool(function, "urlsafe", urlsafe)
+    if isinstance(value, str) and not value.isascii():
+        raise ValueError(f"{function}() got text that is not base64: it holds a character outside ASCII")
+    data = _to_bytes(function, value)
+    try:
+        return base64.b64decode(data + b"=" * (-len(data) % 4), altchars=b"-_" if urlsafe else None, validate=True)
+    except binascii.Error as e:
+        hint = "; for URL-safe base64, pass urlsafe=true" if not urlsafe and (b"-" in data or b"_" in data) else ""
+        raise ValueError(f"{function}() got text that is not base64 ({e}){hint}") from None
+
+
 def b64decode(value: str | bytes, urlsafe: bool = False) -> str:
     """The UTF-8 text a base64 string encodes.
 
@@ -103,29 +115,16 @@ def b64decode(value: str | bytes, urlsafe: bool = False) -> str:
     character outside the alphabet fails, whitespace included, where the
     standard library by default skips it and decodes what is left.
     """
-    urlsafe = _require_bool("b64decode", "urlsafe", urlsafe)
-    if isinstance(value, str) and not value.isascii():
-        raise ValueError("b64decode() got text that is not base64: it holds a character outside ASCII")
-    data = _to_bytes("b64decode", value)
-    try:
-        decoded = base64.b64decode(data + b"=" * (-len(data) % 4), altchars=b"-_" if urlsafe else None, validate=True)
-    except binascii.Error as e:
-        hint = "; for URL-safe base64, pass urlsafe=true" if not urlsafe and (b"-" in data or b"_" in data) else ""
-        raise ValueError(f"b64decode() got text that is not base64 ({e}){hint}") from None
+    decoded = _decode_base64("b64decode", value, urlsafe)
     try:
         return decoded.decode("utf-8")
     except UnicodeDecodeError:
         raise ValueError(f"b64decode() decoded {len(decoded)} bytes that are not UTF-8 text") from None
 
 
-def b64decode_bytes(value: str | bytes) -> bytes:
-    """Decode standard base64 without interpreting the resulting bytes as text."""
-    if isinstance(value, str) and not value.isascii():
-        raise ValueError("b64decode_bytes() got text that is not base64: it holds a character outside ASCII")
-    try:
-        return base64.b64decode(_to_bytes("b64decode_bytes", value), validate=True)
-    except binascii.Error as e:
-        raise ValueError(f"b64decode_bytes() got text that is not base64 ({e})") from None
+def b64decode_bytes(value: str | bytes, urlsafe: bool = False) -> bytes:
+    """Decode base64 to bytes, with optional padding and URL-safe alphabet."""
+    return _decode_base64("b64decode_bytes", value, urlsafe)
 
 
 def hex_bytes(value: str) -> bytes:
