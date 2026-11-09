@@ -1,0 +1,78 @@
+{
+    "description": "open, send and expect a reply that names what send() returned, save from it and check it, then close",
+    "substitutions": [
+        {
+            "vars": {
+                "op": "ping"
+            }
+        }
+    ],
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "localhost"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "hello",
+            "connection": {
+                "name": "dev",
+                "open": true
+            },
+            "response": [
+                {
+                    "verify": {
+                        "jmespath": {
+                            "greeting": "hello"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "ping",
+            "connection": {
+                "name": "dev",
+                "send": {
+                    "op": "{{ op }}"
+                },
+                "expect": {
+                    "match": {
+                        "op": "pong",
+                        "seq": "{{ sent.seq }}"
+                    },
+                    "timeout": "{{ 1 + 1 }}"
+                }
+            },
+            "response": [
+                {
+                    "save": {
+                        "jmespath": {
+                            "server_time": "time"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "expressions": [
+                            "{{ message.op == 'pong' and sent.seq > 0 and server_time > 0 }}"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "bye",
+            "connection": {
+                "name": "dev",
+                "send": {
+                    "op": "bye"
+                },
+                "close": true
+            }
+        }
+    ]
+}

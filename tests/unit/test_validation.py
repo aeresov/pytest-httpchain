@@ -18,6 +18,7 @@ import pytest_httpchain.validation.validate as validation_validate
 from pytest_httpchain.body_schema import BodySchema
 from pytest_httpchain.models import JMESPathMatcher
 from pytest_httpchain.validation import SEVERITY, DiagnosticCode, DiscoveryError, load_scenario, resolve_root_path, validate_paths, validate_scenario
+from pytest_httpchain.validation.deep import _method_problem
 from tests.unit.helpers import LOADABLE_BUT_DEEP, TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, nested, on_bounded_stack
 
 C = DiagnosticCode
@@ -41,6 +42,15 @@ def _codes(result):
 
 def _stage(**fields):
     return {"name": "s", "request": {"url": "http://server/x"}, "response": [{"verify": {"status": 200}}], **fields}
+
+
+def _connection_stage(name="c", response=None, **step):
+    """A stage on the connection ``dev`` (`_DEV`), declared as ``step``."""
+    stage = {"name": name, "connection": {"name": "dev", **step}}
+    return stage if response is None else {**stage, "response": response}
+
+
+_DEV = {"connections": {"dev": {"adapter": "userfuncs:GoodAdapter"}}}
 
 
 def _write(directory, stages, **top):
@@ -193,6 +203,23 @@ def _skip_if_ancestors_set_a_rootdir(tmp_path):
         # ssl.verify's path a template completes is the one the runtime
         # renders and opens, known only then.
         "deep_ssl_verify_templated.json",
+        # A connection stage needs no verify step (no HTTPCHAIN005); its send,
+        # its expect's timeout and match values (which see `sent`) and its
+        # response steps (which see `message` and `sent`) are all in scope.
+        "connection_stage_ok.json",
+        # params read a scenario substitution, a scenario fixture (also in
+        # connect_timeout) and an earlier stage's save, never 016/017.
+        "connection_params_ok.json",
+        # A close a stage may skip leaves the connection maybe-closed, which
+        # the runtime reports if it comes to that (no HTTPCHAIN044).
+        "connection_close_maybe_skipped.json",
+        # The first stage opens the never-opened connection implicitly; after
+        # its close, open: true connects again.
+        "connection_reopen_ok.json",
+        # Adapters the plugin can use: plain, static and class methods, a
+        # constructor's optional param, one taking any keyword; and a verify
+        # function on a connection stage, called with message=.
+        "deep_connection_ok.json",
     ],
 )
 def test_clean_fixture_has_no_diagnostics(datadir, fixture):
@@ -598,6 +625,47 @@ DIAGNOSED = [
         "escaped_braces_in_jmespath_key.json",
         [(C.TEMPLATE_IN_KEY, "stages[0].response[0].verify.jmespath", r"but a verify.jmespath key is never rendered, so JMESPath evaluates it as written")],
     ),
+    # A connection stage has a message, not an HTTP response: what only an
+    # HTTP stage has fails it (or does nothing), one finding per field.
+    ("connection_unsupported_status.json", [(C.CONNECTION_STAGE_UNSUPPORTED, "stages[0].response[0].verify.status", r"^Stage 'c': verify\.status checks an HTTP response")]),
+    # Set at all: the default value, written, is refused too.
+    ("connection_unsupported_response_codec.json", [(C.CONNECTION_STAGE_UNSUPPORTED, "stages[0].response_codec", "it does nothing here. Remove it")]),
+    ("connection_unsupported_parallel.json", [(C.CONNECTION_STAGE_UNSUPPORTED, "stages[0].parallel", "parallel repeats an HTTP request")]),
+    ("connection_unsupported_save_regex.json", [(C.CONNECTION_STAGE_UNSUPPORTED, "stages[0].response[0].save.regex", "Save from the message with save.jmespath")]),
+    # A read of the response namespace is this, not an undefined name (003).
+    ("connection_unsupported_response_read.json", [(C.CONNECTION_STAGE_UNSUPPORTED, "stages[0].response[0]", r"reads 'response'.* as 'message'")]),
+    ("connection_undefined.json", [(C.UNDEFINED_CONNECTION, "stages[0].connection.name", r"connection 'devv' is not one of the scenario's connections \(it declares 'dev'\)")]),
+    # A step whose subject is the message, on a stage that takes none: no
+    # expect (an implicit open binds none), or an absent one.
+    ("connection_no_message.json", [(C.NO_MESSAGE, "stages[0].response[0].verify.jmespath", r"takes none \(it has no expect")]),
+    ("connection_no_message_absent.json", [(C.NO_MESSAGE, "stages[0].response[0].save.user_functions", r"its expect is absent: true")]),
+    # Any other step runs there, and reads `message` as an undefined name.
+    ("connection_message_undefined.json", [(C.UNDEFINED_VAR, "stages[0].response", r"\['message'\]")]),
+    # Closed by an unskippable stage, with no open: true since: never reopened implicitly.
+    ("connection_not_open_after_close.json", [(C.CONNECTION_NOT_OPEN, "stages[2].connection", r"^Stage 'late': connection 'dev' is closed by then, by stage 'bye'")]),
+    # A parametrized closer: its second instance finds its own close.
+    ("connection_parametrized_closer.json", [(C.CONNECTION_NOT_OPEN, "stages[0].connection", "after its first parametrize instance")]),
+    # The stage's binding is layered over every user name.
+    (
+        "connection_reserved_message_var.json",
+        [(C.RESERVED_MESSAGE_NAME, "stages[0].response", r"^Stage 'c': 'message' is a scenario substitution, but .* the message the stage took")],
+    ),
+    ("connection_reserved_message_save.json", [(C.RESERVED_MESSAGE_NAME, "stages[0].response[0].save", "save step produced the reserved name 'message'")]),
+    # params render when a stage opens the connection, against scenario
+    # names and earlier saves only, reported once, at the field.
+    ("connection_params_stage_fixture.json", [(C.UNDEFINED_VAR, "connections.dev.params", r"only a stage defines .* and stage 'hello' opens it")]),
+    ("connection_params_forward_ref.json", [(C.FORWARD_REF, "connections.dev.params", r"stage 'hello' opens it before stage 'lookup' saves it")]),
+    ("connection_params_skippable_save.json", [(C.UNDEFINED_VAR, "connections.dev.params", r"when stage 'hello' opens it, which only stage 'lookup' saves, and it has skip_if")]),
+    # The stage-level wording and severity: params fail the stage that opens the connection.
+    ("connection_params_uncalled_builtin.json", [(C.UNCALLED_BUILTIN, "connections.dev.params", "fails the stage that opens connection 'dev'. Write now()")]),
+    ("connection_params_invalid_expression.json", [(C.INVALID_EXPRESSION, "connections.dev.params", "rendering it fails the stage that opens connection 'dev'")]),
+    # A match object is written as verify.jmespath is, and judged so.
+    (
+        "connection_match_contradiction.json",
+        [(C.CONTAINS_CONTRADICTION, "stages[0].connection.expect.match.tags", r"expect\.match 'tags' verification both requires and forbids \"a\"")],
+    ),
+    ("connection_match_key_template.json", [(C.TEMPLATE_IN_KEY, "stages[0].connection.expect.match", "an expect.match key is never rendered")]),
+    ("connection_send_undefined.json", [(C.UNDEFINED_VAR, "stages[0].connection", r"connection references potentially undefined variable\(s\): \['nowhere'\]")]),
     # Deep findings (opt-in) are warnings, never errors.
     ("deep_import_missing.json", [(C.IMPORT_FAILED, "stages[0].response[0].verify.user_functions[0]", "'does_not_exist' not found")]),
     ("deep_import_bad_module.json", [(C.IMPORT_FAILED, "stages[0].request.auth", "nosuchmodule_xyz")]),
@@ -606,6 +674,23 @@ DIAGNOSED = [
     # verify and save user_functions get `response` injected; anything else required is missing.
     ("deep_sig_missing_arg.json", [(C.MISSING_ARG, "stages[0].response[0].verify.user_functions[0]", "missing required argument 'x'")]),
     ("deep_save_user_function_sig.json", [(C.MISSING_ARG, "stages[0].response[1].save.user_functions[0]", "missing required argument 'x'")]),
+    # On a connection stage the subject is message=, so a function needing response= misses it.
+    ("deep_connection_user_function_sig.json", [(C.MISSING_ARG, "stages[0].response[0].verify.user_functions[0]", "missing required argument 'response'")]),
+    # A connection's adapter, as the plugin uses it.
+    ("deep_adapter_import_missing.json", [(C.ADAPTER_INVALID, "connections.dev.adapter", "cannot import adapter 'userfuncs:NoSuchAdapter'")]),
+    ("deep_adapter_not_a_class.json", [(C.ADAPTER_INVALID, "connections.dev.adapter", "is not a class")]),
+    ("deep_adapter_missing_method.json", [(C.ADAPTER_INVALID, "connections.dev.adapter", r"has no close\(\) method")]),
+    # Inherited from the published Protocol, whose stub does nothing: as good as missing.
+    ("deep_adapter_protocol_stub.json", [(C.ADAPTER_INVALID, "connections.dev.adapter", r"has no receive\(\) method \(only ProtocolAdapter's stub")]),
+    # A plain method binds the instance first, so send(self) cannot take the message.
+    ("deep_adapter_bad_signature.json", [(C.ADAPTER_INVALID, "connections.dev.adapter", r"send\(self\) cannot be called as send\(message\)")]),
+    # A staticmethod binds no instance, so its `self` takes the timeout.
+    ("deep_adapter_bad_staticmethod.json", [(C.ADAPTER_INVALID, "connections.dev.adapter", r"receive\(self, timeout\) cannot be called as receive\(timeout\)")]),
+    ("deep_adapter_unknown_param.json", [(C.ADAPTER_INVALID, "connections.dev.params", "unexpected argument 'hots'")]),
+    ("deep_adapter_missing_param.json", [(C.ADAPTER_INVALID, "connections.dev.params", "missing required argument 'host'")]),
+    # Without an __init__ of its own, a Protocol subclass takes no argument,
+    # whatever typing's placeholder signature says.
+    ("deep_adapter_protocol_no_init.json", [(C.ADAPTER_INVALID, "connections.dev.params", "unexpected argument 'host'")]),
     ("deep_sig_unknown_kwarg.json", [(C.UNKNOWN_ARG, "stages[0].response[0].verify.user_functions[0]", "unexpected argument 'y'")]),
     # auth gets nothing injected, and the keyword-only call convention can
     # never fill a positional-only parameter.
@@ -769,6 +854,10 @@ def test_valid_scenario_info(datadir):
     assert "base_url" in info.vars_referenced
     assert "base_url" in info.vars_defined
     assert "user_name" in info.vars_saved
+
+
+def test_scenario_info_lists_connections(datadir):
+    assert validate_scenario(datadir / "connection_stage_ok.json").scenario_info.connections == ["dev"]
 
 
 def test_deep_schema_check_that_crashes_is_one_finding(datadir, monkeypatch):
@@ -1144,6 +1233,27 @@ class TestJmespathExpectationMerge:
         scenario, _ = load_scenario(write({"verify": {"jmespath": {"meta": {"$include": "common.json#/checks/verify/jmespath/meta"}}}}))
         assert scenario.stages[0].response[0].verify.jmespath["meta"].eq == {"page": 1}
 
+    @pytest.mark.parametrize(
+        ("match", "where"),
+        [
+            pytest.param({"tags": ["b"]}, "tags", id="array-not-concatenated"),
+            pytest.param({"price": {"lt": 100}}, "price", id="matcher-keys-not-combined"),
+        ],
+    )
+    def test_connection_match_merges_as_expectations(self, tmp_path, match, where):
+        """A connection's expect.match object is written as verify.jmespath
+        is, and merges as it does."""
+        (tmp_path / "common.json").write_text(json.dumps({"expect": {"match": self.CHECKS["verify"]["jmespath"]}}))
+        stage = _connection_stage(expect={"$merge": "common.json#/expect", "match": match})
+        result = validate_scenario(_write(tmp_path, [stage], **_DEV))
+        assert [(d.code, d.message) for d in result.diagnostics] == [(C.REF_ERROR, f"JSON reference resolution error: Merge conflict at match.{where}")]
+
+    def test_connection_match_other_expressions_merge(self, tmp_path):
+        (tmp_path / "common.json").write_text(json.dumps({"expect": {"match": {"tags": ["a"]}}}))
+        stage = _connection_stage(expect={"$merge": "common.json#/expect", "match": {"tags": ["a"], "id": 1}})
+        scenario, _ = load_scenario(_write(tmp_path, [stage], **_DEV))
+        assert scenario.stages[0].connection.expect.match == {"tags": ["a"], "id": 1}
+
 
 @pytest.mark.parametrize(
     ("stages", "top", "expected"),
@@ -1215,6 +1325,94 @@ class TestJmespathExpectationMerge:
             [],
             id="absolute-uri-ref-in-inline-schema",
         ),
+        # Each refused field is a finding of its own, and no 007 besides.
+        pytest.param(
+            [_connection_stage(expect={}, response=[{"verify": {"body": {"contains": ["a"], "not_contains": ["a"]}, "headers": {"x": "y"}}}])],
+            _DEV,
+            [C.CONNECTION_STAGE_UNSUPPORTED] * 3,
+            id="connection-stage-text-matchers",
+        ),
+        # A `response` of the user's own is theirs to read on a connection
+        # stage, and 027 does not fire where no HTTP stage has response steps.
+        pytest.param(
+            [_connection_stage(expect={}, response=[{"verify": {"expressions": ["{{ response == 'mine' }}"]}}])],
+            {**_DEV, "substitutions": [{"vars": {"response": "mine"}}]},
+            [],
+            id="connection-stage-reads-users-response",
+        ),
+        pytest.param(
+            [_stage(), _connection_stage(expect={}, response=[{"verify": {"expressions": ["{{ response == 'mine' }}"]}}])],
+            {**_DEV, "substitutions": [{"vars": {"response": "mine"}}]},
+            [C.RESERVED_NAME],
+            id="reserved-response-with-an-http-stage",
+        ),
+        # `sent` is layered over the expect's match values too.
+        pytest.param(
+            [_connection_stage(send={"op": "ping"}, expect={"match": {"id": "{{ sent.id }}"}})],
+            {**_DEV, "substitutions": [{"vars": {"sent": {"id": 1}}}]},
+            [C.RESERVED_MESSAGE_NAME],
+            id="reserved-sent-in-expect",
+        ),
+        # A stage that does not bind `message` shadows nothing.
+        pytest.param(
+            [_connection_stage(send={"op": "{{ message }}"}, response=[{"verify": {"expressions": ["{{ message == 'hi' }}"]}}])],
+            {**_DEV, "substitutions": [{"vars": {"message": "hi"}}]},
+            [],
+            id="message-not-bound-not-shadowed",
+        ),
+        # `sent` exists only once the stage sends: not in send itself, nor in
+        # a stage that does not send.
+        pytest.param([_connection_stage(send={"id": "{{ sent }}"})], _DEV, [C.UNDEFINED_VAR], id="sent-in-send"),
+        pytest.param([_connection_stage(expect={"match": {"id": "{{ sent.id }}"}})], _DEV, [C.UNDEFINED_VAR], id="sent-without-send"),
+        # The match string is never rendered, nor the connection's name.
+        pytest.param([_connection_stage(expect={"match": "id == `1`"})], _DEV, [], id="match-string-not-read"),
+        # An always_run stage after the close fails too when the chain did not abort.
+        pytest.param(
+            [_connection_stage("bye", send={"op": "bye"}, close=True), {**_connection_stage("late", send={"op": "x"}), "always_run": True}],
+            _DEV,
+            [C.CONNECTION_NOT_OPEN],
+            id="always-run-after-close",
+        ),
+        # A closer pytest never calls closes nothing.
+        pytest.param(
+            [_connection_stage("hello", open=True), {**_connection_stage("bye", close=True), "marks": ["skip"]}, _connection_stage("late", send={"op": "x"})],
+            _DEV,
+            [],
+            id="never-called-closer",
+        ),
+        # A parametrized closer that reopens each instance is fine, and the
+        # stage after it needs open: true.
+        pytest.param(
+            [{**_connection_stage("each", open=True, close=True), "parametrize": [{"individual": {"n": [1, 2]}}]}, _connection_stage("late", send={"op": "x"})],
+            _DEV,
+            [C.CONNECTION_NOT_OPEN],
+            id="parametrized-reopening-closer",
+        ),
+        # A parametrize whose values are a template: one instance, or more, so no finding.
+        pytest.param(
+            [{**_connection_stage("each", send={"op": "x"}, close=True), "parametrize": [{"individual": {"n": "{{ ns }}"}}]}],
+            {**_DEV, "substitutions": [{"vars": {"ns": [1]}}]},
+            [C.PARAMETRIZE_COLLECTION_RESOLUTION],
+            id="parametrized-closer-count-unknown",
+        ),
+        # A skipped implicit opener leaves the next stage to open it: params
+        # are checked at both, and a save between them reaches only the second.
+        pytest.param(
+            [
+                {**_connection_stage("maybe", send={"op": "x"}), "skip_if": "{{ true }}"},
+                {"name": "login", "request": {"url": "http://server/x"}, "response": [{"verify": {"status": 200}}, {"save": {"jmespath": {"token": "t"}}}]},
+                _connection_stage("then", send={"op": "y"}),
+            ],
+            {"connections": {"dev": {"adapter": "userfuncs:GoodAdapter", "params": {"token": "{{ token }}"}}}},
+            [C.FORWARD_REF],
+            id="params-at-every-possible-opener",
+        ),
+        # A connection no stage opens renders nothing.
+        pytest.param([_stage()], {"connections": {"dev": {"adapter": "userfuncs:GoodAdapter", "params": {"x": "{{ nowhere }}"}}}}, [], id="params-never-rendered"),
+        # 043 only for a step that reads the message; save.substitutions does not.
+        pytest.param([_connection_stage(send={"op": "x"}, response=[{"save": {"substitutions": [{"vars": {"n": 1}}]}}])], _DEV, [], id="no-message-other-steps-run"),
+        # An open: true without an expect has connect()'s result as its message.
+        pytest.param([_connection_stage(open=True, response=[{"save": {"jmespath": {"g": "greeting"}}}])], _DEV, [], id="explicit-open-message"),
     ],
 )
 def test_inline_scenario_diagnostics(tmp_path, stages, top, expected):
@@ -1519,5 +1717,21 @@ class TestDiagnosticRegistry:
 
     def test_deep_findings_are_warnings(self):
         """The docs page's promise: deep validation never fails a scenario."""
-        deep = (C.REFERENCED_FILE_NOT_FOUND, C.SCHEMA_FILE_INVALID, C.IMPORT_FAILED, C.UNKNOWN_ARG, C.MISSING_ARG)
+        deep = (C.REFERENCED_FILE_NOT_FOUND, C.SCHEMA_FILE_INVALID, C.IMPORT_FAILED, C.UNKNOWN_ARG, C.MISSING_ARG, C.ADAPTER_INVALID)
         assert {SEVERITY[code] for code in deep} == {"warning"}
+
+
+class TestAdapterMethodProblems:
+    """How `validate --deep` judges one adapter method (HTTPCHAIN046), for
+    the declarations no fixture adapter uses."""
+
+    def test_an_attribute_that_is_no_method(self):
+        assert _method_problem(type("A", (), {"close": 3}), "close", ()) == "has a close that is no method (int)"
+
+    def test_a_callable_object_binds_no_instance(self):
+        class Callable:
+            def __call__(self, timeout):
+                return None
+
+        assert _method_problem(type("A", (), {"receive": Callable()}), "receive", ("timeout",)) is None
+        assert "cannot be called as close()" in str(_method_problem(type("A", (), {"close": Callable()}), "close", ()))

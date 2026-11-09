@@ -1,0 +1,44 @@
+{
+    "description": "a close a stage may skip leaves the connection maybe-closed: the runtime tells",
+    "substitutions": [
+        {
+            "vars": {
+                "done": false
+            }
+        }
+    ],
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "localhost"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "hello",
+            "connection": {
+                "name": "dev",
+                "open": true
+            }
+        },
+        {
+            "name": "bye",
+            "connection": {
+                "name": "dev",
+                "close": true
+            },
+            "skip_if": "{{ not done }}"
+        },
+        {
+            "name": "again",
+            "connection": {
+                "name": "dev",
+                "send": {
+                    "op": "ping"
+                }
+            }
+        }
+    ]
+}

@@ -294,3 +294,49 @@ def test_mapping_form_response_step_ordering_matches_list_form():
     )
     # The re-save precedes the reference, so the consumer reads its own value.
     assert flow.stages[1].consumes == []
+
+
+_CONNECTIONS = {"connections": {"dev": {"adapter": "m:A", "params": {"token": "{{ token }}"}}}}
+
+
+def _connection(name: str, **step) -> dict:
+    return {"name": name, "connection": {"name": "dev", **step}}
+
+
+def test_connection_stage_kind_and_actions():
+    """A connection stage shows as its connection, method and url still text,
+    with the actions it sets in the order it takes them."""
+    flow = analyze_dataflow(*_scenario([_stage("http"), _connection("talk", close=True, send={"a": 1}, expect={}, open=True)], **_CONNECTIONS))
+    http, talk = flow.stages
+    assert (http.kind, http.connection, http.actions) == ("request", None, [])
+    assert (talk.kind, talk.connection, talk.actions, talk.method, talk.url) == ("connection", "dev", ["open", "send", "expect", "close"], "CONNECTION", "dev")
+
+
+def test_connection_step_consumes_what_it_renders():
+    """send, and the match object's values and timeout, which see ``sent``
+    over an earlier save of that name; never the match object's keys."""
+    stages = [
+        _producer(a="a", b="b", c="c", sent="s"),
+        _connection("talk", send={"x": "{{ a }}"}, expect={"match": {"id": "{{ b }}", "seq": "{{ sent.seq }}"}, "timeout": "{{ c }}"}),
+    ]
+    flow = analyze_dataflow(*_scenario(stages, connections={"dev": {"adapter": "m:A"}}))
+    assert [s.consumes for s in flow.stages] == [[], ["a", "b", "c"]]
+
+
+def test_params_are_consumed_by_each_possible_opener():
+    """The connection's params render where it may open: here the first
+    stage on it may skip, so the next one may open it too."""
+    stages = [_producer("login", token="t"), {**_connection("maybe", send={"a": 1}), "skip_if": "{{ true }}"}, _connection("then", expect={})]
+    flow = analyze_dataflow(*_scenario(stages, **_CONNECTIONS))
+    assert [s.consumes for s in flow.stages] == [[], ["token"], ["token"]]
+    assert _edges(flow) == [{"producer": 0, "consumer": 1, "vars": ["token"]}, {"producer": 0, "consumer": 2, "vars": ["token"]}]
+
+
+def test_connection_edges_run_from_each_possible_opener():
+    stages = [{**_connection("maybe", send={"a": 1}), "skip_if": "{{ true }}"}, _connection("then", expect={}), _connection("bye", close=True), _connection("again", open=True)]
+    flow = analyze_dataflow(*_scenario(stages, connections={"dev": {"adapter": "m:A"}}))
+    assert [e.model_dump() for e in flow.connection_edges] == [
+        {"opener": 0, "user": 1, "connection": "dev"},
+        {"opener": 0, "user": 2, "connection": "dev"},
+        {"opener": 1, "user": 2, "connection": "dev"},
+    ]

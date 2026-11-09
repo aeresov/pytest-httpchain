@@ -714,6 +714,47 @@ def test_graph_draws_an_edge_from_the_producer_a_skipped_stage_falls_back_to(ref
     assert result.output.splitlines()[-2:] == ["    S0 -->|token| S2", "    S1 -.->|token| S2"]
 
 
+@pytest.fixture
+def connection_scenario(tmp_path) -> Path:
+    """A login whose token the connection's params read, then three stages on the connection."""
+    stages = [
+        {**_stage("login", "https://x.test/login"), "response": [{"save": {"jmespath": {"token": "t"}}}]},
+        {"name": "hello", "connection": {"name": "dev", "open": True}},
+        {"name": "ping", "connection": {"name": "dev", "send": {"op": "ping"}, "expect": {}}},
+        {"name": "bye", "connection": {"name": "dev", "drain": True, "close": True}},
+    ]
+    return _write(tmp_path / "test_conn.http.json", {"connections": {"dev": {"adapter": "m:A", "params": {"token": "{{ token }}"}}}, "stages": stages})
+
+
+def test_show_text_reports_connection_stages(connection_scenario):
+    """A connection stage shows its connection and the actions it sets; the
+    stage that opens the connection consumes what its params read."""
+    result = runner.invoke(app, ["show", str(connection_scenario)])
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[3:] == [
+        "1 · login    GET https://x.test/login",
+        "    saves:    token",
+        "2 · hello    CONNECTION dev open",
+        "    consumes: token (from #1 login)",
+        "3 · ping    CONNECTION dev send·expect",
+        "4 · bye    CONNECTION dev drain·close",
+    ]
+
+
+def test_show_json_reports_connection_stages(connection_scenario):
+    result = runner.invoke(app, ["show", "--format", "json", str(connection_scenario)])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert [(s["kind"], s["connection"], s["method"], s["url"]) for s in data["stages"]][1] == ("connection", "dev", "CONNECTION", "dev")
+    assert data["connection_edges"] == [{"opener": 1, "user": 2, "connection": "dev"}, {"opener": 1, "user": 3, "connection": "dev"}]
+
+
+def test_graph_draws_dashed_connection_edges_from_the_opener(connection_scenario):
+    result = runner.invoke(app, ["graph", str(connection_scenario)])
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[-3:] == ["    S0 -->|token| S1", '    S1 -.->|"connection: dev"| S2', '    S1 -.->|"connection: dev"| S3']
+
+
 def test_graph_of_a_stageless_scenario_is_still_valid_mermaid(tmp_path):
     """An empty `stages` list has no nodes; the output must stay a parseable
     flowchart with a comment rather than a bare header or a crash."""

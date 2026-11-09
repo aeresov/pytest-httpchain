@@ -1,0 +1,39 @@
+{
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "{{ device_host }}"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "hello",
+            "connection": {
+                "name": "dev",
+                "open": true
+            }
+        },
+        {
+            "name": "lookup",
+            "request": {
+                "url": "http://server/x"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "device_host": "host"
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

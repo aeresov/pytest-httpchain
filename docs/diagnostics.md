@@ -59,13 +59,26 @@ not free their numbers for reuse.
 | `HTTPCHAIN038` | error | The same in a template resolved before any stage runs, so that nothing runs: a scenario-level one (`substitutions`, `auth`, `ssl`, `client`), which fails scenario initialization and every stage with it (the scenario's collection, for `substitutions` a templated parametrize value resolves there), or a stage's parametrize value, which fails the scenario's collection |
 | `HTTPCHAIN039` | error | A directory given to [`validate`](cli.md#validate) holds no scenario file: none named `test_<name>.<suffix>.json` or `.jsonc` for the suffix searched by, outside the directories pytest skips — so a mistyped path, or a suffix that names no file, cannot pass the gate as an empty run |
 | `HTTPCHAIN040` | warning | A parallel stage's [`stats_as`](advanced/parallel.md#saving-the-stats) names a variable its own response saves too — the stats are saved after the response steps' saves and replace that one, which no later stage can read. When the stage runs, a name only a `user_functions` save returns, which `validate` cannot see, raises the same warning |
+| `HTTPCHAIN041` | error | A connection stage sets what only an HTTP stage has, which fails it (or, for `response_codec`, does nothing): `parallel`, `response_codec` (any value, its default included), a verify step's `status`, `headers` or `body` text matchers (`contains`, `not_contains`, `matches`, `not_matches`), `save.regex`, or a response step that reads the `response` namespace. One finding per field; check the message with `verify.jmespath` instead |
+| `HTTPCHAIN042` | error | A stage's `connection.name` is not one of the scenario's `connections` |
+| `HTTPCHAIN043` | error | A connection stage that takes no message (no `expect`, or an `absent` one, and no `open: true` without an `expect`) has a response step that reads one: `verify.jmespath`, `verify.body.schema`, `save.jmespath`, or verify or save `user_functions` (called with `message=`). Other steps run there; a read of `message` in one is undefined (`HTTPCHAIN003`) |
+| `HTTPCHAIN044` | error | A stage without `open: true` uses a connection that is closed by then whatever ran before it: an earlier stage that cannot skip closed it (`close: true`) and nothing reopened it, or, from its second parametrize instance on, the stage's own `close: true`. A closed connection is never reopened implicitly, so the stage fails; set `open: true` to connect again. A close in a stage that may skip is not reported |
+| `HTTPCHAIN045` | warning | User-defined name `message` or `sent` (a substitution, fixture, parametrize or foreach parameter, or a save) where a connection stage binds that name: in its response steps (and, for `sent`, its `expect`) the stage's message, or what its `send()` returned, shadows it. Also raised for a save of that name on such a stage, at runtime too for a name only a `user_functions` save returns |
+| `HTTPCHAIN046` | warning | A connection's adapter cannot be used (deep): it cannot be imported, or is no class; a method the plugin calls (`connect(timeout)`, `send(message)`, `receive(timeout)`, `close()`) is missing, only `ProtocolAdapter`'s stub, or cannot take those arguments; or the constructor does not take the connection's `params` (an unknown one, or a required one missing) |
 
 ## Deep (opt-in) checks
 
-`HTTPCHAIN020`–`HTTPCHAIN024` come from *deep* validation
-(`validate --deep`), which imports your user modules and touches the
-filesystem — so it is opt-in and never runs at pytest collection time. Deep
-findings are always warnings; pair `--deep` with `--strict` to fail CI on
+These codes come from *deep* validation (`validate --deep`), which imports
+your user modules and touches the filesystem — so it is opt-in and never runs
+at pytest collection time:
+
+- `HTTPCHAIN020`, `HTTPCHAIN021`: referenced files and body schemas;
+- `HTTPCHAIN022`, `HTTPCHAIN023`, `HTTPCHAIN024`: user functions, their
+  imports and signatures (a verify or save function on a connection stage is
+  checked as called with `message=`);
+- `HTTPCHAIN046`: connection adapters.
+
+Deep findings are always warnings; pair `--deep` with `--strict` to fail CI on
 them.
 
 ## Filtering collection warnings

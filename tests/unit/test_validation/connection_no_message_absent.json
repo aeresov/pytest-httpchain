@@ -1,0 +1,31 @@
+{
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "localhost"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "c",
+            "connection": {
+                "name": "dev",
+                "expect": {
+                    "match": "op == 'push'",
+                    "absent": true
+                }
+            },
+            "response": [
+                {
+                    "save": {
+                        "user_functions": [
+                            "userfuncs:needs_message"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

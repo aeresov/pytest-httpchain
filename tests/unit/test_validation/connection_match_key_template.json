@@ -1,0 +1,23 @@
+{
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "localhost"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "c",
+            "connection": {
+                "name": "dev",
+                "expect": {
+                    "match": {
+                        "\"{{ key }}\"": 1
+                    }
+                }
+            }
+        }
+    ]
+}

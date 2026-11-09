@@ -70,16 +70,40 @@ def is_alternatives_position(path: tuple[str | int, ...]) -> bool:
     return _verify_subpath(path) == ("status",)
 
 
+def _expectations_subpath(path: tuple[str | int, ...]) -> tuple[str, tuple[str | int, ...]] | None:
+    """``(the field, the part of the position below it)`` for a raw-JSON
+    position inside a mapping of JMESPath expectations, or None: a step's
+    ``verify.jmespath``, or a connection stage's ``connection.expect.match``,
+    whose object form is written as ``verify.jmespath`` is (one object, so
+    unlike a response step it has no mapping-form variant)."""
+    match path:
+        case ("stages", _, "connection", "expect", "match", *rest):
+            return "expect.match", tuple(rest)
+    subpath = _verify_subpath(path)
+    if subpath is not None and subpath[:1] == ("jmespath",):
+        return "verify.jmespath", subpath[1:]
+    return None
+
+
+def expectations_field(path: tuple[str | int, ...]) -> str | None:
+    """The field a raw-JSON position holding a mapping of JMESPath
+    expectations is (``verify.jmespath`` or ``expect.match``), for a message
+    to name it; None for any other position."""
+    found = _expectations_subpath(path)
+    return found[0] if found is not None and found[1] == () else None
+
+
 def is_jmespath_expectations_position(path: tuple[str | int, ...]) -> bool:
-    """True for raw-JSON positions holding a ``verify.jmespath`` mapping, whose
-    keys are JMESPath expressions rather than names sent on the wire."""
-    return _verify_subpath(path) == ("jmespath",)
+    """True for raw-JSON positions holding a ``verify.jmespath`` mapping, or a
+    connection's ``expect.match`` object, whose keys are JMESPath expressions
+    rather than names sent on the wire."""
+    return expectations_field(path) is not None
 
 
 def is_expected_value_position(path: tuple[str | int, ...]) -> bool:
-    """True for raw-JSON positions holding what one ``verify.jmespath``
-    expression must be (a value it must equal, or a matcher), and for each
-    operand of such a matcher.
+    """True for raw-JSON positions holding what one ``verify.jmespath`` (or
+    ``expect.match``) expression must be (a value it must equal, or a
+    matcher), and for each operand of such a matcher.
 
     An expected value is one value, not a list of checks: a sibling's
     ``["b"]`` concatenated onto a fragment's ``["a"]`` would assert
@@ -96,8 +120,8 @@ def is_expected_value_position(path: tuple[str | int, ...]) -> bool:
     an operand: an array expectation is kept whole before its items are
     reached, and a reference with siblings is an object.
     """
-    subpath = _verify_subpath(path)
-    return subpath is not None and len(subpath) in (2, 3) and subpath[0] == "jmespath"
+    found = _expectations_subpath(path)
+    return found is not None and len(found[1]) in (1, 2)
 
 
 def merges_whole(path: tuple[str | int, ...]) -> bool:

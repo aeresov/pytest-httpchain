@@ -1,0 +1,43 @@
+{
+    "substitutions": [
+        {
+            "vars": {
+                "message": "hi"
+            }
+        }
+    ],
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "localhost"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "c",
+            "connection": {
+                "name": "dev",
+                "send": {
+                    "op": "{{ message }}"
+                },
+                "expect": {
+                    "match": {
+                        "op": "pong"
+                    },
+                    "timeout": 1
+                }
+            },
+            "response": [
+                {
+                    "verify": {
+                        "jmespath": {
+                            "op": "pong"
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}
