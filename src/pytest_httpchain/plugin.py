@@ -496,6 +496,7 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     if (cls := _carrier_class(item)) is not None:
         cls.begin_chain(item.stash.get(_CHAIN_KEY, ()))
         cls.fixture_scopes = _fixture_scopes(item)
+        cls.snapshot_passed_exchanges = _passed_sections_shown(item.config)
 
 
 def _fixture_scopes(item: pytest.Item) -> dict[str, str]:
@@ -702,8 +703,13 @@ def _sections_will_be_shown(config: pytest.Config, report: pytest.TestReport) ->
     needs --xfail-tb). An xdist worker unregisters the terminal reporter and ships
     its sections to the controller, which does the rendering — so there, yes.
     """
-    if report.failed:
-        return True
+    return report.failed or _passed_sections_shown(config)
+
+
+def _passed_sections_shown(config: pytest.Config) -> bool:
+    """Whether pytest prints the sections of a report that did not fail (see
+    `_sections_will_be_shown`): a connection stage that passes then takes its
+    full snapshot (`Carrier.snapshot_passed_exchanges`)."""
     terminal_reporter = config.pluginmanager.get_plugin("terminalreporter")
     if terminal_reporter is None:
         return True

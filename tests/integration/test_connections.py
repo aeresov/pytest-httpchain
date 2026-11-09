@@ -41,6 +41,7 @@ def test_open_send_expect_close_round_trip(run_scenario):
     assert not _readers()
 
 
+@pytest.mark.slow  # its absent expect waits its timeout out
 def test_pushed_messages_queue_until_taken_or_drained(run_scenario):
     """Messages pushed before a stage expects them wait in the queue: a stage
     that sends nothing takes the oldest match from all of it, and drain
@@ -83,12 +84,6 @@ def test_pushed_messages_queue_until_taken_or_drained(run_scenario):
                 _bye(),
             ),
             3,
-        ),
-        # Nothing matching arrives by the deadline: the pong does not count.
-        (
-            "absent-passes",
-            line_json_scenario(connection_stage("quiet", send={"op": "ping", "id": 1}, expect={"match": "push", "absent": True, "timeout": 0.2}), _bye()),
-            2,
         ),
         # The server hangs up: closed waits for that, and its message says
         # how the connection ended (EOFError from receive() is a clean end).
@@ -151,6 +146,15 @@ def test_pushed_messages_queue_until_taken_or_drained(run_scenario):
 )
 def test_connection_steps_pass(run_scenario, name, scenario, passed):
     run_scenario(scenario, ADAPTER).assert_outcomes(passed=passed)
+    assert not _readers()
+
+
+@pytest.mark.slow
+def test_absent_expect_passes_at_its_deadline(run_scenario):
+    """Nothing matching arrives by the deadline: the pong does not count. An
+    absent expect passes only by waiting its timeout out, a real one."""
+    scenario = line_json_scenario(connection_stage("quiet", send={"op": "ping", "id": 1}, expect={"match": "push", "absent": True, "timeout": 0.2}), _bye())
+    run_scenario(scenario, ADAPTER).assert_outcomes(passed=2)
     assert not _readers()
 
 

@@ -5,7 +5,7 @@ import pytest_httpchain.templates.substitution as substitution_module
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsNamespace, VarsSubstitution
 from pytest_httpchain.templates import TemplatesError
-from pytest_httpchain.utils import make_marker, path_segment, process_substitutions, request_content, xdist_group_names
+from pytest_httpchain.utils import INTERRUPTS, describe_exception, make_marker, path_segment, process_substitutions, request_content, xdist_group_names
 
 # The functions these tests import live in a module of their own; see its
 # docstring for why they are not defined here.
@@ -194,3 +194,28 @@ def test_request_content(request_, expected):
 )
 def test_path_segment(key, segment):
     assert path_segment(key) == segment
+
+
+class _Unprintable(Exception):
+    def __str__(self) -> str:
+        raise RuntimeError("no text")
+
+
+@pytest.mark.parametrize(
+    ("error", "described"),
+    [
+        (ValueError("bad frame"), "ValueError: bad frame"),
+        # One without a message is its type alone, not "EOFError: ".
+        (EOFError(), "EOFError"),
+        (_Unprintable(), "_Unprintable: <exception str() failed>"),
+    ],
+    ids=["message", "no-message", "str-raises"],
+)
+def test_describe_exception(error, described):
+    """One description of an exception user code raised, for the carrier's
+    exits and a connection's adapter alike."""
+    assert describe_exception(error) == described
+
+
+def test_interrupts_are_what_stops_a_run():
+    assert INTERRUPTS == (KeyboardInterrupt, SystemExit, pytest.exit.Exception)

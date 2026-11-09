@@ -21,6 +21,7 @@ from pytest_httpchain.plugin import (
     _chain_args,
     _earlier_hops,
     _format_section,
+    _passed_sections_shown,
     _regroup_carrier_items,
     _sections_will_be_shown,
     _warn_on_params_varying_across_stages,
@@ -521,6 +522,13 @@ class TestReportSectionsBuiltOnlyWhenShown:
     )
     def test_sections_will_be_shown(self, pytester, args, failed, expected):
         assert _sections_will_be_shown(pytester.parseconfigure(*args), MagicMock(failed=failed)) is expected
+
+    @pytest.mark.parametrize(("args", "shown"), [((), False), (("-rP",), True), (("-rA",), True), (("--xfail-tb",), True)], ids=["default", "rP", "rA", "xfail-tb"])
+    def test_passed_sections_shown(self, pytester, args, shown):
+        """What a connection stage that passes goes by for its snapshot
+        (`Carrier.snapshot_passed_exchanges`): in full only where pytest
+        prints a passing report's sections."""
+        assert _passed_sections_shown(pytester.parseconfigure(*args)) is shown
 
     def test_worker_without_terminal_reporter_formats_everything(self, pytester):
         """An xdist worker unregisters the terminal reporter and ships its

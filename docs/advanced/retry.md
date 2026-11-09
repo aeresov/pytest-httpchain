@@ -147,10 +147,11 @@ waits anew.
   with the connection still open), and the response steps' checks on the message, as above.
 - **`save`**: a save step that could not take its values from the message.
 - **`request`**: the adapter failed: its constructor, `connect()` or `send()` raised an
-  `OSError` (a refused, reset or timed-out socket), or a `RequestError` it raised with
-  `retryable=True` (`from pytest_httpchain.errors import RequestError`). Anything else an adapter
-  raises is not retried. Nor is the connection ending while the stage waits for a message, unless
-  the stage says `open: true`, so the next attempt connects again.
+  `OSError` (a refused, reset or timed-out socket), an `EOFError` (the other side closing), or a
+  `RequestError` it raised with `retryable=True`
+  (`from pytest_httpchain.errors import RequestError`). Anything else an adapter raises is not
+  retried. Nor is the connection ending while the stage waits for a message, or before it could
+  send, unless the stage says `open: true`, so the next attempt connects again.
 
 Never retried on a connection stage: a step on a connection that is not open (closed by a stage,
 or ended by the other side) without `open: true`; an `absent` expect that saw a matching message;

@@ -49,14 +49,31 @@ class TestStageFields:
                 r"exactly one of: request, connection, got request and connection \[",
                 id="both",
             ),
-            # An explicit null is refused, as the schema (no null branch) refuses it.
-            pytest.param({"request": None}, r"A stage's request cannot be null", id="null-request"),
-            pytest.param({"request": None, "connection": {"name": "c", "open": True}}, r"A stage's request cannot be null", id="null-beside-connection"),
+            # A null kind is not set, so it alone is no kind at all.
+            pytest.param({"request": None}, r"A stage sets exactly one of: request, connection \[type", id="null-request"),
+            pytest.param({"request": None, "connection": None}, r"A stage sets exactly one of: request, connection \[type", id="both-null"),
         ],
     )
     def test_exactly_one_kind(self, fields, message):
         with pytest.raises(ValidationError, match=message):
             Stage.model_validate({"name": "test", **fields})
+
+    @pytest.mark.parametrize(
+        "stage",
+        [
+            pytest.param({"name": "http", "request": {"url": "http://x.test"}}, id="request"),
+            pytest.param({"name": "socket", "connection": {"name": "c", "send": {"op": "ping"}, "expect": {"match": "op == 'pong'"}}}, id="connection"),
+        ],
+    )
+    @pytest.mark.parametrize("dump", [{}, {"mode": "json"}, {"exclude_unset": True}, {"exclude_none": True}], ids=["python", "json", "exclude-unset", "exclude-none"])
+    def test_a_dumped_scenario_validates_again(self, stage, dump):
+        """A model dumped whole writes the kind a stage is not as None: that
+        is a kind not set, so the dump is the scenario it was dumped from.
+        Counted by `model_fields_set`, the None read as a second kind, and no
+        scenario survived `Scenario.model_validate(scenario.model_dump())`."""
+        scenario = Scenario.model_validate({"connections": {"c": {"adapter": "m:C"}}, "stages": [stage]})
+        again = Scenario.model_validate(scenario.model_dump(**dump))
+        assert again.model_dump() == scenario.model_dump()
 
     def test_connection_stage(self):
         stage = Stage.model_validate({"name": "test", "connection": {"name": "device", "open": True}})

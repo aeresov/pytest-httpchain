@@ -1000,7 +1000,8 @@ class ConnectionLifecycle:
 
     openers: tuple[int, ...]
     """The stages that may open it, in order: one with ``open: true``, and
-    one that may find it never opened (the runtime's implicit open)."""
+    one that sends or waits and may find it never opened (the runtime's
+    implicit open)."""
     sessions: Mapping[int, frozenset[int]]
     """For each stage using it, the openers before it whose session it may
     use (never itself)."""
@@ -1016,14 +1017,20 @@ type _ConnectionState = tuple[str, int]
 _NEVER_OPENED: _ConnectionState = ("never", -1)
 
 
+def _uses_connection(step: ConnectionStep) -> bool:
+    """Whether the step sends or waits: what the runtime opens a connection
+    never opened for. One that only drains or closes has nothing to do to it."""
+    return step.send is not None or step.expect is not None
+
+
 def _after_connection_step(state: _ConnectionState, step: ConnectionStep, i: int) -> _ConnectionState:
     """The state stage ``i``'s connection ``step`` leaves, run from ``state``."""
     kind, at = state
-    if step.open or kind == "never":
+    if step.open or (kind == "never" and _uses_connection(step)):
         return ("closed", i) if step.close else ("open", i)
     if kind == "open":
         return ("closed", i) if step.close else ("open", at)
-    return state  # closed: the stage fails, and changes nothing
+    return state  # never opened: nothing to drain or close; closed: the stage fails
 
 
 def connection_lifecycles(scenario: Scenario, scopes: list[StageScopes] | None = None) -> dict[str, ConnectionLifecycle]:
@@ -1031,8 +1038,9 @@ def connection_lifecycles(scenario: Scenario, scopes: list[StageScopes] | None =
     stages that name it, tracking every state it may be in, as the carrier
     moves it (`carrier.Carrier._execute_connection_attempt`).
 
-    A stage with ``open: true`` opens it, as does the first stage to find it
-    never opened; one that closes it leaves it closed, whatever its outcome;
+    A stage with ``open: true`` opens it, as does the first stage that sends
+    or waits to find it never opened (one that only drains or closes does
+    nothing to it then); one that closes it leaves it closed, whatever its outcome;
     one that finds it closed without ``open: true`` fails. A stage pytest
     never calls, or whose ``skip_if`` is true, does nothing to it; one with a
     `SkipCause` may do nothing, so it only widens the states (a skippable
@@ -1065,7 +1073,7 @@ def connection_lifecycles(scenario: Scenario, scopes: list[StageScopes] | None =
             starts = [states] if instances == 1 else [states, run(states)]
             definite = starts if instances is not None else starts[:1]
             seen = frozenset().union(*starts)
-            if step.open or _NEVER_OPENED in seen:
+            if step.open or (_NEVER_OPENED in seen and _uses_connection(step)):
                 openers.append(i)
             if not step.open:
                 if used := frozenset(at for kind, at in seen if kind == "open" and at != i):

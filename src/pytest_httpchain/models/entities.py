@@ -1480,7 +1480,8 @@ class ConnectionStep(StrictModel):
 
 def _no_null_branch(schema: JsonDict) -> None:
     """A stage kind's schema: the kind itself, without the null branch and
-    default its Optional type adds; null is refused (`Stage._one_kind`)."""
+    default its Optional type adds: a scenario file writes the one kind
+    the stage is."""
     schema.pop("default", None)
     branches = schema.get("anyOf")
     if isinstance(branches, list) and {"type": "null"} in branches:
@@ -1499,8 +1500,9 @@ class Stage(Marked, Fixtured, Descripted):
     KINDS: ClassVar[tuple[str, ...]] = ("request", "connection")
 
     # Exactly one kind: the schema says so too. Neither field has a null
-    # branch in it (`_no_null_branch`), so an editor's oneOf agrees with
-    # `_one_kind`, which refuses an explicit null as well.
+    # branch in it (`_no_null_branch`), so an editor's oneOf holds a scenario
+    # file to one kind written out; `_one_kind` counts a null as not set, as
+    # a dumped model writes the kind a stage is not.
     model_config = ConfigDict(json_schema_extra={"oneOf": [{"required": ["request"]}, {"required": ["connection"]}]})
 
     name: str = Field(default="", description="Stage name (human-readable).")
@@ -1539,9 +1541,10 @@ class Stage(Marked, Fixtured, Descripted):
 
     @model_validator(mode="after")
     def _one_kind(self) -> Self:
-        declared = [kind for kind in self.KINDS if kind in self.model_fields_set]
-        if nulls := [kind for kind in declared if getattr(self, kind) is None]:
-            raise ValueError(f"A stage's {nulls[0]} cannot be null: a stage sets exactly one of: {', '.join(self.KINDS)}")
+        # By value, as `FileSpec._one_source` counts: a kind left null is not
+        # set, so a stage dumped whole (`model_dump()` writes the other kind
+        # as None) validates again as the stage it was.
+        declared = [kind for kind in self.KINDS if getattr(self, kind) is not None]
         if len(declared) != 1:
             got = f", got {' and '.join(declared)}" if declared else ""
             raise ValueError(f"A stage sets exactly one of: {', '.join(self.KINDS)}{got}")

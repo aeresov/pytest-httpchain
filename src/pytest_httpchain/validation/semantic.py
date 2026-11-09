@@ -780,7 +780,7 @@ def _http_only_fields(stage: Stage, i: int, rendered_steps: list[Any], response_
     refuses on connection stage ``stage``, in document order."""
     if stage.parallel is not None:
         yield f"stages[{i}].parallel", "parallel repeats an HTTP request, and a connection stage takes none: the stage fails when it runs. Remove it."
-    if "response_codec" in stage.model_fields_set:
+    if stage.response_codec != "auto":
         yield (
             f"stages[{i}].response_codec",
             "response_codec decodes an HTTP response's body, and a connection stage's message comes decoded: it does nothing here. Remove it.",
@@ -850,7 +850,8 @@ def _connection_stage_diagnostics(
     it maybe-closed, which the runtime reports if it comes to that.
 
     041, per field, what only an HTTP stage has: ``parallel``,
-    ``response_codec`` (set at all, its default included), a verify step's
+    ``response_codec`` (set to a codec: its default, ``auto``, is how a model
+    dumped whole writes a stage that never set it), a verify step's
     status, headers and body text matchers, ``save.regex``, and a read of the
     ``response`` namespace in a response step. 043, per field, a step that
     reads the stage's message as its subject (``verify.jmespath``, a body

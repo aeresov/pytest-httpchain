@@ -28,12 +28,13 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, NamedTuple, Protocol
 
-import pytest
 from pydantic import BaseModel
 
 from pytest_httpchain.errors import RequestError, StageExecutionError, VerificationError
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.userfunc import UserFunctionError, import_adapter
+from pytest_httpchain.utils import INTERRUPTS as _INTERRUPTS
+from pytest_httpchain.utils import describe_exception
 
 logger = logging.getLogger(__name__)
 
@@ -93,19 +94,6 @@ TEARDOWN_BUDGET = 2.0
 DEBUG_INFO_LIMIT = 4000
 # Where a message is cut in a failure line.
 _SHOWN_LIMIT = 200
-
-# Raised by a call, these stop the run: never taken for a failure.
-_INTERRUPTS = (KeyboardInterrupt, SystemExit, pytest.exit.Exception)
-
-
-def describe_exception(e: BaseException) -> str:
-    """``Type: message`` for an exception an adapter raised, whose ``__str__``
-    may raise in turn."""
-    try:
-        text = str(e)
-    except Exception:
-        text = "<exception str() failed>"
-    return f"{type(e).__name__}: {text}" if text else type(e).__name__
 
 
 class MessageValueError(ValueError):
@@ -171,9 +159,11 @@ def checked_message(value: Any, source: str) -> dict[str, Any]:
 def adapter_error(connection: str, call: str, e: Exception) -> RequestError:
     """``e``, which the adapter of ``connection`` raised from ``call``, as the
     `RequestError` it fails the stage with: retryable when it is an OSError (a
-    refused, reset or timed-out socket), or a stage failure the adapter marked
-    retryable (``RequestError(..., retryable=True)``)."""
-    retryable = isinstance(e, OSError) or (isinstance(e, StageExecutionError) and e.retryable)
+    refused, reset or timed-out socket) or an EOFError (the other side
+    closing, as ``receive()`` reports it: an adapter whose ``connect()`` reads
+    its greeting with it raises that for a handshake cut short), or a stage
+    failure the adapter marked retryable (``RequestError(..., retryable=True)``)."""
+    retryable = isinstance(e, OSError | EOFError) or (isinstance(e, StageExecutionError) and e.retryable)
     error = RequestError(f"Connection '{connection}': {call} failed: {describe_exception(e)}", retryable=retryable)
     error.__cause__ = e
     return error
@@ -194,20 +184,26 @@ def shown_message(message: Any) -> str:
     return text if len(text) <= _SHOWN_LIMIT else f"{text[:_SHOWN_LIMIT]}... ({len(text)} characters)"
 
 
+def dumped_match(match: Any) -> Any:
+    """An ``expect.match`` as the scenario declares it, as JSON data: an
+    object's matchers dumped to the objects they were written as, its
+    templates unrendered."""
+    if isinstance(match, dict):
+        return {key: value.model_dump(mode="json", exclude_unset=True) if isinstance(value, BaseModel) else value for key, value in match.items()}
+    return match
+
+
 def declared_match(match: Any) -> str:
     """An ``expect.match`` as the scenario declares it, for a failure line:
     its templates as written, never their rendered values."""
-    if match is None:
-        return "any message"
-    if isinstance(match, dict):
-        match = {key: value.model_dump(mode="json", exclude_unset=True) if isinstance(value, BaseModel) else value for key, value in match.items()}
-    return shown_message(match)
+    return "any message" if match is None else shown_message(dumped_match(match))
 
 
 def debug_text(adapter: Any) -> str | None:
     """What the adapter's optional ``debug_info()`` says, cut at
-    `DEBUG_INFO_LIMIT`, or None without one. Whatever it raises is its text
-    instead: a report must not fail for it."""
+    `DEBUG_INFO_LIMIT`, or None without one, or when it returns None: nothing
+    to say. Whatever it raises is its text instead: a report must not fail
+    for it."""
     method = getattr(adapter, "debug_info", None)
     if method is None:
         return None
@@ -217,6 +213,8 @@ def debug_text(adapter: Any) -> str | None:
         raise
     except Exception as e:
         return f"<debug_info() failed: {describe_exception(e)}>"
+    if text is None:
+        return None
     if not isinstance(text, str):
         return f"<debug_info() returned {type(text).__name__}, not text>"
     return text if len(text) <= DEBUG_INFO_LIMIT else f"{text[:DEBUG_INFO_LIMIT]}... ({len(text)} characters)"
@@ -284,7 +282,10 @@ class ExpectOutcome:
     it considered that did not match, oldest first; those that arrived within
     `LATE_WINDOW` after a timeout (``late``); how long it waited; how many
     queued messages it left out as older than the stage's send
-    (``earlier``); and the reader's end, if it saw one."""
+    (``earlier``); how many arrived during the wait and were dropped by the
+    inbox_limit before it could look at them (``unseen``); and the reader's
+    end, if it saw one. ``seen`` is the last message it looked at, and
+    ``ended_at`` when it ended (monotonic): what `_Session.late` goes by."""
 
     result: ExpectResult
     waited: float
@@ -292,7 +293,10 @@ class ExpectOutcome:
     considered: tuple[Arrival, ...] = ()
     late: tuple[Arrival, ...] = ()
     earlier: int = 0
+    unseen: int = 0
     end: ReaderEnd | None = None
+    seen: int = 0
+    ended_at: float = 0.0
 
 
 # What a predicate says of a message: None, it matches; a `Miss`, why not.
@@ -426,6 +430,12 @@ class _Session:
         ending wakes it: a wait for a message then ends at once, not at its
         timeout. Whatever ``predicate`` raises (the scenario's own error)
         ends the wait as it is.
+
+        A message that arrived since the last look and is no longer queued
+        was dropped by the inbox_limit before the wait could judge it
+        (``unseen``): a wait that then finds no match cannot say none came.
+        A timed-out wait does not linger for late messages: `late` does, for
+        the one whose failure is reported.
         """
         started = time.monotonic()
         deadline = started + min(timeout, threading.TIMEOUT_MAX)
@@ -433,15 +443,23 @@ class _Session:
         with self._condition:
             earlier = sum(1 for seq, _, _ in self._inbox if seq <= seen) if after is not None else 0
         considered: list[Arrival] = []
+        unseen = 0
+        # A stage that did not send looks at the whole queue first: what is
+        # missing from it then was taken or drained before, not unseen.
+        counting = after is not None
 
         def ended(result: ExpectResult, **fields: Any) -> ExpectOutcome:
-            return ExpectOutcome(result, waited=time.monotonic() - started, considered=tuple(considered), earlier=earlier, **fields)
+            now = time.monotonic()
+            return ExpectOutcome(result, waited=now - started, considered=tuple(considered), earlier=earlier, unseen=unseen, seen=seen, ended_at=now, **fields)
 
         while True:
             with self._condition:
                 fresh = [entry for entry in self._inbox if entry[0] > seen]
                 end = self._end
                 newest = self._seq
+            if counting:
+                unseen += (newest - seen) - len(fresh)
+            counting = True
             if mode != "closed":
                 for seq, arrived, message in fresh:
                     miss = predicate(message) if predicate is not None else None
@@ -459,11 +477,7 @@ class _Session:
                 return ended("closed" if mode == "closed" else "ended", end=end)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                if mode == "absent":
-                    return ended("absent")
-                waited = time.monotonic() - started
-                late = self._late(seen, since)
-                return ExpectOutcome("timeout", waited=waited, considered=tuple(considered), late=late, earlier=earlier)
+                return ended("absent" if mode == "absent" else "timeout")
             with self._condition:
                 if self._end is None and self._seq <= seen:
                     self._condition.wait(min(WAIT_SLICE, remaining))
@@ -475,12 +489,15 @@ class _Session:
                     self._inbox.remove(entry)
                     return
 
-    def _late(self, seen: int, since: float) -> tuple[Arrival, ...]:
-        """The messages that arrive within `LATE_WINDOW` after a timeout,
-        for the report: they stay queued."""
-        threading.Event().wait(LATE_WINDOW)
+    def late(self, outcome: ExpectOutcome, since: float) -> tuple[Arrival, ...]:
+        """The messages that arrive within `LATE_WINDOW` after the timeout
+        ``outcome`` is, for the report of a stage it failed: they stay
+        queued. It waits out what is left of the window, so it is asked once,
+        for the attempt that failed the stage, not by every attempt."""
+        if (remaining := outcome.ended_at + LATE_WINDOW - time.monotonic()) > 0:
+            self._stop.wait(remaining)
         with self._condition:
-            return tuple(Arrival(seq, arrived - since, message) for seq, arrived, message in self._inbox if seq > seen)
+            return tuple(Arrival(seq, arrived - since, message) for seq, arrived, message in self._inbox if seq > outcome.seen)
 
     def stop(self) -> None:
         self._stop.set()
@@ -505,9 +522,10 @@ class _Session:
         self._thread.join(timeout)
 
     def log_unobserved(self) -> None:
-        """Log a reader failure no stage saw, at the session's end: a warning
-        (by logging, never the warnings module), as it is often the peer's
-        own end, a fixture serving it torn down before the scenario's."""
+        """Log a reader failure no stage saw, at the session's end (the
+        chain's, a stage's close, a reopening): a warning (by logging, never
+        the warnings module), as it is often the peer's own end, a fixture
+        serving it torn down before the scenario's."""
         end = self.end
         if end is not None and end.error is not None and not end.after_stop and not self.observed:
             logger.warning("Connection '%s' (open %d) failed and no stage saw it: %s", self.name, self.generation, describe_exception(end.error))
@@ -529,8 +547,9 @@ class ConnectionExchange:
     ``taken`` is the message the wait took, or an absent one saw;
     ``considered`` the messages that did not match, ``late`` those that
     arrived just after a timeout, ``earlier`` how many queued messages were
-    older than the send, and ``dropped`` how many the session's inbox_limit
-    discarded. ``end`` is how the session's reader ended, if it has, as the
+    older than the send, ``unseen`` how many arrived during the wait and
+    were dropped before it could look at them, and ``dropped`` how many the
+    session's inbox_limit discarded in all. ``end`` is how the session's reader ended, if it has, as the
     wait saw it or, without one, by the snapshot. ``debug_info`` is the
     adapter's, cut (`debug_text`).
 
@@ -554,6 +573,7 @@ class ConnectionExchange:
     considered: tuple[Arrival, ...] = ()
     late: tuple[Arrival, ...] = ()
     earlier: int = 0
+    unseen: int = 0
     dropped: int = 0
     end: ReaderEnd | None = None
     debug_info: str | None = None
@@ -575,35 +595,53 @@ class ExchangeRecord:
     timeout: float | None = None
     mode: ExpectMode | None = None
     outcome: ExpectOutcome | None = None
+    # What the wait's arrival times are relative to (`_Session.expect`).
+    since: float = 0.0
 
-    def freeze(self) -> ConnectionExchange:
-        """The snapshot, its messages deep-copied: a user function a later
-        stage calls cannot change what the report shows. ``debug_info()`` is
-        asked now, before any close."""
+    def freeze(self, full: bool = True) -> ConnectionExchange:
+        """The snapshot. ``full``, for one a report will show: its messages
+        deep-copied, so nothing run later changes what the report shows, and
+        the adapter's ``debug_info()`` asked now, before any close. Otherwise
+        (a stage that passed, whose section nobody reads) the messages are
+        the adapter's own and ``debug_info()`` is not called: no user code
+        runs, and nothing is copied, for a report that is not printed."""
         session, outcome = self.session, self.outcome
         end = outcome.end if outcome is not None and outcome.end is not None else session.end if session is not None else None
+        copied: Callable[[Any], Any] = _copied if full else lambda value: value
+        arrival: Callable[[Arrival], Arrival] = _copied_arrival if full else lambda value: value
         return ConnectionExchange(
             connection=self.connection,
             adapter=self.adapter,
             generation=session.generation if session is not None else None,
             session_age=session.age if session is not None else None,
             opened=self.opened,
-            connected=_copied(self.connected),
-            sent=_copied(self.sent),
-            sent_return=_copied(self.sent_return),
+            connected=copied(self.connected),
+            sent=copied(self.sent),
+            sent_return=copied(self.sent_return),
             match=self.match,
             timeout=self.timeout,
             mode=self.mode,
             waited=outcome.waited if outcome is not None else None,
             result=outcome.result if outcome is not None else None,
-            taken=_copied_arrival(outcome.taken) if outcome is not None and outcome.taken is not None else None,
-            considered=tuple(map(_copied_arrival, outcome.considered)) if outcome is not None else (),
-            late=tuple(map(_copied_arrival, outcome.late)) if outcome is not None else (),
+            taken=arrival(outcome.taken) if outcome is not None and outcome.taken is not None else None,
+            considered=tuple(map(arrival, outcome.considered)) if outcome is not None else (),
+            late=tuple(map(arrival, outcome.late)) if outcome is not None else (),
             earlier=outcome.earlier if outcome is not None else 0,
+            unseen=outcome.unseen if outcome is not None else 0,
             dropped=session.dropped if session is not None else 0,
             end=end,
-            debug_info=debug_text(session.adapter) if session is not None else None,
+            debug_info=debug_text(session.adapter) if full and session is not None else None,
         )
+
+    def late(self) -> tuple[Arrival, ...]:
+        """For a wait for a message that timed out: copies of the messages
+        that arrive just after its deadline (`_Session.late`), which stay
+        queued; none for any other step. Asked once the stage's failure is
+        final, so only that attempt waits the window out."""
+        session, outcome = self.session, self.outcome
+        if session is None or outcome is None or outcome.result != "timeout" or self.mode != "message":
+            return ()
+        return tuple(map(_copied_arrival, session.late(outcome, self.since)))
 
 
 def _copied[T](value: T) -> T:
@@ -725,6 +763,7 @@ class Connections:
         if old is not None:
             entry.closed_by, entry.failure = None, "reopening"
             error = old.shutdown()
+            old.log_unobserved()
             if old.reader_alive:
                 entry.stuck = True
                 raise RequestError(f"Connection '{name}': the previous reader for '{name}' did not stop within {JOIN_BUDGET:g}s of close()", retryable=False)
@@ -782,6 +821,7 @@ class Connections:
         if session is None:
             return None
         error = session.shutdown()
+        session.log_unobserved()
         if session.reader_alive:
             entry.stuck = True
             logger.error("The reader of connection '%s' did not stop within %gs of close()", name, JOIN_BUDGET)
@@ -800,7 +840,8 @@ def not_open_failure(stage: str, connection: str, why: str) -> RequestError:
     return RequestError(f"Stage '{stage}': connection '{connection}' is not open ({why}); set \"open\": true to connect again", retryable=False)
 
 
-def _count(n: int, what: str) -> str:
+def count(n: int, what: str) -> str:
+    """``1 message``, ``3 messages``."""
     return f"{n} {what}" if n == 1 else f"{n} {what}s"
 
 
@@ -829,7 +870,18 @@ def expect_failure(
     message the failure quotes through ``redaction`` (`Redaction.message`);
     a miss reason it quotes is the predicate's, which redacts its own.
     """
+    unseen = (
+        f"{count(outcome.unseen, 'message')} that arrived meanwhile {'was' if outcome.unseen == 1 else 'were'} dropped by the connection's inbox_limit "
+        f"before the stage could look at {'it' if outcome.unseen == 1 else 'them'}"
+    )
     match outcome.result:
+        case "absent" if outcome.unseen:
+            # Not "nothing arrived": what was dropped unseen may have matched.
+            return VerificationError(
+                f"Stage '{stage}': cannot tell that no message on connection '{connection}' matched {declared_match(match)} within {timeout:g} s: {unseen}. "
+                f"Raise connections.{connection}.inbox_limit.",
+                retryable=False,
+            )
         case "taken" | "absent" | "closed":
             return None
         case "seen":
@@ -855,8 +907,9 @@ def expect_failure(
             arrived = len(outcome.considered)
             first_error = next((arrival.miss for arrival in outcome.considered if arrival.miss is not None and arrival.miss.error), None)
             evaluation = f"; the first that could not be evaluated: {first_error.reason}" if first_error is not None else ""
+            dropped = f"; {unseen}" if outcome.unseen else ""
             return VerificationError(
                 f"Stage '{stage}': no message on connection '{connection}' matched {declared_match(match)} within {timeout:g} s "
-                f"({_count(arrived, 'message')} arrived {'after the send' if sent else 'while it waited'}){evaluation}"
+                f"({count(arrived, 'message')} arrived {'after the send' if sent else 'while it waited'}){evaluation}{dropped}"
             )
     raise RuntimeError(f"Unhandled expect result: {outcome.result}")

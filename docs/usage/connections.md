@@ -44,7 +44,7 @@ A stage has either a `request` or a `connection`, never both. HTTP and connectio
 | `adapter` | string | required | The adapter class, as `module:Class`, imported the way user functions are |
 | `params` | object | `{}` | Keyword arguments for the adapter's constructor; templates allowed |
 | `connect_timeout` | number or template | `10` | Seconds, passed to the adapter's `connect()` |
-| `inbox_limit` | integer | `1000` | Most messages kept queued; beyond it the oldest are dropped, and counted in reports |
+| `inbox_limit` | integer | `1000` | Most messages kept queued; beyond it the oldest are dropped, and counted in reports. A wait that finds no match says how many were dropped before it could look at them |
 | `description` | string | | Free text |
 
 `params` and `connect_timeout` are rendered each time the connection opens. They can read scenario substitutions, scenario-level `fixtures`, and any value a stage before the opening one saved, such as a device id returned by a registration call. They cannot read the opening stage's own fixtures, parameters or substitutions: the connection outlives that stage. For the same reason a fixture `params` read must be class-scoped or wider; a function-scoped one fails the opening stage. `validate` checks these names against every stage that may open the connection.
@@ -64,7 +64,7 @@ A stage sets at least one of these, and they run in this order: open, drain, sen
 
 ### Opening and closing
 
-The first stage of the chain that names a connection opens it, so `open` is needed only to check the handshake result or to connect again. A stage that opens the connection this way takes no message from it: only `open: true` makes the result of `connect()` a message to check.
+The first stage of the chain that sends or waits on a connection opens it, so `open` is needed only to check the handshake result or to connect again. A stage that opens the connection this way takes no message from it: only `open: true` makes the result of `connect()` a message to check. A stage that only drains or closes a connection never opened has nothing to do to it, and does not connect for that.
 
 Each open is a new session, with its own adapter instance, reader and queue: messages queued on the old one are discarded with it.
 
@@ -104,9 +104,9 @@ A message the match cannot be evaluated against (a `length()` of its null field)
 Stage 'ping': no message on connection 'device' matched {"op": "pong", "id": 1} within 2 s (3 messages arrived after the send)
 ```
 
-The failure names the first message the match could not be evaluated against, if any. The [report](#reports) lists the messages, and for each one the first expectation it did not meet.
+The failure names the first message the match could not be evaluated against, if any, and how many messages `inbox_limit` dropped during the wait before the stage could look at them. The [report](#reports) lists the messages, and for each one the first expectation it did not meet.
 
-**Making sure something does not happen.** `absent: true` turns the wait around. It is how a test checks that a rejected call pushed nothing, or that an acknowledged command is not sent again. It passes at the deadline, and fails at once on the first message that matches, which no retry changes:
+**Making sure something does not happen.** `absent: true` turns the wait around. It is how a test checks that a rejected call pushed nothing, or that an acknowledged command is not sent again. It passes at the deadline, and fails at once on the first message that matches, which no retry changes. It also fails when messages that arrived during the wait were dropped by `inbox_limit` before it could look at them, since one of them may have matched: raise the limit, or drain before the wait.
 
 ```json
 {"name": "flush", "connection": {"name": "spk1", "drain": true}},
@@ -149,8 +149,8 @@ HTTP-only settings have nothing to work on here and are refused on a connection 
 [`retry`](../advanced/retry.md) works on connection stages. Each attempt runs the stage again from the top: it reconnects if the stage has `open: true`, and drains, sends and waits anew. A `close: true` closes once, after the last attempt.
 
 - **An `expect` that timed out** is a `verify` failure, and so is a `closed: true` wait whose connection did not end.
-- **An adapter that fails to build, connect or send** is a `request` failure. It is retried when the adapter raised an `OSError` (a refused or reset socket, a timeout) or a `RequestError` it marked `retryable=True` (`from pytest_httpchain.errors import RequestError`).
-- **The connection ending** while the stage waits is a `request` failure, retried only on a stage with `open: true`, which connects again.
+- **An adapter that fails to build, connect or send** is a `request` failure. It is retried when the adapter raised an `OSError` (a refused or reset socket, a timeout), an `EOFError` (the other side closing, as when `connect()` reads its greeting with `receive()` and the handshake is cut short) or a `RequestError` it marked `retryable=True` (`from pytest_httpchain.errors import RequestError`).
+- **The connection ending** while the stage waits, or between its own `open` and its send, is a `request` failure, retried only on a stage with `open: true`, which connects again. A server that accepts a connection and hangs up while it is still starting is ridden out this way.
 - **Not retried:**
     - using a connection that is not open, without `open: true`, since no attempt can change that;
     - an `absent` expect that saw its message;
@@ -223,10 +223,10 @@ The plugin calls the adapter like this:
 
 - **`__init__(**params)`** with the rendered `params`.
 - **`connect(timeout)`** on the test's thread, with `connect_timeout`. It opens the connection, performs any handshake, and returns a dict for the stage to check, or `None`. A handshake the server refuses at protocol level is best returned as a dict, such as `{"result": "rejected", "reason": "..."}`, so a stage can verify it. Raise only when the transport fails. If `connect()` raises, `close()` is still called, so it must cope with a connection that was only half opened.
-- **`send(message)`** on the test's thread, with one rendered `send` object. Values may be bytes, so a binary protocol can carry raw fields. If it returns a dict, such as the frame header it assigned, the stage reads that as `sent`, for example `"match": {"reply_to": "{{ sent.seq }}"}`.
+- **`send(message)`** on the test's thread, with one rendered `send` object. Values may be bytes, so a binary protocol can carry raw fields. The message is a copy, the adapter's to change: writing a frame number into it changes nothing the next attempt sends. If it returns a dict, such as the frame header it assigned, the stage reads that as `sent`, for example `"match": {"reply_to": "{{ sent.seq }}"}`.
 - **`receive(timeout)`** on the connection's reader thread, over and over. It returns one decoded message as a dict, or `None` if nothing arrived within `timeout`. It must return within about `timeout`; the plugin passes 0.2 seconds. Frames the adapter deals with itself, such as heartbeats and automatic acknowledgements, should return `None` and are then not queued. To report a clean end of the connection, raise `EOFError`; any other exception it raises ends the connection as failed, with that exception.
 - **`close()`** when a stage closes the connection, before it is reopened, after a failed `connect()`, and when the scenario ends, including after a failure. It may run while `receive()` is still waiting, and it must make that `receive()` return. For a socket, `shutdown()` before `close()` does this.
-- **`debug_info()`** is optional. It returns text for failure reports, such as the bytes the adapter holds undecoded, and may run while `receive()` does. It is cut at 4000 characters, and what it raises is shown in its place.
+- **`debug_info()`** is optional. It returns text for failure reports, such as the bytes the adapter holds undecoded, or `None` when it has nothing to say, and may run while `receive()` does. It is cut at 4000 characters, and what it raises is shown in its place. It is called when a stage's attempt fails, and for a passing stage only when passing stages' sections are printed (`-rP`).
 
 **Threads.** `send()` runs on the test's thread at the same time as `receive()` runs on the reader's. If the adapter also writes from `receive()` or from threads of its own, which heartbeats and acknowledgements often do, it must guard every write with one lock, as `write_lock` does above. Otherwise two frames can interleave. `receive()` must also not change state that `send()` relies on: setting the socket timeout in `receive()` would apply to `sendall()` too, which is why the adapter above keeps the socket blocking and waits with `select`. An adapter that starts threads of its own stops them in `close()`.
 
@@ -300,13 +300,13 @@ It shows:
 - the message sent, and what `send()` returned;
 - the match as written (its templates, not their values), the timeout, and how long the stage waited;
 - how the wait ended, and the message taken, or the message an `absent` wait saw;
-- when nothing matched, the messages that were considered (the last 20), each with its arrival time and the first expectation it did not meet, and those that arrived within 0.2 seconds after the deadline, marked as late and left queued;
-- how many queued messages were left out as older than the send, and how many `inbox_limit` dropped;
+- when nothing matched, the messages that were considered (the last 20), each with its arrival time and the first expectation it did not meet, and those that arrived within 0.2 seconds after the deadline of the attempt that failed the stage, marked as late and left queued;
+- how many queued messages were left out as older than the send, how many `inbox_limit` dropped, and how many of those during the wait, before it could look at them;
 - how the connection's reader ended, if it has;
-- the adapter's `debug_info()`, taken when the stage's attempt ended, before any close.
+- the adapter's `debug_info()`, taken when the stage's attempt ended, before any close, unless it returned `None`.
 
 Messages are shown as JSON, cut at the report's body limit, bytes as hex.
 
-Values under keys listed in `httpchain_redact_message_keys` are shown as `[REDACTED]` at any depth, in this section and in the failure messages that quote a message: an `absent` wait's hit, and the reasons a message did not match, a rendered expectation on a listed key included. Keys are matched case-insensitively, and are separated by whitespace or commas. The default list is the [redacted header and query parameter names](../getting-started.md#secrets-in-reports), lowercased: `authorization`, `token`, `password`, and so on. Setting the option replaces the default, and an empty value disables it. `verify` and `save` still see the real values, and their failure messages are not redacted, as an HTTP stage's body checks are not. The match is shown as written, and `debug_info()` exactly as the adapter returns it.
+Values under keys listed in `httpchain_redact_message_keys` are shown as `[REDACTED]` at any depth, in this section and in the failure messages that quote a message: an `absent` wait's hit, and the reasons a message did not match, a rendered expectation on a listed key included, written as a value or as a matcher's operand. Keys are matched case-insensitively, and are separated by whitespace or commas. The default list is the [redacted header and query parameter names](../getting-started.md#secrets-in-reports), lowercased: `authorization`, `token`, `password`, and so on. Setting the option replaces the default, and an empty value disables it. `verify` and `save` still see the real values, and their failure messages are not redacted, as an HTTP stage's body checks are not. The match is shown as written, and `debug_info()` exactly as the adapter returns it.
 
 Connection stages add nothing to HAR files.

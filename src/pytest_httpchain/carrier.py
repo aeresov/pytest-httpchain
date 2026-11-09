@@ -105,6 +105,8 @@ from pytest_httpchain.scoping import (
     with_stage_substitutions,
 )
 from pytest_httpchain.templates import TemplatesError, needs_rendering, walk, walker
+from pytest_httpchain.utils import INTERRUPTS as _INTERRUPTS
+from pytest_httpchain.utils import describe_exception as _describe_exception
 from pytest_httpchain.utils import path_segment, process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
 
@@ -166,9 +168,7 @@ class _IterationContextManagers:
 _ITERATION_CONTEXT_MANAGERS: ContextVar[_IterationContextManagers | None] = ContextVar("iteration_context_managers", default=None)
 
 # Raised by an exit, these stop the run: re-raised once every context manager
-# is exited. pytest.exit()'s is an Exception, so an `except Exception` must
-# let these through first.
-_INTERRUPTS = (KeyboardInterrupt, SystemExit, pytest.exit.Exception)
+# is exited (`utils.INTERRUPTS`).
 
 
 def _exit_context_managers(entered: list[_EnteredContextManager], errors: Iterable[str] = ()) -> list[str]:
@@ -197,15 +197,6 @@ def _exit_context_managers(entered: list[_EnteredContextManager], errors: Iterab
         _log_exit_errors(errors)
         raise interrupt
     return errors
-
-
-def _describe_exception(e: BaseException) -> str:
-    """``Type: message`` for an exception user code raised, whose ``__str__``
-    may raise in turn: formatting it must not abandon the exits still to come."""
-    try:
-        return f"{type(e).__name__}: {e}"
-    except Exception:
-        return f"{type(e).__name__}: <exception str() failed>"
 
 
 def _log_exit_errors(errors: list[str]) -> None:
@@ -1059,26 +1050,31 @@ def _rendered_match(declared: dict[str, Any], context: Mapping[str, Any]) -> dic
 _CONNECTION_RESERVED = {name: f"{what} (HTTPCHAIN045)" for name, what in CONNECTION_BINDINGS.items()}
 
 
-def _message_miss(match: Any, rendered: Mapping[str, Any] | None, redaction: Redaction, message: dict[str, Any]) -> Miss | None:
+def _message_miss(match: Any, rendered: Mapping[str, Any] | None, redaction: Redaction, listed: Sequence[Mapping[str, Any]], message: dict[str, Any]) -> Miss | None:
     """The predicate a connection stage's wait takes (`connections.MatchPredicate`):
     `response_steps.message_matches`' verdict on ``message``.
 
     A miss's reason is for the report and the timeout message only, so it is
     shown through ``redaction`` here (`Redaction.message_text`): what it quotes
     of the message under a listed key, and what an expectation on a listed key
-    (``body.token``) expected, which a template may have rendered from a secret."""
+    (``body.token``) expected (``listed``, `_listed_expectations`, the same
+    for every message of the wait), which a template may have rendered from a
+    secret."""
     verdict = message_matches(match, rendered, message)
     if isinstance(verdict, Match):
         return None
-    expected = [{key: value} for key, value in _listed_expectations(rendered, redaction)] if rendered else []
-    return Miss(redaction.message_text(verdict.reason, message, *expected), verdict.error)
+    return Miss(redaction.message_text(verdict.reason, message, *listed), verdict.error)
 
 
-def _listed_expectations(rendered: Mapping[str, Any], redaction: Redaction) -> Iterator[tuple[str, Any]]:
+def _listed_expectations(rendered: Mapping[str, Any] | None, redaction: Redaction) -> list[dict[str, Any]]:
     """Each rendered expectation whose JMESPath expression reads a key
-    ``redaction`` lists, as that key and its expected value."""
-    if not redaction.message_keys:
-        return
+    ``redaction`` lists, as ``{that key: what it expects}``, for
+    `Redaction.message_text` to hide where a miss quotes it: a value as it
+    is, a matcher as its operands (``{"eq": "s3cret"}``), since a secret
+    rendered into one is as much the key's value."""
+    listed: list[dict[str, Any]] = []
+    if not rendered or not redaction.message_keys:
+        return listed
     for expression, expected in rendered.items():
         try:
             pending: list[Any] = [jmespath.compile(expression).parsed]
@@ -1087,9 +1083,10 @@ def _listed_expectations(rendered: Mapping[str, Any], redaction: Redaction) -> I
         while pending:
             node = pending.pop()
             if node.get("type") == "field" and isinstance(name := node.get("value"), str) and redaction.redacts_message_key(name):
-                yield name, expected
+                listed.append({name: expected.model_dump(mode="python", exclude_unset=True) if isinstance(expected, BaseModel) else expected})
                 break
             pending.extend(child for child in node.get("children", ()) if isinstance(child, dict))
+    return listed
 
 
 def fresh_chain_state() -> dict[str, Any]:
@@ -1105,6 +1102,7 @@ def fresh_chain_state() -> dict[str, Any]:
         "client": None,
         "connections": Connections(),
         "last_connection_exchange": None,
+        "_connection_record": None,
         "_connection_params_context": None,
         "aborted": False,
         "last_request": None,
@@ -1418,6 +1416,14 @@ class Carrier:
     # What a connection stage did, for its report: a snapshot taken once its
     # step ran, before any close.
     last_connection_exchange: ClassVar[ConnectionExchange | None] = None
+    # The record that snapshot was taken from: its last attempt's.
+    _connection_record: ClassVar[ExchangeRecord | None] = None
+    # Whether a passing stage's report sections are printed too (-rP, an
+    # xdist worker), which the plugin says for each item: a connection stage
+    # that passes then takes the full snapshot a failing one always does.
+    # Otherwise it copies nothing and does not call the adapter's
+    # debug_info(), for a section nobody reads.
+    snapshot_passed_exchanges: ClassVar[bool] = True
     # What a connection's params render against: the scenario's substitutions
     # and fixtures and the saves so far, never the stage's own names, since
     # the connection outlives the stage. Set by a connection stage.
@@ -1573,6 +1579,7 @@ class Carrier:
         cls.last_shown_attempt = None
         cls.last_parallel_stats = None
         cls.last_connection_exchange = None
+        cls._connection_record = None
         cls._connection_params_context = None
 
         # Ahead of the always_run machinery: a failed initialization leaves no
@@ -1721,6 +1728,12 @@ class Carrier:
         # The iterations' exit errors go in, so that an interrupt raised by one
         # of these exits logs them rather than dropping them.
         exit_errors = _exit_context_managers(cls.active_context_managers, iteration_exit_errors)
+        # A wait that timed out and failed the stage: what arrived just after
+        # its deadline goes in the report. Asked once, here, where the failure
+        # is final, and before any close: not by every attempt.
+        if isinstance(outcome, _STAGE_FAILURE_EXCEPTIONS) and (record := cls._connection_record) is not None and (exchange := cls.last_connection_exchange) is not None:
+            if late := record.late():
+                cls.last_connection_exchange = replace(exchange, late=late)
         # With them, and as they do: a close that fails fails the stage, its
         # own failure first, and no saves commit.
         if closing is not None and not isinstance(outcome, pytest.skip.Exception):
@@ -2382,59 +2395,84 @@ class Carrier:
         the stage's, once its attempts are done: `execute_stage`).
 
         It opens the connection on ``open: true``, and at the first stage of
-        the chain that names it while it was never opened. One a stage closed,
-        or whose reopening failed, is not open, and a stage that does not
-        open it fails, as no attempt changes that; so does one that sends on
-        a connection whose reader has ended. An ``expect`` takes the oldest
-        matching message, after the stage's send if it sends
-        (`connections._Session.expect`). The response steps see it as
-        ``message`` (or, without an ``expect``, what an ``open``'s
+        the chain that sends or waits on it while it was never opened: a
+        stage that only drains or closes one never opened has nothing to do
+        to it, and does not connect for that. One a stage closed, or whose
+        reopening failed, is not open, and a stage that does not open it
+        fails, as no attempt changes that; so does one that sends on a
+        connection whose reader has ended. A reader that ended since this
+        attempt opened the connection is the connection ending under the
+        stage, which a stage with ``open: true`` retries by connecting again.
+        An ``expect`` takes the oldest matching message, after the stage's
+        send if it sends (`connections._Session.expect`). The response steps
+        see it as ``message`` (or, without an ``expect``, what an ``open``'s
         ``connect()`` returned) and what ``send()`` returned as ``sent``.
 
         Whatever happens, what the step did is kept for the report
-        (``last_connection_exchange``), before any close.
+        (``last_connection_exchange``), before any close: in full when the
+        attempt failed or passing stages are reported too
+        (``snapshot_passed_exchanges``), and otherwise without copying a
+        message or calling the adapter's ``debug_info()``.
         """
         step = stage.connection
         assert step is not None, "a stage without a request has a connection step"
         config = cls.scenario.connections.get(step.name) if cls.scenario is not None else None
         if config is None:
             raise StageExecutionError(f"Stage '{stage.name}': connection '{step.name}' is not declared in the scenario's connections")
-        record = ExchangeRecord(step.name, config.adapter)
+        cls._connection_record = record = ExchangeRecord(step.name, config.adapter)
+        failed = True
         try:
             # What the response steps see: `message`, `sent`.
             bound: dict[str, Any] = {}
             subject = NO_MESSAGE
-            if step.open or cls.connections.never_opened(step.name):
+            session: Any = None
+            # Only a stage that sends or waits needs a connection never opened.
+            uses = step.send is not None or step.expect is not None
+            if step.open or (uses and cls.connections.never_opened(step.name)):
                 session, connected = cls._open_connection(stage, step.name, config)
                 record.opened, record.connected = True, connected
                 if step.open and step.expect is None:
                     subject = MessageSubject(connected)
                     bound[MESSAGE_META_NAME] = connected
+            elif cls.connections.never_opened(step.name):
+                pass  # nothing to drain or close
             elif (why := cls.connections.not_open(step.name)) is not None:
                 raise not_open_failure(stage.name, step.name, why)
             else:
                 session = cls.connections.session(step.name)
                 assert session is not None, "a connection opened and not closed has a session"
             record.session = session
-            ended_before = session.end
-            if ended_before is not None and step.send is not None:
+            end = session.end if session is not None else None
+            # An end the reader came to before this stage: the connection was
+            # not open for it. One since this attempt's own open is the
+            # connection ending under the stage.
+            ended_before = end is not None and not record.opened
+            if end is not None and step.send is not None:
                 session.observed = True
-                raise not_open_failure(stage.name, step.name, ended_before.describe())
+                if ended_before:
+                    raise not_open_failure(stage.name, step.name, end.describe())
+                gone = RequestError(f"Stage '{stage.name}': connection '{step.name}' {end.describe()} before the stage could send", retryable=step.open)
+                gone.__cause__ = end.error
+                raise gone
 
-            if step.drain:
+            if step.drain and session is not None:
                 session.drain()
 
             after: int | None = None
             since = time.monotonic()
             if step.send is not None:
-                record.sent = outgoing = cls._rendered_send(stage, step, iter_context)
+                record.sent = declared = cls._rendered_send(stage, step, iter_context)
+                # A copy: an adapter that changes the message it is given (a
+                # sequence number written into it) must not change the
+                # scenario's own, which the next attempt sends again.
+                outgoing = convert_namespace_to_dict(declared)
                 # Before the send: a reply can arrive before send() returns.
                 after = session.mark()
                 since = time.monotonic()
                 record.sent_return = bound[SENT_NAME] = session.send(outgoing)
 
             if step.expect is not None:
-                subject = cls._expect(stage, step, session, iter_context, bound, record, after=after, since=since, ended_before=ended_before is not None)
+                subject = cls._expect(stage, step, session, iter_context, bound, record, after=after, since=since, ended_before=ended_before)
                 if subject.present:
                     bound[MESSAGE_META_NAME] = subject.message
 
@@ -2446,8 +2484,9 @@ class Carrier:
                 raise StageExecutionError(str(e)) from e
             except RecursionError as e:
                 raise StageExecutionError(f"Stage '{stage.name}': the message is nested too deeply for templates to read: {e}") from e
+            failed = False
         finally:
-            cls.last_connection_exchange = record.freeze()
+            cls.last_connection_exchange = record.freeze(full=failed or cls.snapshot_passed_exchanges)
         return IterationResult(saved_context=saved_context)
 
     @classmethod
@@ -2511,7 +2550,8 @@ class Carrier:
         rendered = _rendered_match(expect.match, context) if isinstance(expect.match, dict) else None
         mode = "closed" if expect.closed else "absent" if expect.absent else "message"
         record.match, record.timeout, record.mode = expect.match, timeout, mode
-        predicate = functools.partial(_message_miss, expect.match, rendered, cls.redaction) if expect.match is not None else None
+        predicate = functools.partial(_message_miss, expect.match, rendered, cls.redaction, _listed_expectations(rendered, cls.redaction)) if expect.match is not None else None
+        record.since = since
         record.outcome = outcome = session.expect(predicate, timeout, after=after, since=since, mode=mode)
         sent = step.send is not None
         failure = expect_failure(

@@ -23,7 +23,7 @@
                     }
                 }
             ],
-            "response_codec": "auto"
+            "response_codec": "json"
         }
     ]
 }
