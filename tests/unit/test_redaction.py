@@ -1,17 +1,20 @@
 """redaction: the one set of rules the report, the HAR export and the header
-verification messages show credentials through."""
+verification messages show credentials through, and a connection's messages
+by key name."""
 
 import httpx
 import pytest
 
 from pytest_httpchain.redaction import (
     DEFAULT_REDACT_HEADERS,
+    DEFAULT_REDACT_MESSAGE_KEYS,
     DEFAULT_REDACT_QUERY_PARAMS,
     DEFAULT_REDACTION,
     NO_REDACTION,
     REDACTED,
     Redaction,
 )
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT
 
 _EXPIRES = "Expires=Wed, 21 Oct 2026 07:28:00 GMT"
 
@@ -148,3 +151,88 @@ def test_defaults_are_the_documented_lists():
     assert DEFAULT_REDACT_QUERY_PARAMS == ("access_token", "refresh_token", "id_token", "api_key", "apikey", "client_secret", "password", "token")
     assert DEFAULT_REDACTION.headers == {name.lower() for name in DEFAULT_REDACT_HEADERS}
     assert DEFAULT_REDACTION.query_params == set(DEFAULT_REDACT_QUERY_PARAMS)
+
+
+def test_message_key_defaults_are_both_lists():
+    """`httpchain_redact_message_keys`' default: the header and query-parameter
+    defaults, lowercased, as message keys are matched."""
+    assert DEFAULT_REDACT_MESSAGE_KEYS == tuple(name.lower() for name in (*DEFAULT_REDACT_HEADERS, *DEFAULT_REDACT_QUERY_PARAMS))
+    assert DEFAULT_REDACTION.message_keys == set(DEFAULT_REDACT_MESSAGE_KEYS)
+    assert NO_REDACTION.message_keys == frozenset()
+
+
+class TestMessage:
+    @pytest.mark.parametrize(
+        ("message", "expected"),
+        [
+            pytest.param({"Token": "t", "id": 1}, {"Token": REDACTED, "id": 1}, id="any-case"),
+            pytest.param({"a": {"b": [{"password": "p"}, {"x": 1}]}}, {"a": {"b": [{"password": REDACTED}, {"x": 1}]}}, id="lists-of-dicts"),
+            # A listed key's whole value goes, a container included.
+            pytest.param({"authorization": {"scheme": "Bearer", "token": "t"}}, {"authorization": REDACTED}, id="container-value"),
+            pytest.param({"token": 0, "password": False, "api_key": b"\x00"}, {"token": REDACTED, "password": REDACTED, "api_key": REDACTED}, id="non-string-values"),
+            # Empty values hide nothing, and are worth seeing when a template rendered to "".
+            pytest.param({"token": "", "password": None, "api_key": b"", "apikey": [], "cookie": {}}, None, id="empty-values-kept"),
+            pytest.param({"tokens": "t", "my_token": "t"}, None, id="whole-key-only"),
+            pytest.param([{"token": "t"}], [{"token": REDACTED}], id="list-root"),
+            pytest.param("token", None, id="not-a-container"),
+        ],
+    )
+    def test_listed_keys_at_any_depth(self, message, expected):
+        assert DEFAULT_REDACTION.message(message) == (message if expected is None else expected)
+
+    def test_is_a_copy(self):
+        message = {"token": "t", "body": {"items": [1]}}
+        shown = DEFAULT_REDACTION.message(message)
+        assert message == {"token": "t", "body": {"items": [1]}}
+        assert shown["body"] is not message["body"]
+        assert shown["body"]["items"] is not message["body"]["items"]
+
+    def test_configured_keys(self):
+        assert Redaction(message_keys=["Session-ID"]).message({"session-id": "s", "token": "t"}) == {"session-id": REDACTED, "token": "t"}
+
+    def test_no_keys_is_the_value_itself(self):
+        message = {"token": "t"}
+        assert NO_REDACTION.message(message) is message
+        assert Redaction(["Authorization"], ["token"]).message(message) is message, "message keys are a list of their own"
+
+    def test_deep_message_is_no_recursion_error(self):
+        message: dict = {}
+        current = message
+        for _ in range(BEYOND_RECURSION_LIMIT):
+            current["next"] = current = {}
+        current["token"] = "t"
+        shown = DEFAULT_REDACTION.message(message)
+        for _ in range(BEYOND_RECURSION_LIMIT):
+            shown = shown["next"]
+        assert shown == {"token": REDACTED}
+
+    def test_shared_and_cyclic_containers_are_copied_once(self):
+        shared = {"token": "t"}
+        message: dict = {"a": shared, "b": shared}
+        message["self"] = message
+        shown = DEFAULT_REDACTION.message(message)
+        assert shown["a"] is shown["b"]
+        assert shown["a"] == {"token": REDACTED}
+        assert shown["self"] is shown
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param('JMESPath \'body\' gave {"token": "s3cret"}', 'JMESPath \'body\' gave {"token": "[REDACTED]"}', id="json-quoted"),
+        pytest.param("got 's3cret'", "got '[REDACTED]'", id="repr-quoted"),
+        pytest.param("got 0x00ff", f"got {REDACTED}", id="bytes-hex"),
+        pytest.param('got "nested-pw"', f'got "{REDACTED}"', id="under-a-listed-key"),
+        # Unquoted, a value could be any part of the line.
+        pytest.param("s3cret appears", "s3cret appears", id="unquoted-left-alone"),
+        pytest.param('got "visible"', 'got "visible"', id="unlisted-key"),
+    ],
+)
+def test_message_text(text, expected):
+    message = {"body": {"token": "s3cret", "blob": {"api_key": b"\x00\xff"}, "auth": {"password": {"inner": ["nested-pw"]}}, "name": "visible"}}
+    assert DEFAULT_REDACTION.message_text(text, message) == expected
+
+
+def test_message_text_takes_several_messages_and_skips_empty_values():
+    assert DEFAULT_REDACTION.message_text('"a" "b" ""', {"token": "a"}, {"password": "b", "api_key": ""}) == '"[REDACTED]" "[REDACTED]" ""'
+    assert NO_REDACTION.message_text('"a"', {"token": "a"}) == '"a"'

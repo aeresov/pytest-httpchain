@@ -33,6 +33,7 @@ from pytest_httpchain.connections import (
 )
 from pytest_httpchain.errors import RequestError, StageExecutionError, VerificationError
 from pytest_httpchain.models import ConnectionExpect
+from pytest_httpchain.redaction import NO_REDACTION
 from tests.unit import connections_test_helpers as helpers
 
 ADAPTER = "tests.unit.connections_test_helpers:FakeAdapter"
@@ -373,6 +374,15 @@ class TestExpect:
         assert not failure.retryable
         assert 'matched {"n": 2} within 5 s, where none should: message #1' in str(failure)
 
+    def test_absent_hit_quotes_the_message_redacted(self, registry):
+        peer = helpers.peer("absent secret")
+        session, _ = _open(registry, "absent secret")
+        peer.push({"n": 2, "auth": {"Token": "s3cret"}})
+        outcome = session.expect(None, 5, after=None, since=0, mode="absent")
+        fields: dict[str, Any] = {"stage": "quiet", "connection": "dev", "match": None, "timeout": 5, "mode": "absent", "sent": False, "reopens": False, "ended_before": False}
+        assert str(expect_failure(outcome, **fields)).endswith(': {"n": 2, "auth": {"Token": "[REDACTED]"}}')
+        assert str(expect_failure(outcome, **fields, redaction=NO_REDACTION)).endswith(': {"n": 2, "auth": {"Token": "s3cret"}}')
+
     @pytest.mark.parametrize(
         ("error", "message"),
         [(None, {"error": None, "detail": None}), (ConnectionResetError("reset by peer"), {"error": "ConnectionResetError", "detail": "reset by peer"})],
@@ -533,6 +543,23 @@ def test_exchange_snapshot_copies_what_it_shows(registry):
     assert snapshot.session_age >= 0
     with pytest.raises(AttributeError):
         snapshot.result = "timeout"  # ty: ignore[invalid-assignment]
+
+
+def test_exchange_snapshot_keeps_the_open_and_the_reader_end(registry):
+    """What connect() returned, copied, and how the reader ended: as the wait
+    saw it, or, without a wait, as the session has it when the snapshot is taken."""
+    peer = helpers.peer("snapshot end", greeting={"hello": ["world"]})
+    session, connected = _open(registry, "snapshot end")
+    record = ExchangeRecord("dev", ADAPTER, session=session, opened=True, connected=connected)
+    assert record.freeze().end is None
+    peer.end(ConnectionResetError("reset"))
+    _wait_for(lambda: session.end is not None)
+    snapshot = record.freeze()
+    assert connected is not None
+    connected["hello"].append("again")
+    assert (snapshot.opened, snapshot.connected) == (True, {"hello": ["world"]})
+    assert snapshot.end is not None
+    assert snapshot.end.describe() == "failed: ConnectionResetError: reset"
 
 
 class TestCloseAll:

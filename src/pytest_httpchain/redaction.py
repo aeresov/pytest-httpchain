@@ -1,4 +1,5 @@
-"""Credential redaction for everything that shows an HTTP exchange.
+"""Credential redaction for everything that shows an HTTP exchange or a
+connection's messages.
 
 One set of rules, shared by the report sections, the HAR export and the
 failure messages that echo a header (verification and request errors): the
@@ -7,10 +8,19 @@ shown, prints as ``[REDACTED]``. Names stay visible, so a report still says
 which credential was sent. Bodies are never touched: their shape is the
 scenario's own, and guessing at it would hide data without making the output
 safe.
+
+A connection stage's messages are the exception, by key name: they have no
+wire form the report shows, no headers or query to carry a credential apart
+from the data, so the value under a listed message key, at any depth, prints
+as ``[REDACTED]`` in the Connection Exchange section and in the failure
+messages that quote a message (`Redaction.message`, `Redaction.message_text`).
+What the stage's checks and saves see is never redacted.
 """
 
+import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 from urllib.parse import unquote_plus
 
 import httpx
@@ -21,6 +31,9 @@ REDACTED = "[REDACTED]"
 # the credential carriers common enough that a report showing them is a leak.
 DEFAULT_REDACT_HEADERS = ("Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie", "X-API-Key", "API-Key", "X-Auth-Token")
 DEFAULT_REDACT_QUERY_PARAMS = ("access_token", "refresh_token", "id_token", "api_key", "apikey", "client_secret", "password", "token")
+# And `httpchain_redact_message_keys`: both lists, lowercased, as a message's
+# keys are matched (case-insensitively).
+DEFAULT_REDACT_MESSAGE_KEYS = tuple(dict.fromkeys(name.lower() for name in (*DEFAULT_REDACT_HEADERS, *DEFAULT_REDACT_QUERY_PARAMS)))
 
 # Headers whose value is a URL, which can carry the same query credentials a
 # request URL does: a redirect's Location is how OAuth hands a code or token over.
@@ -36,18 +49,20 @@ _URL_AUTHORITY = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)(?P<authorit
 
 
 class Redaction:
-    """Which header and query-parameter values to hide, by case-insensitive name.
+    """Which header, query-parameter and message-key values to hide, by
+    case-insensitive name.
 
     Empty sets redact nothing. An empty value is shown as it is: an empty
     ``Authorization`` hides nothing, and is worth seeing when a template
     rendered to "".
     """
 
-    __slots__ = ("headers", "query_params")
+    __slots__ = ("headers", "message_keys", "query_params")
 
-    def __init__(self, headers: Iterable[str] = (), query_params: Iterable[str] = ()) -> None:
+    def __init__(self, headers: Iterable[str] = (), query_params: Iterable[str] = (), message_keys: Iterable[str] = ()) -> None:
         self.headers = frozenset(name.lower() for name in headers)
         self.query_params = frozenset(name.lower() for name in query_params)
+        self.message_keys = frozenset(name.lower() for name in message_keys)
 
     def redacts_header(self, name: str) -> bool:
         return name.lower() in self.headers
@@ -116,6 +131,83 @@ class Redaction:
                 text = text.replace(repr(value), repr(shown))
         return text
 
+    def redacts_message_key(self, key: str) -> bool:
+        return key.lower() in self.message_keys
+
+    def message(self, value: Any) -> Any:
+        """A connection message (or what ``send()`` returned) as it may be
+        shown: a copy, in which the value of each listed key, at any depth,
+        is ``[REDACTED]``, unless it is empty (null, ``""``, ``b""``, ``[]``
+        or ``{}``), which hides nothing. With no key listed, ``value`` itself.
+
+        Iterative, so a deep message is no RecursionError; a container met
+        again is the same copy, so a shared one, or one holding itself, is
+        copied once. Dicts and lists (a tuple too) are walked, as JSON has
+        them; any other value is kept as it is.
+        """
+        if not self.message_keys or not isinstance(value, Mapping | list | tuple):
+            return value
+        copies: dict[int, Any] = {}
+        root = copies[id(value)] = {} if isinstance(value, Mapping) else []
+        pending: list[tuple[Any, Any]] = [(value, root)]
+        while pending:
+            original, copied = pending.pop()
+            members = original.items() if isinstance(original, Mapping) else enumerate(original)
+            for key, member in members:
+                if isinstance(original, Mapping) and isinstance(key, str) and self.redacts_message_key(key) and not _empty(member):
+                    shown = REDACTED
+                elif isinstance(member, Mapping | list | tuple):
+                    shown = copies.get(id(member))
+                    if shown is None:
+                        shown = copies[id(member)] = {} if isinstance(member, Mapping) else []
+                        pending.append((member, shown))
+                else:
+                    shown = member
+                if isinstance(copied, dict):
+                    copied[key] = shown
+                else:
+                    copied.append(shown)
+        return root
+
+    def message_text(self, text: str, *messages: Any) -> str:
+        """A failure line quoting values of ``messages``, as it may be shown:
+        each string or bytes a listed key holds in them, at any depth, is
+        replaced where the line quotes it, as JSON or ``repr()`` write a
+        string (``"s3cret"``, ``'s3cret'``) and as a report writes bytes
+        (``0x`` and their hex). Only those quoted forms, as `error_text`: an
+        unquoted value could match any part of the line."""
+        secrets = sorted(self._message_secrets(messages), key=len, reverse=True)
+        for secret in secrets:
+            if isinstance(secret, str):
+                text = text.replace(json.dumps(secret, ensure_ascii=False), json.dumps(REDACTED)).replace(repr(secret), repr(REDACTED))
+            else:
+                text = text.replace(f"0x{secret[:64].hex()}", REDACTED).replace(repr(secret), repr(REDACTED))
+        return text
+
+    def _message_secrets(self, messages: Iterable[Any]) -> set[str | bytes]:
+        """The non-empty strings and bytes listed keys hold in ``messages``,
+        at any depth, under them too: iteratively, each container once (and
+        once more where a listed key holds it)."""
+        secrets: set[str | bytes] = set()
+        if not self.message_keys:
+            return secrets
+        seen: set[tuple[int, bool]] = set()
+        # Each value, and whether a listed key holds it, or a value that one does.
+        pending: list[tuple[Any, bool]] = [(message, False) for message in messages]
+        while pending:
+            value, listed = pending.pop()
+            if isinstance(value, Mapping | list | tuple):
+                if (id(value), listed) in seen:
+                    continue
+                seen.add((id(value), listed))
+                if isinstance(value, Mapping):
+                    pending.extend((member, listed or (isinstance(key, str) and self.redacts_message_key(key))) for key, member in value.items())
+                else:
+                    pending.extend((member, listed) for member in value)
+            elif listed and isinstance(value, str | bytes) and value:
+                secrets.add(value)
+        return secrets
+
     def _query(self, query: str) -> str:
         """``query`` with the listed parameters' values replaced, the rest (and
         its encoding) left as written."""
@@ -128,6 +220,11 @@ class Redaction:
                 pair = f"{key}{equals}{REDACTED}"
             pairs.append(pair)
         return "&".join(pairs)
+
+
+def _empty(value: Any) -> bool:
+    """A message value that hides nothing: null, or an empty string, bytes, list or dict."""
+    return value is None or (isinstance(value, str | bytes | Mapping | list | tuple) and not value)
 
 
 def _redact_cookie_pair(pair: str) -> str:
@@ -168,5 +265,5 @@ def _redact_userinfo(match: re.Match[str]) -> str:
 
 # The rules a caller gets without configuration: the ini defaults, so a report
 # built outside the plugin (a test, a later exporter) is no less careful.
-DEFAULT_REDACTION = Redaction(DEFAULT_REDACT_HEADERS, DEFAULT_REDACT_QUERY_PARAMS)
+DEFAULT_REDACTION = Redaction(DEFAULT_REDACT_HEADERS, DEFAULT_REDACT_QUERY_PARAMS, DEFAULT_REDACT_MESSAGE_KEYS)
 NO_REDACTION = Redaction()

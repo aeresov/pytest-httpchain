@@ -27,8 +27,8 @@ from pytest_httpchain.factory import create_test_class
 from pytest_httpchain.har_writer import write_har_file
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.parallel_stats import ParallelStats
-from pytest_httpchain.redaction import DEFAULT_REDACT_HEADERS, DEFAULT_REDACT_QUERY_PARAMS, NO_REDACTION, Redaction
-from pytest_httpchain.report_formatter import format_curl, format_request, format_response
+from pytest_httpchain.redaction import DEFAULT_REDACT_HEADERS, DEFAULT_REDACT_MESSAGE_KEYS, DEFAULT_REDACT_QUERY_PARAMS, NO_REDACTION, Redaction
+from pytest_httpchain.report_formatter import format_connection_exchange, format_curl, format_request, format_response
 from pytest_httpchain.templates import get_max_comprehension_length, set_max_comprehension_length
 from pytest_httpchain.utils import make_marker, xdist_group_names
 from pytest_httpchain.validation import check_scenario, load_with_diagnostics
@@ -535,6 +535,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "args",
             list(DEFAULT_REDACT_QUERY_PARAMS),
         ),
+        (
+            ConfigOptions.REDACT_MESSAGE_KEYS,
+            "Connection message keys (case-insensitive, separated by whitespace or commas) whose values, at any depth, "
+            "the Connection Exchange section and failure messages show as [REDACTED]; empty disables.",
+            "args",
+            list(DEFAULT_REDACT_MESSAGE_KEYS),
+        ),
         (ConfigOptions.HAR_REDACT, "Apply the httpchain_redact_* rules to HAR files too.", "bool", False),
     ]
     for option, help_text, ini_type, default in ini_options:
@@ -652,6 +659,7 @@ def pytest_configure(config: pytest.Config) -> None:
     redaction = Redaction(
         _redaction_names(config, ConfigOptions.REDACT_HEADERS, header_names=True),
         _redaction_names(config, ConfigOptions.REDACT_QUERY_PARAMS, header_names=False),
+        _redaction_names(config, ConfigOptions.REDACT_MESSAGE_KEYS, header_names=False),
     )
     config.stash[_REDACTION] = redaction
     config.stash[_HAR_REDACTION] = redaction if _getbool(ConfigOptions.HAR_REDACT) else NO_REDACTION
@@ -773,6 +781,10 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
                 report.sections.append((f"HTTP Request (curl){suffix}", _format_section("curl command", functools.partial(format_curl, redaction=redaction), request)))
             if (response := carrier_class.last_response) is not None:
                 report.sections.append((f"HTTP Response{suffix}", _format_section("response", functools.partial(format_response, redaction=redaction), response)))
+            if (exchange := carrier_class.last_connection_exchange) is not None:
+                report.sections.append(
+                    (f"Connection Exchange{suffix}", _format_section("connection exchange", functools.partial(format_connection_exchange, redaction=redaction), exchange))
+                )
 
         output_dir = item.config.getoption("httpchain_output_dir")
         if output_dir and carrier_class.last_exchanges:

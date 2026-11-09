@@ -21,6 +21,7 @@ from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
@@ -4197,6 +4198,81 @@ class TestConnectionStages:
         carrier, scenario = self._carrier([{"name": "open", "connection": {"name": "dev", "open": True}}], fixtures=["token"], params={"peer": "carrier", "token": "{{ token }}"})
         carrier.fixture_scopes = {"token": "class"}
         assert self._run(carrier, scenario, {"token": "t"}) == ["passed"]
+
+    @staticmethod
+    def _recording(carrier: type[Carrier]) -> list[tuple[Any, Any]]:
+        """Each stage's connection snapshot and shown attempt, kept past the
+        chain's end, which resets them."""
+        kept: list[tuple[Any, Any]] = []
+        original = carrier.execute_stage.__func__
+
+        def recording(cls, stage, fixtures):
+            try:
+                original(cls, stage, fixtures)
+            finally:
+                kept.append((cls.last_connection_exchange, cls.last_shown_attempt))
+
+        carrier.execute_stage = classmethod(recording)  # ty: ignore[invalid-assignment]
+        return kept
+
+    def test_miss_reasons_and_the_timeout_message_are_redacted(self, monkeypatch):
+        """A miss reason quotes the message and what was expected: under a
+        listed key, both are shown redacted, in the snapshot the report shows
+        and in the timeout message, while the checks see the real values."""
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr("pytest_httpchain.connections.LATE_WINDOW", 0)
+        helpers.peer("carrier", reply=lambda message: [{"user": {"token": "tok-sent-back"}}])
+        carrier, scenario = self._carrier(
+            [
+                {
+                    "name": "real values",
+                    "connection": {"name": "dev", "send": {"op": "who"}, "expect": {"match": {"user.token": "tok-sent-back"}, "timeout": 1}},
+                    "response": [{"verify": {"jmespath": {"user.token": "tok-sent-back"}}}],
+                },
+                {
+                    "name": "object",
+                    "connection": {"name": "dev", "send": {"op": "who"}, "expect": {"match": {"user.token": "{{ secret }}"}, "timeout": 0.05}},
+                },
+            ],
+            substitutions=[{"vars": {"secret": "s3cret"}}],
+        )
+        kept = self._recording(carrier)
+        [passed, failed] = self._run(carrier, scenario)
+        assert passed == "passed"
+        assert failed.startswith("failed: Stage 'object': no message on connection 'dev' matched")
+        snapshot = kept[1][0]
+        assert snapshot is not None
+        [arrival] = snapshot.considered
+        assert arrival.miss.reason == 'JMESPath \'user.token\' doesn\'t match: expected "[REDACTED]", got "[REDACTED]"'
+        assert arrival.message == {"user": {"token": "tok-sent-back"}}, "the snapshot keeps the real message: the report redacts it"
+
+    def test_evaluation_error_in_the_timeout_message_is_redacted(self, monkeypatch):
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr("pytest_httpchain.connections.LATE_WINDOW", 0)
+        helpers.peer("carrier", reply=lambda message: [{"user": {"token": "s3cret"}}])
+        carrier, scenario = self._carrier([{"name": "string", "connection": {"name": "dev", "send": {"op": "who"}, "expect": {"match": "abs(user.token) > `1`", "timeout": 0.05}}}])
+        [failed] = self._run(carrier, scenario)
+        assert failed.endswith(
+            "the first that could not be evaluated: JMESPath 'abs(user.token) > `1`' cannot be evaluated against the message: abs() needs number, got \"[REDACTED]\" (string)"
+        )
+        assert "s3cret" not in failed
+
+    def test_failed_attempt_is_the_shown_one(self, monkeypatch):
+        """A connection stage's failure carries no request: the report's suffix
+        still says which attempt its exchange is."""
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr(carrier_module, "_wait_to_retry", lambda seconds, cancel: True)
+        monkeypatch.setattr("pytest_httpchain.connections.LATE_WINDOW", 0)
+        helpers.peer("carrier")
+        carrier, scenario = self._carrier([{"name": "wait", "retry": {"attempts": 2, "delay": 0}, "connection": {"name": "dev", "send": {"op": "x"}, "expect": {"timeout": 0.05}}}])
+        kept = self._recording(carrier)
+        self._run(carrier, scenario)
+        [(snapshot, shown_attempt)] = kept
+        assert snapshot is not None
+        assert shown_attempt == (2, 2)
 
     def test_undeclared_connection_fails_the_stage(self):
         carrier, scenario = self._carrier([{"name": "s", "connection": {"name": "nope", "open": True}}])

@@ -104,6 +104,7 @@ class TestPytestConfigure:
             pytest.param(ConfigOptions.REDACT_HEADERS, "Authorization:", "'Authorization:' is not a header name", id="redact-headers-not-a-name"),
             pytest.param(ConfigOptions.REDACT_HEADERS, '"Authorization', "No closing quotation", id="redact-headers-unbalanced-quote"),
             pytest.param(ConfigOptions.REDACT_QUERY_PARAMS, "'token", "No closing quotation", id="redact-query-unbalanced-quote"),
+            pytest.param(ConfigOptions.REDACT_MESSAGE_KEYS, '"token', "No closing quotation", id="redact-message-keys-unbalanced-quote"),
             # The same two wrappers as a non-integer above, around pytest's own
             # "invalid truth value" message.
             pytest.param(ConfigOptions.HAR_REDACT, "maybe", "invalid truth value 'maybe'", id="har-redact-not-a-boolean"),
@@ -119,6 +120,7 @@ class TestPytestConfigure:
         [
             pytest.param(ConfigOptions.REDACT_HEADERS, '["Authorization", 1]', "item at index 1 is int: 1", id="redact-headers-non-string-item"),
             pytest.param(ConfigOptions.REDACT_QUERY_PARAMS, '[["token"]]', r"item at index 0 is list: \['token'\]", id="redact-query-nested-list"),
+            pytest.param(ConfigOptions.REDACT_MESSAGE_KEYS, '["token", false]', "item at index 1 is bool: False", id="redact-message-keys-non-string-item"),
         ],
     )
     def test_invalid_toml_list_item(self, pytester, option, value, match):
@@ -155,6 +157,25 @@ def test_redaction_rules_from_ini(pytester, ini, headers, query_params, har_reda
     redaction = config.stash[_REDACTION]
     assert (redaction.headers, redaction.query_params) == (headers, query_params)
     assert config.stash[_HAR_REDACTION] is (redaction if har_redacts else NO_REDACTION)
+
+
+@pytest.mark.parametrize(
+    ("ini", "message_keys"),
+    [
+        pytest.param("", DEFAULT_REDACTION.message_keys, id="defaults"),
+        # Parsed as the query-parameter names are: a list replaces the
+        # default, split at commas and whitespace, lowercased, any name taken.
+        pytest.param("httpchain_redact_message_keys = Session-ID, x.secret", {"session-id", "x.secret"}, id="replaces-default"),
+        pytest.param("httpchain_redact_message_keys =\n    pin\n    OTP", {"pin", "otp"}, id="one-per-line"),
+        pytest.param("httpchain_redact_message_keys =", set(), id="empty-disables"),
+        # A list of its own: emptying the header and query lists leaves it.
+        pytest.param("httpchain_redact_headers =\nhttpchain_redact_query_params =", DEFAULT_REDACTION.message_keys, id="independent"),
+    ],
+)
+def test_message_key_rules_from_ini(pytester, ini, message_keys):
+    pytester.makeini(f"[pytest]\n{ini}\n")
+    config = pytester.parseconfigure()
+    assert config.stash[_REDACTION].message_keys == message_keys
 
 
 def test_httpx_request_log_is_redacted_for_the_session(pytester):

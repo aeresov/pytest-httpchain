@@ -1,7 +1,10 @@
-"""HTTP request/response formatting for the report sections.
+"""HTTP request/response formatting for the report sections, and a
+connection stage's exchange (`format_connection_exchange`).
 
 Header values and URL query values are shown through a `Redaction`, which
 defaults to the ``httpchain_redact_*`` ini defaults; bodies are shown as sent.
+A connection's messages are shown with the values of its listed message keys
+redacted (`Redaction.message`).
 """
 
 import codecs
@@ -11,7 +14,9 @@ import shlex
 from typing import Any
 
 import httpx
+from pydantic import BaseModel
 
+from pytest_httpchain.connections import LATE_WINDOW, Arrival, ConnectionExchange
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.utils import JSON_PARSE_ERRORS, request_content
 from pytest_httpchain.wire_codec import MSGPACK_DECODE_ERRORS, is_msgpack_content_type, unpack_msgpack
@@ -202,6 +207,144 @@ def _format_body_text(text: str) -> str:
     if len(text) > _MAX_BODY_CHARS:
         return f"{text[:_MAX_BODY_CHARS]}... (truncated)"
     return text
+
+
+# How many of the messages a wait considered, or saw late, a report lists: the last ones.
+_MAX_LISTED_MESSAGES = 20
+
+
+def _message_display(value: Any) -> Any:
+    """A message value JSON has no form for: bytes as hex, as a MessagePack
+    body shows them, anything else as its repr."""
+    if isinstance(value, bytes | bytearray):
+        return _msgpack_display(bytes(value))
+    return repr(value)
+
+
+_PRETTY_MESSAGE = json.JSONEncoder(indent=2, ensure_ascii=False, default=_message_display)
+
+
+def _format_message(message: Any, redaction: Redaction) -> str:
+    """One message, pretty JSON through ``redaction``, cut as a body is. One
+    JSON cannot show (a key that is no string, a container holding itself) is
+    its repr; one neither can (a value whose repr raises), a line saying so:
+    the section shows the rest."""
+    shown = redaction.message(message)
+    try:
+        return _format_encoded(_PRETTY_MESSAGE, shown)
+    except Exception:
+        pass
+    try:
+        return _format_body_text(repr(shown))
+    except Exception as e:
+        return f"<message cannot be shown: {type(e).__name__}>"
+
+
+def _declared(match: Any) -> str:
+    """An ``expect.match`` as the scenario declares it: an expression as
+    written, an object of expectations as JSON, its templates unrendered."""
+    if match is None:
+        return "any message"
+    if isinstance(match, str):
+        return match
+    if isinstance(match, dict):
+        match = {key: value.model_dump(mode="json", exclude_unset=True) if isinstance(value, BaseModel) else value for key, value in match.items()}
+    return _format_encoded(_PRETTY_JSON, match)
+
+
+def _count(n: int, what: str) -> str:
+    return f"{n} {what}" if n == 1 else f"{n} {what}s"
+
+
+def _arrivals(title: str, arrivals: tuple[Arrival, ...], relative_to: str, redaction: Redaction, *, late: bool = False) -> list[str]:
+    """A list of messages a wait saw, the last `_MAX_LISTED_MESSAGES` of
+    them, each with its place, its arrival time and why it did not match."""
+    lines = [f"{title}:"]
+    if len(arrivals) > _MAX_LISTED_MESSAGES:
+        lines.append(f"({len(arrivals) - _MAX_LISTED_MESSAGES} earlier not shown)")
+        arrivals = arrivals[-_MAX_LISTED_MESSAGES:]
+    for arrival in arrivals:
+        heading = f"#{arrival.seq} at {arrival.at:+.3f} s {relative_to}"
+        if late:
+            heading += " (late)"
+        if arrival.miss is not None:
+            heading += f": {redaction.message_text(arrival.miss.reason, arrival.message)}"
+        lines.extend((heading, _format_message(arrival.message, redaction)))
+    return lines
+
+
+# How each way a wait can end reads in the report (`connections.ExpectResult`).
+_RESULTS = {
+    "taken": "took a message",
+    "seen": "a message matched, where none should",
+    "timeout": "timed out, no message matched",
+    "absent": "no message matched, as expected",
+    "closed": "the connection ended, as expected",
+    "ended": "the connection ended while the stage waited",
+}
+
+
+def format_connection_exchange(exchange: ConnectionExchange, redaction: Redaction = DEFAULT_REDACTION) -> str:
+    """A connection stage's report section: the connection and its session;
+    what ``connect()`` returned when the stage opened it; the message sent and
+    what ``send()`` returned; the wait, its match as declared, its timeout
+    and how long it took, and how it ended: the message taken or, when none
+    matched, the messages considered and why each did not match, those that
+    arrived just after the deadline, and how many were left out; how the
+    session's reader ended, if it has; and the adapter's ``debug_info()``,
+    verbatim.
+
+    Each message is shown through ``redaction`` (`Redaction.message`), as
+    pretty JSON cut at the body cap, bytes as hex.
+    """
+    session = f", open {exchange.generation}, {exchange.session_age:.3f} s old" if exchange.generation is not None and exchange.session_age is not None else ", no session"
+    lines = [f"Connection '{exchange.connection}' (adapter {exchange.adapter}){session}"]
+    if exchange.opened:
+        if exchange.connected is None:
+            lines.append("Opened: connect() returned nothing")
+        else:
+            lines.extend(("Opened: connect() returned", _format_message(exchange.connected, redaction)))
+    if exchange.sent is not None:
+        lines.extend(("Sent:", _format_message(exchange.sent, redaction)))
+        if exchange.sent_return is not None:
+            lines.extend(("send() returned:", _format_message(exchange.sent_return, redaction)))
+    relative_to = "after the send" if exchange.sent is not None else "from the wait"
+    if exchange.mode is not None:
+        declared = _declared(exchange.match)
+        match exchange.mode:
+            case "closed":
+                lines.append("Expect: the connection to end")
+            case "absent":
+                lines.extend(("Expect: no message matching", declared) if "\n" in declared else (f"Expect: no message matching {declared}",))
+            case _:
+                lines.extend(("Expect:", declared) if "\n" in declared else (f"Expect: {declared}",))
+        timing = f"Timeout: {exchange.timeout:g} s" if exchange.timeout is not None else "Timeout: not rendered"
+        if exchange.waited is not None:
+            timing += f", waited {exchange.waited:.3f} s"
+        lines.append(timing)
+        if exchange.result is None:
+            lines.append("Result: the wait did not finish (see the failure message)")
+        elif exchange.result == "timeout" and exchange.mode == "closed":
+            lines.append("Result: timed out, the connection did not end")
+        else:
+            lines.append(f"Result: {_RESULTS[exchange.result]}")
+        if (taken := exchange.taken) is not None:
+            lines.extend((f"#{taken.seq} at {taken.at:+.3f} s {relative_to}", _format_message(taken.message, redaction)))
+        if exchange.considered:
+            lines.extend(_arrivals(f"Considered, not matching ({_count(len(exchange.considered), 'message')})", exchange.considered, relative_to, redaction))
+        if exchange.late:
+            lines.extend(_arrivals(f"Late, within {LATE_WINDOW:g} s after the deadline, left queued", exchange.late, relative_to, redaction, late=True))
+        if exchange.result is not None:
+            left_out = [f"{_count(exchange.earlier, 'message')} queued before the send"] if exchange.sent is not None else []
+            left_out.append(f"{exchange.dropped} dropped by inbox_limit")
+            lines.append(f"Not considered: {', '.join(left_out)}")
+    elif exchange.dropped:
+        lines.append(f"Not considered: {exchange.dropped} dropped by inbox_limit")
+    if exchange.end is not None and not exchange.end.after_stop:
+        lines.append(f"Reader: {exchange.end.describe()}")
+    if exchange.debug_info is not None:
+        lines.extend(("debug_info():", exchange.debug_info))
+    return "\n".join(lines)
 
 
 # The headers curl writes itself: Host from the URL, Content-Length and

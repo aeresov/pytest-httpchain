@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, ClassVar, LiteralString, NamedTuple, TypeGuard, cast
 
 import httpx
+import jmespath
 import pytest
 from pydantic import BaseModel, RootModel, ValidationError
 from pydantic_core import InitErrorDetails, PydanticCustomError
@@ -1058,11 +1059,37 @@ def _rendered_match(declared: dict[str, Any], context: Mapping[str, Any]) -> dic
 _CONNECTION_RESERVED = {name: f"{what} (HTTPCHAIN045)" for name, what in CONNECTION_BINDINGS.items()}
 
 
-def _message_miss(match: Any, rendered: Mapping[str, Any] | None, message: dict[str, Any]) -> Miss | None:
+def _message_miss(match: Any, rendered: Mapping[str, Any] | None, redaction: Redaction, message: dict[str, Any]) -> Miss | None:
     """The predicate a connection stage's wait takes (`connections.MatchPredicate`):
-    `response_steps.message_matches`' verdict on ``message``."""
+    `response_steps.message_matches`' verdict on ``message``.
+
+    A miss's reason is for the report and the timeout message only, so it is
+    shown through ``redaction`` here (`Redaction.message_text`): what it quotes
+    of the message under a listed key, and what an expectation on a listed key
+    (``body.token``) expected, which a template may have rendered from a secret."""
     verdict = message_matches(match, rendered, message)
-    return None if isinstance(verdict, Match) else Miss(verdict.reason, verdict.error)
+    if isinstance(verdict, Match):
+        return None
+    expected = [{key: value} for key, value in _listed_expectations(rendered, redaction)] if rendered else []
+    return Miss(redaction.message_text(verdict.reason, message, *expected), verdict.error)
+
+
+def _listed_expectations(rendered: Mapping[str, Any], redaction: Redaction) -> Iterator[tuple[str, Any]]:
+    """Each rendered expectation whose JMESPath expression reads a key
+    ``redaction`` lists, as that key and its expected value."""
+    if not redaction.message_keys:
+        return
+    for expression, expected in rendered.items():
+        try:
+            pending: list[Any] = [jmespath.compile(expression).parsed]
+        except ValueError:  # a JMESPathError: validated, so never expected
+            continue
+        while pending:
+            node = pending.pop()
+            if node.get("type") == "field" and isinstance(name := node.get("value"), str) and redaction.redacts_message_key(name):
+                yield name, expected
+                break
+            pending.extend(child for child in node.get("children", ()) if isinstance(child, dict))
 
 
 def fresh_chain_state() -> dict[str, Any]:
@@ -1817,6 +1844,10 @@ class Carrier:
         elif completed:
             cls.last_request, cls.last_response = completed[-1].request, completed[-1].response
             shown_attempt = completed[-1].attempt
+        elif isinstance(failed, StageExecutionError) and cls.last_connection_exchange is not None:
+            # A connection stage's failure carries no request: its report shows
+            # the exchange of the attempt that failed (`last_connection_exchange`).
+            shown_attempt = failed.attempt
         cls.last_shown_attempt = (shown_attempt, attempts) if shown_attempt > 1 else None
 
     @classmethod
@@ -2375,6 +2406,7 @@ class Carrier:
             subject = NO_MESSAGE
             if step.open or cls.connections.never_opened(step.name):
                 session, connected = cls._open_connection(stage, step.name, config)
+                record.opened, record.connected = True, connected
                 if step.open and step.expect is None:
                     subject = MessageSubject(connected)
                     bound[MESSAGE_META_NAME] = connected
@@ -2479,11 +2511,20 @@ class Carrier:
         rendered = _rendered_match(expect.match, context) if isinstance(expect.match, dict) else None
         mode = "closed" if expect.closed else "absent" if expect.absent else "message"
         record.match, record.timeout, record.mode = expect.match, timeout, mode
-        predicate = functools.partial(_message_miss, expect.match, rendered) if expect.match is not None else None
+        predicate = functools.partial(_message_miss, expect.match, rendered, cls.redaction) if expect.match is not None else None
         record.outcome = outcome = session.expect(predicate, timeout, after=after, since=since, mode=mode)
         sent = step.send is not None
         failure = expect_failure(
-            outcome, stage=stage.name, connection=step.name, match=expect.match, timeout=timeout, mode=mode, sent=sent, reopens=step.open, ended_before=ended_before
+            outcome,
+            stage=stage.name,
+            connection=step.name,
+            match=expect.match,
+            timeout=timeout,
+            mode=mode,
+            sent=sent,
+            reopens=step.open,
+            ended_before=ended_before,
+            redaction=cls.redaction,
         )
         if failure is not None:
             raise failure

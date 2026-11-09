@@ -83,4 +83,5 @@ class ConfigOptions(StrEnum):
     MAX_PARALLEL_ITERATIONS = "httpchain_max_parallel_iterations"
     REDACT_HEADERS = "httpchain_redact_headers"
     REDACT_QUERY_PARAMS = "httpchain_redact_query_params"
+    REDACT_MESSAGE_KEYS = "httpchain_redact_message_keys"
     HAR_REDACT = "httpchain_har_redact"
