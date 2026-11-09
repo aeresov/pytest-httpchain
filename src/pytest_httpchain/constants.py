@@ -15,20 +15,22 @@ USER_FUNCTION_NAME_PATTERN = re.compile(r"\A(?P<module>[a-zA-Z_][a-zA-Z0-9_]*(?:
 _BARE_NAME_PATTERN = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
 
-def parse_user_function_name(name: str) -> tuple[str, str]:
+def parse_user_function_name(name: str, kind: str = "function") -> tuple[str, str]:
     """Split ``module.path:function_name`` into ``(module_path, function_name)``,
     raising ``ValueError`` that says what is wrong with an unusable name.
 
     The wording is shared, not just the grammar: the models' validator surfaces
     it as a validation error and the importer as a ``UserFunctionError``, and one
-    mistake must not be described to the author in two different ways.
+    mistake must not be described to the author in two different ways. ``kind``
+    names what is imported: a connection adapter is a class (``module:Class``),
+    named by the same grammar.
     """
     if match := USER_FUNCTION_NAME_PATTERN.fullmatch(name):
         return match["module"], match["function"]
     # The most common mistake deserves an actionable hint.
     if _BARE_NAME_PATTERN.fullmatch(name):
         raise ValueError(f"Module path is required: use 'module:{name}' format instead of '{name}'")
-    raise ValueError(f"Invalid function name format: {name}")
+    raise ValueError(f"Invalid {kind} name format: {name}")
 
 
 # What a scenario file's name ends with, after ``test_<name>.<suffix>``: pytest

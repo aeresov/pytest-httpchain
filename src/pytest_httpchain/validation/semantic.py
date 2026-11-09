@@ -634,6 +634,8 @@ def _relative_url_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
     if scenario.client.base_url is not None:
         return
     for i, stage in enumerate(scenario.stages):
+        if stage.request is None:
+            continue
         url = stage.request.url
         template = next(find_templates(url), None)
         # The literal text before a template is relative when it already ends

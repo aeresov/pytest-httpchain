@@ -46,6 +46,7 @@ from pydantic_core import InitErrorDetails, PydanticCustomError
 
 from pytest_httpchain.models.types import (
     RENDERED,
+    AdapterImportName,
     Base64String,
     BaseUrlStr,
     FunctionImportName,
@@ -58,6 +59,8 @@ from pytest_httpchain.models.types import (
     JsonNumber,
     JSONSchemaInline,
     JsonTypeName,
+    KeywordArgName,
+    MatchExpression,
     MultipartFieldValue,
     NamespaceFromDict,
     NamespaceOrDict,
@@ -1059,11 +1062,15 @@ class Verify(Descripted):
             "Template expressions evaluated as boolean conditions against the context "
             "(saved variables, fixtures, substitutions). Each must be a full template "
             "expression that evaluates to a boolean. Response metadata is "
-            "available as `response.*`: status, reason, headers, elapsed_ms."
+            "available as `response.*`: status, reason, headers, elapsed_ms; "
+            "on a connection stage, the message taken is `message` instead."
         ),
         examples=[["{{ user_age >= 18 }}", "{{ response.status == 200 }}", "{{ 'json' in response.headers['content-type'] }}"]],
     )
-    user_functions: FunctionsList = Field(default_factory=list, description="Functions to process response data.")
+    user_functions: FunctionsList = Field(
+        default_factory=list,
+        description="Functions to process response data, called with response= (on a connection stage, message=); each returns a boolean.",
+    )
     body: ResponseBody = Field(default_factory=ResponseBody)
 
 
@@ -1085,7 +1092,7 @@ def validate_rendered_verify(declared: Verify, value: Any) -> Verify:
 
 
 class SaveStep(StrictModel):
-    """Save data from HTTP response."""
+    """Save data from the HTTP response, or from a connection stage's message."""
 
     save: Save = Field(description="Save configuration.")
 
@@ -1341,14 +1348,139 @@ class RetryConfig(StrictModel):
         default=list(RETRY_ON),
         description=(
             "The failures that make another attempt: a verify step's checks (verify), a save step's extraction (save), "
-            "the request timing out or its connection failing (request). The scenario's own failures are never retried: "
+            "the request timing out or its connection failing, or a connection adapter failing to connect, send or receive (request). "
+            "The scenario's own failures are never retried: "
             "a template that fails to render, a user function that cannot be called or crashes, a body schema that cannot be read."
         ),
         examples=["verify", ["verify", "save"]],
     )
 
 
+# A connection's waits, in seconds: a positive finite number or a template,
+# never a bool, which the number branch would take as 1 (`_refuse_bool`).
+_ConnectionSeconds = Annotated[Annotated[float, Field(gt=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A connection timeout"))]
+
+# One message a connection stage sends: an object of JSON values or bytes, at
+# any depth (a binary protocol carries raw fields; `hex_bytes()` and the
+# MessagePack helpers render them). A tuple is refused, as JSON refuses it; a
+# template over `vars` renders a namespace, which stands for its object.
+ConnectionMessage = Annotated[
+    dict[str, Annotated[JsonValue | bytes, WrapValidator(_allow_nested_bytes)]],
+    BeforeValidator(convert_namespace_to_dict),
+    WithJsonSchema({"type": "object", "description": "The message, an object of JSON values; templates may render bytes in it."}),
+]
+
+
+class ConnectionConfig(Descripted):
+    """A connection stages talk over: the adapter class that opens it, sends a
+    message and receives the next one, and the keyword arguments it is built
+    with. It opens at the first stage that names it."""
+
+    adapter: AdapterImportName = Field(
+        description="The adapter class, as module:Class, imported as user functions are.",
+        examples=["tests.adapters:LineJsonAdapter"],
+    )
+    params: dict[KeywordArgName, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Keyword arguments for the adapter's constructor, rendered when the connection opens: they read scenario substitutions, "
+            "scenario fixtures and values earlier stages saved."
+        ),
+        examples=[{"host": "{{ device_host }}", "port": 6126}],
+    )
+    connect_timeout: _ConnectionSeconds = Field(default=10.0, description="Seconds, passed to the adapter's connect().")
+    inbox_limit: PositiveInt = Field(default=1000, description="Messages kept queued at most; beyond it the oldest are dropped, and counted in reports.")
+
+
+def _match_tag(v: Any) -> str:
+    """A string is a JMESPath expression; an object, expectations."""
+    return "expectations" if isinstance(v, dict) else "expression"
+
+
+ConnectionMatch = Annotated[
+    Annotated[MatchExpression, Tag("expression")] | Annotated[dict[JMESPathKey, JMESPathExpectation], Tag("expectations")],
+    Discriminator(_match_tag),
+]
+
+
+class ConnectionExpect(StrictModel):
+    """Wait for one message: the oldest queued one that matches (after the
+    stage's send, if it sends), within timeout seconds."""
+
+    match: ConnectionMatch | None = Field(
+        default=None,
+        description=(
+            "Which message to take: a JMESPath expression, never rendered, taken when its result is truthy; or an object of "
+            "expectations, written as in verify.jmespath, all of which must hold. Not set: any message."
+        ),
+        examples=["header.action == 'DoCommand'", {"header.request_id": "{{ request_id }}", "items": {"length": 2}}],
+    )
+    timeout: _ConnectionSeconds = Field(default=5.0, description="Seconds to wait.")
+    absent: Literal[True, False] = Field(default=False, description="Pass if no message matches within timeout; fail on the first one that does.")
+    closed: Literal[True, False] = Field(
+        default=False,
+        description="Wait for the other side to end the connection; the message is then {error, detail}.",
+    )
+
+    @model_validator(mode="after")
+    def _closed_alone(self) -> Self:
+        if self.closed and (self.match is not None or self.absent):
+            raise ValueError("expect.closed waits for the connection to end, so it takes no match and no absent")
+        return self
+
+
+class ConnectionStep(StrictModel):
+    """A connection stage's step: which connection, and what to do on it, in
+    this order: open, drain, send, expect, the response steps, close."""
+
+    ACTIONS: ClassVar[tuple[str, ...]] = ("open", "drain", "send", "expect", "close")
+
+    # The carrier validates `send` again once rendered, and a login message
+    # can carry a credential: pydantic's input_value must not print it.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    name: VariableName = Field(description="The connection, a key of the scenario's connections.")
+    open: Literal[True, False] = Field(
+        default=False,
+        description="Connect now, closing the connection first if it is open; the connect() result is the stage's message.",
+    )
+    drain: Literal[True, False] = Field(default=False, description="Discard every message already queued.")
+    send: ConnectionMessage | PartialTemplateStr | None = Field(default=None, description="One message for the adapter to send; templates allowed.")
+    expect: ConnectionExpect | None = Field(default=None, description="Wait for a message, which the response steps then check.")
+    close: Literal[True, False] = Field(default=False, description="Close the connection once the stage has run, whether or not its checks pass.")
+
+    @model_validator(mode="after")
+    def _does_something(self) -> Self:
+        if not (self.open or self.drain or self.close or self.send is not None or self.expect is not None):
+            raise ValueError(f"A connection step sets at least one of: {', '.join(self.ACTIONS)}")
+        return self
+
+
+def _no_null_branch(schema: JsonDict) -> None:
+    """A stage kind's schema: the kind itself, without the null branch and
+    default its Optional type adds; null is refused (`Stage._one_kind`)."""
+    schema.pop("default", None)
+    branches = schema.get("anyOf")
+    if isinstance(branches, list) and {"type": "null"} in branches:
+        rest = [branch for branch in branches if branch != {"type": "null"}]
+        del schema["anyOf"]
+        if len(rest) == 1 and isinstance(rest[0], dict):
+            schema.update(rest[0])
+        else:
+            schema["anyOf"] = rest
+
+
 class Stage(Marked, Fixtured, Descripted):
+    """A stage: one HTTP request, or one step on a connection, and the
+    response steps that check what came back."""
+
+    KINDS: ClassVar[tuple[str, ...]] = ("request", "connection")
+
+    # Exactly one kind: the schema says so too. Neither field has a null
+    # branch in it (`_no_null_branch`), so an editor's oneOf agrees with
+    # `_one_kind`, which refuses an explicit null as well.
+    model_config = ConfigDict(json_schema_extra={"oneOf": [{"required": ["request"]}, {"required": ["connection"]}]})
+
     name: str = Field(default="", description="Stage name (human-readable).")
     substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")
     always_run: Literal[True, False] | TemplateExpressionOnly = Field(
@@ -1368,15 +1500,30 @@ class Stage(Marked, Fixtured, Descripted):
     parallel: ParallelConfig | None = Field(default=None, description="Parallel execution configuration for load/stress testing.")
     retry: RetryConfig | None = Field(
         default=None,
-        description="Attempt the stage again while it fails, after a wait: each attempt renders and sends the request anew and runs every response step. "
-        "With parallel, each iteration retries on its own.",
+        description="Attempt the stage again while it fails, after a wait: each attempt renders and sends the request (or the connection step) anew "
+        "and runs every response step. With parallel, each iteration retries on its own.",
     )
-    request: Request = Field(description="HTTP request details.")
+    request: Request | None = Field(default=None, description="HTTP request details.", json_schema_extra=_no_null_branch)
+    connection: ConnectionStep | None = Field(
+        default=None,
+        description="A step on one of the scenario's connections, in place of a request.",
+        json_schema_extra=_no_null_branch,
+    )
     response_codec: Literal["auto", "json", "msgpack"] = Field(
         default="auto",
         description="Codec for JMESPath and body schema checks: auto uses MessagePack for a MessagePack Content-Type, otherwise JSON.",
     )
     response: Responses = Field(default_factory=list, description="Sequential steps to process the response.")
+
+    @model_validator(mode="after")
+    def _one_kind(self) -> Self:
+        declared = [kind for kind in self.KINDS if kind in self.model_fields_set]
+        if nulls := [kind for kind in declared if getattr(self, kind) is None]:
+            raise ValueError(f"A stage's {nulls[0]} cannot be null: a stage sets exactly one of: {', '.join(self.KINDS)}")
+        if len(declared) != 1:
+            got = f", got {' and '.join(declared)}" if declared else ""
+            raise ValueError(f"A stage sets exactly one of: {', '.join(self.KINDS)}{got}")
+        return self
 
 
 Stages = Annotated[
@@ -1398,6 +1545,10 @@ class Scenario(Marked, Fixtured, Descripted):
     client: ClientConfig = Field(
         default_factory=ClientConfig,
         description="The shared HTTP client: base URL, default headers and query parameters, timeout, redirects, proxy, HTTP/2 and connection pool.",
+    )
+    connections: dict[VariableName, ConnectionConfig] = Field(
+        default_factory=dict,
+        description="Connections connection stages talk over, by name: a protocol adapter for each, for services that do not speak HTTP.",
     )
     stages: Stages = Field(default_factory=list, description="Ordered list (or name-keyed mapping) of stages to execute.")
     substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")

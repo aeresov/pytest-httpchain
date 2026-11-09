@@ -2113,6 +2113,8 @@ class Carrier:
             raise _Cancelled("Iteration cancelled: the stage already failed")
 
         iter_context = iteration_context(local_context, iter_vars)
+        if stage.request is None:
+            raise StageExecutionError("Connection stages are not supported yet", retryable=False)
 
         # Rendering re-validates the model it substitutes into, so no further
         # model_validate is needed here.

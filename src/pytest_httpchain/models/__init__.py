@@ -7,7 +7,8 @@ All models use Pydantic V2 with discriminated unions for flexible body types.
 Key models:
 - Scenario: Root model representing a complete test scenario
 - ClientConfig: The scenario's shared HTTP client (base URL, default headers, pool)
-- Stage: Individual test stage with request and response processing
+- Stage: Individual test stage: an HTTP request, or a step on a connection, and response processing
+- ConnectionConfig / ConnectionStep / ConnectionExpect: protocol-adapter connections and a stage's step on one
 - RetryConfig: a stage's attempts after a failure (polling, flaky networks)
 - Request: HTTP request configuration (method, URL, headers, body, auth)
 - Auth: authentication, built in (basic, digest, bearer) or a user function
@@ -26,6 +27,11 @@ from pytest_httpchain.models.entities import (
     BytesBody,
     ClientConfig,
     CombinationsParameter,
+    ConnectionConfig,
+    ConnectionExpect,
+    ConnectionMatch,
+    ConnectionMessage,
+    ConnectionStep,
     DigestAuth,
     FilesBody,
     FileSpec,
@@ -98,6 +104,11 @@ from pytest_httpchain.models.types import (
 __all__ = [
     "Scenario",
     "Stage",
+    "ConnectionConfig",
+    "ConnectionExpect",
+    "ConnectionMatch",
+    "ConnectionMessage",
+    "ConnectionStep",
     "ParallelConfig",
     "ParallelConfigBase",
     "ParallelForeachConfig",

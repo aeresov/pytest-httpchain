@@ -511,6 +511,351 @@
       ],
       "title": "CombinationsParameter"
     },
+    "ConnectionConfig": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Description",
+              "description": "Optional description for this component"
+            },
+            "adapter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "examples": [
+                    "tests.adapters:LineJsonAdapter"
+                  ],
+                  "type": "string"
+                }
+              ],
+              "title": "Adapter",
+              "description": "The adapter class, as module:Class, imported as user functions are."
+            },
+            "params": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "additionalProperties": true,
+                  "examples": [
+                    {
+                      "host": "{{ device_host }}",
+                      "port": 6126
+                    }
+                  ],
+                  "type": "object"
+                }
+              ],
+              "title": "Params",
+              "description": "Keyword arguments for the adapter's constructor, rendered when the connection opens: they read scenario substitutions, scenario fixtures and values earlier stages saved."
+            },
+            "connect_timeout": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    }
+                  ],
+                  "default": 10.0
+                }
+              ],
+              "title": "Connect Timeout",
+              "description": "Seconds, passed to the adapter's connect()."
+            },
+            "inbox_limit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "default": 1000,
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              ],
+              "title": "Inbox Limit",
+              "description": "Messages kept queued at most; beyond it the oldest are dropped, and counted in reports."
+            }
+          },
+          "required": [
+            "adapter"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ConnectionConfig",
+      "description": "A connection stages talk over: the adapter class that opens it, sends a\nmessage and receives the next one, and the keyword arguments it is built\nwith. It opens at the first stage that names it."
+    },
+    "ConnectionExpect": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "match": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/JMESPathMatcher"
+                          },
+                          {
+                            "description": "Equal to this JSON value (true is not 1; 1 equals 1.0).",
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean",
+                              "null",
+                              "array"
+                            ]
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "examples": [
+                    "header.action == 'DoCommand'",
+                    {
+                      "header.request_id": "{{ request_id }}",
+                      "items": {
+                        "length": 2
+                      }
+                    }
+                  ]
+                }
+              ],
+              "title": "Match",
+              "description": "Which message to take: a JMESPath expression, never rendered, taken when its result is truthy; or an object of expectations, written as in verify.jmespath, all of which must hold. Not set: any message."
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "number"
+                    },
+                    {
+                      "pattern": "(?:^\\s*\\{\\{(?:(?!\\}\\}).)+\\}\\}\\s*$)|(?:^[+-]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)$)",
+                      "type": "string"
+                    }
+                  ],
+                  "default": 5.0
+                }
+              ],
+              "title": "Timeout",
+              "description": "Seconds to wait."
+            },
+            "absent": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "default": false,
+                  "enum": [
+                    true,
+                    false
+                  ],
+                  "type": "boolean"
+                }
+              ],
+              "title": "Absent",
+              "description": "Pass if no message matches within timeout; fail on the first one that does."
+            },
+            "closed": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "default": false,
+                  "enum": [
+                    true,
+                    false
+                  ],
+                  "type": "boolean"
+                }
+              ],
+              "title": "Closed",
+              "description": "Wait for the other side to end the connection; the message is then {error, detail}."
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "title": "ConnectionExpect",
+      "description": "Wait for one message: the oldest queued one that matches (after the\nstage's send, if it sends), within timeout seconds."
+    },
+    "ConnectionStep": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "title": "Name",
+              "description": "The connection, a key of the scenario's connections."
+            },
+            "open": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "default": false,
+                  "enum": [
+                    true,
+                    false
+                  ],
+                  "type": "boolean"
+                }
+              ],
+              "title": "Open",
+              "description": "Connect now, closing the connection first if it is open; the connect() result is the stage's message."
+            },
+            "drain": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "default": false,
+                  "enum": [
+                    true,
+                    false
+                  ],
+                  "type": "boolean"
+                }
+              ],
+              "title": "Drain",
+              "description": "Discard every message already queued."
+            },
+            "send": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "description": "The message, an object of JSON values; templates may render bytes in it.",
+                      "type": "object"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              ],
+              "title": "Send",
+              "description": "One message for the adapter to send; templates allowed."
+            },
+            "expect": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConnectionExpect"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Wait for a message, which the response steps then check."
+            },
+            "close": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "default": false,
+                  "enum": [
+                    true,
+                    false
+                  ],
+                  "type": "boolean"
+                }
+              ],
+              "title": "Close",
+              "description": "Close the connection once the stage has run, whether or not its checks pass."
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ConnectionStep",
+      "description": "A connection stage's step: which connection, and what to do on it, in\nthis order: open, drain, send, expect, the response steps, close."
+    },
     "DigestAuth": {
       "anyOf": [
         {
@@ -2778,7 +3123,7 @@
                 }
               ],
               "title": "On",
-              "description": "The failures that make another attempt: a verify step's checks (verify), a save step's extraction (save), the request timing out or its connection failing (request). The scenario's own failures are never retried: a template that fails to render, a user function that cannot be called or crashes, a body schema that cannot be read."
+              "description": "The failures that make another attempt: a verify step's checks (verify), a save step's extraction (save), the request timing out or its connection failing, or a connection adapter failing to connect, send or receive (request). The scenario's own failures are never retried: a template that fails to render, a user function that cannot be called or crashes, a body schema that cannot be read."
             }
           },
           "required": [
@@ -2936,7 +3281,7 @@
         }
       ],
       "title": "SaveStep",
-      "description": "Save data from HTTP response."
+      "description": "Save data from the HTTP response, or from a connection stage's message."
     },
     "Stage": {
       "anyOf": [
@@ -2945,6 +3290,18 @@
         },
         {
           "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "request"
+              ]
+            },
+            {
+              "required": [
+                "connection"
+              ]
+            }
+          ],
           "properties": {
             "description": {
               "anyOf": [
@@ -3186,11 +3543,15 @@
                 }
               ],
               "default": null,
-              "description": "Attempt the stage again while it fails, after a wait: each attempt renders and sends the request anew and runs every response step. With parallel, each iteration retries on its own."
+              "description": "Attempt the stage again while it fails, after a wait: each attempt renders and sends the request (or the connection step) anew and runs every response step. With parallel, each iteration retries on its own."
             },
             "request": {
               "$ref": "#/$defs/Request",
               "description": "HTTP request details."
+            },
+            "connection": {
+              "$ref": "#/$defs/ConnectionStep",
+              "description": "A step on one of the scenario's connections, in place of a request."
             },
             "response_codec": {
               "anyOf": [
@@ -3263,13 +3624,11 @@
               "description": "Sequential steps to process the response."
             }
           },
-          "required": [
-            "request"
-          ],
           "type": "object"
         }
       ],
-      "title": "Stage"
+      "title": "Stage",
+      "description": "A stage: one HTTP request, or one step on a connection, and the\nresponse steps that check what came back."
     },
     "SubstitutionsSave": {
       "anyOf": [
@@ -3726,7 +4085,7 @@
                 }
               ],
               "title": "Expressions",
-              "description": "Template expressions evaluated as boolean conditions against the context (saved variables, fixtures, substitutions). Each must be a full template expression that evaluates to a boolean. Response metadata is available as `response.*`: status, reason, headers, elapsed_ms."
+              "description": "Template expressions evaluated as boolean conditions against the context (saved variables, fixtures, substitutions). Each must be a full template expression that evaluates to a boolean. Response metadata is available as `response.*`: status, reason, headers, elapsed_ms; on a connection stage, the message taken is `message` instead."
             },
             "user_functions": {
               "anyOf": [
@@ -3748,7 +4107,7 @@
                 }
               ],
               "title": "User Functions",
-              "description": "Functions to process response data."
+              "description": "Functions to process response data, called with response= (on a connection stage, message=); each returns a boolean."
             },
             "body": {
               "$ref": "#/$defs/ResponseBody"
@@ -3963,6 +4322,21 @@
       ],
       "title": "client",
       "description": "The shared HTTP client: base URL, default headers and query parameters, timeout, redirects, proxy, HTTP/2 and connection pool."
+    },
+    "connections": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonRef"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/ConnectionConfig"
+          },
+          "type": "object"
+        }
+      ],
+      "title": "Connections",
+      "description": "Connections connection stages talk over, by name: a protocol adapter for each, for services that do not speak HTTP."
     },
     "stages": {
       "anyOf": [

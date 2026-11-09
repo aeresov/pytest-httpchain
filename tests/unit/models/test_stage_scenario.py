@@ -40,10 +40,29 @@ class TestStageFields:
         # name is the one field make_stage() fills in, so build the stage directly.
         assert Stage(request=make_request()).name == ""
 
-    def test_request_is_required(self):
-        with pytest.raises(ValidationError) as exc_info:
-            Stage(name="test")
-        assert_error_types(exc_info, "missing", at="request")
+    @pytest.mark.parametrize(
+        ("fields", "message"),
+        [
+            pytest.param({}, r"A stage sets exactly one of: request, connection \[type", id="neither"),
+            pytest.param(
+                {"request": {"url": "http://x.test"}, "connection": {"name": "c", "open": True}},
+                r"exactly one of: request, connection, got request and connection \[",
+                id="both",
+            ),
+            # An explicit null is refused, as the schema (no null branch) refuses it.
+            pytest.param({"request": None}, r"A stage's request cannot be null", id="null-request"),
+            pytest.param({"request": None, "connection": {"name": "c", "open": True}}, r"A stage's request cannot be null", id="null-beside-connection"),
+        ],
+    )
+    def test_exactly_one_kind(self, fields, message):
+        with pytest.raises(ValidationError, match=message):
+            Stage.model_validate({"name": "test", **fields})
+
+    def test_connection_stage(self):
+        stage = Stage.model_validate({"name": "test", "connection": {"name": "device", "open": True}})
+        assert stage.request is None
+        assert stage.connection is not None
+        assert stage.connection.open is True
 
     @pytest.mark.parametrize(
         ("field", "value"),
