@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `sha1(value)` template helper: the hex SHA-1 digest of text (as UTF-8) or bytes,
+  beside `sha256` and `md5`, for request-signing schemes that call for SHA-1.
+
 ## [0.18.1] - 2026-10-02
 
 ### Fixed

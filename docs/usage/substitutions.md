@@ -423,7 +423,7 @@ Available functions in expressions:
 -   time: `now()`, `timestamp()`, `timestamp_ms()`
 -   encoding: `b64encode()`, `b64decode()`, `b64decode_bytes()`, `hex_bytes()`, `hexencode()`, `msgpack_pack()`, `json_dumps()`, `json_loads()`
 -   URLs: `urlencode()`, `quote()`
--   hashing: `sha256()`, `md5()`, `hmac_sha256()`
+-   hashing: `sha256()`, `sha1()`, `md5()`, `hmac_sha256()`
 
 The time, encoding, URL and hashing helpers cover the values a test otherwise
 needs a fixture or a user function for. Each returns plain text, a number or,
@@ -522,6 +522,7 @@ query inside a value, such as a callback URL passed as a parameter.
 | Call | Returns |
 | --- | --- |
 | `sha256(value)` | The hex SHA-256 digest of `value` |
+| `sha1(value)` | The hex SHA-1 digest of `value`, for signature schemes and checksums that call for SHA-1, not for security |
 | `md5(value)` | The hex MD5 digest of `value`, for checksums such as `Content-MD5`, not for security |
 | `hmac_sha256(key, message, encoding='hex')` | The HMAC-SHA256 of `message` under `key`, as hex, or as base64 with `'base64'` |
 

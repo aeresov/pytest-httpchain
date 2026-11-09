@@ -233,6 +233,13 @@ def sha256(value: str | bytes) -> str:
     return hashlib.sha256(_to_bytes("sha256", value)).hexdigest()
 
 
+def sha1(value: str | bytes) -> str:
+    """Hex SHA-1 digest of ``value`` (text encoded as UTF-8), for the request
+    signatures and checksums that still call for it, not for security: flagged
+    so, so that a FIPS-mode interpreter allows it."""
+    return hashlib.sha1(_to_bytes("sha1", value), usedforsecurity=False).hexdigest()
+
+
 def md5(value: str | bytes) -> str:
     """Hex MD5 digest of ``value`` (text encoded as UTF-8). A checksum, not a
     security measure: flagged so, so that a FIPS-mode interpreter allows it."""
@@ -267,6 +274,7 @@ HELPER_FUNCTIONS = {
     "urlencode": urlencode,
     "quote": quote,
     "sha256": sha256,
+    "sha1": sha1,
     "md5": md5,
     "hmac_sha256": hmac_sha256,
 }
