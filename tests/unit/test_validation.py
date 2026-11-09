@@ -221,7 +221,8 @@ DIAGNOSED = [
     # trailing comma is accepted: the second is where the error is.
     ("jsonc_unterminated_comment.json", [(C.INVALID_JSON, None, r"^Invalid JSON syntax: Unterminated comment: line 6 column 1 \(char \d+\)$")]),
     ("jsonc_double_comma.json", [(C.INVALID_JSON, None, r"^Invalid JSON syntax: Expecting value: line 5 column 113 \(char \d+\)$")]),
-    ("schema_error.json", [(C.SCHEMA, "stages -> 0 -> request", "Field required")]),
+    # A stage with neither a request nor a connection fails on the rule itself.
+    ("schema_error.json", [(C.SCHEMA, "stages -> 0", "A stage sets exactly one of: request, connection")]),
     # Models forbid extra keys: a typo fails naming the key and its location.
     ("request_field_typo.json", [(C.SCHEMA, "stages -> 0 -> request -> headerz", "Extra inputs are not permitted")]),
     ("toplevel_vars_unknown_key.json", [(C.SCHEMA, "vars", "Extra inputs are not permitted")]),

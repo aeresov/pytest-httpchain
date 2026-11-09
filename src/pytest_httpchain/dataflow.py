@@ -141,8 +141,10 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
             StageFlow(
                 index=i,
                 name=stage.name,
-                method=str(stage.request.method),
-                url=stage.request.url,
+                # A connection stage shows as its connection, so the field
+                # stays text for show's JSON readers.
+                method=str(stage.request.method) if stage.request is not None else "CONNECTION",
+                url=stage.request.url if stage.request is not None else stage.connection.name if stage.connection is not None else "",
                 fixtures=sorted(stage.fixtures),
                 marks=list(stage.marks),
                 skip_if=stage.skip_if,

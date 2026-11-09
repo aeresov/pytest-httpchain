@@ -155,7 +155,7 @@ def _file_diagnostics(scenario: Scenario, base_dir: Path | None = None, ref_boun
     yield from _check_path_value(scenario.ssl.verify, "ssl.verify", base_dir)
 
     for i, stage in enumerate(scenario.stages):
-        match stage.request.body:
+        match stage.request.body if stage.request is not None else None:
             case BinaryBody(binary=binary):
                 yield from _check_path_value(binary, f"stages[{i}].request.body.binary", base_dir)
             case FilesBody(files=files):
@@ -223,7 +223,8 @@ def _function_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
     add_substitution_sites(scenario.substitutions, "substitutions")
 
     for i, stage in enumerate(scenario.stages):
-        add_auth_site(stage.request.auth, f"stages[{i}].request.auth")
+        if stage.request is not None:
+            add_auth_site(stage.request.auth, f"stages[{i}].request.auth")
         add_substitution_sites(stage.substitutions, f"stages[{i}].substitutions")
         for k, step in enumerate(stage.response):
             match step:

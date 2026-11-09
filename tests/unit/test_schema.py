@@ -162,6 +162,19 @@ def test_schema_patterns_are_ecma262_compatible():
             id="jmespath-values-and-matchers",
         ),
         pytest.param(_verify(jmespath={"a": {"$include": "common.json#/expected"}}), id="jmespath-include"),
+        # A connection stage in place of a request, and the connections it names.
+        pytest.param(
+            {
+                "connections": {"device": {"adapter": "adapters:LineJson", "params": {"port": "{{ port }}", "type": "v3"}, "connect_timeout": 3}},
+                "stages": [
+                    {"name": "hello", "connection": {"name": "device", "open": True}},
+                    {"name": "ping", "connection": {"name": "device", "send": {"op": "ping"}, "expect": {"match": "op == 'pong'", "timeout": "{{ t }}"}}},
+                    {"name": "pushed", "connection": {"name": "device", "expect": {"match": {"id": "{{ id }}", "n": {"gt": 1}}, "absent": True}}},
+                    {"name": "bye", "connection": {"name": "device", "expect": {"closed": True}, "close": True}},
+                ],
+            },
+            id="connection-stages",
+        ),
     ],
 )
 def test_schema_accepts_documented_shapes(validator, document):
@@ -200,6 +213,11 @@ def test_schema_accepts_documented_shapes(validator, document):
         pytest.param(_request(timeout=r"\{{ t }}"), id="timeout-escaped"),
         pytest.param(_request(timeout=r"\\{{ t }}"), id="timeout-backslash-then-template"),
         pytest.param(_with_stage(skip_if=r"\{{ flag }}"), id="skip-if-escaped"),
+        # A stage is exactly one kind, and neither kind is null.
+        pytest.param({"stages": [{"name": "s"}]}, id="stage-without-kind"),
+        pytest.param(_with_stage(connection={"name": "c", "open": True}), id="stage-with-both-kinds"),
+        pytest.param({"stages": [{"name": "s", "request": None, "connection": {"name": "c", "open": True}}]}, id="stage-null-request"),
+        pytest.param({"stages": [{"name": "s", "connection": {"name": "c", "opne": True}}]}, id="connection-key"),
     ],
 )
 def test_schema_rejects_typos(validator, document):

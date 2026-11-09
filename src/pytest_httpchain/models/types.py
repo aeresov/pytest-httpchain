@@ -296,6 +296,39 @@ def validate_function_import_name(v: str) -> str:
     return v
 
 
+def validate_adapter_import_name(v: str) -> str:
+    """A connection adapter's ``module.path:ClassName``: the user-function
+    grammar, worded for an adapter. Never a template: ``validate --deep``
+    imports the adapter it names."""
+    if contains_template(v):
+        raise ValueError("An adapter name is never rendered, so it cannot hold a template")
+    parse_user_function_name(v, kind="adapter")
+    return v
+
+
+def validate_keyword_arg_name(v: str) -> str:
+    """A keyword argument's name, as a constructor's ``**params`` takes it: an
+    identifier that is not a hard keyword. Soft keywords (``type``, ``match``,
+    ``case``, ``_``) are valid parameter names, unlike template variables."""
+    if not v.isidentifier() or keyword.iskeyword(v):
+        raise ValueError(f"Invalid keyword argument name: '{v}'")
+    return v
+
+
+def validate_match_expression(v: str) -> str:
+    """A connection ``expect.match`` written as a string: a JMESPath expression
+    applied to each message, never rendered, so ``{{`` in it is refused rather
+    than matched as literal text (a saved value goes in the object form, whose
+    values are rendered)."""
+    if "{{" in v:
+        raise ValueError("A match expression is never rendered, so it cannot hold '{{'; compare saved values with the object form, whose values are rendered")
+    try:
+        jmespath.compile(v)
+    except Exception as e:
+        raise ValueError("Invalid JMESPath expression") from e
+    return v
+
+
 class VarsNamespace(types.SimpleNamespace):
     """An object a scenario writes in ``vars`` (at any depth), as templates
     read it: by attribute, as a SimpleNamespace is (``{{ user.name }}``), and
@@ -519,6 +552,9 @@ def convert_namespace_items_to_dict(v: Any) -> Any:
 
 VariableName = Annotated[str, AfterValidator(validate_python_identifier)]
 FunctionImportName = Annotated[str, AfterValidator(validate_function_import_name)]
+AdapterImportName = Annotated[str, AfterValidator(validate_adapter_import_name)]
+KeywordArgName = Annotated[str, AfterValidator(validate_keyword_arg_name)]
+MatchExpression = Annotated[str, AfterValidator(validate_match_expression)]
 JMESPathExpression = Annotated[str, AfterValidator(validate_jmespath_expression)]
 JMESPathKey = Annotated[str, AfterValidator(validate_jmespath_key)]
 JSONSchemaInline = Annotated[dict[str, Any], AfterValidator(validate_json_schema_inline)]
