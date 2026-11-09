@@ -8,6 +8,7 @@ and how the carrier runs a connection step is test_carrier.py's.
 import logging
 import threading
 import time
+import types
 from collections.abc import Iterator
 from typing import Any
 
@@ -579,9 +580,12 @@ class TestCloseAll:
         session, _ = _open(chain, "unseen")
         peer.end(ConnectionResetError("reset"))
         _wait_for(lambda: session.end is not None)
-        with caplog.at_level(logging.ERROR, logger="pytest_httpchain.connections"):
+        with caplog.at_level(logging.WARNING, logger="pytest_httpchain.connections"):
             chain.close_all()
         assert "Connection 'dev' (open 1) failed and no stage saw it: ConnectionResetError: reset" in caplog.text
+        # A warning, not an error: often the peer's own end, a fixture serving
+        # it torn down before the scenario's.
+        assert [record.levelno for record in caplog.records] == [logging.WARNING]
 
     def test_close_errors_are_logged_never_warned(self, caplog):
         helpers.peer("close fails", close_error=RuntimeError("busy"))
@@ -610,16 +614,163 @@ class TestCloseAll:
         _wait_for(lambda: not _readers())
 
     def test_interrupt_is_raised_once_every_connection_is_closed(self):
-        first, second = helpers.peer("first", close_error=KeyboardInterrupt()), helpers.peer("second")
+        first, second, third = helpers.peer("first", close_error=KeyboardInterrupt()), helpers.peer("second", close_error=SystemExit()), helpers.peer("third")
         sessions = []
-        for name in ("first", "second"):
+        for name in ("first", "second", "third"):
             sessions.append(Connections().open(name, ADAPTER, {"peer": name}, 1, 10, "Unit")[0])
+        # The first interrupt, once every connection was closed.
         with pytest.raises(KeyboardInterrupt):
             close_all(sessions)
-        assert (first.closes, second.closes) == (1, 1)
+        assert (first.closes, second.closes, third.closes) == (1, 1, 1)
         _wait_for(lambda: not _readers())
 
 
 def test_reader_end_describes_itself():
     assert ReaderEnd(None).describe() == "closed by the other side"
     assert ReaderEnd(OSError("x")).describe() == "failed: OSError: x"
+
+
+class _Unprintable(Exception):
+    def __str__(self) -> str:
+        raise RuntimeError("no text")
+
+
+class TestGuards:
+    """What an adapter or a message can do wrong that must not break a
+    report, a failure line or the reader."""
+
+    def test_exception_whose_str_raises(self):
+        assert connections_module.describe_exception(_Unprintable()) == "_Unprintable: <exception str() failed>"
+        assert ReaderEnd(_Unprintable()).as_message() == {"error": "_Unprintable", "detail": "<exception str() failed>"}
+
+    def test_bytearray_is_refused_as_bytes(self):
+        with pytest.raises(MessageValueError, match=r"receive\(\) returned bytearray at raw; return bytes"):
+            checked_message({"raw": bytearray(b"x")}, "receive()")
+
+    def test_mapping_that_is_no_dict_is_refused_as_one(self):
+        with pytest.raises(MessageValueError, match=r"receive\(\) returned mappingproxy at meta; return a dict"):
+            checked_message({"meta": types.MappingProxyType({})}, "receive()")
+
+    @pytest.mark.parametrize(
+        ("message", "shown"),
+        [
+            # Bytes as hex, the first 64 of them.
+            ({"raw": b"\x00\xff"}, '{"raw": "0x00ff"}'),
+            ({"raw": b"\x01" * 65}, '{"raw": "0x' + "01" * 64 + '..."}'),
+            # A value JSON has no form for, by its repr.
+            ({"when": 1j}, '{"when": "1j"}'),
+        ],
+    )
+    def test_shown_message(self, message, shown):
+        assert connections_module.shown_message(message) == shown
+
+    def test_shown_message_cut_and_unshowable(self):
+        long = connections_module.shown_message({"text": "x" * 300})
+        assert long.endswith("... (312 characters)")
+        assert len(long) < 300
+        cyclic: dict[str, Any] = {}
+        cyclic["self"] = cyclic
+        assert connections_module.shown_message(cyclic) == "(a message too deep or too long to show)"
+
+    def test_debug_info_interrupt_propagates(self):
+        helpers.peer("interrupted debug", debug=KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            debug_text(helpers.FakeAdapter("interrupted debug"))
+
+    def test_uncopyable_value_is_kept_as_it_is(self):
+        generator = (n for n in ())
+        message = {"g": generator}
+        assert connections_module._copied(message) is message
+
+    def test_unhandled_expect_result_is_a_plugin_bug(self):
+        outcome = connections_module.ExpectOutcome("bogus", waited=0)
+        with pytest.raises(RuntimeError, match="Unhandled expect result: bogus"):
+            expect_failure(outcome, stage="s", connection="dev", match=None, timeout=1, mode="message", sent=False, reopens=False, ended_before=False)
+
+
+class TestReaderGuards:
+    def test_receive_returning_at_once_does_not_spin(self, registry):
+        peer = helpers.peer("impatient")
+        session, _ = _open(registry, "impatient", adapter="tests.unit.connections_test_helpers:ImpatientAdapter")
+        time.sleep(0.2)
+        # Without the pause it would call receive() thousands of times.
+        assert 1 <= peer.receives < 100
+        assert session.end is None
+
+    def test_anything_the_reader_raises_ends_the_session(self, registry, monkeypatch):
+        def broken(value, source):
+            raise RuntimeError("checker broke")
+
+        monkeypatch.setattr(connections_module, "checked_message", broken)
+        peer = helpers.peer("broken check")
+        session, _ = _open(registry, "broken check")
+        peer.push({"n": 1})
+        _wait_for(lambda: session.end is not None)
+        assert session.end is not None
+        assert session.end.describe() == "failed: RuntimeError: checker broke"
+
+    def test_removing_a_message_already_gone_does_nothing(self, registry):
+        peer = helpers.peer("gone")
+        session, _ = _open(registry, "gone")
+        peer.push({"n": 1})
+        _queued(session, 1)
+        session._remove(99)
+        assert session.drain() == 1
+
+
+class TestOpenAndCloseGuards:
+    def test_reopen_logs_a_failing_close_and_opens(self, registry, caplog):
+        peer = helpers.peer("close fails on reopen", close_error=RuntimeError("busy"))
+        _open(registry, "close fails on reopen")
+        with caplog.at_level(logging.ERROR, logger="pytest_httpchain.connections"):
+            session, _ = _open(registry, "close fails on reopen")
+        assert "Closing connection 'dev' to reopen it failed: RuntimeError: busy" in caplog.text
+        assert session.generation == 2
+        peer.close_error = None
+
+    @pytest.mark.parametrize(
+        ("connect_error", "close_error"),
+        [
+            # An interrupt from connect() is no adapter failure: it propagates,
+            # the half-open adapter closed.
+            (KeyboardInterrupt(), None),
+            # And one from that close() too.
+            (OSError("refused"), KeyboardInterrupt()),
+        ],
+    )
+    def test_interrupt_while_connecting_propagates(self, registry, connect_error, close_error):
+        peer = helpers.peer("interrupted connect", connect_error=connect_error, close_error=close_error)
+        with pytest.raises(KeyboardInterrupt):
+            _open(registry, "interrupted connect")
+        assert peer.closes == 1
+        assert registry.session("dev") is None
+
+    def test_close_interrupt_propagates_the_reader_stopped(self, registry):
+        helpers.peer("interrupted close", close_error=KeyboardInterrupt())
+        _open(registry, "interrupted close")
+        with pytest.raises(KeyboardInterrupt):
+            registry.close("dev", "bye")
+        _wait_for(lambda: not _readers())
+        assert registry.not_open("dev") == "closed by stage 'bye'"
+
+    def test_closing_twice_does_nothing_the_second_time(self, registry):
+        helpers.peer("twice")
+        _open(registry, "twice")
+        assert registry.close("dev", "bye") is None
+        assert registry.close("dev", "again") is None
+        assert registry.not_open("dev") == "closed by stage 'again'"
+
+    def test_close_with_a_stuck_reader_bars_reopening(self, registry, monkeypatch, caplog):
+        monkeypatch.setattr(connections_module, "JOIN_BUDGET", 0.1)
+        helpers.STUCK_RELEASE.clear()
+        helpers.peer("stuck on close")
+        try:
+            registry.open("dev", "tests.unit.connections_test_helpers:StuckAdapter", {"peer": "stuck on close"}, 1, 10, "Unit")
+            with caplog.at_level(logging.ERROR, logger="pytest_httpchain.connections"):
+                assert registry.close("dev", "bye") is None
+            assert "The reader of connection 'dev' did not stop within 0.1s of close()" in caplog.text
+            with pytest.raises(RequestError, match="the previous reader for 'dev' did not stop, so it cannot be opened again"):
+                _open(registry, "stuck on close")
+        finally:
+            helpers.STUCK_RELEASE.set()
+        _wait_for(lambda: not _readers())

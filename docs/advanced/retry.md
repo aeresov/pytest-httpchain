@@ -139,6 +139,24 @@ Each setting but `on` can be a template (see [Templates in retry](#templates-in-
 A response is no request failure, whatever its status: to retry while the server answers `503`,
 check the status in a verify step, and retry on `verify`, as the default does.
 
+A [connection stage](../usage/connections.md#retries) fails in the same three ways. An attempt
+runs its connection step again from the top: it reconnects on `open: true`, and drains, sends and
+waits anew.
+
+- **`verify`**: an `expect` that timed out with no message matching (or, for `closed: true`,
+  with the connection still open), and the response steps' checks on the message, as above.
+- **`save`**: a save step that could not take its values from the message.
+- **`request`**: the adapter failed: its constructor, `connect()` or `send()` raised an
+  `OSError` (a refused, reset or timed-out socket), or a `RequestError` it raised with
+  `retryable=True` (`from pytest_httpchain.errors import RequestError`). Anything else an adapter
+  raises is not retried. Nor is the connection ending while the stage waits for a message, unless
+  the stage says `open: true`, so the next attempt connects again.
+
+Never retried on a connection stage: a step on a connection that is not open (closed by a stage,
+or ended by the other side) without `open: true`; an `absent` expect that saw a matching message;
+a `connect()` or `send()` result that is no message (a dict of JSON values or bytes); an adapter
+that cannot be imported; and an `expect.match` value that does not render.
+
 A user function says "not yet" as a check does: a verify function by returning `False`, and a
 save function, which has no `False` to return, by raising a `SaveError` (a verify function may
 raise a `VerificationError` too). Anything else it raises is a crash, which is not retried:

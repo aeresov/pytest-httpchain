@@ -26,6 +26,7 @@ Configuration options can be set in `pytest.ini` or `pyproject.toml` under `[too
 | `httpchain_max_parallel_iterations` | `10000` | Maximum number of parallel iterations (`repeat`/`foreach`) allowed per stage |
 | `httpchain_redact_headers` | `Authorization Proxy-Authorization Cookie Set-Cookie X-API-Key API-Key X-Auth-Token` | Headers whose values reports and failure messages show as `[REDACTED]`. Case-insensitive; empty disables. See [Secrets in reports](#secrets-in-reports) |
 | `httpchain_redact_query_params` | `access_token refresh_token id_token api_key apikey client_secret password token` | Query parameters whose values URLs in reports show as `[REDACTED]`. Case-insensitive; empty disables |
+| `httpchain_redact_message_keys` | both lists above, lowercased | Keys whose values, at any depth of a [connection stage](usage/connections.md#reports)'s messages, its report section and failure messages show as `[REDACTED]`. Case-insensitive; empty disables |
 | `httpchain_har_redact` | `false` | Apply the same redaction to [HAR files](#har-export) |
 
 The pre-0.10 un-prefixed names (`suffix`, `ref_parent_traversal_depth`, ...)
@@ -82,18 +83,21 @@ A `Cookie` keeps each cookie's name and a `Set-Cookie` its cookie's name and att
 
 Request and response **bodies are not redacted**: a form's `password=...`, or a login response's token, shows as sent. Nor is anything logged at DEBUG: the context dumps the plugin logs there hold saved values such as tokens, and httpcore's connection trace lists every response header as received, `Set-Cookie` included. Do not capture DEBUG logs in a CI run against real credentials.
 
+A [connection stage](usage/connections.md#reports)'s messages have no headers or query to carry a credential apart from the data, so they are redacted by key instead: the value under a key `httpchain_redact_message_keys` lists, at any depth, prints as `[REDACTED]` in the stage's Connection Exchange section and in the failure messages that quote a message (an `absent` expect's hit, the reasons a message did not match). Its default is the two lists above, lowercased. What the stage's `verify` and `save` steps see is never redacted, and their failure messages are not either, as a body check's are not.
+
 Each list replaces its default, so add the names you need to the ones you keep. Names are separated by whitespace, commas or line breaks, or given as a TOML list:
 
 ```toml
 [tool.pytest.ini_options]
 httpchain_redact_headers = ["Authorization", "Cookie", "Set-Cookie", "X-Tenant-Secret"]
 httpchain_redact_query_params = ["access_token", "sig"]
+httpchain_redact_message_keys = ["token", "session_key"]
 ```
 
 An empty value disables that list, for instance to see the real values while debugging locally:
 
 ```bash
-pytest -o httpchain_redact_headers= -o httpchain_redact_query_params=
+pytest -o httpchain_redact_headers= -o httpchain_redact_query_params= -o httpchain_redact_message_keys=
 ```
 
 ## IDE Support

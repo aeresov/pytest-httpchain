@@ -505,10 +505,12 @@ class _Session:
         self._thread.join(timeout)
 
     def log_unobserved(self) -> None:
-        """Log a reader failure no stage saw, at the session's end."""
+        """Log a reader failure no stage saw, at the session's end: a warning
+        (by logging, never the warnings module), as it is often the peer's
+        own end, a fixture serving it torn down before the scenario's."""
         end = self.end
         if end is not None and end.error is not None and not end.after_stop and not self.observed:
-            logger.error("Connection '%s' (open %d) failed and no stage saw it: %s", self.name, self.generation, describe_exception(end.error))
+            logger.warning("Connection '%s' (open %d) failed and no stage saw it: %s", self.name, self.generation, describe_exception(end.error))
 
 
 @dataclass(frozen=True, slots=True)

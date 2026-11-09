@@ -205,10 +205,10 @@ curl -X POST 'https://api.example.com/users?access_token=[REDACTED]' \
 
 ### `[REDACTED]` in a Report
 
-The values of credential headers and query parameters are hidden in report sections and in header checks' failure messages (see [Secrets in reports](getting-started.md#secrets-in-reports)). A failed exact match on such a header can then read `expected session=[REDACTED]; Path=/, got session=[REDACTED]; Path=/`: the values differ, both are hidden. Likewise `contains '[REDACTED]' while it shouldn't` is a `not_contains` operand found in the hidden part of the value, and `Illegal header value b'[REDACTED]'` a header value the HTTP library refused, usually for a trailing newline in a token read from a file. To see them while debugging locally, switch redaction off for the run:
+The values of credential headers and query parameters are hidden in report sections and in header checks' failure messages (see [Secrets in reports](getting-started.md#secrets-in-reports)). A failed exact match on such a header can then read `expected session=[REDACTED]; Path=/, got session=[REDACTED]; Path=/`: the values differ, both are hidden. Likewise `contains '[REDACTED]' while it shouldn't` is a `not_contains` operand found in the hidden part of the value, and `Illegal header value b'[REDACTED]'` a header value the HTTP library refused, usually for a trailing newline in a token read from a file. A connection stage's messages hide the values of listed keys (`httpchain_redact_message_keys`) in its Connection Exchange section and in the failure messages that quote a message. To see them while debugging locally, switch redaction off for the run:
 
 ```bash
-pytest -o httpchain_redact_headers= -o httpchain_redact_query_params=
+pytest -o httpchain_redact_headers= -o httpchain_redact_query_params= -o httpchain_redact_message_keys=
 ```
 
 ## HTTP Request Errors
@@ -265,6 +265,63 @@ Increase the timeout for slow endpoints (or for every stage of a scenario, with
 }
 ```
 
+## Connection Stages
+
+### An `expect` Times Out
+
+The failure names the match as the scenario declares it, and how many messages
+arrived while the stage waited:
+
+```text
+Stage 'ping': no message on connection 'device' matched {"op": "pong", "id": 1} within 5 s (2 messages arrived after the send)
+```
+
+The report's **Connection Exchange** section lists those messages, each with
+its arrival time and the first expectation it did not meet
+(`#1 at +0.004 s after the send: JMESPath 'id' doesn't match: expected 1, got "1"`),
+the messages that arrived within 0.2 s after the deadline as late, how many
+were queued before the send, and how many `inbox_limit` dropped (see
+[Reports](usage/connections.md#reports)). The usual causes:
+
+-   **The message came before the send.** A stage that sends looks only at what
+    arrives after its send. A message pushed in reply to an earlier HTTP stage
+    is taken by a stage that sends nothing, which looks at the whole queue.
+-   **A type differs**: `"1"` against `1`. The miss reason shows both values.
+-   **Nothing arrived**: the section's `debug_info()` shows what the adapter
+    holds undecoded, if it has a `debug_info()`, and its `Reader:` line says
+    whether the connection ended.
+
+### `receive() returned tuple at body.items`
+
+A message, and what `connect()` and `send()` return, must be a dict with
+string keys holding JSON values (objects, lists, strings, numbers, booleans,
+null) or bytes, at any depth. The adapter returned something else at that
+path: convert tuples and sets to lists, and dates, decimals or protocol
+objects to strings or numbers. A message `receive()` returns that is not one
+ends the connection, and the stage waiting on it fails saying so.
+
+### "failed and no stage saw it" at the End of a Run
+
+```text
+WARNING  pytest_httpchain.connections: Connection 'device' (open 1) failed and no stage saw it: ConnectionResetError: [Errno 104] Connection reset by peer
+```
+
+At the end of a scenario the plugin logs, as a warning, a connection whose
+reader failed after the last stage that used it. It is most often the other
+side going first: a fixture that serves the peer and is torn down before the
+scenario's connections are closed, which happens after its class-scoped
+fixtures are torn down. Give such a fixture module scope or wider, or expect
+the line. An adapter that raises `EOFError` for a clean end of the connection
+is not reported.
+
+### Frames That Interleave or a Socket That Misbehaves
+
+`send()` runs on the test's thread while `receive()` runs on the connection's
+reader thread. An adapter that also writes from `receive()` or from threads of
+its own (heartbeats, automatic acknowledgements) must guard every write with
+one lock, and `receive()` must not change socket state `send()` relies on,
+such as its timeout (see [Writing an adapter](usage/connections.md#writing-an-adapter)).
+
 ## User Function Errors
 
 ### Import Failures
@@ -288,3 +345,6 @@ Verify functions must accept `httpx.Response` and return `bool`:
 def my_verify(response: httpx.Response) -> bool:
     return response.json()["status"] == "ok"
 ```
+
+On a [connection stage](usage/connections.md#checking-the-message), both take the
+message as `message=` (a dict) instead of `response=`.

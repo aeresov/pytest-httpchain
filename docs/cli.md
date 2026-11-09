@@ -60,7 +60,7 @@ Findings carry a stable `HTTPCHAINxxx` code and a severity — see
 | `--format text\|json` | `json` emits the whole result, including each diagnostic's `code`, `severity`, `message` and `location`, for editor and CI integration. |
 | `--strict` | Treat warnings as failures for the exit code. |
 | `--suffix SUFFIX` | Search directories for `test_<name>.<SUFFIX>.json` and `.jsonc` files. Default: the `httpchain_suffix` your pytest configuration sets, else `http` (see [Directories](#directories)). |
-| `--deep` | Also import your `module:func` references and check their signatures, and confirm referenced files and schema files exist. A body schema is followed as the runtime follows it: its JSON pointer must resolve, the schema it selects must be valid, and every `$ref` and `$dynamicRef` it reaches must resolve to a valid schema, locally and under the path rules a scenario's `$include` keeps (`--root-path`, `--ref-parent-traversal-depth`) (see [JSON Schema validation](usage/responses.md#a-schema-inside-a-document-openapi-and-shared-schema-files)). |
+| `--deep` | Also import your `module:func` references and check their signatures, import each connection's adapter class and check it has the methods the plugin calls, taking the arguments it passes, and a constructor that takes the connection's `params` (`HTTPCHAIN046`, see [Writing an adapter](usage/connections.md#writing-an-adapter)), and confirm referenced files and schema files exist. A body schema is followed as the runtime follows it: its JSON pointer must resolve, the schema it selects must be valid, and every `$ref` and `$dynamicRef` it reaches must resolve to a valid schema, locally and under the path rules a scenario's `$include` keeps (`--root-path`, `--ref-parent-traversal-depth`) (see [JSON Schema validation](usage/responses.md#a-schema-inside-a-document-openapi-and-shared-schema-files)). |
 | `--syspath DIR` | Extra directory on `sys.path` for `--deep` import resolution. Repeatable. |
 
 `--deep` imports your code, which is why it is opt-in and never runs at pytest
@@ -164,10 +164,20 @@ finds nothing. So a name whose nearest producer may skip lists every stage it
 may come from, nearest first, back to one that never skips:
 `token (from #2 refresh, else #1 login)`.
 
+A [connection stage](usage/connections.md) shows `CONNECTION`, its connection's
+name and what its step does, in order, in place of a method and URL:
+`2 · ping    CONNECTION device send·expect`. The stage that may open a
+connection lists what its `params` read among its `consumes:`.
+
 `--format json` emits the same data-flow model (stages, edges, scenario
 fixtures and vars) for tooling. Each stage carries its `skip_if` as declared,
 `false` when it has none, and `may_skip`: whether its `skip_if` or one of its
-own marks may skip it.
+own marks may skip it. Each also carries its `kind` (`"request"` or
+`"connection"`), and a connection stage its `connection` and `actions`
+(`["send", "expect"]`; `null` and `[]` on an HTTP stage), with `"method":
+"CONNECTION"` and its connection's name as `url`. `connection_edges` lists, for
+each stage that uses a connection, each stage that may have opened it
+(`{"opener": 0, "user": 1, "connection": "device"}`, by index).
 
 ## `graph`
 
@@ -178,6 +188,10 @@ of a stage that may skip, by its `skip_if` or its own `skip`, `skipif` or
 those names from an earlier stage that saved them, so every such stage has its
 own edge too, back to the nearest one that never skips, whose edge is solid;
 when none saved them, the consumer finds nothing.
+
+A stage that uses a [connection](usage/connections.md) gets a dotted edge (`-.->`),
+labelled `connection: <name>`, from each stage that may have opened the session
+it uses.
 
 ```console
 $ pytest-httpchain graph tests/integration/examples/save/test_save_jmespath.http.json

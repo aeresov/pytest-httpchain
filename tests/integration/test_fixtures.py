@@ -24,7 +24,7 @@ def test_fixture_values_reach_templates(run_scenario, scenario, passed):
 @pytest.mark.parametrize(
     ("call", "outcomes", "line"),
     [
-        # Committed while the class-scoped connection it is built on is open.
+        # Committed while the class-scoped db_connection it is built on is open.
         pytest.param("transaction('t1')", {"passed": 2}, "transaction t1 committed", id="exited-with-stage"),
         # An error on exit fails the stage: it aborts the chain, and discards
         # the save, so the cleanup stage guarded by exists() skips.
@@ -39,7 +39,7 @@ def test_fixture_values_reach_templates(run_scenario, scenario, passed):
 def test_factory_fixture_context_manager_exits_with_its_stage(run_scenario, call, outcomes, line):
     """A context manager a factory fixture returns is exited when the stage that
     entered it ends, before pytest tears down the fixtures it is built on. It
-    was exited at class teardown, after even a class-scoped ``connection`` was
+    was exited at class teardown, after even a class-scoped ``db_connection`` was
     closed, and its error on exit was only logged: both runs passed. The
     cleanup stage, guarded by ``exists()``, pins that a stage failed on exit
     discards its save like any failed stage, so no cleanup runs for a

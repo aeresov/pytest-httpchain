@@ -56,6 +56,10 @@ JSON, MessagePack, form, XML, text, base64, a binary file and GraphQL, and [mult
 -   **User functions** — Call Python functions for custom extraction, verification, or authentication
 -   **Failure reports** — A failing verify step lists every check that failed, not only the first, and the report gives the request as a ready-to-run `curl` command beside the request and response it shows
 
+### Socket Protocols via Adapters
+
+Not every service a test talks to speaks HTTP. A [`connection`](usage/connections.md) stage drives a long-lived connection through an adapter, a small Python class you write that connects, sends one message and decodes the next: `"connection": {"name": "device", "send": {"op": "ping"}, "expect": {"match": {"op": "pong"}, "timeout": 2}}`. Every message received is queued for the stages that wait for it; `expect` takes the one that matches, asserts that none arrives (`absent`) or that the other side hangs up (`closed`), and the same `verify` and `save` steps an HTTP stage uses check it. HTTP and connection stages mix in one chain, sharing what they save.
+
 ### Scenario-wide Client Settings
 
 A scenario's [`client`](usage/scenarios.md#client-configuration) block sets up the HTTP client all its stages share, once: a base URL their relative URLs are appended to, headers and query parameters sent with every request, timeout, redirects, proxy, HTTP/2 and connection pool. A stage overrides what it needs.

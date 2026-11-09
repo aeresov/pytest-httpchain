@@ -6,6 +6,7 @@ round trip itself is the integration suite's.
 """
 
 import contextvars
+import fnmatch
 import json
 import logging
 import math
@@ -68,7 +69,7 @@ from pytest_httpchain.models import (
     VarsSubstitution,
     Verify,
 )
-from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
+from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION, Redaction
 from pytest_httpchain.request_builder import build_client_kwargs
 from pytest_httpchain.scoping import base_global_context
 from pytest_httpchain.templates import TemplatesError, walk
@@ -4344,6 +4345,68 @@ class TestConnectionStages:
         )
         with pytest.warns(ScenarioValidationWarning, match="reserved name 'message': inside response steps it is shadowed by the message the stage took"):
             assert self._run(carrier, scenario) == ["passed"]
+
+    @pytest.mark.parametrize(
+        ("stage", "variables", "failure"),
+        [
+            # A send that renders to text, not an object.
+            (
+                {"name": "s", "connection": {"name": "dev", "send": "{{ payload }}"}},
+                {"payload": "\\{{ x }}"},
+                "failed: Stage 's': connection.send must render to an object, got str",
+            ),
+            # A matcher operand that renders to None, as a field's would.
+            (
+                {"name": "s", "connection": {"name": "dev", "expect": {"match": {"n": {"gt": "{{ nothing }}"}}, "timeout": 1}}},
+                {"nothing": None},
+                "failed: 'connection.expect.match.n.gt' was declared as '{{ nothing }}' but rendered to None*",
+            ),
+            # A template the response steps cannot render, on a connection stage.
+            (
+                {"name": "s", "connection": {"name": "dev", "open": True}, "response": [{"save": {"substitutions": [{"vars": {"x": "{{ 1 / 0 }}"}}]}}]},
+                {},
+                "failed: *division by zero*",
+            ),
+        ],
+    )
+    def test_what_the_scenario_cannot_render_fails_the_stage(self, stage, variables, failure):
+        from tests.unit import connections_test_helpers as helpers
+
+        helpers.peer("carrier", greeting={"a": 1})
+        carrier, scenario = self._carrier([stage], substitutions=[{"vars": variables}] if variables else [])
+        [outcome] = self._run(carrier, scenario)
+        assert fnmatch.fnmatchcase(outcome, failure), outcome
+
+    def test_message_too_deep_for_templates_fails_the_stage(self):
+        from tests.unit import connections_test_helpers as helpers
+
+        deep: dict = {}
+        node = deep
+        for _ in range(5000):
+            node["a"] = {}
+            node = node["a"]
+        helpers.peer("carrier", greeting=deep)
+        carrier, scenario = self._carrier([{"name": "s", "connection": {"name": "dev", "open": True}, "response": [{"verify": {"expressions": ["{{ true }}"]}}]}])
+        [outcome] = self._run(carrier, scenario)
+        assert outcome.startswith("failed: Stage 's': the message is nested too deeply for templates to read")
+
+    def test_miss_reasons_without_message_redaction(self, monkeypatch):
+        """With no message key listed, a miss reason is shown as it is."""
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr("pytest_httpchain.connections.LATE_WINDOW", 0)
+        helpers.peer("carrier", reply=lambda message: [{"token": "visible"}])
+        carrier, scenario = self._carrier(
+            [{"name": "s", "connection": {"name": "dev", "send": {}, "expect": {"match": {"token": "{{ want }}"}, "timeout": 0.05}}}], substitutions=[{"vars": {"want": "other"}}]
+        )
+        carrier.redaction = Redaction()
+        kept = self._recording(carrier)
+        [outcome] = self._run(carrier, scenario)
+        assert outcome.startswith("failed: Stage 's': no message on connection 'dev' matched")
+        snapshot = kept[0][0]
+        assert snapshot is not None
+        [arrival] = snapshot.considered
+        assert arrival.miss.reason == 'JMESPath \'token\' doesn\'t match: expected "other", got "visible"'
 
     def test_end_chain_resets_state_when_client_close_raises(self, caplog):
         from tests.unit import connections_test_helpers as helpers

@@ -637,27 +637,54 @@ def _tls_server_context(ca, *, require_client_cert: bool) -> ssl.SSLContext:
 LINE_JSON_PORT_ENV = "HTTPCHAIN_EXAMPLE_LINE_JSON_PORT"
 
 
-def _line_json_answer(message: dict) -> dict:
-    """What the newline-JSON server answers a message with: a pong for a
-    ping, a bye for a bye (and it hangs up), an echo for anything else."""
+def _line_json_answers(message: dict, state: dict) -> list[dict] | None:
+    """What the newline-JSON server answers a message with, in order, each
+    answer but an echo carrying the message's ``seq`` (the reference adapter's
+    frame number) as ``reply_to``; None to hang up without a word.
+
+    - ``ping``: a ``pong`` of the same ``id``;
+    - ``push``: ``count`` pushed messages ``{"push": 1}``... first, then a
+      ``pushed`` reply;
+    - ``count``: the connection's own counter, one more each time (``n``);
+    - ``hangup``: nothing, the server hangs up;
+    - ``bye``: a ``bye``, then the server hangs up;
+    - anything else: an ``echo`` of the message.
+    """
+    reply_to = {"reply_to": message["seq"]} if "seq" in message else {}
     match message.get("op"):
         case "ping":
-            return {"op": "pong", "id": message.get("id"), "time": 1700000000}
+            return [{"op": "pong", "id": message.get("id"), "time": 1700000000, **reply_to}]
+        case "push":
+            count = int(message.get("count", 1))
+            return [*({"push": i} for i in range(1, count + 1)), {"op": "pushed", "count": count, **reply_to}]
+        case "count":
+            state["count"] = state.get("count", 0) + 1
+            return [{"op": "count", "n": state["count"], **reply_to}]
+        case "hangup":
+            return None
         case "bye":
-            return {"op": "bye"}
+            return [{"op": "bye", **reply_to}]
         case _:
-            return {"echo": message}
+            return [{"echo": message}]
 
 
 def _line_json_client(conn: socket.socket) -> None:
-    """Serve one connection: greet it, then answer each line until a bye or EOF."""
+    """Serve one connection: greet it, then answer each line until a bye, a
+    hangup or EOF. Hanging up shuts the socket down, so the client reads a
+    clean end at once."""
+    state: dict = {}
     with conn, conn.makefile("rb") as lines:
         try:
             conn.sendall(b'{"greeting": "hello"}\n')
             for line in lines:
                 message = json.loads(line)
-                conn.sendall(json.dumps(_line_json_answer(message)).encode() + b"\n")
+                answers = _line_json_answers(message, state)
+                if answers is None:
+                    conn.shutdown(socket.SHUT_RDWR)
+                    break
+                conn.sendall(b"".join(json.dumps(answer).encode() + b"\n" for answer in answers))
                 if message.get("op") == "bye":
+                    conn.shutdown(socket.SHUT_RDWR)
                     break
         except OSError:
             # The client went away, or teardown shut the socket.
@@ -699,16 +726,20 @@ def _serve_line_json():
             thread.join(5)
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="module")
 def line_json_server():
     """A newline-JSON TCP server for a whole scenario's connection stages
     (``connections/line_json.py`` is its adapter), its port exported as
     ``HTTPCHAIN_EXAMPLE_LINE_JSON_PORT``, so a connection's params read it
     as a real suite's would: ``"port": "{{ env('HTTPCHAIN_EXAMPLE_LINE_JSON_PORT') }}"``.
     A scenario asks for it with ``usefixtures('line_json_server')``. It greets
-    each connection with ``{"greeting": "hello"}``, answers a ``ping`` with a
-    ``pong`` of the same ``id``, a ``bye`` with a ``bye``, then hangs up, and
-    echoes anything else."""
+    each connection with ``{"greeting": "hello"}``, then answers each message
+    as `_line_json_answers` says: a ``ping`` with a ``pong`` of the same
+    ``id``, a ``bye`` with a ``bye`` before it hangs up, and so on.
+
+    Module-scoped, so it outlives the scenario's connections, which close
+    after its class-scoped fixtures are torn down: a server gone first would
+    end them before the plugin closes them."""
     with _serve_line_json() as port, _exported(LINE_JSON_PORT_ENV, str(port)):
         yield port
 
@@ -806,7 +837,7 @@ def request_id():
 
 
 @pytest.fixture(scope="class")
-def connection():
+def db_connection():
     """A class-scoped resource, closed once the scenario's last stage is done."""
     conn = {"closed": False}
     yield conn
@@ -814,8 +845,8 @@ def connection():
 
 
 @pytest.fixture
-def transaction(connection):
-    """Factory fixture whose value is a context manager built on ``connection``:
+def transaction(db_connection):
+    """Factory fixture whose value is a context manager built on ``db_connection``:
     ``{{ transaction('t1') }}`` begins one, and its exit commits it, printing
     so, or raises — on a closed connection, as a real commit would, or when
     asked to with ``fail=True``."""
@@ -823,7 +854,7 @@ def transaction(connection):
     @contextmanager
     def _transaction(name, fail=False):
         yield name
-        if connection["closed"]:
+        if db_connection["closed"]:
             raise RuntimeError(f"cannot commit {name}: connection closed")
         if fail:
             raise RuntimeError(f"commit of {name} rejected")
