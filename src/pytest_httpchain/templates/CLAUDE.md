@@ -209,7 +209,7 @@ Safe functions available in expressions:
 - Time: `now(fmt=None)` (UTC, ISO 8601 with offset and microseconds, or `strftime(fmt)`; `%s` refused, as the C library formats it in local time), `timestamp()`, `timestamp_ms()`
 - Encoding: `b64encode(value, urlsafe=False)`, `b64decode(value, urlsafe=False)` (padding optional, UTF-8 result), `json_dumps(value)` (json.dumps defaults, a `vars` namespace encoded as its object), `json_loads(text)`
 - URLs: `urlencode(mapping)` (encoded as httpx encodes `request.params`: list values repeat the key, `true`/`false`, empty for None; bytes percent-encoded as they are, where httpx sends their repr; nested objects and functions refused), `quote(text, safe='')`
-- Hashing: `sha256(value)`, `md5(value)`, `hmac_sha256(key, message, encoding='hex')` (`'hex'` or `'base64'`)
+- Hashing: `sha256(value)`, `sha1(value)`, `md5(value)`, `hmac_sha256(key, message, encoding='hex')` (`'hex'` or `'base64'`)
 
 The time, encoding, URL and hashing helpers live in `functions.py`
 (`HELPER_FUNCTIONS`, merged into `SAFE_FUNCTIONS`, so `TEMPLATE_BUILTINS`

@@ -301,6 +301,9 @@ class TestHashing:
             pytest.param("{{ sha256('abc') }}", {}, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", id="sha256"),
             pytest.param("{{ sha256('hé') }}", {}, "7dfbe0eab96510b11c9a2671d83019cd52953211294db5f917ffa0b7cc84f534", id="sha256-utf-8"),
             pytest.param("{{ sha256(raw) }}", {"raw": b"abc"}, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", id="sha256-bytes"),
+            pytest.param("{{ sha1('abc') }}", {}, "a9993e364706816aba3e25717850c26c9cd0d89d", id="sha1"),
+            pytest.param("{{ sha1('hé') }}", {}, "96565112c667eb63e672b56c4401d0541eeada0e", id="sha1-utf-8"),
+            pytest.param("{{ sha1(raw) }}", {"raw": b"abc"}, "a9993e364706816aba3e25717850c26c9cd0d89d", id="sha1-bytes"),
             pytest.param("{{ md5('abc') }}", {}, "900150983cd24fb0d6963f7d28e17f72", id="md5"),
             pytest.param("{{ hmac_sha256(key, message) }}", {"key": HMAC_KEY, "message": HMAC_MESSAGE}, HMAC_HEX, id="hmac-hex"),
             pytest.param("{{ hmac_sha256(key, message, 'base64') }}", {"key": HMAC_KEY, "message": HMAC_MESSAGE}, HMAC_BASE64, id="hmac-base64"),
@@ -315,6 +318,7 @@ class TestHashing:
         [
             # A number has more than one text form: the author picks it with str().
             pytest.param("{{ sha256(1) }}", r"^TypeError .*: sha256\(\) takes text or bytes, not int$", id="sha256-number"),
+            pytest.param("{{ sha1(1.5) }}", r"sha1\(\) takes text or bytes, not float$", id="sha1-number"),
             pytest.param("{{ md5(null) }}", r"md5\(\) takes text or bytes, not None$", id="md5-none"),
             pytest.param("{{ hmac_sha256(1, 'm') }}", r"hmac_sha256\(\) takes text or bytes, not int$", id="hmac-key"),
             pytest.param("{{ hmac_sha256('k', ['m']) }}", r"hmac_sha256\(\) takes text or bytes, not list$", id="hmac-message"),
@@ -402,6 +406,7 @@ def test_call_form_covers_every_call_only_builtin():
                 "urlencode",
                 "quote",
                 "sha256",
+                "sha1",
                 "md5",
                 "hmac_sha256",
                 "env",

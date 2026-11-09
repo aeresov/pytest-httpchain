@@ -24,6 +24,7 @@
                         "ts": "{{ timestamp() }}",
                         "ms": "{{ timestamp_ms() }}",
                         "digest": "{{ sha256(started) }}",
+                        "sha1": "{{ sha1(started) }}",
                         "checksum": "{{ md5(started) }}",
                         "signature": "{{ hmac_sha256(secret, started, 'base64') }}",
                         "encoded": "{{ b64encode(json_dumps(query), urlsafe=true) }}",
@@ -39,6 +40,7 @@
                         "jmespath": {
                             "received.started": "{{ started }}",
                             "received.digest": "{{ sha256(started) }}",
+                            "received.sha1": "{{ sha1(started) }}",
                             "received.checksum": "{{ md5(started) }}",
                             "received.signature": "{{ hmac_sha256(secret, started, 'base64') }}",
                             "received.segment": "a%20b%2Fc",
