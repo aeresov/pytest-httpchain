@@ -19,11 +19,33 @@ import pytest
 from pytest_httpchain.body_schema import ReferenceBounds
 from pytest_httpchain.carrier import _verify_renderer
 from pytest_httpchain.errors import SaveError, VerificationError
-from pytest_httpchain.models import JSON_TYPE_NAMES, JMESPathSave, RegexSave, SubstitutionsSave, UserFunctionsSave, Verify
+from pytest_httpchain.models import (
+    JSON_TYPE_NAMES,
+    ConnectionExpect,
+    JMESPathMatcher,
+    JMESPathSave,
+    RegexSave,
+    SubstitutionsSave,
+    UserFunctionsSave,
+    Verify,
+    validate_rendered_expectations,
+)
 from pytest_httpchain.models.entities import ResponseBody
 from pytest_httpchain.models.types import convert_dict_to_namespace
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
-from pytest_httpchain.response_steps import RenderFailure, RenderOutcome, is_json_type, process_save, process_verify
+from pytest_httpchain.response_steps import (
+    MATCH,
+    NO_MESSAGE,
+    Match,
+    MessageSubject,
+    NoMatch,
+    RenderFailure,
+    RenderOutcome,
+    is_json_type,
+    message_matches,
+    process_save,
+    process_verify,
+)
 from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.userfunc import UserFunctionError
 from tests.unit import response_steps_test_helpers
@@ -1723,3 +1745,127 @@ class TestRetryable:
 )
 def test_is_json_type(value, types):
     assert {name for name in JSON_TYPE_NAMES if is_json_type(value, name)} == types
+
+
+class TestMessageSubject:
+    """A connection stage's message as a step's subject: JMESPath and a body
+    schema read the dict as it is, user functions get it as ``message=``, and
+    what only an HTTP response has fails the step clearly."""
+
+    MESSAGE = MessageSubject({"type": "ack", "ack_of": "c1", "raw": b"\x00\xff", "items": [1, 2]})
+
+    def test_jmespath_schema_and_functions_read_the_message(self):
+        verify = Verify.model_validate(
+            {
+                "jmespath": {"type": "ack", "raw": b"\x00\xff", "items": {"length": 2}},
+                "user_functions": ["tests.unit.response_steps_test_helpers:message_is_ack"],
+                "body": {"schema": {"type": "object", "required": ["ack_of"]}},
+            }
+        )
+        process_verify(verify, self.MESSAGE)
+
+    def test_saves_read_the_message(self):
+        assert process_save(JMESPathSave(jmespath={"of": "ack_of", "raw": "raw"}), self.MESSAGE, ChainMap()) == {"of": "c1", "raw": b"\x00\xff"}
+        saved = process_save(UserFunctionsSave(user_functions=["tests.unit.response_steps_test_helpers:saves_from_message"]), self.MESSAGE, ChainMap())
+        assert saved == {"ack_of": "c1"}
+
+    def test_mismatch_names_the_message(self):
+        with pytest.raises(VerificationError, match=r"^JMESPath 'length\(missing\)' cannot be evaluated against the message: length\(\) needs"):
+            process_verify(Verify.model_validate({"jmespath": {"length(type)": 3, "length(missing)": 0}}), self.MESSAGE)
+
+    def test_http_only_checks_fail_once_per_field_and_are_not_retried(self):
+        verify = Verify.model_validate({"status": 200, "headers": {"X-A": "1"}, "body": {"contains": ["a"], "not_matches": ["b"]}})
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(verify, self.MESSAGE)
+        assert str(excinfo.value) == (
+            "4 verification checks failed:\n"
+            "  1. verify.status checks an HTTP response, and a connection stage has a message instead\n"
+            "  2. verify.headers checks an HTTP response, and a connection stage has a message instead\n"
+            "  3. verify.body.contains checks an HTTP response, and a connection stage has a message instead\n"
+            "  4. verify.body.not_matches checks an HTTP response, and a connection stage has a message instead"
+        )
+        assert not excinfo.value.retryable
+
+    def test_regex_save_fails_on_a_message(self):
+        with pytest.raises(SaveError, match="save.regex reads an HTTP response body's text") as excinfo:
+            process_save(RegexSave(regex={"a": "(.)"}), self.MESSAGE, ChainMap())
+        assert not excinfo.value.retryable
+
+    def test_no_message_fails_what_needs_one(self):
+        verify = Verify.model_validate({"jmespath": {"a": 1, "b": 2}, "user_functions": ["tests.unit.response_steps_test_helpers:message_is_ack"]})
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(verify, NO_MESSAGE)
+        assert str(excinfo.value).splitlines()[1:] == [
+            "  1. Cannot check verify.jmespath: the stage took no message (it has no expect, or an absent one, and does not open)",
+            "  2. Cannot call user function 'tests.unit.response_steps_test_helpers:message_is_ack' (user_functions[0]): "
+            "the stage took no message (it has no expect, or an absent one, and does not open)",
+        ]
+        assert not excinfo.value.retryable
+        with pytest.raises(SaveError, match="Cannot extract variables: the stage took no message"):
+            process_save(JMESPathSave(jmespath={"a": "a"}), NO_MESSAGE, ChainMap())
+
+
+class TestMessageMatches:
+    @pytest.mark.parametrize(
+        ("value", "matched"),
+        [
+            pytest.param(True, True, id="true"),
+            pytest.param(0, True, id="zero-is-true-in-jmespath"),
+            pytest.param("x", True, id="text"),
+            pytest.param([0], True, id="array"),
+            pytest.param(False, False, id="false"),
+            pytest.param(None, False, id="null"),
+            pytest.param("", False, id="empty-string"),
+            pytest.param([], False, id="empty-array"),
+            pytest.param({}, False, id="empty-object"),
+        ],
+    )
+    def test_string_form_uses_jmespath_truth(self, value, matched):
+        verdict = message_matches("v", None, {"v": value})
+        assert isinstance(verdict, Match) is matched
+
+    def test_string_form_miss_says_what_it_gave(self):
+        assert message_matches("op == 'pong'", None, {"op": "ping"}) == NoMatch("JMESPath \"op == 'pong'\" gave false")
+
+    def test_evaluation_error_on_one_message_is_no_match(self):
+        verdict = message_matches("length(body)", None, {"body": None})
+        assert isinstance(verdict, NoMatch)
+        assert verdict.error
+        assert verdict.reason.startswith("JMESPath 'length(body)' cannot be evaluated against the message: length() needs")
+
+    def test_no_match_object_matches_anything(self):
+        assert message_matches(None, None, {}) == MATCH
+
+    def test_object_form_needs_every_expectation(self):
+        match = {"op": "pong", "id": JMESPathMatcher(gt=1)}
+        assert message_matches(match, match, {"op": "pong", "id": 2}) == MATCH
+        assert message_matches(match, match, {"op": "pong", "id": 1}) == NoMatch("JMESPath 'id' doesn't match: expected gt 1, got 1")
+        assert message_matches(match, match, {"op": "ping", "id": 2}) == NoMatch('JMESPath \'op\' doesn\'t match: expected "pong", got "ping"')
+
+    def test_object_form_evaluation_error_is_no_match(self):
+        match = {"length(body)": 1}
+        verdict = message_matches(match, match, {"body": None})
+        assert isinstance(verdict, NoMatch)
+        assert verdict.error
+
+    @pytest.mark.parametrize(
+        "matcher",
+        [
+            pytest.param(JMESPathMatcher.model_construct(gt="{{ x }}", _fields_set={"gt"}), id="gt-template-text"),
+            pytest.param(JMESPathMatcher.model_construct(matches="(", _fields_set={"matches"}), id="bad-pattern"),
+        ],
+    )
+    def test_unusable_operand_raises_at_once(self, matcher):
+        """A scenario mistake fails every message alike: never a wait spent on it."""
+        with pytest.raises(VerificationError, match=r"^expect.match: JMESPath 'a': ") as excinfo:
+            message_matches({"a": matcher}, {"a": matcher}, {"a": "text"})
+        assert not excinfo.value.retryable
+
+    def test_rendered_value_stays_a_value(self):
+        """A value declared as a template, rendered to an object with a
+        matcher's keys, compares by equality (`validate_rendered_expectations`)."""
+        declared = ConnectionExpect.model_validate({"match": {"meta": "{{ shape }}"}}).match
+        assert isinstance(declared, dict)
+        rendered = validate_rendered_expectations(declared, {"meta": {"type": "object"}})
+        assert message_matches(declared, rendered, {"meta": {"type": "object"}}) == MATCH
+        assert isinstance(message_matches(declared, rendered, {"meta": {"a": 1}}), NoMatch)

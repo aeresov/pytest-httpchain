@@ -10,7 +10,6 @@ from pydantic import BaseModel
 
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.scoping import (
-    RESPONSE_META_NAME,
     defined_names,
     extract_template_variables,
     raw_stages,
@@ -126,7 +125,7 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         # entries inside a substitutions-save step. Those entries resolve in
         # sequence, and only their rendered values can consume an earlier save.
         for templates, own_saves in response_step_templates(stage, raw.get("response")):
-            step_refs = extract_template_variables(templates, defined=defined) - {RESPONSE_META_NAME}
+            step_refs = extract_template_variables(templates, defined=defined) - scope.response_names
             consumes |= _consumed(step_refs, scope.earlier_saves, scope.request_shadows | own_saves)
         consumes |= _consumed(extract_template_variables(raw.get("always_run"), defined=defined), scope.earlier_saves, scope.always_run_shadows)
 

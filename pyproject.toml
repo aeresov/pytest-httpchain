@@ -218,6 +218,9 @@ layers = [
     # a lower layer, the domain packages included, may import it.
     "carrier : dataflow : schema : importers",
     "validation : har_writer : report_formatter : request_builder : response_steps : parallel_stats",
+    # connections is the connection stages' sessions and readers, below
+    # response_steps, which judges a message: the carrier injects the match.
+    "connections",
     "body_schema",
     # scoping reads stage marks with utils.make_marker (scoping.SkipCause).
     "scoping",

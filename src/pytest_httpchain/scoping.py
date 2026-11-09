@@ -23,6 +23,11 @@ response (per iteration)  the above plus the ``response`` metadata namespace,
                           plus PRIOR steps' saves (steps resolve in order)
 ========================  ====================================================
 
+A connection stage's response steps see, in place of ``response``, the
+``message`` it took (when it takes one: an ``expect`` that is not ``absent``,
+or an ``open``) and what its ``send()`` returned, ``sent`` (when it sends):
+`response_meta_names`, and at runtime `connection_bindings`.
+
 A stage's ``parallel.stats_as`` is saved with its response steps' saves, once
 every iteration has ended: the stages after it see it, none of its own phases.
 
@@ -72,11 +77,15 @@ from pytest_httpchain.models import (
     VarsSubstitution,
     normalize_list_input,
 )
+from pytest_httpchain.models.types import convert_dict_to_namespace
 from pytest_httpchain.templates import CALL_ONLY_BUILTINS, CONTEXT_HELPERS, TEMPLATE_BUILTINS, TemplatesError, find_templates, parse_expression, template_form
 from pytest_httpchain.utils import make_marker
 
 # The name under which response metadata is injected into response-step contexts.
 RESPONSE_META_NAME = "response"
+# A connection stage's instead: the message it took, and what its send() returned.
+MESSAGE_META_NAME = "message"
+SENT_NAME = "sent"
 
 # Fields resolved once per scenario, against only the scenario substitutions.
 SCENARIO_TEMPLATE_FIELDS = ("substitutions", "auth", "ssl", "client")
@@ -808,6 +817,9 @@ class StageScopes:
     never_called: bool
     """pytest never calls this stage, by its own marks or the scenario's, which
     apply to every stage (`marks_skip_cause`): it reads nothing."""
+    response_names: frozenset[str] = frozenset({RESPONSE_META_NAME})
+    """The names the stage's kind layers over its response steps
+    (`response_meta_names`): ``response``, or a connection stage's."""
 
     @property
     def when_skipped(self) -> "StageScopes":
@@ -841,8 +853,8 @@ class StageScopes:
         have landed: the request scope plus the ``response`` namespace. Steps
         resolve strictly in order, so each additionally sees PRIOR steps' saves
         (see `response_step_templates`, whose runtime twin is `with_saves`).
-        Twin: `response_step_context`."""
-        return self.request | frozenset({RESPONSE_META_NAME})
+        Twin: `response_step_context`, or a connection stage's `connection_step_context`."""
+        return self.request | self.response_names
 
     def phases(self) -> Phases:
         """Every phase's names as the properties give them, as `NameUnion`s
@@ -851,7 +863,7 @@ class StageScopes:
         always_run = NameUnion(self.scenario_substitutions, self.earlier_saves, self.scenario_fixtures, self.stage_fixtures, self.parametrize_params)
         pre_iteration = always_run | self.stage_substitutions
         request = pre_iteration | self.foreach_params
-        return Phases(always_run, pre_iteration, request, request | frozenset({RESPONSE_META_NAME}))
+        return Phases(always_run, pre_iteration, request, request | self.response_names)
 
     # Shadow sets: names layered ABOVE the global context in each phase, behind
     # which a same-named earlier save is unreadable.
@@ -869,6 +881,22 @@ class StageScopes:
     @property
     def request_shadows(self) -> frozenset[str]:
         return self.pre_iteration_shadows | self.foreach_params
+
+
+def response_meta_names(stage: Stage) -> frozenset[str]:
+    """The names a stage's kind layers over its response steps: an HTTP
+    stage's ``response``; a connection stage's ``message``, when it takes one
+    (an ``expect`` that is not ``absent``, or an ``open`` without one, whose
+    message is what ``connect()`` returned), and ``sent``, when it sends."""
+    step = stage.connection
+    if step is None:
+        return frozenset({RESPONSE_META_NAME})
+    names: set[str] = set()
+    if (step.expect is not None and not step.expect.absent) or (step.expect is None and step.open):
+        names.add(MESSAGE_META_NAME)
+    if step.send is not None:
+        names.add(SENT_NAME)
+    return frozenset(names)
 
 
 def stage_scopes(scenario: Scenario) -> list[StageScopes]:
@@ -898,6 +926,7 @@ def stage_scopes(scenario: Scenario) -> list[StageScopes]:
                 skippable_saves=earlier_saves - unskippable_saves,
                 skip_cause=skip_cause,
                 never_called=(reader := marks_skip_cause([*stage.marks, *scenario.marks])) is not None and reader.never_called,
+                response_names=response_meta_names(stage),
             )
         )
         earlier_saves |= saves
@@ -938,6 +967,21 @@ def response_step_context(iteration_ctx: ChainMap[str, Any], response_meta: Any)
     """The ``response`` namespace over the iteration context, layered last so a
     user variable cannot shadow it inside response steps."""
     return iteration_ctx.new_child({RESPONSE_META_NAME: response_meta})
+
+
+def connection_bindings(**values: Any) -> dict[str, Any]:
+    """What a connection stage binds over its response steps, by name
+    (`MESSAGE_META_NAME`, `SENT_NAME`), each given only when the stage has it:
+    a dict as a `VarsNamespace`, so ``{{ message.header.items }}`` reads the
+    key, not a dict's method. JMESPath, a body schema and user functions get
+    the plain dict instead."""
+    return {name: convert_dict_to_namespace(value) for name, value in values.items()}
+
+
+def connection_step_context(iteration_ctx: ChainMap[str, Any], bindings: Mapping[str, Any]) -> ChainMap[str, Any]:
+    """A connection stage's `connection_bindings` over the iteration context,
+    layered last, as `response_step_context` layers ``response``."""
+    return iteration_ctx.new_child(dict(bindings))
 
 
 def with_saves(context: ChainMap[str, Any], saves: Mapping[str, Any]) -> ChainMap[str, Any]:

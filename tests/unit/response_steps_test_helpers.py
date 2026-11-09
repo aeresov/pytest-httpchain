@@ -95,3 +95,12 @@ def saves_item_id(response):
     """Save the item's id under a name only this function knows: no save
     step declares it, so `validate` cannot see it."""
     return {"item_id": response.json()["id"]}
+
+
+def message_is_ack(message):
+    """A connection stage's verify function: it gets the message, never a response."""
+    return message.get("type") == "ack"
+
+
+def saves_from_message(message):
+    return {"ack_of": message["ack_of"]}

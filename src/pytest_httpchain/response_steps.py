@@ -1,18 +1,25 @@
-"""What a stage's ``verify`` and ``save`` steps mean.
+"""What a stage's ``verify`` and ``save`` steps mean, and what a connection
+stage's ``expect.match`` means for one message (`message_matches`).
 
-Pure functions over ``(model, response)`` — no chain state — raising
+Pure functions over ``(model, subject)`` — no chain state — raising
 `VerificationError` / `SaveError` on failure: a verify step once it has run
 every check, naming all that failed, a save step at its first error. A save
 step comes resolved; a verify step comes as declared, with the carrier's way
 to render each check's value (`VerifyRender`). The carrier owns the sequence,
 and a step that fails ends it.
+
+The subject is an HTTP stage's ``httpx.Response``, or a connection stage's
+message (`MessageSubject`): a decoded dict, which JMESPath and a body schema
+read as it is, with no codec, and user functions get as ``message=``. What
+only an HTTP response has (a status, headers, a body's text) fails the step
+on a message, as the scenario's own mistake.
 """
 
 import json
 import operator
 import re
 from collections import ChainMap
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, NoReturn
@@ -51,6 +58,39 @@ from pytest_httpchain.wire_codec import MSGPACK_DECODE_ERRORS, is_msgpack_conten
 type ResponseCodec = Literal["auto", "json", "msgpack"]
 
 
+@dataclass(frozen=True, slots=True)
+class MessageSubject:
+    """A connection stage's message, as its response steps' subject: what
+    its ``expect`` took (or its ``open`` connected with), a decoded dict.
+    ``present`` is False for a stage that took none (`NO_MESSAGE`)."""
+
+    message: Any
+    present: bool = True
+
+
+# A connection stage's subject when it took no message: no expect, or an
+# absent one, and no open.
+NO_MESSAGE = MessageSubject(None, present=False)
+
+# What a step reads: an HTTP response, or a connection stage's message.
+type Subject = httpx.Response | MessageSubject
+
+
+def _function_subject(subject: Subject) -> dict[str, Any]:
+    """The keyword a verify or save function gets its subject by:
+    ``response=``, or ``message=`` on a connection stage."""
+    return {"message": subject.message} if isinstance(subject, MessageSubject) else {"response": subject}
+
+
+def _no_message(purpose: str) -> str:
+    return f"Cannot {purpose}: the stage took no message (it has no expect, or an absent one, and does not open)"
+
+
+def _http_only(what: str) -> str:
+    """A check an HTTP response alone can meet, declared on a connection stage."""
+    return _Unusable(f"{what} checks an HTTP response, and a connection stage has a message instead")
+
+
 def _selected_codec(response: httpx.Response, codec: ResponseCodec) -> Literal["json", "msgpack"]:
     if codec == "auto":
         return "msgpack" if is_msgpack_content_type(response.headers.get("content-type", "")) else "json"
@@ -70,8 +110,9 @@ def _parse_failure(error: Exception, codec: Literal["json", "msgpack"], purpose:
     return f"Cannot {purpose}, response is not valid {label}: {str(error) or type(error).__name__}"
 
 
-def process_save(save_model: Save, response: httpx.Response, context: ChainMap[str, Any], *, codec: ResponseCodec = "auto") -> dict[str, Any]:
-    """Extract one save step's ``{name: value}`` contribution to the context."""
+def process_save(save_model: Save, response: Subject, context: ChainMap[str, Any], *, codec: ResponseCodec = "auto") -> dict[str, Any]:
+    """Extract one save step's ``{name: value}`` contribution to the context,
+    from ``response``, or a connection stage's message (`MessageSubject`)."""
     step_saved: dict[str, Any] = {}
 
     match save_model:
@@ -88,6 +129,8 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
                     raise SaveError(f"Error saving variable {var_name}: {_evaluation_error(e)}") from e
 
         case RegexSave():
+            if not isinstance(response, httpx.Response):
+                raise SaveError("save.regex reads an HTTP response body's text, and a connection stage has a message instead", retryable=False)
             for var_name, entry in save_model.regex.items():
                 step_saved[var_name] = _regex_save(var_name, entry, response.text)
 
@@ -101,7 +144,7 @@ def process_save(save_model: Save, response: httpx.Response, context: ChainMap[s
         case UserFunctionsSave():
             for func_item in save_model.user_functions:
                 try:
-                    func_result = call_user_function(func_item, response=response)
+                    func_result = call_user_function(func_item, **_function_subject(response))
                 except UserFunctionError as e:
                     raise SaveError(f"Error calling user function '{func_item}': {e}", retryable=_raised_retryable(e)) from e
 
@@ -184,7 +227,7 @@ type VerifyRender = Callable[[list[tuple[VerifyWhere, Any]]], dict[VerifyWhere, 
 
 def process_verify(
     verify_model: Verify,
-    response: httpx.Response,
+    response: Subject,
     scenario_dir: Path | None = None,
     redaction: Redaction = DEFAULT_REDACTION,
     render: VerifyRender | None = None,
@@ -231,6 +274,10 @@ def process_verify(
     dropped. A fail() that is the step's one failure is raised as itself, as
     it always was.
 
+    ``response`` is the HTTP response, or a connection stage's message
+    (`MessageSubject`), which jmespath and body.schema read as it is: a
+    status, a header or a body text check on one fails, once per field.
+
     A header check's message shows the header's value through ``redaction``, as
     the report does, and so does an exact-match expected value: it is a whole
     value of that header. A matcher operand shows as written unless its failure
@@ -246,6 +293,9 @@ def process_verify(
     failures = _Failures()
     body = _StructuredBody(response, failures, codec)
     step = _RenderedStep(verify_model, render)
+    message = response if isinstance(response, MessageSubject) else None
+    http = response if isinstance(response, httpx.Response) else None
+    headers = http.headers if http is not None else httpx.Headers()
 
     def end_step(outcome: BaseException, raised_by: str, where: VerifyWhere) -> NoReturn:
         """End the step at ``where`` on a pytest outcome ``raised_by`` a
@@ -295,17 +345,22 @@ def process_verify(
 
     # `is not None`, not truthiness: None means undeclared, and only that — the
     # carrier refuses an assertion a template rendered to None.
-    if verify_model.status is not None and (status := rendered("status")) is not _UNRENDERED:
-        failures.add(_status_failure(status, response.status_code))
+    if http is None:
+        if verify_model.status is not None:
+            failures.add(_http_only("verify.status"))
+        if verify_model.headers:
+            failures.add(_http_only("verify.headers"))
+    elif verify_model.status is not None and (status := rendered("status")) is not _UNRENDERED:
+        failures.add(_status_failure(status, http.status_code))
 
-    for header_name in verify_model.headers:
+    for header_name in verify_model.headers if http is not None else ():
         expected_value = rendered("headers", header_name)
         if expected_value is _UNRENDERED:
             continue
         match expected_value:
             case HeaderMatcher():
                 # An absent header behaves as an empty string, as bodies do.
-                actual = response.headers.get(header_name) or ""
+                actual = headers.get(header_name) or ""
                 shown = redaction.header(header_name, actual)
                 failures.extend(
                     text_matcher_failures(
@@ -319,7 +374,7 @@ def process_verify(
                     )
                 )
             case _:
-                actual = response.headers.get(header_name)
+                actual = headers.get(header_name)
                 if actual != expected_value:
                     shown = redaction.header(header_name, actual) if actual is not None else None
                     failures.add(f"Header '{header_name}' doesn't match: expected {redaction.header(header_name, expected_value)}, got {shown}")
@@ -330,7 +385,7 @@ def process_verify(
     for expression in verify_model.jmespath:
         expected = rendered("jmespath", expression)
         if expected is not _UNRENDERED and (parsed := body.parsed("check verify.jmespath")) is not _UNPARSABLE:
-            _verify_jmespath(expression, expected, parsed, failures)
+            _verify_jmespath(expression, expected, parsed, failures, "the message" if message is not None else "the response body")
 
     for i in range(len(verify_model.expressions)):
         # An expression is a predicate, not a value. Truthiness alone would pass a
@@ -357,7 +412,10 @@ def process_verify(
         # the words it always had, which print the model.
         named = f"'{call_target(func_item)[0]}' (user_functions[{i}])"
         try:
-            result = call_user_function(func_item, response=response)
+            if message is not None and not message.present:
+                failures.add(_no_message(f"call user function {named}"), retryable=False)
+                continue
+            result = call_user_function(func_item, **_function_subject(response))
         except UserFunctionError as e:
             failures.add(f"Error calling user function '{func_item}': {e}", cause=e, listed=f"Error calling user function {named}: {e}", retryable=_raised_retryable(e))
             continue
@@ -380,16 +438,21 @@ def process_verify(
             if (operand := rendered("body", field, i)) is not _UNRENDERED:
                 yield operand
 
-    failures.extend(
-        text_matcher_failures(
-            "Body",
-            response.text,
-            contains=operands("contains"),
-            not_contains=operands("not_contains"),
-            matches=operands("matches"),
-            not_matches=operands("not_matches"),
+    if http is None:
+        for field in _BODY_OPERANDS:
+            if getattr(verify_model.body, field):
+                failures.add(_http_only(f"verify.body.{field}"))
+    else:
+        failures.extend(
+            text_matcher_failures(
+                "Body",
+                http.text,
+                contains=operands("contains"),
+                not_contains=operands("not_contains"),
+                matches=operands("matches"),
+                not_matches=operands("not_matches"),
+            )
         )
-    )
 
     if failures:
         raise failures.error()
@@ -515,6 +578,11 @@ class _Failures:
         for message in messages:
             self.add(message)
 
+    @property
+    def items(self) -> list[tuple[str, BaseException | None, str]]:
+        """Each failure so far, in order: its message, its cause, how it is listed."""
+        return list(self._items)
+
     def error(self) -> VerificationError:
         """The step's failure, for a step with at least one. Its message is
         the whole report: nothing is chained to it but the cause of a lone
@@ -589,11 +657,13 @@ class _StructuredBody:
 
     A body the codec cannot read is one failure of the step, recorded by the
     check that asked first; the checks after it that need the body do not run.
+    A connection stage's message is the structure itself, never parsed; a
+    stage that took none fails the first check that asks, once.
     """
 
     __slots__ = ("_codec", "_failures", "_response", "_value")
 
-    def __init__(self, response: httpx.Response, failures: _Failures, codec: ResponseCodec) -> None:
+    def __init__(self, response: Subject, failures: _Failures, codec: ResponseCodec) -> None:
         self._response = response
         self._failures = failures
         self._codec = codec
@@ -603,7 +673,14 @@ class _StructuredBody:
         """The body as JSON, or `_UNPARSABLE`. The first time, a body that is
         not JSON is recorded as a failure saying ``check`` (``"check
         verify.jmespath"``) cannot be done on it."""
+        if self._value is _UNPARSED and isinstance(self._response, MessageSubject):
+            if self._response.present:
+                self._value = self._response.message
+            else:
+                self._value = _UNPARSABLE
+                self._failures.add(_no_message(check), retryable=False)
         if self._value is _UNPARSED:
+            assert isinstance(self._response, httpx.Response), "a message is never parsed"
             try:
                 self._value = _parse_structured(self._response, self._codec)
             except MSGPACK_DECODE_ERRORS as e:
@@ -612,10 +689,11 @@ class _StructuredBody:
         return self._value
 
 
-def _verify_jmespath(expression: str, expected: Any, body: Any, failures: _Failures) -> None:
+def _verify_jmespath(expression: str, expected: Any, body: Any, failures: _Failures, against: str = "the response body") -> None:
     """A ``verify.jmespath`` entry: the expression's value in the parsed
     ``body`` against its expectation, a value it must equal (JSON equality) or
-    a `JMESPathMatcher`, each key of which is a check of its own.
+    a `JMESPathMatcher`, each key of which is a check of its own. ``against``
+    names the body in an evaluation error: a connection stage's is a message.
 
     A missing path extracts null, as JMESPath has it, so ``null`` cannot tell a
     missing key from a null one.
@@ -631,7 +709,7 @@ def _verify_jmespath(expression: str, expected: Any, body: Any, failures: _Failu
         # ceil() on 1e400, which json reads as inf (OverflowError), or on
         # NaN (ValueError); contains() on a string, looking for a number
         # (TypeError). One failure: no key of a matcher can be judged.
-        failures.add(f"JMESPath {expression!r} cannot be evaluated against the response body: {_evaluation_error(e)}", cause=e)
+        failures.add(f"JMESPath {expression!r} cannot be evaluated against {against}: {_evaluation_error(e)}", cause=e)
         return
     if isinstance(expected, JMESPathMatcher):
         failures.extend(_jmespath_matcher_failures(expression, expected, actual))
@@ -902,8 +980,13 @@ def _verify_body_schema(schema: Any, body: _StructuredBody, scenario_dir: Path |
         failures.add(f"Cannot validate against {body_schema.where}, a schema it references is not valid: {schema_error_text(e)}", cause=e, retryable=False)
 
 
-def _response_data(response: httpx.Response, error: type[StageExecutionError], purpose: str, codec: ResponseCodec) -> Any:
-    """A structured body, or an error naming why it could not be decoded."""
+def _response_data(response: Subject, error: type[StageExecutionError], purpose: str, codec: ResponseCodec) -> Any:
+    """A structured body, or an error naming why it could not be decoded: a
+    connection stage's message as it is, or an error when it took none."""
+    if isinstance(response, MessageSubject):
+        if not response.present:
+            raise error(_no_message(purpose), retryable=False)
+        return response.message
     try:
         return _parse_structured(response, codec)
     except MSGPACK_DECODE_ERRORS as e:
@@ -980,3 +1063,65 @@ def text_matcher_failures(
             elif key == "not_matches" and found:
                 quoted = REDACTED if hides and str(pattern) not in shown else pattern
                 yield f"{subject} matches '{quoted}' while it shouldn't"
+
+
+@dataclass(frozen=True, slots=True)
+class Match:
+    """A message a connection stage's ``expect.match`` takes."""
+
+
+@dataclass(frozen=True, slots=True)
+class NoMatch:
+    """A message ``expect.match`` does not take, and why: the first
+    expectation it fails, or, where ``error``, why the match cannot be
+    evaluated against it (a ``length()`` of its null)."""
+
+    reason: str
+    error: bool = False
+
+
+MATCH = Match()
+
+
+def _jmespath_false(value: Any) -> bool:
+    """JMESPath's own falsiness: false, null, and an empty string, array or
+    object. Not 0, which JMESPath holds true, unlike Python."""
+    return value is None or value is False or (isinstance(value, str | list | dict) and not value)
+
+
+def message_matches(match: str | Mapping[str, Any] | None, rendered_match: Mapping[str, Any] | None, message: Any) -> Match | NoMatch:
+    """Whether a connection stage's ``expect.match`` takes ``message``.
+
+    ``match`` as declared: None takes any message; a string is a JMESPath
+    expression, never rendered, which takes a message its result is true for
+    as JMESPath has truth (`_jmespath_false`); an object is expectations
+    written as ``verify.jmespath``'s, ``rendered_match`` with their templates
+    rendered (`models.validate_rendered_expectations`), every one of which
+    must hold, checked as ``verify.jmespath`` checks its own.
+
+    An expression this message cannot be evaluated against (``length()`` of
+    its null) is no match, the error kept as its reason: another message may
+    hold what it needs. An expectation the scenario rendered unusable (a
+    ``gt`` of template text, a pattern that does not compile) fails every
+    message alike, so it raises at once, a `VerificationError` that no attempt
+    retries, rather than leave the stage to wait out its timeout.
+    """
+    if match is None:
+        return MATCH
+    if isinstance(match, str):
+        try:
+            result = jmespath.search(match, message)
+        except (ValueError, ArithmeticError, TypeError) as e:
+            return NoMatch(f"JMESPath {match!r} cannot be evaluated against the message: {_evaluation_error(e)}", error=True)
+        return NoMatch(f"JMESPath {match!r} gave {_shown(result)}") if _jmespath_false(result) else MATCH
+    assert rendered_match is not None, "an object match comes rendered"
+    for expression, expected in rendered_match.items():
+        failures = _Failures()
+        _verify_jmespath(expression, expected, message, failures, "the message")
+        for failure, _cause, _listed in failures.items:
+            if isinstance(failure, _Unusable):
+                raise VerificationError(f"expect.match: {failure}", retryable=False)
+        if failures:
+            failure, cause, _listed = failures.items[0]
+            return NoMatch(failure, error=cause is not None)
+    return MATCH

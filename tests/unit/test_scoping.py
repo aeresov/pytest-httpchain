@@ -14,6 +14,8 @@ from pytest_httpchain.scoping import (
     NameUnion,
     SkipCause,
     base_global_context,
+    connection_bindings,
+    connection_step_context,
     defined_names,
     extract_builtin_stand_ins,
     extract_invalid_expressions,
@@ -296,6 +298,43 @@ class TestContextBuilders:
             assert set(after_saves) == scope.response | scope.saves
 
             global_context = with_saves(global_context, dict.fromkeys(scope.saves, "value"))
+
+    @pytest.mark.parametrize(
+        ("step", "names"),
+        [
+            pytest.param({"open": True}, {"message"}, id="open-message-is-connect-result"),
+            pytest.param({"expect": {}}, {"message"}, id="expect"),
+            pytest.param({"expect": {"closed": True}}, {"message"}, id="expect-closed"),
+            pytest.param({"expect": {"absent": True}}, set(), id="absent-takes-none"),
+            pytest.param({"open": True, "expect": {"absent": True}}, set(), id="open-absent-takes-none"),
+            pytest.param({"send": {"a": 1}, "expect": {}}, {"message", "sent"}, id="send-expect"),
+            pytest.param({"send": {"a": 1}}, {"sent"}, id="send-only"),
+            pytest.param({"drain": True}, set(), id="drain-only"),
+        ],
+    )
+    def test_connection_stage_runtime_static_correspondence(self, step, names):
+        """A connection stage's response steps see ``message`` and ``sent``,
+        each when the stage has it, in place of ``response``: the static
+        phase and the runtime context agree."""
+        scenario = Scenario.model_validate(
+            {
+                "connections": {"dev": {"adapter": "m:A"}},
+                "stages": [{"name": "c", "connection": {"name": "dev", **step}, "response": [{"save": {"jmespath": {"x": "x"}}}]}],
+            }
+        )
+        [scope] = stage_scopes(scenario)
+        assert scope.response_names == names
+        iteration = iteration_context(with_stage_substitutions(stage_start_context(base_global_context({}), {}), {}), {})
+        responded = connection_step_context(iteration, connection_bindings(**dict.fromkeys(names, {"k": 1})))
+        assert set(responded) == scope.response
+        assert "response" not in scope.response
+
+    def test_connection_bindings_read_keys_as_data(self):
+        """``message.items`` is the key's value, not a dict's method; ``sent`` of None stays None."""
+        bindings = connection_bindings(message={"items": [1], "header": {"id": "a"}}, sent=None)
+        assert bindings["message"].items == [1]
+        assert bindings["message"].header.id == "a"
+        assert bindings["sent"] is None
 
     def test_response_namespace_shadows_user_variable(self):
         """`response` is layered last, so neither a user var nor an earlier
