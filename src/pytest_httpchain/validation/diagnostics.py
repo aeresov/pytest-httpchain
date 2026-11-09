@@ -56,6 +56,12 @@ class DiagnosticCode(StrEnum):
     SCENARIO_INVALID_EXPRESSION = "HTTPCHAIN038"
     NO_SCENARIO_FILES = "HTTPCHAIN039"
     STATS_REPLACE_SAVE = "HTTPCHAIN040"
+    CONNECTION_STAGE_UNSUPPORTED = "HTTPCHAIN041"
+    UNDEFINED_CONNECTION = "HTTPCHAIN042"
+    NO_MESSAGE = "HTTPCHAIN043"
+    CONNECTION_NOT_OPEN = "HTTPCHAIN044"
+    RESERVED_MESSAGE_NAME = "HTTPCHAIN045"
+    ADAPTER_INVALID = "HTTPCHAIN046"
 
 
 # A code's severity is a property of the code, not of the site that raises it:
@@ -106,6 +112,12 @@ SEVERITY: dict[DiagnosticCode, Severity] = {
     DiagnosticCode.SCENARIO_INVALID_EXPRESSION: "error",
     DiagnosticCode.NO_SCENARIO_FILES: "error",
     DiagnosticCode.STATS_REPLACE_SAVE: "warning",
+    DiagnosticCode.CONNECTION_STAGE_UNSUPPORTED: "error",
+    DiagnosticCode.UNDEFINED_CONNECTION: "error",
+    DiagnosticCode.NO_MESSAGE: "error",
+    DiagnosticCode.CONNECTION_NOT_OPEN: "error",
+    DiagnosticCode.RESERVED_MESSAGE_NAME: "warning",
+    DiagnosticCode.ADAPTER_INVALID: "warning",
 }
 
 
@@ -127,6 +139,7 @@ class ScenarioInfo(BaseModel):
     vars_saved: list[str] = []
     vars_defined: list[str] = []
     fixtures: list[str] = []
+    connections: list[str] = []
 
 
 class ValidateResult(BaseModel):

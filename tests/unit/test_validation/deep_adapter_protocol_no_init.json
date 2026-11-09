@@ -1,0 +1,19 @@
+{
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:ProtocolNoInitAdapter",
+            "params": {
+                "host": "h"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "c",
+            "connection": {
+                "name": "dev",
+                "open": true
+            }
+        }
+    ]
+}

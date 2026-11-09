@@ -1,0 +1,16 @@
+{
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:StubReceiveAdapter"
+        }
+    },
+    "stages": [
+        {
+            "name": "c",
+            "connection": {
+                "name": "dev",
+                "open": true
+            }
+        }
+    ]
+}

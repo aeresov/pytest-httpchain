@@ -234,7 +234,9 @@ def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[st
 
     for s in flow.stages:
         name = s.name or f"(stage {s.index + 1})"
-        lines.append(f"{s.index + 1} · {name}    {s.method} {s.url}")
+        # A connection stage shows the actions it sets, in the order it takes them.
+        target = f"CONNECTION {s.connection} {'·'.join(s.actions)}" if s.kind == "connection" else f"{s.method} {s.url}"
+        lines.append(f"{s.index + 1} · {name}    {target}")
         if s.skip_if is not False:
             lines.append(f"    skip_if:  {s.skip_if.strip() if isinstance(s.skip_if, str) else 'true'}")
         if s.saves:
@@ -289,6 +291,10 @@ def _to_mermaid(flow: DataFlow, direction: str = "TD") -> str:
         # the values may come from an earlier producer instead (its own edge), or never.
         arrow = "-.->" if flow.stages[edge.producer].may_skip else "-->"
         lines.append(f"    S{edge.producer} {arrow}|{', '.join(edge.vars)}| S{edge.consumer}")
+    for connection_edge in flow.connection_edges:
+        # Dashed: no value flows, the later stage talks over the session the
+        # earlier one may have opened.
+        lines.append(f'    S{connection_edge.opener} -.->|"{_mermaid_label(f"connection: {connection_edge.connection}")}"| S{connection_edge.user}')
     return "\n".join(lines)
 
 

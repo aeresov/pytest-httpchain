@@ -1,0 +1,31 @@
+{
+    "description": "a close, then open: true connects again; the never-opened connection opens implicitly at its first stage",
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "localhost"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "first",
+            "connection": {
+                "name": "dev",
+                "send": {
+                    "op": "ping"
+                },
+                "close": true
+            }
+        },
+        {
+            "name": "reconnect",
+            "connection": {
+                "name": "dev",
+                "open": true,
+                "close": true
+            }
+        }
+    ]
+}

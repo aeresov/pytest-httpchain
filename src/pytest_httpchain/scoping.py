@@ -26,7 +26,12 @@ response (per iteration)  the above plus the ``response`` metadata namespace,
 A connection stage's response steps see, in place of ``response``, the
 ``message`` it took (when it takes one: an ``expect`` that is not ``absent``,
 or an ``open``) and what its ``send()`` returned, ``sent`` (when it sends):
-`response_meta_names`, and at runtime `connection_bindings`.
+`response_meta_names`, and at runtime `connection_bindings`. Its ``send``
+renders in the request phase; its ``expect.timeout`` and the values of a
+match object with ``sent`` in scope too (`connection_step_templates`). A
+connection's own ``params`` render when a stage opens it, against
+`StageScopes.connection_params`; which stages may open it, and which find it
+closed, is `connection_lifecycles`'s walk.
 
 A stage's ``parallel.stats_as`` is saved with its response steps' saves, once
 every iteration has ended: the stages after it see it, none of its own phases.
@@ -61,6 +66,7 @@ import pytest
 
 from pytest_httpchain.models import (
     CombinationsParameter,
+    ConnectionStep,
     FunctionsSubstitution,
     IndividualParameter,
     JMESPathSave,
@@ -86,6 +92,9 @@ RESPONSE_META_NAME = "response"
 # A connection stage's instead: the message it took, and what its send() returned.
 MESSAGE_META_NAME = "message"
 SENT_NAME = "sent"
+# What each shadows a user's name of the same name with, in a connection
+# stage's response steps (HTTPCHAIN045): the validator's and the carrier's words.
+CONNECTION_BINDINGS: Mapping[str, str] = {MESSAGE_META_NAME: "the message the stage took", SENT_NAME: "what the stage's send() returned"}
 
 # Fields resolved once per scenario, against only the scenario substitutions.
 SCENARIO_TEMPLATE_FIELDS = ("substitutions", "auth", "ssl", "client")
@@ -611,6 +620,21 @@ def response_step_templates(stage: Stage, raw_response: Any) -> Iterator[tuple[A
             opaque_save_seen = True
 
 
+def rendered_response_steps(stage: Stage, raw_response: Any) -> list[Any]:
+    """What the runtime renders of each of the stage's response steps, step K
+    at index K: the step, or a substitutions-save's entries, as
+    `response_step_templates` reads them, for a check that names the step."""
+    raw_steps = raw_list_entries(raw_response)
+    rendered: list[Any] = []
+    for k, step in enumerate(stage.response):
+        step_raw = raw_steps[k] if k < len(raw_steps) else None
+        if isinstance(step, SaveStep) and isinstance(step.save, SubstitutionsSave):
+            rendered.append([templates for templates, _ in substitution_step_templates(_raw_save_substitutions(step_raw))])
+        else:
+            rendered.append(step_raw)
+    return rendered
+
+
 # --------------------------------------------------------------------------- #
 # Skip causes: which stages may end without their saves while the chain goes on.
 # --------------------------------------------------------------------------- #
@@ -856,6 +880,15 @@ class StageScopes:
         Twin: `response_step_context`, or a connection stage's `connection_step_context`."""
         return self.request | self.response_names
 
+    @property
+    def connection_params(self) -> NameUnion:
+        """A connection's ``params`` (and ``connect_timeout``), rendered when
+        this stage opens it: the scenario's substitutions and fixtures and the
+        earlier saves, never the stage's own fixtures, parameters or
+        substitutions, which the connection outlives. Twin:
+        `carrier.Carrier._params_context`."""
+        return NameUnion(self.scenario_substitutions, self.earlier_saves, self.scenario_fixtures)
+
     def phases(self) -> Phases:
         """Every phase's names as the properties give them, as `NameUnion`s
         of the ingredients, not copies: for a check that asks for all of them
@@ -933,6 +966,145 @@ def stage_scopes(scenario: Scenario) -> list[StageScopes]:
         if skip_cause is None:
             unskippable_saves |= saves
     return scopes
+
+
+# --------------------------------------------------------------------------- #
+# Connection lifecycle: which stages may open a connection, and which find it
+# closed.
+# --------------------------------------------------------------------------- #
+
+
+def parametrize_instances(params: Parameters | None) -> int | None:
+    """How many instances a stage's ``parametrize`` runs it as: the product of
+    its steps' value counts, ``1`` without one, or None when a step's values
+    are a template, known only once rendered."""
+    count = 1
+    for param in params or []:
+        match param:
+            case IndividualParameter(individual=individual):
+                values = next(iter(individual.values()))
+            case CombinationsParameter(combinations=values):
+                pass
+            case _:
+                return None
+        if isinstance(values, str):
+            return None
+        count *= len(values)
+    return count
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionLifecycle:
+    """What the stages do to one connection, as the runtime has it
+    (`connection_lifecycles`), by stage index."""
+
+    openers: tuple[int, ...]
+    """The stages that may open it, in order: one with ``open: true``, and
+    one that may find it never opened (the runtime's implicit open)."""
+    sessions: Mapping[int, frozenset[int]]
+    """For each stage using it, the openers before it whose session it may
+    use (never itself)."""
+    not_open: Mapping[int, frozenset[int]]
+    """The stages without ``open: true`` that find it closed whatever ran
+    before them, which fails them, each with the stages that may have closed
+    it."""
+
+
+# A connection's state at a point in the chain: never opened, open (by the
+# stage at the index), or closed (by the stage at the index).
+type _ConnectionState = tuple[str, int]
+_NEVER_OPENED: _ConnectionState = ("never", -1)
+
+
+def _after_connection_step(state: _ConnectionState, step: ConnectionStep, i: int) -> _ConnectionState:
+    """The state stage ``i``'s connection ``step`` leaves, run from ``state``."""
+    kind, at = state
+    if step.open or kind == "never":
+        return ("closed", i) if step.close else ("open", i)
+    if kind == "open":
+        return ("closed", i) if step.close else ("open", at)
+    return state  # closed: the stage fails, and changes nothing
+
+
+def connection_lifecycles(scenario: Scenario, scopes: list[StageScopes] | None = None) -> dict[str, ConnectionLifecycle]:
+    """Each declared connection's `ConnectionLifecycle`: a walk over the
+    stages that name it, tracking every state it may be in, as the carrier
+    moves it (`carrier.Carrier._execute_connection_attempt`).
+
+    A stage with ``open: true`` opens it, as does the first stage to find it
+    never opened; one that closes it leaves it closed, whatever its outcome;
+    one that finds it closed without ``open: true`` fails. A stage pytest
+    never calls, or whose ``skip_if`` is true, does nothing to it; one with a
+    `SkipCause` may do nothing, so it only widens the states (a skippable
+    close is a maybe-closed, and a later stage that may find it open is not
+    reported). A parametrized stage runs once per instance, the later ones
+    from the state the earlier left: with ``close: true`` and no ``open:
+    true``, its second instance finds it closed. An ``always_run`` stage is
+    walked as any other: after an abort, one whose connection is not open is
+    skipped and never connects, and a stage that fails aborts the chain, so
+    the walk follows the chain that does not abort, as `stage_scopes` does.
+    """
+    scopes = scopes if scopes is not None else stage_scopes(scenario)
+    lifecycles: dict[str, ConnectionLifecycle] = {}
+    for name in scenario.connections:
+        states: frozenset[_ConnectionState] = frozenset({_NEVER_OPENED})
+        openers: list[int] = []
+        sessions: dict[int, frozenset[int]] = {}
+        not_open: dict[int, frozenset[int]] = {}
+        for i, stage in enumerate(scenario.stages):
+            step = stage.connection
+            if step is None or step.name != name or scopes[i].never_called or stage.skip_if is True:
+                continue
+
+            def run(from_states: frozenset[_ConnectionState], step: ConnectionStep = step, i: int = i) -> frozenset[_ConnectionState]:
+                return frozenset(_after_connection_step(state, step, i) for state in from_states)
+
+            # Two instances are as many as can differ: the state after the
+            # second is the state after the first, run again.
+            instances = parametrize_instances(stage.parametrize)
+            starts = [states] if instances == 1 else [states, run(states)]
+            definite = starts if instances is not None else starts[:1]
+            seen = frozenset().union(*starts)
+            if step.open or _NEVER_OPENED in seen:
+                openers.append(i)
+            if not step.open:
+                if used := frozenset(at for kind, at in seen if kind == "open" and at != i):
+                    sessions[i] = used
+                for start in definite:
+                    if start and all(kind == "closed" for kind, _ in start):
+                        not_open[i] = not_open.get(i, frozenset()) | frozenset(at for _, at in start)
+            ran = run(starts[-1])
+            if instances is None:
+                ran |= run(starts[0])  # one instance, or more
+            states = states | ran if scopes[i].skip_cause is not None else ran
+        lifecycles[name] = ConnectionLifecycle(openers=tuple(openers), sessions=sessions, not_open=not_open)
+    return lifecycles
+
+
+def connection_step_templates(raw_connection: Any) -> tuple[Any, Any]:
+    """What the runtime renders of a raw connection step: ``(send, the rest)``,
+    the rest being ``expect.timeout`` and the values of an object
+    ``expect.match``, which render with ``sent`` in scope. The connection's
+    ``name`` and a string ``match`` are never rendered, nor a match object's
+    keys, which JMESPath evaluates as written."""
+    if not isinstance(raw_connection, dict):
+        return None, None
+    expect = raw_connection.get("expect")
+    after_send: list[Any] = []
+    if isinstance(expect, dict):
+        after_send.append(expect.get("timeout"))
+        if isinstance(match := expect.get("match"), dict):
+            after_send.append(list(match.values()))
+    return raw_connection.get("send"), after_send
+
+
+def connection_rendered_fields(raw_connection_config: Any) -> list[tuple[str, Any]]:
+    """``(field, raw value)`` for what the runtime renders of a raw
+    ``connections.<name>`` entry when a stage opens it: its ``params`` and
+    ``connect_timeout``, against `StageScopes.connection_params`."""
+    if not isinstance(raw_connection_config, dict):
+        return []
+    return [(field, raw_connection_config[field]) for field in ("params", "connect_timeout") if field in raw_connection_config]
 
 
 # --------------------------------------------------------------------------- #

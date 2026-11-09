@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds, SchemaFile, file_body_schema, inline_body_schema
+from pytest_httpchain.connections import ADAPTER_METHODS, ProtocolAdapter
 from pytest_httpchain.errors import SchemaFileError, SchemaPointerError
 from pytest_httpchain.models import (
     BinaryBody,
@@ -28,7 +29,7 @@ from pytest_httpchain.models import (
     VerifyStep,
 )
 from pytest_httpchain.templates import contains_template, unescape
-from pytest_httpchain.userfunc import UserFunctionError, call_target, import_function
+from pytest_httpchain.userfunc import UserFunctionError, call_target, import_adapter, import_function
 from pytest_httpchain.utils import path_segment, resolve_scenario_path, schema_error_text
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, diag
 
@@ -39,7 +40,8 @@ def check_scenario_deep(
     scenario_dir: Path | None = None,
     ref_bounds: ReferenceBounds = UNBOUNDED,
 ) -> list[Diagnostic]:
-    """Referenced-file existence, user-function imports, and call-signature compatibility.
+    """Referenced-file existence, user-function imports, call-signature
+    compatibility, and connection adapters.
 
     Imports user modules, so ``syspaths`` (and the CWD) are temporarily prepended
     to ``sys.path`` to resolve them the way pytest would. ``ref_bounds`` is
@@ -56,6 +58,7 @@ def check_scenario_deep(
         # Consumed inside the try: the checks import user modules, so they must
         # run while the temporary sys.path entries are in place.
         diagnostics += list(_function_diagnostics(scenario))
+        diagnostics += list(_adapter_diagnostics(scenario))
     finally:
         sys.path[:] = saved_path
 
@@ -183,7 +186,11 @@ def _signature_problems(func: Any, provided: set[str]) -> Iterator[tuple[Diagnos
         signature = inspect.signature(func)
     except (TypeError, ValueError):
         return  # not introspectable (some builtins/C functions)
+    yield from _parameter_problems(signature, provided)
 
+
+def _parameter_problems(signature: inspect.Signature, provided: set[str]) -> Iterator[tuple[DiagnosticCode, str]]:
+    """`_signature_problems` for a signature in hand."""
     params = list(signature.parameters.values())
     keyword_acceptable = {p.name for p in params if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
     required_keywords = {p.name for p in params if p.default is p.empty and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
@@ -201,7 +208,9 @@ def _signature_problems(func: Any, provided: set[str]) -> Iterator[tuple[Diagnos
 
 def _function_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
     """HTTPCHAIN022/023/024: resolve every literal user-function reference and,
-    where the call arguments are statically known, check them against the signature."""
+    where the call arguments are statically known, check them against the
+    signature: a verify or save function gets ``response``, or ``message`` on
+    a connection stage."""
     # (call, injected-arg-names, check_signature, location). Substitution
     # `functions` are invoked from templates with unknown call-time arguments,
     # so they are import-checked only.
@@ -226,16 +235,19 @@ def _function_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
         if stage.request is not None:
             add_auth_site(stage.request.auth, f"stages[{i}].request.auth")
         add_substitution_sites(stage.substitutions, f"stages[{i}].substitutions")
+        # What verify and save functions get their subject by: a connection
+        # stage's message, or the HTTP response (`response_steps`).
+        subject = {"message"} if stage.connection is not None else {"response"}
         for k, step in enumerate(stage.response):
             match step:
                 case SaveStep(save=UserFunctionsSave(user_functions=calls)):
                     for j, call in enumerate(calls):
-                        sites.append((call, {"response"}, True, f"stages[{i}].response[{k}].save.user_functions[{j}]"))
+                        sites.append((call, subject, True, f"stages[{i}].response[{k}].save.user_functions[{j}]"))
                 case SaveStep(save=SubstitutionsSave(substitutions=substitutions)):
                     add_substitution_sites(substitutions, f"stages[{i}].response[{k}].save.substitutions")
                 case VerifyStep(verify=verify):
                     for j, call in enumerate(verify.user_functions):
-                        sites.append((call, {"response"}, True, f"stages[{i}].response[{k}].verify.user_functions[{j}]"))
+                        sites.append((call, subject, True, f"stages[{i}].response[{k}].verify.user_functions[{j}]"))
 
     for call, injected, check_signature, location in sites:
         name, kwargs = call_target(call)
@@ -250,3 +262,97 @@ def _function_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
             continue
         for code, problem in _signature_problems(func, injected | kwargs.keys()):
             yield diag(code, f"Function '{name}': {problem}", location)
+
+
+# A placeholder for the instance a plain method is called on.
+_SELF = object()
+
+
+def _stub_owner(owner: type) -> bool:
+    """Whether an attribute found on ``owner`` is no adapter's own: the
+    plugin's `ProtocolAdapter`, whose methods are stubs that do nothing, or
+    ``typing``'s and ``object``'s machinery."""
+    return owner is ProtocolAdapter or owner is object or owner.__module__ == "typing"
+
+
+def _constructor_signature(adapter: type) -> inspect.Signature:
+    """What ``adapter(**params)`` accepts. A class subclassing a
+    ``typing.Protocol`` without an ``__init__`` of its own gets typing's
+    placeholder, whose ``(*args, **kwargs)`` hides that it takes no
+    arguments at all, as ``object`` does: that is the signature returned
+    then. Raises as `inspect.signature` does."""
+    owner = next((klass for klass in adapter.__mro__ if "__init__" in vars(klass)), object)
+    if getattr(vars(owner)["__init__"], "__module__", None) == "typing":
+        return inspect.Signature()
+    return inspect.signature(adapter)
+
+
+def _method_problem(adapter: type, method: str, args: tuple[str, ...]) -> str | None:
+    """Why ``adapter`` cannot be called as the plugin calls ``method``, with
+    ``args`` positionally, or None. Missing, or only a `ProtocolAdapter` stub
+    (found through the MRO), is a problem; so is a signature that cannot bind
+    the arguments. The attribute is classified as it is declared
+    (`inspect.getattr_static`): a plain function binds the instance first, a
+    staticmethod does not, and a classmethod comes bound. A signature that
+    cannot be read (a C method) is not judged."""
+    owner = next((klass for klass in adapter.__mro__ if method in vars(klass)), None)
+    if owner is None or _stub_owner(owner):
+        inherited = " (only ProtocolAdapter's stub, which does nothing)" if owner is ProtocolAdapter else ""
+        return f"has no {method}() method{inherited}"
+    declared = inspect.getattr_static(adapter, method)
+    match declared:
+        case staticmethod():
+            target, bound = declared.__func__, args
+        case classmethod():
+            target, bound = getattr(adapter, method), args
+        case _ if inspect.isfunction(declared):
+            target, bound = declared, (_SELF, *args)
+        case _ if callable(declared):
+            target, bound = declared, args
+        case _:
+            return f"has a {method} that is no method ({type(declared).__name__})"
+    try:
+        signature = inspect.signature(target)
+    except (TypeError, ValueError):
+        return None
+    try:
+        signature.bind(*bound)
+    except TypeError as e:
+        return f"{method}{signature} cannot be called as {method}({', '.join(args)}): {e}"
+    return None
+
+
+def _adapter_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
+    """HTTPCHAIN046: each connection's adapter, as the plugin uses it when a
+    stage opens the connection: imported (`userfunc.import_adapter`, which
+    refuses what is no class), each method of `connections.ADAPTER_METHODS`
+    its own and callable with the arguments the plugin passes, positionally,
+    and its constructor taking the connection's ``params`` as keyword
+    arguments (the keys are known even where the values are templates).
+
+    Its own code, not 022/023/024: those are documented as a user
+    function's, and an adapter is a class."""
+    for name, config in scenario.connections.items():
+        location = f"connections.{name}.adapter"
+        try:
+            adapter = import_adapter(config.adapter)
+        except UserFunctionError as e:
+            yield diag(DiagnosticCode.ADAPTER_INVALID, f"Connection '{name}': cannot import adapter '{config.adapter}': {e}", location)
+            continue
+        for method, args in ADAPTER_METHODS.items():
+            if (problem := _method_problem(adapter, method, args)) is not None:
+                yield diag(
+                    DiagnosticCode.ADAPTER_INVALID,
+                    f"Connection '{name}': adapter '{config.adapter}' {problem}; the plugin calls {method}({', '.join(args)}) on it. Define it to take those arguments.",
+                    location,
+                )
+        try:
+            signature = _constructor_signature(adapter)
+        except (TypeError, ValueError):
+            continue
+        for _, problem in _parameter_problems(signature, set(config.params)):
+            yield diag(
+                DiagnosticCode.ADAPTER_INVALID,
+                f"Connection '{name}': adapter '{config.adapter}' cannot be built with the connection's params: {problem}",
+                f"connections.{name}.params",
+            )

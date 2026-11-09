@@ -1,0 +1,53 @@
+{
+    "description": "adapters as the plugin uses them: plain, static and class methods, and a constructor taking any keyword",
+    "connections": {
+        "a": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "h",
+                "port": 1
+            }
+        },
+        "b": {
+            "adapter": "userfuncs:StaticAndClassMethodAdapter"
+        },
+        "c": {
+            "adapter": "userfuncs:KwargsAdapter",
+            "params": {
+                "anything": "{{ 1 }}"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "a",
+            "connection": {
+                "name": "a",
+                "expect": {}
+            },
+            "response": [
+                {
+                    "verify": {
+                        "user_functions": [
+                            "userfuncs:needs_message"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "b",
+            "connection": {
+                "name": "b",
+                "open": true
+            }
+        },
+        {
+            "name": "c",
+            "connection": {
+                "name": "c",
+                "open": true
+            }
+        }
+    ]
+}

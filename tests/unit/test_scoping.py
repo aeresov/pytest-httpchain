@@ -15,7 +15,9 @@ from pytest_httpchain.scoping import (
     SkipCause,
     base_global_context,
     connection_bindings,
+    connection_lifecycles,
     connection_step_context,
+    connection_step_templates,
     defined_names,
     extract_builtin_stand_ins,
     extract_invalid_expressions,
@@ -23,6 +25,8 @@ from pytest_httpchain.scoping import (
     extract_uncalled_builtins,
     iteration_context,
     marks_skip_cause,
+    parametrize_instances,
+    rendered_response_steps,
     response_step_context,
     response_step_templates,
     saved_in_response,
@@ -671,3 +675,137 @@ def test_template_builtins_is_single_source():
     """M14: the reference extractor uses the canonical TEMPLATE_BUILTINS from the
     templates package, not a private copy that could drift from the engine."""
     assert SCOPING_BUILTINS is TEMPLATE_BUILTINS
+
+
+def _on(name="dev", **step):
+    """A stage on connection ``name``."""
+    return {"name": step.pop("stage", "s"), "connection": {"name": name, **step}}
+
+
+def _lifecycle(*stages, name="dev"):
+    scenario = Scenario.model_validate({"connections": {"dev": {"adapter": "m:A"}, "other": {"adapter": "m:A"}}, "stages": list(stages)})
+    return connection_lifecycles(scenario)[name]
+
+
+class TestConnectionLifecycles:
+    """The opener walk: which stages may open a connection, whose session a
+    stage may use, and which find it closed whatever ran before, as the
+    carrier moves a connection."""
+
+    def test_first_stage_opens_implicitly_and_later_ones_use_its_session(self):
+        lifecycle = _lifecycle(_on(send={"a": 1}), _on(expect={}), _on(close=True))
+        assert lifecycle.openers == (0,)
+        assert lifecycle.sessions == {1: {0}, 2: {0}}
+        assert lifecycle.not_open == {}
+
+    def test_open_true_opens_its_own_session(self):
+        lifecycle = _lifecycle(_on(open=True), _on(open=True), _on(expect={}))
+        assert lifecycle.openers == (0, 1)
+        assert lifecycle.sessions == {2: {1}}
+
+    def test_a_closed_connection_is_not_reopened_implicitly(self):
+        lifecycle = _lifecycle(_on(open=True), _on(close=True), _on(expect={}), _on(drain=True))
+        assert lifecycle.openers == (0,)
+        assert lifecycle.not_open == {2: {1}, 3: {1}}
+
+    def test_reopen_after_close(self):
+        lifecycle = _lifecycle(_on(close=True), _on(open=True), _on(expect={}))
+        assert lifecycle.openers == (0, 1)
+        assert lifecycle.not_open == {}
+        assert lifecycle.sessions == {2: {1}}
+
+    def test_a_skippable_opener_leaves_the_next_stage_an_opener(self):
+        lifecycle = _lifecycle({**_on(send={"a": 1}), "skip_if": "{{ x }}"}, _on(expect={}))
+        assert lifecycle.openers == (0, 1)
+        assert lifecycle.sessions == {1: {0}}
+
+    def test_a_skippable_closer_is_maybe_closed(self):
+        lifecycle = _lifecycle(_on(open=True), {**_on(close=True), "marks": ["skipif('sys.platform == \"x\"')"]}, _on(expect={}))
+        assert lifecycle.not_open == {}
+        assert lifecycle.sessions == {1: {0}, 2: {0}}
+
+    @pytest.mark.parametrize("ignored", [{"skip_if": True}, {"marks": ["skip"]}, {"marks": ["xfail(run=False)"]}])
+    def test_a_stage_that_never_runs_does_nothing(self, ignored):
+        lifecycle = _lifecycle({**_on(open=True, close=True), **ignored}, _on(expect={}))
+        assert lifecycle.openers == (1,)
+        assert lifecycle.not_open == {}
+
+    def test_a_parametrized_closer_finds_its_own_close(self):
+        lifecycle = _lifecycle({**_on(send={"a": 1}, close=True), "parametrize": [{"individual": {"n": [1, 2]}}]})
+        assert lifecycle.openers == (0,)
+        assert lifecycle.not_open == {0: {0}}
+
+    def test_a_parametrized_closer_of_one_instance_is_fine(self):
+        assert _lifecycle({**_on(send={"a": 1}, close=True), "parametrize": [{"individual": {"n": [1]}}]}).not_open == {}
+
+    def test_other_connections_are_not_touched(self):
+        lifecycle = _lifecycle(_on("other", open=True, close=True), _on(expect={}), name="dev")
+        assert lifecycle.openers == (1,)
+        assert lifecycle.not_open == {}
+
+
+@pytest.mark.parametrize(
+    ("parametrize", "instances"),
+    [
+        pytest.param(None, 1, id="none"),
+        pytest.param([{"individual": {"a": [1, 2]}}, {"combinations": [{"b": 1}, {"b": 2}, {"b": 3}]}], 6, id="product"),
+        pytest.param([{"individual": {"a": "{{ xs }}"}}], None, id="template"),
+    ],
+)
+def test_parametrize_instances(parametrize, instances):
+    stage = {"name": "s", "request": {"url": "http://x/"}}
+    if parametrize is not None:
+        stage["parametrize"] = parametrize
+    [stage_model] = Scenario.model_validate({"stages": [stage]}).stages
+    assert parametrize_instances(stage_model.parametrize) == instances
+
+
+def test_connection_step_templates_are_what_renders():
+    """``send``; then the timeout and a match object's values, never its
+    keys, the connection's name or a match string."""
+    raw = {"name": "{{ n }}", "send": {"a": "{{ a }}"}, "expect": {"match": {"{{ k }}": "{{ v }}"}, "timeout": "{{ t }}"}}
+    assert connection_step_templates(raw) == ({"a": "{{ a }}"}, ["{{ t }}", ["{{ v }}"]])
+    assert connection_step_templates({"name": "d", "expect": {"match": "{{ m }}"}}) == (None, [None])
+    assert connection_step_templates(None) == (None, None)
+
+
+def test_rendered_response_steps_pair_each_step():
+    scenario = Scenario.model_validate(
+        {
+            "stages": [
+                {
+                    "name": "s",
+                    "request": {"url": "http://x/"},
+                    "response": {
+                        "grab": {"save": {"jmespath": {"a": "a"}}},
+                        "derive": {"save": {"substitutions": [{"vars": {"b": "{{ a }}"}}], "description": "{{ never }}"}},
+                    },
+                }
+            ]
+        }
+    )
+    raw = {"grab": {"save": {"jmespath": {"a": "a"}}}, "derive": {"save": {"substitutions": [{"vars": {"b": "{{ a }}"}}], "description": "{{ never }}"}}}
+    assert rendered_response_steps(scenario.stages[0], raw) == [{"save": {"jmespath": {"a": "a"}}}, [[{"b": "{{ a }}"}]]]
+
+
+def test_connection_params_see_scenario_names_and_earlier_saves_only():
+    """A connection outlives the stage that opens it, so its params never
+    see that stage's own fixtures, parameters or substitutions."""
+    scenario = Scenario.model_validate(
+        {
+            "fixtures": ["sfx"],
+            "substitutions": [{"vars": {"svar": 1}}],
+            "connections": {"dev": {"adapter": "m:A"}},
+            "stages": [
+                {"name": "login", "request": {"url": "http://x/"}, "response": [{"save": {"jmespath": {"token": "t"}}}]},
+                {
+                    "name": "open",
+                    "fixtures": ["stage_fx"],
+                    "parametrize": [{"individual": {"p": [1]}}],
+                    "substitutions": [{"vars": {"local": 1}}],
+                    "connection": {"name": "dev", "open": True},
+                },
+            ],
+        }
+    )
+    assert set(stage_scopes(scenario)[1].connection_params) == {"sfx", "svar", "token"}

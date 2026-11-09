@@ -1,0 +1,47 @@
+{
+    "substitutions": [
+        {
+            "vars": {
+                "fresh": true
+            }
+        }
+    ],
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "{{ device_host }}"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "lookup",
+            "request": {
+                "url": "http://server/x"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "device_host": "host"
+                        }
+                    }
+                }
+            ],
+            "skip_if": "{{ not fresh }}"
+        },
+        {
+            "name": "hello",
+            "connection": {
+                "name": "dev",
+                "open": true
+            }
+        }
+    ]
+}

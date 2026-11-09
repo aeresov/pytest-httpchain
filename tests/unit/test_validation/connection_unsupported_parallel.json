@@ -1,0 +1,24 @@
+{
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "localhost"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "c",
+            "connection": {
+                "name": "dev",
+                "send": {
+                    "op": "ping"
+                }
+            },
+            "parallel": {
+                "repeat": 2
+            }
+        }
+    ]
+}

@@ -1,0 +1,28 @@
+{
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "localhost"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "c",
+            "connection": {
+                "name": "dev",
+                "expect": {}
+            },
+            "response": [
+                {
+                    "verify": {
+                        "user_functions": [
+                            "userfuncs:accepts_kwargs"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

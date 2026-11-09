@@ -1,0 +1,19 @@
+{
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "{{ a; b }}"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "hello",
+            "connection": {
+                "name": "dev",
+                "open": true
+            }
+        }
+    ]
+}

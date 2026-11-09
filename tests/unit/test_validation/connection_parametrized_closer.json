@@ -1,0 +1,32 @@
+{
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "localhost"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "each",
+            "connection": {
+                "name": "dev",
+                "send": {
+                    "op": "{{ op }}"
+                },
+                "close": true
+            },
+            "parametrize": [
+                {
+                    "individual": {
+                        "op": [
+                            "a",
+                            "b"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}

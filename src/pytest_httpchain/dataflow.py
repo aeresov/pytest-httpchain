@@ -4,12 +4,16 @@ Reads the same per-stage scopes as the validator, but produces a graph instead
 of diagnostics: what each stage saves, what it consumes, and the edges between.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from pytest_httpchain.models import Scenario
+from pytest_httpchain.models import ConnectionStep, Scenario
 from pytest_httpchain.scoping import (
+    SENT_NAME,
+    connection_lifecycles,
+    connection_rendered_fields,
+    connection_step_templates,
     defined_names,
     extract_template_variables,
     raw_stages,
@@ -18,6 +22,12 @@ from pytest_httpchain.scoping import (
     substitution_names,
     substitution_step_templates,
 )
+
+
+def _sets(step: ConnectionStep, action: str) -> bool:
+    """Whether a connection step takes ``action`` (one of `ConnectionStep.ACTIONS`)."""
+    value = getattr(step, action)
+    return value is not None and value is not False
 
 
 def _consumed(refs: set[str], earlier_saves: frozenset[str], shadows: frozenset[str]) -> set[str]:
@@ -37,16 +47,34 @@ class DataFlowEdge(BaseModel):
     vars: list[str]
 
 
+class ConnectionEdge(BaseModel):
+    """A connection dependency: stage ``user`` talks over the session of
+    ``connection`` that stage ``opener`` may have opened (one edge per
+    possible opener, `scoping.connection_lifecycles`)."""
+
+    opener: int
+    user: int
+    connection: str
+
+
 class StageFlow(BaseModel):
     """Per-stage data-flow summary. ``skip_if`` is the stage's as declared.
     ``may_skip`` says whether the stage may end without its saves while the
     chain goes on: a ``skip_if`` other than ``false``, or a ``skip``,
     ``skipif`` or ``xfail`` mark of its own (`scoping.SkipCause`). A later
     stage then reads the value an earlier stage saved under the same name, or
-    finds none."""
+    finds none.
+
+    ``kind`` is what the stage does: an HTTP ``request``, or a step on
+    ``connection``, whose ``actions`` are those it sets, in the order it takes
+    them. A connection stage's ``method`` is ``CONNECTION`` and its ``url``
+    the connection's name, so both stay text."""
 
     index: int
     name: str
+    kind: Literal["request", "connection"] = "request"
+    connection: str | None = None
+    actions: list[str] = []
     method: str
     url: str
     fixtures: list[str]
@@ -62,6 +90,7 @@ class DataFlow(BaseModel):
 
     stages: list[StageFlow]
     edges: list[DataFlowEdge]
+    connection_edges: list[ConnectionEdge] = []
     scenario_fixtures: list[str] = []
     scenario_vars: list[str] = []
 
@@ -95,10 +124,27 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     with the chain going on, and the consumer then reads the writer before it:
     so the edges run from each writer back to, and including, the nearest one
     that never skips — ``graph`` draws those from a stage that may skip dotted.
+
+    A connection stage consumes what its step renders
+    (`scoping.connection_step_templates`), and each stage that may open a
+    connection what the connection's ``params`` read, against its scope for
+    them (`scoping.StageScopes.connection_params`, beneath only the
+    scenario's fixtures). ``connection_edges`` run from each stage that may
+    have opened the session a later stage uses to that stage.
     """
     raws = raw_stages(test_data)
     scopes = stage_scopes(scenario)
     defined = defined_names(scenario)
+    lifecycles = connection_lifecycles(scenario, scopes)
+    raw_connections = test_data.get("connections")
+    if not isinstance(raw_connections, dict):
+        raw_connections = {}
+    # What each stage that may open a connection renders of it.
+    opened_params: dict[int, list[Any]] = {}
+    for name, lifecycle in lifecycles.items():
+        rendered = [value for _, value in connection_rendered_fields(raw_connections.get(name))]
+        for opener in lifecycle.openers:
+            opened_params.setdefault(opener, []).extend(rendered)
 
     stages: list[StageFlow] = []
     edges: list[DataFlowEdge] = []
@@ -121,6 +167,12 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         consumes |= _consumed(extract_template_variables(raw.get("parallel"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
         consumes |= _consumed(extract_template_variables(raw.get("retry"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
         consumes |= _consumed(extract_template_variables(raw.get("request"), defined=defined), scope.earlier_saves, scope.request_shadows)
+        if stage.connection is not None:
+            send, after_send = connection_step_templates(raw.get("connection"))
+            sent = frozenset({SENT_NAME}) if stage.connection.send is not None else frozenset()
+            consumes |= _consumed(extract_template_variables(send, defined=defined), scope.earlier_saves, scope.request_shadows)
+            consumes |= _consumed(extract_template_variables(after_send, defined=defined), scope.earlier_saves, scope.request_shadows | sent)
+        consumes |= _consumed(extract_template_variables(opened_params.get(i), defined=defined), scope.earlier_saves, scope.scenario_fixtures)
         # The same order-aware iterator the validator uses also sees prior
         # entries inside a substitutions-save step. Those entries resolve in
         # sequence, and only their rendered values can consume an earlier save.
@@ -140,6 +192,9 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
             StageFlow(
                 index=i,
                 name=stage.name,
+                kind="connection" if stage.connection is not None else "request",
+                connection=stage.connection.name if stage.connection is not None else None,
+                actions=[action for action in ConnectionStep.ACTIONS if stage.connection is not None and _sets(stage.connection, action)],
                 # A connection stage shows as its connection, so the field
                 # stays text for show's JSON readers.
                 method=str(stage.request.method) if stage.request is not None else "CONNECTION",
@@ -156,9 +211,18 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         for name in scope.saves:
             writers.setdefault(name, []).append(i)
 
+    connection_edges = [
+        ConnectionEdge(opener=opener, user=user, connection=name)
+        for name, lifecycle in lifecycles.items()
+        for user, openers in sorted(lifecycle.sessions.items())
+        for opener in sorted(openers)
+    ]
+    connection_edges.sort(key=lambda edge: (edge.user, edge.opener, edge.connection))
+
     return DataFlow(
         stages=stages,
         edges=edges,
+        connection_edges=connection_edges,
         scenario_fixtures=sorted(scenario.fixtures),
         scenario_vars=sorted(substitution_names(scenario.substitutions)),
     )

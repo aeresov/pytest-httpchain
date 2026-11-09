@@ -1,0 +1,40 @@
+{
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "localhost"
+            }
+        }
+    },
+    "stages": [
+        {
+            "name": "c",
+            "connection": {
+                "name": "dev",
+                "expect": {
+                    "match": {
+                        "op": "pong"
+                    },
+                    "timeout": 1
+                }
+            },
+            "response": [
+                {
+                    "save": {
+                        "jmespath": {
+                            "message": "op"
+                        }
+                    }
+                },
+                {
+                    "verify": {
+                        "jmespath": {
+                            "op": "pong"
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

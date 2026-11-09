@@ -87,6 +87,7 @@ from pytest_httpchain.response_steps import (
     process_verify,
 )
 from pytest_httpchain.scoping import (
+    CONNECTION_BINDINGS,
     MESSAGE_META_NAME,
     RESPONSE_META_NAME,
     SENT_NAME,
@@ -1053,8 +1054,8 @@ def _rendered_match(declared: dict[str, Any], context: Mapping[str, Any]) -> dic
 
 
 # What a connection stage binds over its response steps, by what shadows a
-# save of that name there.
-_CONNECTION_RESERVED = {MESSAGE_META_NAME: "the message the stage took (HTTPCHAIN045)", SENT_NAME: "what the stage's send() returned (HTTPCHAIN045)"}
+# save of that name there, in the validator's words (`scoping.CONNECTION_BINDINGS`).
+_CONNECTION_RESERVED = {name: f"{what} (HTTPCHAIN045)" for name, what in CONNECTION_BINDINGS.items()}
 
 
 def _message_miss(match: Any, rendered: Mapping[str, Any] | None, message: dict[str, Any]) -> Miss | None:

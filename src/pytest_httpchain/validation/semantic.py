@@ -7,7 +7,7 @@ import json
 import re
 import warnings
 from collections import Counter
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Generator, Iterable, Iterator, Sequence
 from collections.abc import Set as AbstractSet
 from typing import Any
 
@@ -18,24 +18,34 @@ from pytest_httpchain.models import (
     FunctionsSubstitution,
     HeaderMatcher,
     JMESPathMatcher,
+    JMESPathSave,
+    RegexSave,
     SaveStep,
     Scenario,
     Stage,
     Substitution,
     SubstitutionsSave,
     UserFunctionKwargs,
+    UserFunctionsSave,
     Verify,
     VerifyStep,
     is_relative_url,
     parametrize_values_contain_template,
 )
 from pytest_httpchain.scoping import (
+    CONNECTION_BINDINGS,
+    MESSAGE_META_NAME,
     RESPONSE_META_NAME,
     SCENARIO_TEMPLATE_FIELDS,
+    SENT_NAME,
+    ConnectionLifecycle,
     DefinedNames,
     NameUnion,
     SkipCause,
     StageScopes,
+    connection_lifecycles,
+    connection_rendered_fields,
+    connection_step_templates,
     defined_names,
     extract_builtin_stand_ins,
     extract_defined_variables,
@@ -44,8 +54,10 @@ from pytest_httpchain.scoping import (
     extract_template_variables,
     extract_uncalled_builtins,
     raw_stages,
+    rendered_response_steps,
     response_step_templates,
     saved_in_response,
+    saved_in_step,
     stage_scopes,
     stats_name,
     substitution_names,
@@ -54,7 +66,7 @@ from pytest_httpchain.scoping import (
 from pytest_httpchain.templates import CALL_ONLY_BUILTINS, TEMPLATE_BUILTINS, call_form, contains_escape, contains_template, find_templates, is_complete_template, needs_rendering
 from pytest_httpchain.utils import make_marker, optional_as_list, path_segment, xdist_group_names
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ScenarioInfo, diag
-from pytest_httpchain.validation.loader import is_jmespath_expectations_position
+from pytest_httpchain.validation.loader import expectations_field
 
 
 def _scenario_fixtures(scenario: Scenario) -> list[str]:
@@ -74,17 +86,22 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagno
     vars_saved = extract_saved_variables(scenario)
     scenario_sub_names = substitution_names(scenario.substitutions)
     defined = defined_names(scenario)
+    scopes = stage_scopes(scenario)
+    lifecycles = connection_lifecycles(scenario, scopes)
 
     return [
         *_stage_name_diagnostics(scenario),
         *_fixture_diagnostics(scenario, vars_saved),
         *_invalid_expression_diagnostics(scenario, test_data),
         *_scenario_template_diagnostics(scenario, test_data, set(fixtures), scenario_sub_names, defined),
-        *_reserved_name_diagnostics(vars_defined | vars_saved | set(fixtures)),
+        *_reserved_name_diagnostics(scenario, vars_defined | vars_saved | set(fixtures)),
+        *_reserved_message_name_diagnostics(scenario, scopes),
         *_stats_as_diagnostics(scenario),
-        *_dataflow_diagnostics(scenario, test_data, defined),
+        *_dataflow_diagnostics(scenario, test_data, defined, scopes),
+        *_connection_params_diagnostics(scenario, test_data, defined, scopes, lifecycles),
         *_uncalled_builtin_diagnostics(scenario, test_data, defined),
         *_relative_url_diagnostics(scenario),
+        *_connection_stage_diagnostics(scenario, test_data, defined, scopes, lifecycles),
         *_verify_diagnostics(scenario),
         *_inline_schema_diagnostics(scenario),
         *_marker_diagnostics(scenario),
@@ -108,6 +125,7 @@ def describe_scenario(scenario: Scenario, test_data: dict[str, Any]) -> Scenario
         vars_saved=sorted(extract_saved_variables(scenario)),
         vars_defined=sorted(extract_defined_variables(scenario)),
         fixtures=_scenario_fixtures(scenario),
+        connections=sorted(scenario.connections),
     )
 
 
@@ -194,6 +212,12 @@ def _builtin_fallback(names: set[str], *, fails: str = "fails the stage") -> str
 _FAILS_SCENARIO_INIT = "crashes scenario initialization"
 _FAILS_COLLECTION = "fails the scenario's collection"
 _FAILS_STAGE = "fails the stage"
+
+
+def _fails_opening(connection: str) -> str:
+    """What a template that fails in connection ``connection``'s ``params``
+    fails: they render when a stage opens it."""
+    return f"fails the stage that opens connection '{connection}'"
 
 
 def _scenario_level_fails(scenario: Scenario, key: str) -> str:
@@ -305,10 +329,17 @@ def _scenario_template_diagnostics(scenario: Scenario, test_data: dict[str, Any]
             yield _stand_in_diagnostic(f"Scenario-level '{key}'", stand_ins, key, scope_note=note)
 
 
-def _reserved_name_diagnostics(user_names: set[str]) -> Iterator[Diagnostic]:
+def _reserved_name_diagnostics(scenario: Scenario, user_names: set[str]) -> Iterator[Diagnostic]:
     """HTTPCHAIN027 (static half): names shadowed by the reserved ``response``
     namespace inside response steps. The carrier covers dynamically-produced
-    save keys this cannot see."""
+    save keys this cannot see.
+
+    Only an HTTP stage's response steps see ``response``: in a scenario
+    whose only stages with response steps are connection stages nothing is
+    shadowed by it (theirs see ``message`` and ``sent``, HTTPCHAIN045). A
+    scenario of HTTP stages alone is judged as it always was."""
+    if any(stage.connection is not None for stage in scenario.stages) and not any(stage.request is not None and stage.response for stage in scenario.stages):
+        return
     reserved_conflicts = user_names & {RESPONSE_META_NAME}
     if reserved_conflicts:
         yield diag(
@@ -316,6 +347,60 @@ def _reserved_name_diagnostics(user_names: set[str]) -> Iterator[Diagnostic]:
             f"Name(s) {sorted(reserved_conflicts)} are shadowed by the reserved response metadata namespace inside response steps "
             f"(save/verify templates see the HTTP response there, not your value)",
         )
+
+
+def _user_name_source(scope: StageScopes, name: str) -> str:
+    """Where a name a stage sees comes from, for a message: the innermost
+    ingredient that holds it, as the runtime layers them."""
+    for names, source in (
+        (scope.foreach_params, "a parallel.foreach parameter"),
+        (scope.stage_substitutions, "a substitution of this stage"),
+        (scope.parametrize_params, "a parametrize parameter"),
+        (scope.stage_fixtures | scope.scenario_fixtures, "a fixture"),
+        (scope.earlier_saves, "saved by an earlier stage"),
+    ):
+        if name in names:
+            return source
+    return "a scenario substitution"
+
+
+def _reserved_message_name_diagnostics(scenario: Scenario, scopes: list[StageScopes]) -> Iterator[Diagnostic]:
+    """HTTPCHAIN045: a user's name ``message`` or ``sent`` where a connection
+    stage binds it (`scoping.response_meta_names`), layered over every user
+    name, so the user's value is unreadable there: a name the stage sees
+    from anywhere (a substitution, a fixture, a parametrize or foreach
+    parameter, an earlier stage's save) in its response steps, or, for
+    ``sent``, in its ``expect`` too, whose timeout and match values see it;
+    and a save of that name in the stage itself, which the steps after it
+    cannot read. The carrier warns the same of a save whose keys this cannot
+    see (a user function's). A stage that does not bind the name shadows
+    nothing, and an HTTP stage's ``response`` is HTTPCHAIN027's."""
+    for i, stage in enumerate(scenario.stages):
+        step = stage.connection
+        scope = scopes[i]
+        if step is None or scope.never_called:
+            continue
+        visible = scope.phases().request
+        for name in sorted(scope.response_names):
+            what = CONNECTION_BINDINGS[name]
+            # Where the binding is layered over the user's names: `sent`
+            # over the expect's too (`carrier.Carrier._expect`).
+            places = [place for place, binds in (("expect", name == SENT_NAME and step.expect is not None), ("response steps", bool(stage.response))) if binds]
+            if name in visible and places:
+                yield diag(
+                    DiagnosticCode.RESERVED_MESSAGE_NAME,
+                    f"Stage '{stage.name}': '{name}' is {_user_name_source(scope, name)}, but in this connection stage's {' and '.join(places)} '{name}' is {what}, "
+                    f"which shadows it: they read that, not your value. Rename '{name}'.",
+                    location=f"stages[{i}].response" if stage.response else f"stages[{i}].connection.expect",
+                )
+            for k, response_step in enumerate(stage.response):
+                if name in saved_in_step(response_step):
+                    yield diag(
+                        DiagnosticCode.RESERVED_MESSAGE_NAME,
+                        f"Stage '{stage.name}': save step produced the reserved name '{name}': inside this connection stage's response steps it is shadowed by {what}, "
+                        f"so the steps after it read that, not the saved value. Rename the save.",
+                        location=f"stages[{i}].response[{k}].save",
+                    )
 
 
 def _stats_as_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
@@ -355,19 +440,26 @@ def _skip_cause_text(cause: SkipCause) -> str:
     return "skip_if" if cause.mark is None else f"the mark {cause.mark!r}"
 
 
+def _skippable_savers(scenario: Scenario, scopes: list[StageScopes], i: int, name: str) -> str:
+    """The stages before stage ``i`` that save ``name``, all with a
+    `scoping.SkipCause`, each named with its cause, its ``skip_if`` or the mark
+    as written, and when the name is then undefined: ``which only stage 'a'
+    saves, and it has skip_if: when it skips``."""
+    savers = [(scenario.stages[j].name, cause) for j in range(i) if name in scopes[j].saves and (cause := scopes[j].skip_cause)]
+    if len(savers) == 1:
+        [(saver, cause)] = savers
+        return f"which only stage '{saver}' saves, and it has {_skip_cause_text(cause)}: when it {'fails as expected' if cause.fails_as_expected else 'skips'}"
+    listed = ", ".join(f"'{saver}' ({_skip_cause_text(cause)})" for saver, cause in savers)
+    return f"which only stages {listed} save: when none of them saves it"
+
+
 def _skippable_save_diagnostic(scenario: Scenario, scopes: list[StageScopes], i: int, where: str, name: str, location: str) -> Diagnostic:
     """HTTPCHAIN003 for a reference to ``name`` that only earlier stages with a
     `scoping.SkipCause` save (`scoping.StageScopes.skippable_saves`): a skip
     leaves the chain healthy, so stage ``i`` runs, and finds the name undefined,
-    whenever those stages skipped. Each saver is named with its cause, its
-    ``skip_if`` or the mark as written. ``where`` is the phase that reads it."""
-    savers = [(scenario.stages[j].name, cause) for j in range(i) if name in scopes[j].saves and (cause := scopes[j].skip_cause)]
-    if len(savers) == 1:
-        [(saver, cause)] = savers
-        saved = f"which only stage '{saver}' saves, and it has {_skip_cause_text(cause)}: when it {'fails as expected' if cause.fails_as_expected else 'skips'}"
-    else:
-        listed = ", ".join(f"'{saver}' ({_skip_cause_text(cause)})" for saver, cause in savers)
-        saved = f"which only stages {listed} save: when none of them saves it"
+    whenever those stages skipped (`_skippable_savers`). ``where`` is the
+    phase that reads it."""
+    saved = _skippable_savers(scenario, scopes, i, name)
     return diag(
         DiagnosticCode.UNDEFINED_VAR,
         f"Stage '{scenario.stages[i].name}': {where} references '{name}', {saved}, '{name}' is undefined here — read it with get('{name}', <default>){_builtin_fallback({name})}",
@@ -375,7 +467,7 @@ def _skippable_save_diagnostic(scenario: Scenario, scopes: list[StageScopes], i:
     )
 
 
-def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined: DefinedNames) -> Iterator[Diagnostic]:
+def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined: DefinedNames, scopes: list[StageScopes]) -> Iterator[Diagnostic]:
     """HTTPCHAIN003/004/036: order-aware data-flow analysis.
 
     Checks every template reference against the phase scopes of
@@ -390,8 +482,12 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
     skip_if is true. A built-in's
     name the scenario defines too, called or passed as a function where that
     definition is not in scope, gets the built-in instead: a BUILTIN_STANDS_IN.
+
+    A connection stage's step is read as the runtime renders it
+    (`scoping.connection_step_templates`): its ``send`` in the request
+    phase, its ``expect.timeout`` and match values with ``sent`` too, when
+    it sends. A read of ``response`` in its response steps is HTTPCHAIN041's.
     """
-    scopes = stage_scopes(scenario)
     all_saved = extract_saved_variables(scenario)
     first_save_stage: dict[str, int] = {}
     for i, scope in enumerate(scopes):
@@ -476,6 +572,13 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
             ("retry", raw.get("retry"), phases.pre_iteration, skipped.pre_iteration),
             ("request", raw.get("request"), phases.request, skipped.request),
         ]
+        if stage.connection is not None:
+            send, after_send = connection_step_templates(raw.get("connection"))
+            sent = frozenset({SENT_NAME}) if stage.connection.send is not None else frozenset()
+            phase_checks += [
+                ("connection", send, phases.request, skipped.request),
+                ("connection", after_send, phases.request | sent, skipped.request | sent),
+            ]
         phase_checks += [
             ("response", templates, phases.response | prior_saves, skipped.response | prior_saves) for templates, prior_saves in response_step_templates(stage, raw.get("response"))
         ]
@@ -493,6 +596,8 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
                     if name not in available_when_skipped:
                         yield _skippable_save_diagnostic(scenario, scopes, i, phase, name, f"stages[{i}].{phase}")
                     continue
+                if phase == "response" and name == RESPONSE_META_NAME and stage.connection is not None:
+                    continue  # HTTPCHAIN041: no HTTP response to read
                 if name in scope.stage_substitutions:
                     yield diag(
                         DiagnosticCode.FORWARD_REF,
@@ -527,16 +632,20 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
 
 
 # The raw stage fields a template renders in, in resolution order.
-_STAGE_TEMPLATE_FIELDS = ("parametrize", "always_run", "substitutions", "skip_if", "parallel", "retry", "request", "response")
+_STAGE_TEMPLATE_FIELDS = ("parametrize", "always_run", "substitutions", "skip_if", "parallel", "retry", "request", "connection", "response")
 
 
 def _rendered_stage_field(stage: Stage, field: str, raw_value: Any) -> Any:
     """The part of a raw stage field the runtime renders: the reference checks'
     view of it (parametrize values without ``ids``, substitution steps without
-    function kwargs, a substitutions-save's entries alone)."""
+    function kwargs, a substitutions-save's entries alone, a connection step's
+    ``send``, ``expect.timeout`` and match object values, never its ``name``
+    or a match string)."""
     match field:
         case "parametrize":
             return _parametrize_rendered_values(raw_value)
+        case "connection":
+            return list(connection_step_templates(raw_value))
         case "substitutions":
             return [templates for templates, _ in substitution_step_templates(raw_value)]
         case "response":
@@ -547,18 +656,23 @@ def _rendered_stage_field(stage: Stage, field: str, raw_value: Any) -> Any:
 
 def _rendered_template_fields(scenario: Scenario, test_data: dict[str, Any]) -> Iterator[tuple[Any, str, str, str]]:
     """``(text, where, location, fails)`` for each field a template renders in,
-    scenario-level and per stage: the part of it the runtime renders, as the
-    reference checks read it (`_rendered_stage_field`: a function's kwargs and
-    a substitutions-save's ``description`` are never rendered, so a template
-    there is dead text), how a message names the field, its location, and what
-    a template that fails there fails (collection for a parametrize value,
-    scenario initialization or collection at scenario level,
-    `_scenario_level_fails`)."""
+    scenario-level, per connection and per stage: the part of it the runtime
+    renders, as the reference checks read it (`_rendered_stage_field`: a
+    function's kwargs and a substitutions-save's ``description`` are never
+    rendered, so a template there is dead text), how a message names the
+    field, its location, and what a template that fails there fails
+    (collection for a parametrize value, scenario initialization or
+    collection at scenario level, `_scenario_level_fails`, and for a
+    connection's ``params`` the stage that opens it, `_fails_opening`)."""
     for key in SCENARIO_TEMPLATE_FIELDS:
         subtree = test_data.get(key)
         if key == "substitutions":
             subtree = [templates for templates, _ in substitution_step_templates(subtree)]
         yield subtree, f"Scenario-level '{key}'", key, _scenario_level_fails(scenario, key)
+    raw_connections = test_data.get("connections")
+    for name, raw_config in raw_connections.items() if isinstance(raw_connections, dict) else ():
+        for field, subtree in connection_rendered_fields(raw_config):
+            yield subtree, f"Connection '{name}': {field}", f"connections.{name}.{field}", _fails_opening(name)
     raws = raw_stages(test_data)
     for i, stage in enumerate(scenario.stages):
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
@@ -582,7 +696,8 @@ def _invalid_expression_diagnostics(scenario: Scenario, test_data: dict[str, Any
     (`_rendered_template_fields`); each template once per field.
 
     The severity follows what it fails. Where it fails a stage (037, a
-    warning, as an undefined name there is), the stages before it still run.
+    warning, as an undefined name there is; a connection's ``params`` fail the
+    stage that opens it), the stages before it still run.
     Where it fails before any stage runs (038, an error, as 017 is), nothing
     does: at scenario level it fails initialization, and with it every stage,
     and in a stage's parametrize value the collection of the whole scenario,
@@ -590,7 +705,7 @@ def _invalid_expression_diagnostics(scenario: Scenario, test_data: dict[str, Any
     runtime's: Python's own often ends in a ``?``.
     """
     for subtree, where, location, fails in _rendered_template_fields(scenario, test_data):
-        code = DiagnosticCode.INVALID_EXPRESSION if fails == _FAILS_STAGE else DiagnosticCode.SCENARIO_INVALID_EXPRESSION
+        code = DiagnosticCode.SCENARIO_INVALID_EXPRESSION if fails in (_FAILS_SCENARIO_INIT, _FAILS_COLLECTION) else DiagnosticCode.INVALID_EXPRESSION
         for template, reason in extract_invalid_expressions(subtree).items():
             yield diag(code, f"{where} has an invalid expression '{template}', and rendering it {fails}: {reason}", location=location)
 
@@ -649,13 +764,246 @@ def _relative_url_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
             )
 
 
+def _stage_list(scenario: Scenario, indices: Iterable[int]) -> str:
+    """``stage 'a'``, or ``stages 'a', 'b'``, for a message."""
+    names = [f"'{scenario.stages[i].name}'" for i in sorted(indices)]
+    return f"stage {names[0]}" if len(names) == 1 else f"stages {', '.join(names)}"
+
+
+# HTTPCHAIN041: what an HTTP stage has that a connection stage's message does
+# not, each with how the scenario says the same of a message.
+_READ_THE_MESSAGE = "Check the message with verify.jmespath, or move the check to an HTTP stage."
+
+
+def _http_only_fields(stage: Stage, i: int, rendered_steps: list[Any], response_visible: bool, defined: DefinedNames) -> Iterator[tuple[str, str]]:
+    """``(location, what goes wrong and the fix)`` for each field HTTPCHAIN041
+    refuses on connection stage ``stage``, in document order."""
+    if stage.parallel is not None:
+        yield f"stages[{i}].parallel", "parallel repeats an HTTP request, and a connection stage takes none: the stage fails when it runs. Remove it."
+    if "response_codec" in stage.model_fields_set:
+        yield (
+            f"stages[{i}].response_codec",
+            "response_codec decodes an HTTP response's body, and a connection stage's message comes decoded: it does nothing here. Remove it.",
+        )
+    for k, step in enumerate(stage.response):
+        where = f"stages[{i}].response[{k}]"
+        match step:
+            case VerifyStep(verify=verify):
+                if verify.status is not None:
+                    yield f"{where}.verify.status", f"verify.status checks an HTTP response, and a connection stage has a message instead: the step fails. {_READ_THE_MESSAGE}"
+                if verify.headers:
+                    yield f"{where}.verify.headers", f"verify.headers checks an HTTP response, and a connection stage has a message instead: the step fails. {_READ_THE_MESSAGE}"
+                for field in ("contains", "not_contains", "matches", "not_matches"):
+                    if getattr(verify.body, field):
+                        yield (
+                            f"{where}.verify.body.{field}",
+                            f"verify.body.{field} checks an HTTP response's body text, and a connection stage has a message instead: the step fails. {_READ_THE_MESSAGE}",
+                        )
+            case SaveStep(save=RegexSave()):
+                yield (
+                    f"{where}.save.regex",
+                    "save.regex reads an HTTP response's body text, and a connection stage has a message instead: the step fails. Save from the message with save.jmespath.",
+                )
+        if not response_visible and k < len(rendered_steps) and RESPONSE_META_NAME in extract_template_variables(rendered_steps[k], defined=defined):
+            yield (
+                where,
+                "response step reads 'response', an HTTP response's metadata, and a connection stage has none: rendering it fails the stage. "
+                "Read the message the stage took as 'message'.",
+            )
+
+
+def _message_readers(stage: Stage, i: int) -> Iterator[str]:
+    """The location of each response step field of ``stage`` that reads the
+    stage's message, as its subject (HTTPCHAIN043)."""
+    for k, step in enumerate(stage.response):
+        where = f"stages[{i}].response[{k}]"
+        match step:
+            case VerifyStep(verify=verify):
+                if verify.jmespath:
+                    yield f"{where}.verify.jmespath"
+                if verify.body.schema is not None:
+                    yield f"{where}.verify.body.schema"
+                if verify.user_functions:
+                    yield f"{where}.verify.user_functions"
+            case SaveStep(save=JMESPathSave()):
+                yield f"{where}.save.jmespath"
+            case SaveStep(save=UserFunctionsSave()):
+                yield f"{where}.save.user_functions"
+
+
+def _connection_stage_diagnostics(
+    scenario: Scenario,
+    test_data: dict[str, Any],
+    defined: DefinedNames,
+    scopes: list[StageScopes],
+    lifecycles: dict[str, ConnectionLifecycle],
+) -> Iterator[Diagnostic]:
+    """HTTPCHAIN041/042/043/044: what a connection stage cannot do, as the
+    carrier runs one.
+
+    042, a connection the scenario does not declare: the stage fails. 044, a
+    stage without ``open: true`` that finds its connection closed whatever
+    ran before it (`scoping.connection_lifecycles`): one an earlier stage
+    closed, unskippably, with nothing reopening it, or its own close, from
+    its second parametrize instance on. A closed connection is never
+    reopened implicitly, so the stage fails. A close a stage may skip leaves
+    it maybe-closed, which the runtime reports if it comes to that.
+
+    041, per field, what only an HTTP stage has: ``parallel``,
+    ``response_codec`` (set at all, its default included), a verify step's
+    status, headers and body text matchers, ``save.regex``, and a read of the
+    ``response`` namespace in a response step. 043, per field, a step that
+    reads the stage's message as its subject (``verify.jmespath``, a body
+    schema, ``save.jmespath``, user functions, called with ``message=``) on
+    a stage that takes none: no ``expect``, or an ``absent`` one, and no
+    ``open: true`` (only an explicit open without ``expect`` has
+    ``connect()``'s result as its message). Other steps run there; a read of
+    ``message`` in one is undefined (003).
+    """
+    raws = raw_stages(test_data)
+    declared = sorted(scenario.connections)
+    for i, stage in enumerate(scenario.stages):
+        step = stage.connection
+        scope = scopes[i]
+        if step is None or scope.never_called:
+            continue
+        raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
+
+        if step.name not in scenario.connections:
+            names = f"it declares {', '.join(repr(name) for name in declared)}" if declared else "it declares none"
+            yield diag(
+                DiagnosticCode.UNDEFINED_CONNECTION,
+                f"Stage '{stage.name}': connection '{step.name}' is not one of the scenario's connections ({names}), so the stage fails when it runs. "
+                f"Declare it under connections, or name one that is.",
+                location=f"stages[{i}].connection.name",
+            )
+        elif closers := lifecycles[step.name].not_open.get(i):
+            if closers == {i}:
+                why = (
+                    f"its own close: true closes connection '{step.name}' after its first parametrize instance, and the next one, which does not open it, finds it closed and fails"
+                )
+            else:
+                closed_by = _stage_list(scenario, closers - {i}) + (" (and this stage's own earlier instance)" if i in closers else "")
+                why = f"connection '{step.name}' is closed by then, by {closed_by}, and a stage without open: true never reopens it, so this one fails"
+            yield diag(
+                DiagnosticCode.CONNECTION_NOT_OPEN,
+                f"Stage '{stage.name}': {why}. Set open: true on this stage to connect again, or remove the close: true.",
+                location=f"stages[{i}].connection",
+            )
+
+        response_visible = RESPONSE_META_NAME in scope.phases().request
+        for location, problem in _http_only_fields(stage, i, rendered_response_steps(stage, raw.get("response")), response_visible, defined):
+            yield diag(DiagnosticCode.CONNECTION_STAGE_UNSUPPORTED, f"Stage '{stage.name}': {problem}", location=location)
+
+        if MESSAGE_META_NAME not in scope.response_names:
+            # An open without an expect has connect()'s result: only these take none.
+            if step.expect is not None:
+                why = "its expect is absent: true, which passes when no message comes"
+            else:
+                why = "it has no expect, and only open: true without one has connect()'s result as its message"
+            for location in _message_readers(stage, i):
+                field = location.rsplit("].", 1)[-1]
+                yield diag(
+                    DiagnosticCode.NO_MESSAGE,
+                    f"Stage '{stage.name}': {field} reads the stage's message, but the stage takes none ({why}), so the step fails when it runs. "
+                    f"Add an expect that takes a message, or move the step to a stage that has one.",
+                    location=location,
+                )
+
+
+def _connection_params_diagnostics(
+    scenario: Scenario,
+    test_data: dict[str, Any],
+    defined: DefinedNames,
+    scopes: list[StageScopes],
+    lifecycles: dict[str, ConnectionLifecycle],
+) -> Iterator[Diagnostic]:
+    """HTTPCHAIN003/004/036 for a connection's ``params`` and
+    ``connect_timeout``, which render when a stage opens it, against that
+    stage's `scoping.StageScopes.connection_params`: the scenario's
+    substitutions and fixtures, and what earlier stages saved, never the
+    opening stage's own fixtures, parameters or substitutions, which the
+    connection outlives.
+
+    Checked at every stage that may open it (`scoping.connection_lifecycles`),
+    skip-aware as stage templates are: a name only skippable stages save
+    before an opener is undefined there when they skipped. Each name is
+    reported once, at the field, naming the opening stages where it fails.
+    A connection nothing opens renders nothing.
+    """
+    raw_connections = test_data.get("connections")
+    if not isinstance(raw_connections, dict):
+        return
+    all_saved = extract_saved_variables(scenario)
+    stage_names = frozenset().union(*(scope.stage_fixtures | scope.parametrize_params | scope.stage_substitutions | scope.foreach_params for scope in scopes))
+    for name, lifecycle in lifecycles.items():
+        openers = lifecycle.openers
+        if not openers:
+            continue
+        fails = _fails_opening(name)
+        for field, templates in connection_rendered_fields(raw_connections.get(name)):
+            location = f"connections.{name}.{field}"
+            where = f"Connection '{name}': {field}"
+            refs, stand_ins = _template_refs(templates, defined)
+            for var in sorted(refs):
+                missing = [i for i in openers if var not in scopes[i].connection_params]
+                if missing:
+                    opening = f"{_stage_list(scenario, missing)} {'opens' if len(missing) == 1 else 'open'} it"
+                    if var in all_saved:
+                        savers = [j for j, scope in enumerate(scopes) if var in scope.saves and j >= missing[0]]
+                        code = DiagnosticCode.FORWARD_REF
+                        saved_by = _stage_list(scenario, savers[:1])
+                        message = (
+                            f"{where} references '{var}' before it is saved: {opening} before {saved_by} saves it (in its response, after the open)"
+                            if savers[0] in missing
+                            else f"{where} references '{var}' before it is saved: {opening} before {saved_by} saves it"
+                        )
+                    elif var in stage_names:
+                        code = DiagnosticCode.UNDEFINED_VAR
+                        message = (
+                            f"{where} references '{var}', which only a stage defines (a stage's fixture, parametrize parameter or substitution), "
+                            f"and {opening}: params never see the opening stage's own names, as the connection outlives it. "
+                            f"Define '{var}' in the scenario's substitutions or fixtures, or save it in an earlier stage"
+                        )
+                    else:
+                        code = DiagnosticCode.UNDEFINED_VAR
+                        message = (
+                            f"{where} references potentially undefined variable '{var}': {opening}, and params see only scenario substitutions, "
+                            f"scenario fixtures and what earlier stages saved"
+                        )
+                    yield diag(code, message + _builtin_fallback({var}, fails=fails), location=location)
+                elif skippable := [i for i in openers if var not in scopes[i].when_skipped.connection_params]:
+                    i = skippable[0]
+                    yield diag(
+                        DiagnosticCode.UNDEFINED_VAR,
+                        f"{where} references '{var}' when stage '{scenario.stages[i].name}' opens it, {_skippable_savers(scenario, scopes, i, var)}, "
+                        f"'{var}' is undefined there — read it with get('{var}', <default>){_builtin_fallback({var}, fails=fails)}",
+                        location=location,
+                    )
+            if unavailable := {var for var in stand_ins if any(var not in scopes[i].connection_params for i in openers)}:
+                yield _stand_in_diagnostic(where, unavailable, location, scope_note=" (params see only scenario substitutions, scenario fixtures and earlier saves)")
+
+
 def _verify_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
     """HTTPCHAIN005/006/007/008/018: stages without verification, verify steps
     that assert nothing, non-template expressions, and contradictory body,
-    header or jmespath matcher declarations."""
+    header or jmespath matcher declarations, and contradictory matchers in a
+    connection's ``expect.match`` object, which is written as
+    ``verify.jmespath`` is.
+
+    A connection stage needs no verify step (005): a step that only opens,
+    sends or closes has nothing to check, and an ``expect`` is a check
+    itself. Its body and header matchers are HTTPCHAIN041's, so they are not
+    judged for contradictions too."""
     for i, stage in enumerate(scenario.stages):
-        if not any(isinstance(step, VerifyStep) for step in stage.response):
+        connection = stage.connection
+        if connection is None and not any(isinstance(step, VerifyStep) for step in stage.response):
             yield diag(DiagnosticCode.NO_VERIFY, f"Stage '{stage.name}' has no response validation (no verify step)", location=f"stages[{i}]")
+        if connection is not None and connection.expect is not None and isinstance(connection.expect.match, dict):
+            for expression, expected in connection.expect.match.items():
+                if isinstance(expected, JMESPathMatcher):
+                    location = f"stages[{i}].connection.expect.match{path_segment(expression)}"
+                    yield from _jmespath_contradiction_diagnostics(stage.name, expression, location, expected, field="expect.match")
 
         for k, step in enumerate(stage.response):
             if not isinstance(step, VerifyStep):
@@ -680,32 +1028,38 @@ def _verify_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                         location=location,
                     )
 
-            yield from _contradiction_diagnostics(
-                stage.name,
-                "body verification",
-                f"{location}.body",
-                contains=verify.body.contains,
-                not_contains=verify.body.not_contains,
-                matches=verify.body.matches,
-                not_matches=verify.body.not_matches,
-            )
-
-            for header_name, expected in verify.headers.items():
-                if not isinstance(expected, HeaderMatcher):
-                    continue
-                yield from _contradiction_diagnostics(
-                    stage.name,
-                    f"header '{header_name}' verification",
-                    f"{location}.headers.{header_name}",
-                    contains=optional_as_list(expected.contains),
-                    not_contains=optional_as_list(expected.not_contains),
-                    matches=optional_as_list(expected.matches),
-                    not_matches=optional_as_list(expected.not_matches),
-                )
+            # On a connection stage these checks are HTTPCHAIN041's.
+            if connection is None:
+                yield from _text_matcher_contradictions(stage.name, verify, location)
 
             for expression, expected in verify.jmespath.items():
                 if isinstance(expected, JMESPathMatcher):
                     yield from _jmespath_contradiction_diagnostics(stage.name, expression, f"{location}.jmespath{path_segment(expression)}", expected)
+
+
+def _text_matcher_contradictions(stage_name: str, verify: Verify, location: str) -> Iterator[Diagnostic]:
+    """HTTPCHAIN007/008 for a verify step's body and header text matchers."""
+    yield from _contradiction_diagnostics(
+        stage_name,
+        "body verification",
+        f"{location}.body",
+        contains=verify.body.contains,
+        not_contains=verify.body.not_contains,
+        matches=verify.body.matches,
+        not_matches=verify.body.not_matches,
+    )
+    for header_name, expected in verify.headers.items():
+        if not isinstance(expected, HeaderMatcher):
+            continue
+        yield from _contradiction_diagnostics(
+            stage_name,
+            f"header '{header_name}' verification",
+            f"{location}.headers.{header_name}",
+            contains=optional_as_list(expected.contains),
+            not_contains=optional_as_list(expected.not_contains),
+            matches=optional_as_list(expected.matches),
+            not_matches=optional_as_list(expected.not_matches),
+        )
 
 
 def _is_noop_verify(verify: Verify) -> bool:
@@ -749,8 +1103,9 @@ def _contradiction_diagnostics(
             yield diag(code, f"Stage '{stage_name}': {what} both requires and forbids {noun}: {sorted(overlap)}", location=location)
 
 
-def _jmespath_contradiction_diagnostics(stage_name: str, expression: str, location: str, matcher: JMESPathMatcher) -> Iterator[Diagnostic]:
-    """HTTPCHAIN007/008 for a ``verify.jmespath`` matcher, whose keys hold one
+def _jmespath_contradiction_diagnostics(stage_name: str, expression: str, location: str, matcher: JMESPathMatcher, *, field: str = "jmespath") -> Iterator[Diagnostic]:
+    """HTTPCHAIN007/008 for a ``verify.jmespath`` matcher (or one in a
+    connection's ``expect.match`` object, ``field``), whose keys hold one
     operand each: contains and not_contains the same JSON value, matches and
     not_matches the same pattern. No value passes both.
 
@@ -760,7 +1115,7 @@ def _jmespath_contradiction_diagnostics(stage_name: str, expression: str, locati
     patterns are compared as written. Either may be a template, compared as
     unrendered text, as `_contradiction_diagnostics` does.
     """
-    what = f"Stage '{stage_name}': jmespath {expression!r} verification both requires and forbids"
+    what = f"Stage '{stage_name}': {field} {expression!r} verification both requires and forbids"
     keys = matcher.model_fields_set
     if {"contains", "not_contains"} <= keys and json_equal(matcher.contains, matcher.not_contains):
         yield diag(DiagnosticCode.CONTAINS_CONTRADICTION, f"{what} {json.dumps(matcher.contains, ensure_ascii=False)} (contains and not_contains)", location=location)
@@ -871,6 +1226,10 @@ def _marker_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
                 )
 
 
+def _article(word: str) -> str:
+    return "an" if word[:1] in "aeiou" else "a"
+
+
 def _template_key_diagnostics(test_data: dict[str, Any]) -> Iterator[Diagnostic]:
     """HTTPCHAIN029: ``{{ }}`` in a dict KEY, which is never substituted.
 
@@ -906,18 +1265,19 @@ def _template_key_diagnostics(test_data: dict[str, Any]) -> Iterator[Diagnostic]
             pending.extend(reversed(children))
 
     for key, location, path in templated_keys(test_data, ""):
+        expectations = expectations_field(path)
         if not contains_template(key):
             # An escape alone: never rendered, the key keeps its backslash.
-            if is_jmespath_expectations_position(path):
-                where = "a verify.jmespath key is never rendered, so JMESPath evaluates it"
+            if expectations is not None:
+                where = f"{_article(expectations)} {expectations} key is never rendered, so JMESPath evaluates it"
             else:
                 where = "only values are rendered, so the key is sent"
             message = f"Key {key!r} has a backslash before '{{{{', but {where} as written, backslash included: the escape does nothing there. A key's braces need no escape."
-        elif is_jmespath_expectations_position(path):
+        elif expectations is not None:
             # Only one that compiles gets here (a quoted string or field name):
             # the model refuses the rest, saying why.
             message = (
-                f"Key {key!r} contains a template expression, but a verify.jmespath key is never rendered — JMESPath evaluates it as written. "
+                f"Key {key!r} contains a template expression, but {_article(expectations)} {expectations} key is never rendered — JMESPath evaluates it as written. "
                 f"Write the template in the value the key maps to."
             )
         else:

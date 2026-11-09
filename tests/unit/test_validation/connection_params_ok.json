@@ -1,0 +1,53 @@
+{
+    "description": "params read a scenario substitution, a scenario fixture and an earlier stage's save",
+    "fixtures": [
+        "device_port"
+    ],
+    "substitutions": [
+        {
+            "vars": {
+                "device_host": "localhost"
+            }
+        }
+    ],
+    "connections": {
+        "dev": {
+            "adapter": "userfuncs:GoodAdapter",
+            "params": {
+                "host": "{{ device_host }}",
+                "port": "{{ device_port }}",
+                "token": "{{ token }}"
+            },
+            "connect_timeout": "{{ 2 }}"
+        }
+    },
+    "stages": [
+        {
+            "name": "login",
+            "request": {
+                "url": "http://server/x"
+            },
+            "response": [
+                {
+                    "verify": {
+                        "status": 200
+                    }
+                },
+                {
+                    "save": {
+                        "jmespath": {
+                            "token": "token"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "hello",
+            "connection": {
+                "name": "dev",
+                "open": true
+            }
+        }
+    ]
+}
