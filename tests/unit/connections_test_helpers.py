@@ -184,6 +184,32 @@ class RetryableAdapter(FakeAdapter):
         return {"ready": True}
 
 
+class HangupAdapter(FakeAdapter):
+    """An adapter whose other side hangs up right after the handshake, for
+    the peer's first ``hangups`` connections (a server still starting); a
+    later one is sent the peer's ``welcome``, if it has one."""
+
+    def connect(self, timeout: float) -> Any:
+        greeting = super().connect(timeout)
+        if self.peer.connects <= getattr(self.peer, "hangups", 1):
+            self.inbox.put(_End(None))
+        elif (welcome := getattr(self.peer, "welcome", None)) is not None:
+            self.inbox.put(welcome)
+        return greeting
+
+
+class MutatingAdapter(FakeAdapter):
+    """An adapter that writes its frame number into the message it is given
+    and takes its ``op`` out, as a framing layer building a header may."""
+
+    def send(self, message: dict[str, Any]) -> Any:
+        self.peer.frames = getattr(self.peer, "frames", [])
+        self.peer.frames.append(dict(message))
+        message["seq"] = len(self.peer.frames)
+        del message["op"]
+        return super().send(message)
+
+
 def is_pong(message: dict[str, Any]) -> bool:
     """A verify function a connection stage calls with message=."""
     return message.get("op") == "pong"

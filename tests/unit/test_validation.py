@@ -628,7 +628,8 @@ DIAGNOSED = [
     # A connection stage has a message, not an HTTP response: what only an
     # HTTP stage has fails it (or does nothing), one finding per field.
     ("connection_unsupported_status.json", [(C.CONNECTION_STAGE_UNSUPPORTED, "stages[0].response[0].verify.status", r"^Stage 'c': verify\.status checks an HTTP response")]),
-    # Set at all: the default value, written, is refused too.
+    # A codec chosen for a message, which comes decoded. The default, "auto",
+    # is what a model dumped whole writes for a stage that never set one.
     ("connection_unsupported_response_codec.json", [(C.CONNECTION_STAGE_UNSUPPORTED, "stages[0].response_codec", "it does nothing here. Remove it")]),
     ("connection_unsupported_parallel.json", [(C.CONNECTION_STAGE_UNSUPPORTED, "stages[0].parallel", "parallel repeats an HTTP request")]),
     ("connection_unsupported_save_regex.json", [(C.CONNECTION_STAGE_UNSUPPORTED, "stages[0].response[0].save.regex", "Save from the message with save.jmespath")]),

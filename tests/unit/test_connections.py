@@ -19,6 +19,7 @@ from pytest_httpchain import ProtocolAdapter
 from pytest_httpchain.connections import (
     ADAPTER_METHODS,
     DEBUG_INFO_LIMIT,
+    LATE_WINDOW,
     Connections,
     ExchangeRecord,
     MessageValueError,
@@ -121,11 +122,14 @@ class TestCheckedMessage:
     [
         (ConnectionRefusedError("refused"), True),
         (TimeoutError("timed out"), True),
+        # The other side closing, as receive() reports it: a connect() that
+        # reads its greeting with receive() raises it for a handshake cut short.
+        (EOFError("connection closed by peer"), True),
         (ValueError("bad frame"), False),
         (RequestError("not yet", retryable=True), True),
         (RequestError("never"), False),
     ],
-    ids=["oserror", "timeout", "other", "opted-in", "not-opted-in"],
+    ids=["oserror", "timeout", "eof", "other", "opted-in", "not-opted-in"],
 )
 def test_adapter_error_is_retryable_for_transport_failures(error, retryable):
     failure = adapter_error("dev", "connect()", error)
@@ -346,16 +350,82 @@ class TestExpect:
         assert outcome.taken is not None
         assert 0.05 < outcome.taken.at < 2
 
-    def test_timeout_keeps_the_late_messages_for_the_report(self, registry):
+    def test_a_timeout_does_not_linger_for_late_messages(self, registry):
+        """The wait ends at its deadline: every attempt of a polling stage
+        waited the late window out too, for a report only the last one's
+        failure shows."""
+        helpers.peer("prompt")
+        session, _ = _open(registry, "prompt")
+        started = time.monotonic()
+        outcome = session.expect(_is({"n": 9}), 0.05, after=None, since=started)
+        assert outcome.result == "timeout"
+        assert outcome.late == ()
+        assert time.monotonic() - started < 0.05 + LATE_WINDOW / 2
+
+    def test_late_messages_are_collected_for_the_failure_that_is_reported(self, registry):
         peer = helpers.peer("late")
         session, _ = _open(registry, "late")
         peer.push({"n": 0})
+        since = time.monotonic()
         threading.Timer(0.15, peer.push, args=({"n": 1},)).start()
-        outcome = session.expect(_is({"n": 9}), 0.1, after=None, since=time.monotonic())
+        record = ExchangeRecord("dev", ADAPTER, session=session, mode="message", since=since)
+        record.outcome = outcome = session.expect(_is({"n": 9}), 0.1, after=None, since=since)
         assert outcome.result == "timeout"
         assert [arrival.message for arrival in outcome.considered] == [{"n": 0}]
-        assert [arrival.message for arrival in outcome.late] == [{"n": 1}]
-        assert 0.09 < outcome.waited < 1
+        late = record.late()
+        assert [arrival.message for arrival in late] == [{"n": 1}]
+        # Left queued, and a copy: the report's is not the inbox's.
+        assert late[0].message is not session.expect(None, 1, after=None, since=since).taken.message
+
+    @pytest.mark.parametrize("mode", ["closed", "absent"])
+    def test_only_a_wait_for_a_message_has_late_messages(self, registry, mode):
+        peer = helpers.peer("no late")
+        session, _ = _open(registry, "no late")
+        record = ExchangeRecord("dev", ADAPTER, session=session, mode=mode)
+        record.outcome = session.expect(None if mode == "closed" else _is({"n": 9}), 0.05, after=None, since=0, mode=mode)
+        peer.push({"n": 1})
+        started = time.monotonic()
+        assert record.late() == ()
+        assert time.monotonic() - started < LATE_WINDOW / 2
+
+    def test_messages_dropped_during_a_wait_are_counted_as_unseen(self, registry):
+        """The inbox_limit drops the oldest message even when no wait has
+        looked at it: what arrived after the send and is gone by the next
+        look is unseen, and may have matched."""
+        peer = helpers.peer("unseen")
+        session, _ = _open(registry, "unseen", inbox_limit=2)
+        after = session.mark()
+        peer.push(*({"n": n} for n in range(5)))
+        _queued(session, 5)
+        outcome = session.expect(_is({"n": 0}), 0.05, after=after, since=0, mode="absent")
+        assert (outcome.result, outcome.unseen) == ("absent", 3)
+        assert [arrival.message for arrival in outcome.considered] == [{"n": 3}, {"n": 4}]
+
+    def test_a_timeout_says_what_was_dropped_unseen(self, registry):
+        peer = helpers.peer("unseen timeout")
+        session, _ = _open(registry, "unseen timeout", inbox_limit=1)
+        after = session.mark()
+        peer.push({"n": 1}, {"n": 2})
+        _queued(session, 2)
+        outcome = session.expect(_is({"n": 9}), 0.05, after=after, since=0)
+        failure = expect_failure(outcome, stage="wait", connection="dev", match="n == `9`", timeout=0.05, mode="message", sent=True, reopens=False, ended_before=False)
+        assert str(failure).endswith(
+            "(1 message arrived after the send); 1 message that arrived meanwhile was dropped by the connection's inbox_limit before the stage could look at it"
+        )
+        assert failure is not None
+        assert failure.retryable
+
+    def test_what_was_taken_or_dropped_before_a_wait_is_not_unseen(self, registry):
+        """A stage that did not send looks at the whole queue: the messages
+        earlier stages took from it, and those dropped before it began, are
+        no part of its wait."""
+        peer = helpers.peer("seen")
+        session, _ = _open(registry, "seen", inbox_limit=3)
+        peer.push(*({"n": n} for n in range(5)))
+        _queued(session, 5)
+        assert session.expect(_is({"n": 3}), 1, after=None, since=0).result == "taken"
+        outcome = session.expect(_is({"n": 9}), 0.05, after=None, since=0, mode="absent")
+        assert (outcome.result, outcome.unseen) == ("absent", 0)
 
     def test_absent_passes_at_the_deadline(self, registry):
         peer = helpers.peer("absent")
@@ -509,6 +579,8 @@ class TestDebugText:
             ("raw: 00ff", "raw: 00ff"),
             (RuntimeError("no buffer"), "<debug_info() failed: RuntimeError: no buffer>"),
             (b"bytes", "<debug_info() returned bytes, not text>"),
+            # Nothing to say, as an adapter without the method says nothing.
+            (None, None),
         ],
     )
     def test_guarded(self, debug, text):
@@ -546,6 +618,24 @@ def test_exchange_snapshot_copies_what_it_shows(registry):
         snapshot.result = "timeout"  # ty: ignore[invalid-assignment]
 
 
+def test_a_snapshot_nobody_reads_copies_nothing_and_calls_no_user_code(registry):
+    """A stage that passed, whose section is not printed: its snapshot holds
+    the messages as they are and does not ask the adapter's debug_info()."""
+    peer = helpers.peer("light", debug=RuntimeError("debug_info() must not be called"))
+    session, _ = _open(registry, "light")
+    peer.push({"n": [1]})
+    _queued(session, 1)
+    sent = {"op": "x"}
+    record = ExchangeRecord("dev", ADAPTER, session=session, sent=sent, match=None, timeout=1.0, mode="message")
+    record.outcome = session.expect(None, 1, after=None, since=0)
+    snapshot = record.freeze(full=False)
+    assert snapshot.debug_info is None
+    assert snapshot.sent is sent
+    assert record.outcome.taken is not None
+    assert snapshot.taken is record.outcome.taken
+    assert (snapshot.generation, snapshot.result) == (1, "taken")
+
+
 def test_exchange_snapshot_keeps_the_open_and_the_reader_end(registry):
     """What connect() returned, copied, and how the reader ended: as the wait
     saw it, or, without a wait, as the session has it when the snapshot is taken."""
@@ -573,6 +663,35 @@ class TestCloseAll:
             chain.close_all()
         assert not caplog.records
         assert not _readers()
+
+    @pytest.mark.parametrize("ending", ["close", "reopen"])
+    def test_a_stage_ending_a_session_logs_the_failure_no_stage_saw(self, caplog, ending):
+        """A reader that failed is reported where its session ends, whoever
+        ends it: a stage closing the connection, or opening it again, dropped
+        the failure without a word, which only the chain's end logged."""
+        peer = helpers.peer("dropped")
+        chain = Connections()
+        session, _ = _open(chain, "dropped")
+        peer.end(ValueError("bad frame"))
+        _wait_for(lambda: session.end is not None)
+        with caplog.at_level(logging.WARNING, logger="pytest_httpchain.connections"):
+            if ending == "close":
+                assert chain.close("dev", "bye") is None
+            else:
+                _open(chain, "dropped")
+        assert "Connection 'dev' (open 1) failed and no stage saw it: ValueError: bad frame" in caplog.text
+        chain.close_all()
+        assert not _readers()
+
+    def test_a_failure_a_stage_saw_is_not_logged_at_its_close(self, caplog):
+        peer = helpers.peer("observed")
+        chain = Connections()
+        session, _ = _open(chain, "observed")
+        peer.end(ValueError("bad frame"))
+        assert session.expect(None, 5, after=None, since=0).result == "ended"
+        with caplog.at_level(logging.DEBUG, logger="pytest_httpchain.connections"):
+            chain.close("dev", "bye")
+        assert not caplog.records
 
     def test_unobserved_failure_is_logged(self, caplog):
         peer = helpers.peer("unseen")

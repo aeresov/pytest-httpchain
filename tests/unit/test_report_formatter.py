@@ -651,6 +651,12 @@ class TestConnectionExchange:
         assert 'Late, within 0.2 s after the deadline, left queued:\n#4 at +0.350 s after the send (late)\n{\n  "id": 2\n}' in text
         assert text.endswith("Not considered: 2 messages queued before the send, 5 dropped by inbox_limit")
 
+    def test_messages_dropped_unseen_during_the_wait_are_said(self):
+        exchange = self._exchange(sent={"op": "x"}, match="n == `0`", timeout=1.0, mode="absent", waited=1.0, result="absent", unseen=3, dropped=5)
+        assert format_connection_exchange(exchange).endswith(
+            "Not considered: 0 messages queued before the send, 5 dropped by inbox_limit (3 of them during the wait, before it could look at them)"
+        )
+
     def test_considered_list_is_capped_at_the_last_ones(self):
         considered = tuple(Arrival(seq, -1.0, {"n": seq}, Miss("no")) for seq in range(1, 26))
         text = format_connection_exchange(self._exchange(match="n == `0`", timeout=1.0, mode="message", waited=1.0, result="timeout", considered=considered))

@@ -16,14 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `params`, `connect_timeout`, `inbox_limit`), and a stage is now one HTTP `request` or one
   `connection` step on one of them: `"connection": {"name": "device", "send": {"op": "ping"},
   "expect": {"match": {"op": "pong"}, "timeout": 2}}`. The step opens (implicitly at the first stage
-  naming the connection, or on `open: true`, which reconnects), drains, sends, expects and closes,
+  that sends or waits on the connection, or on `open: true`, which reconnects), drains, sends, expects and closes,
   in that order. Each open is a new session whose reader thread queues every message `receive()`
   returns; `expect` takes the oldest that matches a JMESPath expression or an object of
   `verify.jmespath` expectations, after the stage's send if it sends, or waits for none to match
   (`absent`) or for the other side to end the connection (`closed`), failing at once when the
   connection ends. The response steps check the message (`message` in templates, `message=` for
   user functions) and what `send()` returned (`sent`). A timed-out `expect` is a `verify` failure
-  for `retry`, an adapter's `OSError` or retryable `RequestError` a `request` failure; a step on a
+  for `retry`, an adapter's `OSError`, `EOFError` or retryable `RequestError` a `request` failure; a step on a
   connection a stage closed or the other side ended, without `open: true`, and an `absent` hit are
   never retried. Connections stay open after a failure for an `always_run` farewell, and close at
   the scenario's end, a reader failure no stage saw logged as a warning. A failing (or `-rP`)

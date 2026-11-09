@@ -4200,6 +4200,229 @@ class TestConnectionStages:
         carrier.fixture_scopes = {"token": "class"}
         assert self._run(carrier, scenario, {"token": "t"}) == ["passed"]
 
+    def test_an_adapter_changing_its_message_changes_no_later_send(self, monkeypatch):
+        """The adapter gets a copy: one that writes into the message it is
+        given (a sequence number, a field taken out) changed the scenario's
+        own `send`, where it has no template, and every later attempt sent
+        what the first left of it."""
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr(carrier_module, "_wait_to_retry", lambda seconds, cancel: True)
+        peer = helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [{"name": "ping", "retry": {"attempts": 3, "delay": 0}, "connection": {"name": "dev", "send": {"op": "ping", "body": {"n": [1]}}, "expect": {"timeout": 0.02}}}],
+            adapter="tests.unit.connections_test_helpers:MutatingAdapter",
+        )
+        kept = self._recording(carrier)
+        [outcome] = self._run(carrier, scenario)
+        assert outcome.endswith("(after 3 attempts)")
+        assert peer.frames == [{"op": "ping", "body": {"n": [1]}}] * 3
+        step = scenario.stages[0].connection
+        assert step is not None
+        assert step.send == {"op": "ping", "body": {"n": [1]}}
+        # The report shows the message as the scenario sent it.
+        assert kept[0][0].sent == {"op": "ping", "body": {"n": [1]}}
+
+    @pytest.mark.parametrize("step", [{"send": {"op": "x"}}, {"expect": {"timeout": 5}}], ids=["send", "expect"])
+    def test_a_connection_ending_right_after_its_open_is_retried_by_reconnecting(self, monkeypatch, step):
+        """The other side accepts, greets and hangs up, as a server still
+        starting does: for a stage with open: true that is the connection
+        ending under it, which the next attempt answers by connecting again.
+        It read as "not open, set open: true", which no attempt retried."""
+        import pytest_httpchain.connections as connections_module
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr(carrier_module, "_wait_to_retry", lambda seconds, cancel: True)
+        start = connections_module._Session.start
+
+        def start_and_see_the_end(session):
+            start(session)
+            if session.adapter.peer.connects <= session.adapter.peer.hangups:
+                deadline = time.monotonic() + 2
+                while session.end is None and time.monotonic() < deadline:
+                    time.sleep(0.002)
+
+        monkeypatch.setattr(connections_module._Session, "start", start_and_see_the_end)
+        peer = helpers.peer("carrier", reply=lambda message: [{"op": "pong"}])
+        peer.hangups, peer.welcome = 2, {"op": "hi"}
+        carrier, scenario = self._carrier(
+            [{"name": "hello", "retry": {"attempts": 3, "delay": 0}, "connection": {"name": "dev", "open": True, **step}}],
+            adapter="tests.unit.connections_test_helpers:HangupAdapter",
+        )
+        assert self._run(carrier, scenario) == ["passed"]
+        assert peer.connects == 3
+
+    def test_a_connection_ending_right_after_an_open_says_so(self, monkeypatch):
+        import pytest_httpchain.connections as connections_module
+        from tests.unit import connections_test_helpers as helpers
+
+        start = connections_module._Session.start
+
+        def start_and_see_the_end(session):
+            start(session)
+            deadline = time.monotonic() + 2
+            while session.end is None and time.monotonic() < deadline:
+                time.sleep(0.002)
+
+        monkeypatch.setattr(connections_module._Session, "start", start_and_see_the_end)
+        peer = helpers.peer("carrier")
+        peer.hangups = 9
+        carrier, scenario = self._carrier(
+            [{"name": "hello", "connection": {"name": "dev", "open": True, "send": {"op": "x"}}}], adapter="tests.unit.connections_test_helpers:HangupAdapter"
+        )
+        assert self._run(carrier, scenario) == ["failed: Stage 'hello': connection 'dev' closed by the other side before the stage could send"]
+        assert peer.sent == []
+
+    @pytest.mark.parametrize("idle", [{"close": True}, {"drain": True}, {"drain": True, "close": True}], ids=["close", "drain", "drain-close"])
+    def test_a_stage_that_only_drains_or_closes_never_connects(self, idle):
+        """A connection never opened has nothing to drain or close: the stage
+        connected, handshake and all, only to close it again."""
+        from tests.unit import connections_test_helpers as helpers
+
+        peer = helpers.peer("carrier", reply=lambda message: [message])
+        carrier, scenario = self._carrier(
+            [
+                {"name": "cleanup", "connection": {"name": "dev", **idle}},
+                {"name": "echo", "connection": {"name": "dev", "send": {"n": 1}, "expect": {}}, "response": [{"verify": {"jmespath": {"n": 1}}}]},
+            ]
+        )
+        stage_cleanup, stage_echo = scenario.stages
+        try:
+            carrier.execute_stage(stage_cleanup, {})
+            assert (peer.connects, peer.closes) == (0, 0)
+            assert carrier.last_connection_exchange is not None
+            assert carrier.last_connection_exchange.generation is None
+            # Still never opened: the next stage that uses it opens it.
+            carrier.execute_stage(stage_echo, {})
+            assert peer.connects == 1
+        finally:
+            carrier.teardown_class()
+
+    def test_a_passing_stage_snapshots_in_full_only_where_its_section_is_printed(self):
+        """debug_info() is the adapter's own code and the snapshot copies
+        every message: a stage that passes pays for neither unless passing
+        stages' sections are printed (-rP, an xdist worker), which the plugin
+        says. A failing stage's always is."""
+        from tests.unit import connections_test_helpers as helpers
+
+        calls: list[int] = []
+        helpers.peer("carrier", reply=lambda message: [{"op": "pong"}])
+        original = helpers.FakeAdapter.debug_info
+        stages = [
+            {"name": "passes", "connection": {"name": "dev", "send": {"op": "ping"}, "expect": {"match": "op == 'pong'"}}},
+            {"name": "fails", "connection": {"name": "dev", "send": {"op": "ping"}, "expect": {"match": "op == 'never'", "timeout": 0.02}}},
+        ]
+        try:
+            helpers.FakeAdapter.debug_info = lambda self: calls.append(1) or "state"
+            carrier, scenario = self._carrier(stages)
+            carrier.snapshot_passed_exchanges = False
+            kept = self._recording(carrier)
+            self._run(carrier, scenario)
+            assert [snapshot.debug_info for snapshot, _ in kept] == [None, "state"]
+            assert len(calls) == 1
+            assert kept[0][0].result == "taken"
+
+            calls.clear()
+            helpers.peer("carrier", reply=lambda message: [{"op": "pong"}])
+            carrier, scenario = self._carrier(stages[:1])
+            carrier.snapshot_passed_exchanges = True
+            kept = self._recording(carrier)
+            self._run(carrier, scenario)
+            assert [snapshot.debug_info for snapshot, _ in kept] == ["state"]
+        finally:
+            helpers.FakeAdapter.debug_info = original
+
+    def test_late_messages_are_waited_for_once_by_the_failure_reported(self, monkeypatch):
+        """Each attempt's wait ends at its deadline; the stage waits the late
+        window out once, when its failure is final, and its report has what
+        arrived in it. Every attempt used to, and a closed wait too."""
+        import pytest_httpchain.connections as connections_module
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr(carrier_module, "_wait_to_retry", lambda seconds, cancel: True)
+        asked: list[str] = []
+        late = connections_module._Session.late
+        monkeypatch.setattr(connections_module._Session, "late", lambda session, outcome, since: asked.append(outcome.result) or late(session, outcome, since))
+        peer = helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [
+                {"name": "polls", "retry": {"attempts": 3, "delay": 0}, "connection": {"name": "dev", "send": {"op": "x"}, "expect": {"match": "n == `9`", "timeout": 0.02}}},
+            ]
+        )
+        kept = self._recording(carrier)
+        threading.Timer(0.12, lambda: peer.push({"n": 1})).start()
+        started = time.monotonic()
+        [outcome] = self._run(carrier, scenario)
+        assert outcome.endswith("(after 3 attempts)")
+        assert asked == ["timeout"]
+        assert time.monotonic() - started < 3 * 0.02 + 2 * connections_module.LATE_WINDOW
+        assert [arrival.message for arrival in kept[0][0].late] == [{"n": 1}]
+
+    def test_a_closed_wait_that_times_out_waits_for_no_late_messages(self, monkeypatch):
+        import pytest_httpchain.connections as connections_module
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr(connections_module._Session, "late", lambda *args: pytest.fail("a closed wait has no late messages"))
+        helpers.peer("carrier")
+        carrier, scenario = self._carrier([{"name": "stays", "connection": {"name": "dev", "expect": {"closed": True, "timeout": 0.02}}}])
+        assert self._run(carrier, scenario) == ["failed: Stage 'stays': connection 'dev' did not close within 0.02 s"]
+
+    def test_a_matcher_on_a_listed_key_is_redacted_in_a_miss_reason(self):
+        """What a matcher on a listed key expects is as much that key's value
+        as a plain expectation is: `{"eq": "{{ secret }}"}` printed the
+        rendered secret in the report, where a plain value was hidden."""
+        from tests.unit import connections_test_helpers as helpers
+
+        helpers.peer("carrier", reply=lambda message: [{"user": {"token": "tok-sent-back"}}])
+        carrier, scenario = self._carrier(
+            [
+                {
+                    "name": "matcher",
+                    "connection": {"name": "dev", "send": {"op": "who"}, "expect": {"match": {"user.token": {"eq": "{{ secret }}", "matches": "^{{ secret }}$"}}, "timeout": 0.05}},
+                }
+            ],
+            substitutions=[{"vars": {"secret": "s3cret"}}],
+        )
+        kept = self._recording(carrier)
+        [failed] = self._run(carrier, scenario)
+        assert "s3cret" not in failed
+        [arrival] = kept[0][0].considered
+        assert arrival.miss.reason == 'JMESPath \'user.token\' doesn\'t match: expected eq "[REDACTED]", got "[REDACTED]"'
+
+    def test_an_absent_wait_cannot_pass_over_messages_dropped_unseen(self):
+        """A burst past the inbox_limit drops messages before the wait looks
+        at them: one of them may have matched, so "none matched" is not
+        something the stage can say."""
+        from tests.unit import connections_test_helpers as helpers
+
+        helpers.peer("carrier", reply=lambda message: [{"n": n} for n in range(6)])
+        scenario = Scenario.model_validate(
+            {
+                "connections": {"dev": {"adapter": self.ADAPTER, "params": {"peer": "carrier"}, "inbox_limit": 2}},
+                "stages": [{"name": "quiet", "connection": {"name": "dev", "send": {"op": "burst"}, "expect": {"match": "n == `0`", "absent": True, "timeout": 0.3}}}],
+            }
+        )
+        carrier = _make_carrier_subclass(scenario=scenario, global_context=base_global_context({}))
+        original = helpers.FakeAdapter.send
+
+        def send_and_let_the_reader_catch_up(adapter, message):
+            result = original(adapter, message)
+            deadline = time.monotonic() + 2
+            while not adapter.inbox.empty() and time.monotonic() < deadline:
+                time.sleep(0.002)
+            time.sleep(0.02)
+            return result
+
+        helpers.FakeAdapter.send = send_and_let_the_reader_catch_up  # ty: ignore[invalid-assignment]
+        try:
+            [outcome] = self._run(carrier, scenario)
+        finally:
+            helpers.FakeAdapter.send = original
+        assert outcome == (
+            "failed: Stage 'quiet': cannot tell that no message on connection 'dev' matched \"n == `0`\" within 0.3 s: "
+            "4 messages that arrived meanwhile were dropped by the connection's inbox_limit before the stage could look at them. Raise connections.dev.inbox_limit."
+        )
+
     @staticmethod
     def _recording(carrier: type[Carrier]) -> list[tuple[Any, Any]]:
         """Each stage's connection snapshot and shown attempt, kept past the

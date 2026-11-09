@@ -14,9 +14,8 @@ import shlex
 from typing import Any
 
 import httpx
-from pydantic import BaseModel
 
-from pytest_httpchain.connections import LATE_WINDOW, Arrival, ConnectionExchange
+from pytest_httpchain.connections import LATE_WINDOW, Arrival, ConnectionExchange, count, dumped_match
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.utils import JSON_PARSE_ERRORS, request_content
 from pytest_httpchain.wire_codec import MSGPACK_DECODE_ERRORS, is_msgpack_content_type, unpack_msgpack
@@ -247,13 +246,7 @@ def _declared(match: Any) -> str:
         return "any message"
     if isinstance(match, str):
         return match
-    if isinstance(match, dict):
-        match = {key: value.model_dump(mode="json", exclude_unset=True) if isinstance(value, BaseModel) else value for key, value in match.items()}
-    return _format_encoded(_PRETTY_JSON, match)
-
-
-def _count(n: int, what: str) -> str:
-    return f"{n} {what}" if n == 1 else f"{n} {what}s"
+    return _format_encoded(_PRETTY_JSON, dumped_match(match))
 
 
 def _arrivals(title: str, arrivals: tuple[Arrival, ...], relative_to: str, redaction: Redaction, *, late: bool = False) -> list[str]:
@@ -331,12 +324,14 @@ def format_connection_exchange(exchange: ConnectionExchange, redaction: Redactio
         if (taken := exchange.taken) is not None:
             lines.extend((f"#{taken.seq} at {taken.at:+.3f} s {relative_to}", _format_message(taken.message, redaction)))
         if exchange.considered:
-            lines.extend(_arrivals(f"Considered, not matching ({_count(len(exchange.considered), 'message')})", exchange.considered, relative_to, redaction))
+            lines.extend(_arrivals(f"Considered, not matching ({count(len(exchange.considered), 'message')})", exchange.considered, relative_to, redaction))
         if exchange.late:
             lines.extend(_arrivals(f"Late, within {LATE_WINDOW:g} s after the deadline, left queued", exchange.late, relative_to, redaction, late=True))
         if exchange.result is not None:
-            left_out = [f"{_count(exchange.earlier, 'message')} queued before the send"] if exchange.sent is not None else []
-            left_out.append(f"{exchange.dropped} dropped by inbox_limit")
+            left_out = [f"{count(exchange.earlier, 'message')} queued before the send"] if exchange.sent is not None else []
+            left_out.append(
+                f"{exchange.dropped} dropped by inbox_limit" + (f" ({exchange.unseen} of them during the wait, before it could look at them)" if exchange.unseen else "")
+            )
             lines.append(f"Not considered: {', '.join(left_out)}")
     elif exchange.dropped:
         lines.append(f"Not considered: {exchange.dropped} dropped by inbox_limit")

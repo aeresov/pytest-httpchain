@@ -212,3 +212,21 @@ def process_substitutions(
                 raise RuntimeError(f"Unhandled substitution type: {type(step).__name__}")
 
     return result
+
+
+# Raised by user code a call runs, these stop the run: never taken for a
+# failure. pytest.exit()'s is an Exception, so an `except Exception` must let
+# these through first.
+INTERRUPTS = (KeyboardInterrupt, SystemExit, pytest.exit.Exception)
+
+
+def describe_exception(e: BaseException) -> str:
+    """``Type: message`` for an exception user code raised (a fixture's
+    context manager, a connection adapter), whose ``__str__`` may raise in
+    turn: formatting it must not abandon what is still to be done. One
+    without a message is its type alone."""
+    try:
+        text = str(e)
+    except Exception:
+        text = "<exception str() failed>"
+    return f"{type(e).__name__}: {text}" if text else type(e).__name__
