@@ -1,0 +1,37 @@
+{
+    "description": "Messages the server pushes are queued as they arrive: a stage that sends nothing takes the oldest that matches from the whole queue, drain discards the rest, and an absent expect then sees none",
+    "marks": ["usefixtures('line_json_server')"],
+    "connections": {
+        "device": {
+            "adapter": "line_json:LineJsonAdapter",
+            "params": { "host": "127.0.0.1", "port": "{{ env('HTTPCHAIN_EXAMPLE_LINE_JSON_PORT') }}" }
+        }
+    },
+    "stages": [
+        {
+            "name": "trigger",
+            "description": "The first stage naming the connection opens it. The server pushes three messages, then replies; the reply carries the send's seq back",
+            "connection": {
+                "name": "device",
+                "send": { "op": "push", "count": 3 },
+                "expect": { "match": { "op": "pushed", "reply_to": "{{ sent.seq }}" }, "timeout": 5 }
+            },
+            "response": [{ "verify": { "jmespath": { "count": 3 } } }]
+        },
+        {
+            "name": "second push",
+            "description": "No send, so the whole queue counts: the pushes stayed queued, and the oldest that matches is taken",
+            "connection": { "name": "device", "expect": { "match": "push > `1`", "timeout": 5 } },
+            "response": [{ "verify": { "jmespath": { "push": 2 } } }]
+        },
+        {
+            "name": "flush",
+            "description": "Pushes 1 and 3 are still queued: drain discards them, so nothing matches by the deadline",
+            "connection": { "name": "device", "drain": true, "expect": { "match": "push", "absent": true, "timeout": 0.2 } }
+        },
+        {
+            "name": "bye",
+            "connection": { "name": "device", "send": { "op": "bye" }, "expect": { "match": "op == 'bye'", "timeout": 5 }, "close": true }
+        }
+    ]
+}

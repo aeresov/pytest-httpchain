@@ -11,6 +11,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `sha1(value)` template helper: the hex SHA-1 digest of text (as UTF-8) or bytes,
   beside `sha256` and `md5`, for request-signing schemes that call for SHA-1.
+- Connection stages, for services that do not speak HTTP: a scenario's `connections` name a
+  protocol adapter, a class you write (`"adapter": "adapters:LineJsonAdapter"`, its constructor's
+  `params`, `connect_timeout`, `inbox_limit`), and a stage is now one HTTP `request` or one
+  `connection` step on one of them: `"connection": {"name": "device", "send": {"op": "ping"},
+  "expect": {"match": {"op": "pong"}, "timeout": 2}}`. The step opens (implicitly at the first stage
+  naming the connection, or on `open: true`, which reconnects), drains, sends, expects and closes,
+  in that order. Each open is a new session whose reader thread queues every message `receive()`
+  returns; `expect` takes the oldest that matches a JMESPath expression or an object of
+  `verify.jmespath` expectations, after the stage's send if it sends, or waits for none to match
+  (`absent`) or for the other side to end the connection (`closed`), failing at once when the
+  connection ends. The response steps check the message (`message` in templates, `message=` for
+  user functions) and what `send()` returned (`sent`). A timed-out `expect` is a `verify` failure
+  for `retry`, an adapter's `OSError` or retryable `RequestError` a `request` failure; a step on a
+  connection a stage closed or the other side ended, without `open: true`, and an `absent` hit are
+  never retried. Connections stay open after a failure for an `always_run` farewell, and close at
+  the scenario's end, a reader failure no stage saw logged as a warning. A failing (or `-rP`)
+  connection stage's report gets a Connection Exchange section: the message sent, the match as
+  declared, how the wait ended, the messages considered and why each did not match, the late and
+  dropped ones, and the adapter's `debug_info()`; connection stages write no HAR entries. The new
+  ini option `httpchain_redact_message_keys` (default: the redacted header and query parameter
+  names, lowercased; empty disables) hides listed keys' values, at any depth, in that section and
+  in the failure messages that quote a message. New diagnostics: `HTTPCHAIN041` (an HTTP-only
+  setting on a connection stage), `HTTPCHAIN042` (an undeclared connection), `HTTPCHAIN043` (a check
+  that needs a message on a stage that takes none), `HTTPCHAIN044` (a stage using a connection
+  closed by then, without `open: true`), `HTTPCHAIN045` (warning: a name `message` or `sent`
+  shadowed), and, under `validate --deep`, `HTTPCHAIN046` (warning: an adapter that cannot be
+  imported, lacks a method or cannot take the arguments the plugin passes or the declared `params`).
+  `show` and `graph` show connection stages and an edge from each stage that may open the
+  connection a stage uses. `pytest_httpchain.ProtocolAdapter` is the adapter interface as a
+  `typing.Protocol`.
+
+### Changed
+
+- `pytest-httpchain show --format json` gives each stage `kind` (`"request"` or `"connection"`),
+  `connection` and `actions` (`null` and `[]` on an HTTP stage), and the output a
+  `connection_edges` list; a connection stage's `method` is `"CONNECTION"` and its `url` the
+  connection's name. Existing fields are unchanged for HTTP stages.
 
 ## [0.18.1] - 2026-10-02
 

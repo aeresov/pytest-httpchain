@@ -61,6 +61,7 @@ nav:
     - Usage:
           - Scenarios & Stages: usage/scenarios.md
           - HTTP Requests: usage/requests.md
+          - Connections: usage/connections.md
           - Response Processing: usage/responses.md
           - Substitutions & Templates: usage/substitutions.md
     - Advanced:

@@ -62,6 +62,10 @@ JSON, MessagePack, form, XML, text, base64, a binary file and GraphQL, and multi
 -   **User functions** — Call Python functions for custom extraction, verification, or [authentication](https://www.python-httpx.org/advanced/authentication/#custom-authentication-schemes)
 -   **Failure reports** — A failing verify step lists every check that failed, not only the first, and the report gives the request as a ready-to-run `curl` command beside the request and response it shows
 
+### Socket protocols via adapters
+
+Not every service a test talks to speaks HTTP. A `connection` stage drives a long-lived connection through an adapter, a small Python class you write that connects, sends one message and decodes the next: `"connection": {"name": "device", "send": {"op": "ping"}, "expect": {"match": {"op": "pong"}, "timeout": 2}}`. Every message received is queued for the stages that wait for it; `expect` takes the one that matches, asserts that none arrives (`absent`) or that the other side hangs up (`closed`), and the same `verify` and `save` steps an HTTP stage uses check it. HTTP and connection stages mix in one chain, sharing what they save. See [Connections](https://aeresov.github.io/pytest-httpchain/usage/connections/).
+
 ### Scenario-wide client settings
 
 A scenario's `client` block sets up the HTTP client all its stages share, once: a base URL their relative URLs are appended to, headers and query parameters sent with every request, timeout, redirects, proxy, HTTP/2 and connection pool. A stage overrides what it needs.
@@ -188,7 +192,7 @@ pip install 'git+https://github.com/aeresov/pytest-httpchain@main'
     You can limit the depth of relative path traversal using the `httpchain_ref_parent_traversal_depth` ini option, default value is **3**.
 -   Template expressions support list/dict comprehensions. You can limit the maximum comprehension length using the `httpchain_max_comprehension_length` ini option, default value is **50000**.
 -   Parallel stage iterations (repeat/foreach) have a safety limit configurable via the `httpchain_max_parallel_iterations` ini option, default value is **10000**.
--   A failing stage's report prints the values of credential headers and query parameters as `[REDACTED]`, keeping their names (and cookie names). The lists are set by the `httpchain_redact_headers` ini option, default **Authorization Proxy-Authorization Cookie Set-Cookie X-API-Key API-Key X-Auth-Token**, and `httpchain_redact_query_params`, default **access_token refresh_token id_token api_key apikey client_secret password token**; an empty value disables one. Request and response bodies, and DEBUG logs, are not redacted. See [Secrets in reports](https://aeresov.github.io/pytest-httpchain/getting-started/#secrets-in-reports).
+-   A failing stage's report prints the values of credential headers and query parameters as `[REDACTED]`, keeping their names (and cookie names). The lists are set by the `httpchain_redact_headers` ini option, default **Authorization Proxy-Authorization Cookie Set-Cookie X-API-Key API-Key X-Auth-Token**, and `httpchain_redact_query_params`, default **access_token refresh_token id_token api_key apikey client_secret password token**; an empty value disables one. A connection stage's messages are redacted by key, at any depth, by `httpchain_redact_message_keys`, default both lists lowercased. Request and response bodies, and DEBUG logs, are not redacted. See [Secrets in reports](https://aeresov.github.io/pytest-httpchain/getting-started/#secrets-in-reports).
 
 ### HAR export
 

@@ -450,6 +450,13 @@ request template is an error. The response **body** is deliberately not in the
 namespace; assert on body data with [`jmespath`](#jmespath-assertions), or
 extract it with a `save` step.
 
+A [connection stage](connections.md#checking-the-message) has no HTTP response,
+so it has no `response` namespace: reading it there is `HTTPCHAIN041`. Its
+response steps read the message the stage took as `message` instead, and, on a
+stage that sends, what the adapter's `send()` returned as `sent`
+(`{{ message.body.state == 'playing' }}`, `{{ sent.seq }}`). `jmespath`, a
+body schema and user functions see the message as a decoded JSON body.
+
 Response facets beyond the metadata — e.g. the raw body text — can be captured with a [save user function](#user-function-save), which receives the `httpx.Response`:
 
 ```python
@@ -856,6 +863,10 @@ and is not retried. A `VerificationError(..., retryable=False)` ends the stage a
 attempts are left: a job that failed will not be done at the next poll (see
 [Stopping when the job has failed](../advanced/retry.md#stopping-when-the-job-has-failed)).
 
+On a [connection stage](connections.md#checking-the-message) a verify function is
+called with `message=`, the message the stage took as a dict, in place of `response=`:
+`def ack_accepted(message: dict) -> bool`. Its other arguments are given as above.
+
 ## Save Steps
 
 ### JMESPath Extraction
@@ -1023,6 +1034,10 @@ raises a `SaveError` (`from pytest_httpchain.errors import SaveError`) to have t
 again, when the response does not hold what it saves yet; one that raised anything else crashed,
 and is not retried. A `SaveError(..., retryable=False)` ends the stage at once, when the response
 says it never will.
+
+On a [connection stage](connections.md#checking-the-message) a save function is called with
+`message=`, the message the stage took as a dict, in place of `response=`, and returns the values
+to save as here: `def command_id(message: dict) -> dict: return {"cmd_id": message["header"]["id"]}`.
 
 ## Complete Example
 

@@ -199,3 +199,12 @@ def not_a_class(**params: Any) -> None:
 
 
 NOT_AN_ADAPTER = 42
+
+
+class ImpatientAdapter(FakeAdapter):
+    """An adapter whose receive() returns None at once, never waiting its
+    timeout: the reader must not spin on it."""
+
+    def receive(self, timeout: float) -> Any:
+        self.peer.receives = getattr(self.peer, "receives", 0) + 1
+        return None if not self.closed else super().receive(timeout)

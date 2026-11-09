@@ -12,6 +12,7 @@ A scenario is a JSON file that defines a complete test case. The basic structure
     "auth": null,
     "ssl": {},
     "client": {},
+    "connections": {},
     "substitutions": [],
     "stages": []
 }
@@ -25,6 +26,7 @@ A scenario is a JSON file that defines a complete test case. The basic structure
 | `auth` | object/string | Authentication for every request: `basic`, `digest`, `bearer` or a user function (see [Authentication](requests.md#authentication)) |
 | `ssl` | object | SSL/TLS configuration |
 | `client` | object | The shared HTTP client: base URL, default headers and query parameters, timeout, redirects, proxy, pool (see [Client configuration](#client-configuration)) |
+| `connections` | object | Connections to non-HTTP services that connection stages use, by name: each an adapter class and its constructor's params (see [Connections](connections.md)) |
 | `substitutions` | array/object | Variables and functions for the context |
 | `stages` | array/object | The test stages to execute |
 
@@ -80,7 +82,7 @@ Editors know `.jsonc` as JSON with comments (VS Code opens it in its *JSON with 
 
 ## Stage Structure
 
-Each stage represents a single HTTP request:
+Each stage is one HTTP request (`request`) or one step on a connection (`connection`, see [Connections](connections.md)): exactly one of the two.
 
 ```json
 {
@@ -112,7 +114,8 @@ Each stage represents a single HTTP request:
 | `parallel` | object | Parallel execution config (`repeat`/`foreach`) for running the request concurrently (see [Parallel Execution](../advanced/parallel.md)) |
 | `retry` | object | Attempt the stage again while it fails, after a wait: polling until the response steps pass (see [Retries and Polling](../advanced/retry.md)) |
 | `request` | object | HTTP request configuration |
-| `response` | array/object | Response processing steps |
+| `connection` | object | A step on one of the scenario's `connections`, in place of `request`: open, drain, send, expect, close (see [The connection step](connections.md#the-connection-step)) |
+| `response` | array/object | Response processing steps; on a connection stage they check the message the stage took |
 
 ## Stages as List vs Dictionary
 

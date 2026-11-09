@@ -1,5 +1,6 @@
 """The reference adapter of docs/usage/connections.md: newline-delimited
-JSON over TCP, for the examples conftest's ``line_json_server``."""
+JSON over TCP, for the examples conftest's ``line_json_server``. Keep the
+two in sync."""
 
 import json
 import select
@@ -15,6 +16,7 @@ class LineJsonAdapter:
         self.address = (host, int(port))
         self.sock: socket.socket | None = None
         self.buffer = b""
+        self.seq = 0
         self.write_lock = threading.Lock()
 
     def connect(self, timeout: float) -> dict | None:
@@ -22,10 +24,13 @@ class LineJsonAdapter:
         self.sock.settimeout(None)  # blocking from here on: receive() waits with select
         return self.receive(timeout)  # the greeting is the handshake result
 
-    def send(self, message: dict) -> None:
+    def send(self, message: dict) -> dict:
         assert self.sock is not None
         with self.write_lock:
-            self.sock.sendall(json.dumps(message).encode() + b"\n")
+            self.seq += 1
+            frame = {"seq": self.seq, **message}  # the server's reply carries it back as reply_to
+            self.sock.sendall(json.dumps(frame).encode() + b"\n")
+            return {"seq": self.seq}  # the stage reads it as `sent`
 
     def receive(self, timeout: float) -> dict | None:
         assert self.sock is not None
@@ -36,7 +41,7 @@ class LineJsonAdapter:
                 return None
             chunk = self.sock.recv(65536)
             if not chunk:
-                raise ConnectionError("connection closed by peer")
+                raise EOFError("connection closed by peer")  # a clean end
             self.buffer += chunk
         line, self.buffer = self.buffer.split(b"\n", 1)
         return json.loads(line)
