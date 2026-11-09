@@ -7,9 +7,12 @@ import httpx
 import msgpack
 import pytest
 
+from pytest_httpchain.connections import Arrival, ConnectionExchange, Connections, ExchangeRecord, Miss, ReaderEnd
+from pytest_httpchain.models import ConnectionExpect
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
-from pytest_httpchain.report_formatter import format_curl, format_request, format_response
-from tests.unit.helpers import TOO_DEEP_TO_PARSE, on_bounded_stack
+from pytest_httpchain.report_formatter import format_connection_exchange, format_curl, format_request, format_response
+from tests.unit import connections_test_helpers as helpers
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, TOO_DEEP_TO_PARSE, on_bounded_stack
 
 _UNDECODABLE = bytes(range(256))
 _BIG_JSON = {"data": ["x" * 50] * 200}
@@ -587,3 +590,204 @@ def test_large_multipart_body_is_decoded_only_as_far_as_it_is_shown():
         tracemalloc.stop()
     assert body == ('--XyZ\nContent-Disposition: form-data; name="a"\n\n' + "t" * 1000)[:1000] + "... (truncated)"
     assert peak < 4 * _CHUNK
+
+
+class TestConnectionExchange:
+    """format_connection_exchange: a connection stage's report section, from
+    the carrier's snapshot (`connections.ConnectionExchange`)."""
+
+    ADAPTER = "tests.unit.connections_test_helpers:FakeAdapter"
+
+    def _exchange(self, **fields) -> ConnectionExchange:
+        return ConnectionExchange(**{"connection": "device", "adapter": self.ADAPTER, "generation": 2, "session_age": 1.5, **fields})
+
+    def test_taken(self):
+        exchange = self._exchange(
+            sent={"op": "ping", "id": 1},
+            sent_return={"seq": 7},
+            match={"op": "pong", "id": "{{ sent.seq }}"},
+            timeout=5.0,
+            mode="message",
+            waited=0.0123,
+            result="taken",
+            taken=Arrival(4, 0.01, {"op": "pong", "id": 7}),
+        )
+        assert format_connection_exchange(exchange) == "\n".join(
+            [
+                f"Connection 'device' (adapter {self.ADAPTER}), open 2, 1.500 s old",
+                "Sent:",
+                '{\n  "op": "ping",\n  "id": 1\n}',
+                "send() returned:",
+                '{\n  "seq": 7\n}',
+                "Expect:",
+                # As declared: the template, never what it rendered to.
+                '{\n  "op": "pong",\n  "id": "{{ sent.seq }}"\n}',
+                "Timeout: 5 s, waited 0.012 s",
+                "Result: took a message",
+                "#4 at +0.010 s after the send",
+                '{\n  "op": "pong",\n  "id": 7\n}',
+                "Not considered: 0 messages queued before the send, 0 dropped by inbox_limit",
+            ]
+        )
+
+    def test_timeout_lists_what_was_considered_late_and_left_out(self):
+        match = ConnectionExpect.model_validate({"match": {"id": 2, "n": {"gt": 1}}}).match
+        exchange = self._exchange(
+            sent={"op": "ping"},
+            match=match,
+            timeout=0.3,
+            mode="message",
+            waited=0.301,
+            result="timeout",
+            considered=(Arrival(3, 0.004, {"id": 1}, Miss("JMESPath 'id' doesn't match: expected 2, got 1")),),
+            late=(Arrival(4, 0.35, {"id": 2}),),
+            earlier=2,
+            dropped=5,
+        )
+        text = format_connection_exchange(exchange)
+        assert 'Expect:\n{\n  "id": 2,\n  "n": {\n    "gt": 1\n  }\n}' in text
+        assert "Result: timed out, no message matched" in text
+        assert "Considered, not matching (1 message):\n#3 at +0.004 s after the send: JMESPath 'id' doesn't match: expected 2, got 1\n{\n  \"id\": 1\n}" in text
+        assert 'Late, within 0.2 s after the deadline, left queued:\n#4 at +0.350 s after the send (late)\n{\n  "id": 2\n}' in text
+        assert text.endswith("Not considered: 2 messages queued before the send, 5 dropped by inbox_limit")
+
+    def test_considered_list_is_capped_at_the_last_ones(self):
+        considered = tuple(Arrival(seq, -1.0, {"n": seq}, Miss("no")) for seq in range(1, 26))
+        text = format_connection_exchange(self._exchange(match="n == `0`", timeout=1.0, mode="message", waited=1.0, result="timeout", considered=considered))
+        assert "Expect: n == `0`" in text, "an expression is shown as written"
+        assert "Considered, not matching (25 messages):\n(5 earlier not shown)\n#6 at -1.000 s from the wait: no" in text
+        assert "#5 " not in text
+        assert "#25 at" in text
+        # Nothing was sent, so nothing was left out as older than a send.
+        assert text.endswith("Not considered: 0 dropped by inbox_limit")
+
+    @pytest.mark.parametrize(
+        ("fields", "lines"),
+        [
+            pytest.param(
+                {"mode": "absent", "match": "op == 'push'", "result": "seen", "taken": Arrival(1, 0.2, {"op": "push"})},
+                ["Expect: no message matching op == 'push'", "Result: a message matched, where none should", "#1 at +0.200 s from the wait"],
+                id="absent-hit",
+            ),
+            pytest.param({"mode": "absent", "result": "absent"}, ["Expect: no message matching any message", "Result: no message matched, as expected"], id="absent-passed"),
+            pytest.param(
+                {"mode": "closed", "result": "closed", "end": ReaderEnd(ConnectionResetError("reset"))},
+                ["Expect: the connection to end", "Result: the connection ended, as expected", "Reader: failed: ConnectionResetError: reset"],
+                id="closed",
+            ),
+            pytest.param({"mode": "closed", "result": "timeout"}, ["Result: timed out, the connection did not end"], id="closed-timeout"),
+            pytest.param(
+                {"mode": "message", "result": "ended", "end": ReaderEnd(None)},
+                ["Result: the connection ended while the stage waited", "Reader: closed by the other side"],
+                id="reader-ended",
+            ),
+            # An error before the wait (a match that did not render) leaves no outcome.
+            pytest.param({"mode": "message"}, ["Result: the wait did not finish (see the failure message)"], id="no-outcome"),
+        ],
+    )
+    def test_how_the_wait_ended(self, fields, lines):
+        text = format_connection_exchange(self._exchange(timeout=1.0, waited=1.0, **fields)).split("\n")
+        for line in lines:
+            assert line in text
+
+    def test_open_and_reader_end_without_a_wait(self):
+        exchange = self._exchange(opened=True, connected={"greeting": "hello", "token": "t"}, end=ReaderEnd(None), dropped=3)
+        assert format_connection_exchange(exchange) == "\n".join(
+            [
+                f"Connection 'device' (adapter {self.ADAPTER}), open 2, 1.500 s old",
+                "Opened: connect() returned",
+                '{\n  "greeting": "hello",\n  "token": "[REDACTED]"\n}',
+                "Not considered: 3 dropped by inbox_limit",
+                "Reader: closed by the other side",
+            ]
+        )
+
+    def test_open_returning_nothing_and_no_session(self):
+        assert format_connection_exchange(self._exchange(opened=True)).endswith("Opened: connect() returned nothing")
+        assert format_connection_exchange(ConnectionExchange("device", self.ADAPTER)) == f"Connection 'device' (adapter {self.ADAPTER}), no session"
+
+    def test_reader_end_the_plugin_caused_is_not_shown(self):
+        assert "Reader" not in format_connection_exchange(self._exchange(end=ReaderEnd(OSError("closed"), after_stop=True)))
+
+    @pytest.mark.parametrize(
+        ("debug", "shown"),
+        [
+            pytest.param("raw: 00ff\nline two", "debug_info():\nraw: 00ff\nline two", id="verbatim"),
+            # A token in it is shown: it is the adapter's own text.
+            pytest.param("token=abc", "debug_info():\ntoken=abc", id="never-redacted"),
+            pytest.param(RuntimeError("no buffer"), "debug_info():\n<debug_info() failed: RuntimeError: no buffer>", id="raising-captured"),
+        ],
+    )
+    def test_debug_info(self, debug, shown):
+        """Taken by the snapshot (`connections.debug_text`), which a raising one cannot fail."""
+        helpers.peer("report", debug=debug)
+        registry = Connections()
+        try:
+            session, _ = registry.open("device", self.ADAPTER, {"peer": "report"}, 1.0, 10, label="Report")
+            snapshot = ExchangeRecord("device", self.ADAPTER, session=session).freeze()
+        finally:
+            registry.close_all()
+        assert format_connection_exchange(snapshot).endswith(shown)
+
+    def test_without_debug_info(self):
+        assert "debug_info" not in format_connection_exchange(self._exchange())
+
+    def test_values_json_has_no_form_for(self):
+        """Bytes as hex, as a MessagePack body's; anything else as its repr."""
+        text = format_connection_exchange(self._exchange(sent={"raw": b"\x00\xff", "long": b"\x01" * 70, "when": {1, 2}}))
+        assert '"raw": "<bytes: 00ff>"' in text
+        assert f'"long": "<bytes: {"01" * 64}... (70 bytes)>"' in text
+        assert '"when": "{1, 2}"' in text
+
+    def test_message_json_cannot_show_is_its_repr(self):
+        cyclic: dict = {"a": 1}
+        cyclic["self"] = cyclic
+        text = format_connection_exchange(self._exchange(sent=cyclic, sent_return={(1, 2): "tuple key"}))
+        assert "Sent:\n{'a': 1, 'self': {...}}" in text
+        assert "send() returned:\n{(1, 2): 'tuple key'}" in text
+
+    def test_deep_message_is_cut_not_a_recursion_error(self):
+        message: dict = {}
+        current = message
+        for _ in range(BEYOND_RECURSION_LIMIT):
+            current["next"] = current = {}
+        text = format_connection_exchange(self._exchange(sent=message))
+        assert text.endswith("... (truncated)")
+        assert len(text) < 1200
+
+    def test_message_neither_json_nor_repr_can_show_is_a_line_saying_so(self):
+        """A value whose repr raises (what a template rendered ``send`` to):
+        the rest of the section is still shown."""
+
+        class Unshowable:
+            def __repr__(self) -> str:
+                raise RuntimeError("no repr")
+
+        text = format_connection_exchange(self._exchange(sent={"v": Unshowable()}, debug_info="still here"))
+        assert "Sent:\n<message cannot be shown: RuntimeError>\ndebug_info():\nstill here" in text
+
+    def test_long_message_is_cut_at_the_body_cap(self):
+        text = format_connection_exchange(self._exchange(sent={"data": "x" * 5000}))
+        assert text.endswith("... (truncated)")
+        assert text.count("x") == 1000 - len('{\n  "data": "')
+
+    def test_messages_are_redacted_by_key(self):
+        """Each message the section shows, and each miss reason's quote of one;
+        the declared match is shown as declared."""
+        exchange = self._exchange(
+            sent={"op": "login", "Password": "pw-sent"},
+            sent_return={"auth": {"token": "tok-returned"}},
+            match={"user.token": "{{ token }}"},
+            timeout=1.0,
+            mode="message",
+            waited=1.0,
+            result="timeout",
+            considered=(Arrival(1, 0.1, {"user": {"token": "tok-considered"}}, Miss('JMESPath \'user.token\' doesn\'t match: expected "x", got "tok-considered"')),),
+            late=(Arrival(2, 1.1, {"items": [{"api_key": b"\x01"}]}),),
+        )
+        text = format_connection_exchange(exchange)
+        for secret in ("pw-sent", "tok-returned", "tok-considered", "<bytes: 01>"):
+            assert secret not in text
+        assert text.count("[REDACTED]") == 5
+        assert '"user.token": "{{ token }}"' in text
+        assert "pw-sent" in format_connection_exchange(exchange, redaction=NO_REDACTION)

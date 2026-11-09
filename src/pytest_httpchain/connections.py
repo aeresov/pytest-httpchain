@@ -32,6 +32,7 @@ import pytest
 from pydantic import BaseModel
 
 from pytest_httpchain.errors import RequestError, StageExecutionError, VerificationError
+from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.userfunc import UserFunctionError, import_adapter
 
 logger = logging.getLogger(__name__)
@@ -518,20 +519,28 @@ class ConnectionExchange:
 
     ``generation`` is which open of the connection the session is (from 1),
     and ``session_age`` how long it had been open, in seconds; both None when
-    the stage got no session. ``sent`` is the message sent and
-    ``sent_return`` what ``send()`` returned. ``match`` is the declared
+    the stage got no session. ``opened`` is whether the stage opened it, and
+    ``connected`` what ``connect()`` returned then. ``sent`` is the message
+    sent and ``sent_return`` what ``send()`` returned. ``match`` is the declared
     match (templates as written), with its ``timeout`` and ``mode``, and the
     seconds ``waited``; ``result`` how the wait ended (`ExpectResult`).
     ``taken`` is the message the wait took, or an absent one saw;
     ``considered`` the messages that did not match, ``late`` those that
     arrived just after a timeout, ``earlier`` how many queued messages were
     older than the send, and ``dropped`` how many the session's inbox_limit
-    discarded. ``debug_info`` is the adapter's, cut (`debug_text`)."""
+    discarded. ``end`` is how the session's reader ended, if it has, as the
+    wait saw it or, without one, by the snapshot. ``debug_info`` is the
+    adapter's, cut (`debug_text`).
+
+    Its messages are as the adapter returned them: a report shows them through
+    the scenario's `Redaction` (``report_formatter.format_connection_exchange``)."""
 
     connection: str
     adapter: str
     generation: int | None = None
     session_age: float | None = None
+    opened: bool = False
+    connected: dict[str, Any] | None = None
     sent: dict[str, Any] | None = None
     sent_return: dict[str, Any] | None = None
     match: Any = None
@@ -544,6 +553,7 @@ class ConnectionExchange:
     late: tuple[Arrival, ...] = ()
     earlier: int = 0
     dropped: int = 0
+    end: ReaderEnd | None = None
     debug_info: str | None = None
 
 
@@ -555,6 +565,8 @@ class ExchangeRecord:
     connection: str
     adapter: str
     session: _Session | None = None
+    opened: bool = False
+    connected: dict[str, Any] | None = None
     sent: dict[str, Any] | None = None
     sent_return: dict[str, Any] | None = None
     match: Any = None
@@ -567,11 +579,14 @@ class ExchangeRecord:
         stage calls cannot change what the report shows. ``debug_info()`` is
         asked now, before any close."""
         session, outcome = self.session, self.outcome
+        end = outcome.end if outcome is not None and outcome.end is not None else session.end if session is not None else None
         return ConnectionExchange(
             connection=self.connection,
             adapter=self.adapter,
             generation=session.generation if session is not None else None,
             session_age=session.age if session is not None else None,
+            opened=self.opened,
+            connected=_copied(self.connected),
             sent=_copied(self.sent),
             sent_return=_copied(self.sent_return),
             match=self.match,
@@ -584,6 +599,7 @@ class ExchangeRecord:
             late=tuple(map(_copied_arrival, outcome.late)) if outcome is not None else (),
             earlier=outcome.earlier if outcome is not None else 0,
             dropped=session.dropped if session is not None else 0,
+            end=end,
             debug_info=debug_text(session.adapter) if session is not None else None,
         )
 
@@ -787,7 +803,17 @@ def _count(n: int, what: str) -> str:
 
 
 def expect_failure(
-    outcome: ExpectOutcome, *, stage: str, connection: str, match: Any, timeout: float, mode: ExpectMode, sent: bool, reopens: bool, ended_before: bool
+    outcome: ExpectOutcome,
+    *,
+    stage: str,
+    connection: str,
+    match: Any,
+    timeout: float,
+    mode: ExpectMode,
+    sent: bool,
+    reopens: bool,
+    ended_before: bool,
+    redaction: Redaction = DEFAULT_REDACTION,
 ) -> StageExecutionError | None:
     """The stage failure ``outcome`` is, or None for one that passes.
 
@@ -797,16 +823,19 @@ def expect_failure(
     the connection ending is not "nothing arrived") is a `RequestError`, its
     error chained, retryable only on a stage that opens the connection again;
     one that ended before the stage began is the connection not being open.
-    A message ``match`` is shown as declared (`declared_match`).
+    A message ``match`` is shown as declared (`declared_match`), and a
+    message the failure quotes through ``redaction`` (`Redaction.message`);
+    a miss reason it quotes is the predicate's, which redacts its own.
     """
     match outcome.result:
         case "taken" | "absent" | "closed":
             return None
         case "seen":
             assert outcome.taken is not None, "an absent expect that saw a message has it"
+            shown = shown_message(redaction.message(outcome.taken.message))
             return VerificationError(
                 f"Stage '{stage}': a message on connection '{connection}' matched {declared_match(match)} within {timeout:g} s, where none should: "
-                f"message #{outcome.taken.seq}, {outcome.taken.at:.3f} s {'after the send' if sent else 'from the wait'}: {shown_message(outcome.taken.message)}",
+                f"message #{outcome.taken.seq}, {outcome.taken.at:.3f} s {'after the send' if sent else 'from the wait'}: {shown}",
                 retryable=False,
             )
         case "ended":
