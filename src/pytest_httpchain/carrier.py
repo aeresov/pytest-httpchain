@@ -8,7 +8,8 @@ scenarios stay isolated from each other.
 
 This module owns sequencing only. What the individual pieces mean lives next
 door: ``request_builder`` (models -> httpx arguments), ``response_steps`` (one
-verify/save step), ``scoping`` (context layering).
+verify/save step), ``scoping`` (context layering), ``connections`` (a
+connection stage's sessions, readers and waits).
 """
 
 import functools
@@ -36,11 +37,14 @@ from pydantic_core import InitErrorDetails, PydanticCustomError
 from pyrate_limiter import Duration, Limiter, Rate
 
 from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds
+from pytest_httpchain.connections import ConnectionExchange, Connections, ExchangeRecord, Miss, expect_failure, not_open_failure
 from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.har_writer import Exchange
 from pytest_httpchain.models import (
     ClientConfig,
     CombinationsParameter,
+    ConnectionConfig,
+    ConnectionStep,
     FileSpec,
     IndividualParameter,
     JMESPathMatcher,
@@ -61,16 +65,36 @@ from pytest_httpchain.models import (
     Verify,
     VerifyStep,
     validate_rendered,
+    validate_rendered_expectations,
     validate_rendered_scenario_auth,
     validate_rendered_verify,
 )
+from pytest_httpchain.models.types import convert_namespace_to_dict
 from pytest_httpchain.parallel_stats import IterationEnd, ParallelStats, failed_iterations, parallel_stats, threshold_failure
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.request_builder import build_client_kwargs, build_request_kwargs
-from pytest_httpchain.response_steps import RenderFailure, RenderOutcome, VerifyRender, process_save, process_verify
+from pytest_httpchain.response_steps import (
+    NO_MESSAGE,
+    Match,
+    MessageSubject,
+    RenderFailure,
+    RenderOutcome,
+    ResponseCodec,
+    Subject,
+    VerifyRender,
+    message_matches,
+    process_save,
+    process_verify,
+)
 from pytest_httpchain.scoping import (
+    MESSAGE_META_NAME,
     RESPONSE_META_NAME,
+    SENT_NAME,
+    DefinedNames,
     base_global_context,
+    connection_bindings,
+    connection_step_context,
+    extract_template_variables,
     iteration_context,
     response_step_context,
     saved_in_response,
@@ -1009,17 +1033,51 @@ def _rendered_to_none(where: str, vanished: _Vanished, relocate: _Relocation | N
     return f"{message}; to compare with null, write null" if vanished.compared else message
 
 
+def _rendered_match(declared: dict[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
+    """A connection's ``expect.match`` object with its values' templates
+    rendered, all with one walker, and validated again
+    (`validate_rendered_expectations`), so a value declared as a value stays
+    one, whatever it rendered to. A matcher operand a template rendered to
+    None is refused, as `_render_declared` refuses a field's. Each failure is
+    the scenario's: no attempt retries it."""
+    if not needs_rendering(declared):
+        return declared
+    dumped = {expression: expected.model_dump(mode="python", exclude_unset=True) if isinstance(expected, BaseModel) else expected for expression, expected in declared.items()}
+    substituted = walker(context)(dumped)
+    if (vanished := next(_rendered_away(declared, substituted), None)) is not None:
+        raise VerificationError(_rendered_to_none("connection.expect.match", vanished), retryable=False)
+    try:
+        return validate_rendered_expectations(declared, substituted)
+    except ValidationError as e:
+        raise VerificationError(str(e), retryable=False) from e
+
+
+# What a connection stage binds over its response steps, by what shadows a
+# save of that name there.
+_CONNECTION_RESERVED = {MESSAGE_META_NAME: "the message the stage took (HTTPCHAIN045)", SENT_NAME: "what the stage's send() returned (HTTPCHAIN045)"}
+
+
+def _message_miss(match: Any, rendered: Mapping[str, Any] | None, message: dict[str, Any]) -> Miss | None:
+    """The predicate a connection stage's wait takes (`connections.MatchPredicate`):
+    `response_steps.message_matches`' verdict on ``message``."""
+    verdict = message_matches(match, rendered, message)
+    return None if isinstance(verdict, Match) else Miss(verdict.reason, verdict.error)
+
+
 def fresh_chain_state() -> dict[str, Any]:
     """The mutable class state one chain of a scenario owns, in its pristine form.
 
     A scenario runs as one chain, or as one per param of a parametrized fixture
     (`Carrier.begin_chain`), and each chain starts from this: no abort, no
-    exchanges, no client yet. The saves live in ``global_context``, reset
-    alongside it. What a scenario resolves once for all its chains is in
-    `fresh_scenario_state`.
+    exchanges, no client yet, no connection open. The saves live in
+    ``global_context``, reset alongside it. What a scenario resolves once for
+    all its chains is in `fresh_scenario_state`.
     """
     return {
         "client": None,
+        "connections": Connections(),
+        "last_connection_exchange": None,
+        "_connection_params_context": None,
         "aborted": False,
         "last_request": None,
         "last_response": None,
@@ -1059,12 +1117,14 @@ class IterationResult:
     ``earlier_exchanges`` the exchanges of those before it, when the HAR file
     records them (`Carrier._execute_attempts`). ``duration`` is the seconds
     its attempts' requests spent in the HTTP client, the iteration's latency
-    in a parallel stage's stats (see `parallel_stats`)."""
+    in a parallel stage's stats (see `parallel_stats`). A connection stage's
+    attempt makes no HTTP exchange: its ``request``, ``response`` and
+    ``started`` are None."""
 
     saved_context: dict[str, Any]
-    request: httpx.Request
-    response: httpx.Response
-    started: datetime
+    request: httpx.Request | None = None
+    response: httpx.Response | None = None
+    started: datetime | None = None
     attempt: int = 1
     earlier_exchanges: tuple[Exchange, ...] = ()
     duration: float = 0.0
@@ -1251,7 +1311,10 @@ def _parallel_failure(idx: int, exc: Exception, tolerated: Sequence[tuple[int, E
 
 def _result_exchanges(result: IterationResult) -> list[Exchange]:
     """The exchanges a successful iteration made on the wire, oldest first:
-    its earlier attempts', then the one that succeeded."""
+    its earlier attempts', then the one that succeeded, if it sent a request
+    (a connection stage's sends none)."""
+    if result.request is None:
+        return list(result.earlier_exchanges)
     return [*result.earlier_exchanges, *_wire_exchanges(result.request, result.response, result.started)]
 
 
@@ -1322,6 +1385,19 @@ class Carrier:
     last_shown_attempt: ClassVar[tuple[int, int] | None] = None
     # A parallel stage's stats, for its report's Parallel Summary section.
     last_parallel_stats: ClassVar[ParallelStats | None] = None
+    # The chain's connections, by name (`connections.Connections`).
+    connections: ClassVar[Connections] = Connections()
+    # What a connection stage did, for its report: a snapshot taken once its
+    # step ran, before any close.
+    last_connection_exchange: ClassVar[ConnectionExchange | None] = None
+    # What a connection's params render against: the scenario's substitutions
+    # and fixtures and the saves so far, never the stage's own names, since
+    # the connection outlives the stage. Set by a connection stage.
+    _connection_params_context: ClassVar[ChainMap[str, Any] | None] = None
+    # Each fixture the running stage's item requests, by name, with its
+    # scope, set by the plugin as the item is set up: a fixture a
+    # connection's params read must outlive the stage that opens it.
+    fixture_scopes: ClassVar[Mapping[str, str]] = {}
     record_all_exchanges: ClassVar[bool] = False
     # The report's rules (httpchain_redact_*), for failure messages that echo a
     # header's value: they are printed next to the report sections.
@@ -1468,6 +1544,8 @@ class Carrier:
         cls.last_shown_exchange_is_failed = False
         cls.last_shown_attempt = None
         cls.last_parallel_stats = None
+        cls.last_connection_exchange = None
+        cls._connection_params_context = None
 
         # Ahead of the always_run machinery: a failed initialization leaves no
         # context and no client, so every stage skips.
@@ -1483,11 +1561,18 @@ class Carrier:
         secondary_exchanges: list[Exchange] = []
         # A parallel stage's iterations as they end, once they start.
         run: _ParallelRun | None = None
+        # The connection the stage closes once it has run, whatever its
+        # outcome but a skip (`close: true`).
+        closing: str | None = None
         try:
             stage_fixtures = cls._build_stage_fixtures(fixture_kwargs)
 
             if cls.aborted and not cls._resolve_always_run(stage, stage_fixtures):
                 pytest.skip(reason="Flow aborted")
+            # An always_run stage after a failure can still use an open
+            # connection (a farewell message), but never connects.
+            if cls.aborted and stage.connection is not None and not cls.connections.is_open(stage.connection.name):
+                pytest.skip(reason=f"Flow aborted, and connection '{stage.connection.name}' is not open")
 
             # A literal reads no context, so the stage skips before the
             # scenario initializes or its own substitutions call anything, as
@@ -1513,6 +1598,13 @@ class Carrier:
             # raised, and the stage commits no saves.
             if isinstance(stage.skip_if, str) and cls._skip_if_holds(stage.skip_if, local_context):
                 pytest.skip(reason=f"skip_if: {stage.skip_if.strip()}")
+
+            if stage.connection is not None:
+                if stage.connection.close:
+                    closing = stage.connection.name
+                if stage.parallel is not None:
+                    raise StageExecutionError(f"Stage '{stage.name}': parallel is not supported on a connection stage")
+                cls._connection_params_context = cls._params_context(stage_fixtures)
 
             parallel_config: ParallelConfig | None = _render_declared(stage.parallel, local_context, "parallel") if stage.parallel else None
             iteration_substitutions = cls._build_iteration_substitutions(parallel_config, cls.max_parallel_iterations)
@@ -1601,6 +1693,12 @@ class Carrier:
         # The iterations' exit errors go in, so that an interrupt raised by one
         # of these exits logs them rather than dropping them.
         exit_errors = _exit_context_managers(cls.active_context_managers, iteration_exit_errors)
+        # With them, and as they do: a close that fails fails the stage, its
+        # own failure first, and no saves commit.
+        if closing is not None and not isinstance(outcome, pytest.skip.Exception):
+            close_error = cls.connections.close(closing, stage.name)
+            if close_error is not None:
+                exit_errors.append(close_error)
 
         # Deliberately outside the handler: raising there would set
         # `Failed.__context__` to the original exception, and pytest's
@@ -2107,14 +2205,15 @@ class Carrier:
         fails (or the run is interrupted), in-flight iterations stop before
         sending rather than adding side-effecting traffic to a failed stage.
         The time the request spends in the HTTP client, sent or failed, is
-        appended to ``exchange_seconds``.
+        appended to ``exchange_seconds``. A connection stage's attempt is its
+        connection step instead (`_execute_connection_attempt`).
         """
         if cancel is not None and cancel.is_set():
             raise _Cancelled("Iteration cancelled: the stage already failed")
 
         iter_context = iteration_context(local_context, iter_vars)
         if stage.request is None:
-            raise StageExecutionError("Connection stages are not supported yet", retryable=False)
+            return cls._execute_connection_attempt(stage, iter_context)
 
         # Rendering re-validates the model it substitutes into, so no further
         # model_validate is needed here.
@@ -2144,55 +2243,15 @@ class Carrier:
                 exchange_seconds.append(time.perf_counter() - sending)
 
         try:
-            saved_context: dict[str, Any] = {}
             response_meta = _response_meta(response)
-            for step in stage.response:
-                step_context = response_step_context(iter_context, response_meta)
-                match step:
-                    case SaveStep():
-                        # A SubstitutionsSave renders its own entries strictly in
-                        # order inside process_save; pre-walking it here would
-                        # evaluate later entries before earlier ones' names exist
-                        # and re-evaluate already-rendered values — so response-
-                        # derived text containing '{{ }}' would be executed as an
-                        # expression.
-                        save_model = step.save if isinstance(step.save, SubstitutionsSave) else _render_save(step.save, step_context)
-                        step_saved = process_save(save_model, response, step_context, codec=stage.response_codec)
-                        # The static HTTPCHAIN027 check cannot see dynamically
-                        # produced keys, so the shadowing is surfaced here too.
-                        if RESPONSE_META_NAME in step_saved:
-                            try:
-                                warnings.warn(
-                                    ScenarioValidationWarning(
-                                        f"Save step produced the reserved name '{RESPONSE_META_NAME}': inside response steps it is "
-                                        f"shadowed by the response metadata namespace (HTTPCHAIN027)"
-                                    ),
-                                    stacklevel=2,
-                                )
-                            except ScenarioValidationWarning as promoted:
-                                # Promoted by filterwarnings=error: convert it to
-                                # a stage failure so reporting and abort engage.
-                                # The scenario's own, which no attempt changes.
-                                raise SaveError(str(promoted), retryable=False) from None
-                        iter_context = with_saves(iter_context, step_saved)
-                        saved_context.update(step_saved)
-
-                    case VerifyStep():
-                        # Each check's value is rendered on its own, all before the
-                        # first check, through the guard (`_verify_renderer`): a
-                        # template that fails is one failure among the step's.
-                        process_verify(
-                            step.verify,
-                            response,
-                            cls.scenario_dir,
-                            cls.redaction,
-                            render=_verify_renderer(step.verify, step_context),
-                            ref_bounds=cls.ref_bounds,
-                            codec=stage.response_codec,
-                        )
-
-                    case _:
-                        raise RuntimeError(f"Unhandled response step: {type(step).__name__}")
+            saved_context = cls._run_response_steps(
+                stage,
+                iter_context,
+                response,
+                functools.partial(response_step_context, response_meta=response_meta),
+                {RESPONSE_META_NAME: "the response metadata namespace (HTTPCHAIN027)"},
+                stage.response_codec,
+            )
         except StageExecutionError as e:
             e.request = response.request
             e.response = response
@@ -2212,6 +2271,228 @@ class Carrier:
             response=response,
             started=started,
         )
+
+    @classmethod
+    def _run_response_steps(
+        cls,
+        stage: Stage,
+        iter_context: ChainMap[str, Any],
+        subject: Subject,
+        step_context: Callable[[ChainMap[str, Any]], ChainMap[str, Any]],
+        reserved: Mapping[str, str],
+        codec: ResponseCodec = "auto",
+    ) -> dict[str, Any]:
+        """Run the stage's response steps in order on ``subject``, the HTTP
+        response or a connection stage's message, each in ``step_context`` of
+        the iteration context and the saves of the steps before it: what they
+        saved. ``reserved`` names what the stage's kind layers over the steps,
+        by what shadows a save of that name."""
+        saved_context: dict[str, Any] = {}
+        for step in stage.response:
+            context = step_context(iter_context)
+            match step:
+                case SaveStep():
+                    # A SubstitutionsSave renders its own entries strictly in
+                    # order inside process_save; pre-walking it here would
+                    # evaluate later entries before earlier ones' names exist
+                    # and re-evaluate already-rendered values — so response-
+                    # derived text containing '{{ }}' would be executed as an
+                    # expression.
+                    save_model = step.save if isinstance(step.save, SubstitutionsSave) else _render_save(step.save, context)
+                    step_saved = process_save(save_model, subject, context, codec=codec)
+                    # The static checks cannot see dynamically produced keys,
+                    # so the shadowing is surfaced here too.
+                    for name in sorted(reserved.keys() & step_saved.keys()):
+                        try:
+                            warnings.warn(
+                                ScenarioValidationWarning(f"Save step produced the reserved name '{name}': inside response steps it is shadowed by {reserved[name]}"),
+                                stacklevel=2,
+                            )
+                        except ScenarioValidationWarning as promoted:
+                            # Promoted by filterwarnings=error: convert it to
+                            # a stage failure so reporting and abort engage.
+                            # The scenario's own, which no attempt changes.
+                            raise SaveError(str(promoted), retryable=False) from None
+                    iter_context = with_saves(iter_context, step_saved)
+                    saved_context.update(step_saved)
+
+                case VerifyStep():
+                    # Each check's value is rendered on its own, all before the
+                    # first check, through the guard (`_verify_renderer`): a
+                    # template that fails is one failure among the step's.
+                    process_verify(
+                        step.verify,
+                        subject,
+                        cls.scenario_dir,
+                        cls.redaction,
+                        render=_verify_renderer(step.verify, context),
+                        ref_bounds=cls.ref_bounds,
+                        codec=codec,
+                    )
+
+                case _:
+                    raise RuntimeError(f"Unhandled response step: {type(step).__name__}")
+        return saved_context
+
+    @classmethod
+    def _params_context(cls, stage_fixtures: Mapping[str, Any]) -> ChainMap[str, Any]:
+        """What a connection's ``params`` render against: the scenario's
+        substitutions, the saves so far and the scenario's own fixtures, never
+        the stage's fixtures, parameters or substitutions, which the
+        connection outlives."""
+        scenario_fixtures = cls.scenario.fixtures if cls.scenario is not None else []
+        return stage_start_context(cls.global_context, {name: stage_fixtures[name] for name in scenario_fixtures if name in stage_fixtures})
+
+    @classmethod
+    def _execute_connection_attempt(cls, stage: Stage, iter_context: ChainMap[str, Any]) -> IterationResult:
+        """One attempt of a connection stage: open, drain, send, expect, then
+        the response steps on the message it took, in that order (closing is
+        the stage's, once its attempts are done: `execute_stage`).
+
+        It opens the connection on ``open: true``, and at the first stage of
+        the chain that names it while it was never opened. One a stage closed,
+        or whose reopening failed, is not open, and a stage that does not
+        open it fails, as no attempt changes that; so does one that sends on
+        a connection whose reader has ended. An ``expect`` takes the oldest
+        matching message, after the stage's send if it sends
+        (`connections._Session.expect`). The response steps see it as
+        ``message`` (or, without an ``expect``, what an ``open``'s
+        ``connect()`` returned) and what ``send()`` returned as ``sent``.
+
+        Whatever happens, what the step did is kept for the report
+        (``last_connection_exchange``), before any close.
+        """
+        step = stage.connection
+        assert step is not None, "a stage without a request has a connection step"
+        config = cls.scenario.connections.get(step.name) if cls.scenario is not None else None
+        if config is None:
+            raise StageExecutionError(f"Stage '{stage.name}': connection '{step.name}' is not declared in the scenario's connections")
+        record = ExchangeRecord(step.name, config.adapter)
+        try:
+            # What the response steps see: `message`, `sent`.
+            bound: dict[str, Any] = {}
+            subject = NO_MESSAGE
+            if step.open or cls.connections.never_opened(step.name):
+                session, connected = cls._open_connection(stage, step.name, config)
+                if step.open and step.expect is None:
+                    subject = MessageSubject(connected)
+                    bound[MESSAGE_META_NAME] = connected
+            elif (why := cls.connections.not_open(step.name)) is not None:
+                raise not_open_failure(stage.name, step.name, why)
+            else:
+                session = cls.connections.session(step.name)
+                assert session is not None, "a connection opened and not closed has a session"
+            record.session = session
+            ended_before = session.end
+            if ended_before is not None and step.send is not None:
+                session.observed = True
+                raise not_open_failure(stage.name, step.name, ended_before.describe())
+
+            if step.drain:
+                session.drain()
+
+            after: int | None = None
+            since = time.monotonic()
+            if step.send is not None:
+                record.sent = outgoing = cls._rendered_send(stage, step, iter_context)
+                # Before the send: a reply can arrive before send() returns.
+                after = session.mark()
+                since = time.monotonic()
+                record.sent_return = bound[SENT_NAME] = session.send(outgoing)
+
+            if step.expect is not None:
+                subject = cls._expect(stage, step, session, iter_context, bound, record, after=after, since=since, ended_before=ended_before is not None)
+                if subject.present:
+                    bound[MESSAGE_META_NAME] = subject.message
+
+            try:
+                bindings = connection_bindings(**bound)
+                reserved = {name: what for name, what in _CONNECTION_RESERVED.items() if name in bindings}
+                saved_context = cls._run_response_steps(stage, iter_context, subject, functools.partial(connection_step_context, bindings=bindings), reserved)
+            except (TemplatesError, ValidationError) as e:
+                raise StageExecutionError(str(e)) from e
+            except RecursionError as e:
+                raise StageExecutionError(f"Stage '{stage.name}': the message is nested too deeply for templates to read: {e}") from e
+        finally:
+            cls.last_connection_exchange = record.freeze()
+        return IterationResult(saved_context=saved_context)
+
+    @classmethod
+    def _open_connection(cls, stage: Stage, name: str, config: ConnectionConfig) -> tuple[Any, dict[str, Any] | None]:
+        """Open connection ``name`` for ``stage``, its ``params`` rendered
+        (`_params_context`): its session, and what ``connect()`` returned.
+
+        A fixture the params read must be class-scoped or wider, or the
+        connection would outlive it; the plugin gives each item's fixture
+        scopes (``fixture_scopes``), and without them nothing is checked.
+        """
+        context = cls._connection_params_context if cls._connection_params_context is not None else stage_start_context(cls.global_context, {})
+        scenario_fixtures = frozenset(cls.scenario.fixtures) if cls.scenario is not None else frozenset()
+        read = extract_template_variables(config.params, defined=DefinedNames(scenario_fixtures, scenario_fixtures)) & scenario_fixtures
+        if narrow := sorted(fixture for fixture in read if cls.fixture_scopes.get(fixture) == "function"):
+            raise StageExecutionError(
+                f"Stage '{stage.name}': connection '{name}' params read fixture '{narrow[0]}', which is function-scoped: "
+                f"the connection outlives the stage that opens it, so a fixture its params read must be class-scoped or wider"
+            )
+        try:
+            params = convert_namespace_to_dict(walk(config.params, context))
+            connect_timeout = walk(config.connect_timeout, context)
+        except (TemplatesError, ValueError) as e:
+            raise StageExecutionError(f"Stage '{stage.name}': connection '{name}' params did not render: {e}") from e
+        timeout = _setting_number(f"connections.{name}.connect_timeout", connect_timeout)
+        return cls.connections.open(name, config.adapter, params, timeout, config.inbox_limit, label=cls.__name__)
+
+    @staticmethod
+    def _rendered_send(stage: Stage, step: ConnectionStep, context: Mapping[str, Any]) -> dict[str, Any]:
+        """The step's ``send``, rendered through the guard (`_render_declared`)
+        and validated again as a message, alone: the step is never rendered
+        whole."""
+        declared = ConnectionStep.model_construct(_fields_set={"name", "send"}, name=step.name, send=step.send)
+        rendered = _render_declared(declared, context, "connection").send
+        if not isinstance(rendered, dict):
+            raise StageExecutionError(f"Stage '{stage.name}': connection.send must render to an object, got {type(rendered).__name__}")
+        return rendered
+
+    @classmethod
+    def _expect(
+        cls,
+        stage: Stage,
+        step: ConnectionStep,
+        session: Any,
+        iter_context: ChainMap[str, Any],
+        bound: Mapping[str, Any],
+        record: ExchangeRecord,
+        *,
+        after: int | None,
+        since: float,
+        ended_before: bool,
+    ) -> MessageSubject:
+        """Wait as the step's ``expect`` says, its timeout and its match
+        object's values rendered with ``sent`` in scope (the match string is
+        never rendered): the message it took, the end an ``expect.closed`` saw
+        (``{error, detail}``), or none for an absent one that passed."""
+        expect = step.expect
+        assert expect is not None, "only a step that expects waits"
+        context = connection_step_context(iter_context, connection_bindings(**{name: bound[name] for name in (SENT_NAME,) if name in bound}))
+        timeout = _setting_number("connection.expect.timeout", walk(expect.timeout, context) if isinstance(expect.timeout, str) else expect.timeout)
+        rendered = _rendered_match(expect.match, context) if isinstance(expect.match, dict) else None
+        mode = "closed" if expect.closed else "absent" if expect.absent else "message"
+        record.match, record.timeout, record.mode = expect.match, timeout, mode
+        predicate = functools.partial(_message_miss, expect.match, rendered) if expect.match is not None else None
+        record.outcome = outcome = session.expect(predicate, timeout, after=after, since=since, mode=mode)
+        sent = step.send is not None
+        failure = expect_failure(
+            outcome, stage=stage.name, connection=step.name, match=expect.match, timeout=timeout, mode=mode, sent=sent, reopens=step.open, ended_before=ended_before
+        )
+        if failure is not None:
+            raise failure
+        if outcome.result == "taken":
+            assert outcome.taken is not None, "a wait that took a message has it"
+            return MessageSubject(outcome.taken.message)
+        if outcome.result == "closed":
+            assert outcome.end is not None, "a wait that saw the end has it"
+            return MessageSubject(outcome.end.as_message())
+        return NO_MESSAGE
 
     @classmethod
     def _wrap_factory_fixture(cls, name: str, fixture: Callable) -> Callable:
@@ -2264,17 +2545,33 @@ class Carrier:
         stage had ended (`_wrap_factory_fixture`) and no later stage did: it is
         exited here, and what its exit raises logged, as no stage is left to
         fail for it.
-        """
-        try:
-            _log_exit_errors(_exit_context_managers(cls.active_context_managers))
-        finally:
-            if cls.client is not None:
-                cls.client.close()
 
-            for name, value in fresh_chain_state().items():
-                setattr(cls, name, value)
-            # maps[-1] is the pristine scenario context: saves only ever prepend layers.
-            cls.global_context = base_global_context(cls.global_context.maps[-1])
+        Then the chain's connections are closed, all together
+        (`connections.close_all`), and the client. Each step is guarded, so
+        one that fails leaves the rest, and the state's reset, to run: an
+        error is logged, and an interrupt re-raised once all is done.
+        """
+        interrupts: list[BaseException] = []
+
+        def guarded(what: str, action: Callable[[], object]) -> None:
+            try:
+                action()
+            except _INTERRUPTS as e:
+                interrupts.append(e)
+            except BaseException as e:
+                logger.error("%s at the end of the chain failed: %s", what, _describe_exception(e))
+
+        guarded("Exiting the context managers", lambda: _log_exit_errors(_exit_context_managers(cls.active_context_managers)))
+        guarded("Closing the connections", cls.connections.close_all)
+        if (client := cls.client) is not None:
+            guarded("Closing the HTTP client", client.close)
+
+        for name, value in fresh_chain_state().items():
+            setattr(cls, name, value)
+        # maps[-1] is the pristine scenario context: saves only ever prepend layers.
+        cls.global_context = base_global_context(cls.global_context.maps[-1])
+        if interrupts:
+            raise interrupts[0]
 
 
 def _context_dump(data: Mapping[str, Any]) -> str:

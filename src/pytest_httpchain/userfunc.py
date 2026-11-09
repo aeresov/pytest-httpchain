@@ -1,4 +1,5 @@
-"""Importing and invoking user functions named ``"module.submodule:func"``.
+"""Importing and invoking user functions named ``"module.submodule:func"``,
+and importing connection adapter classes, named the same way.
 
 Failures raise `UserFunctionError` with the cause appended to the message, not
 just chained: consumers render only the message text (stage failures use
@@ -6,6 +7,7 @@ just chained: consumers render only the message text (stage failures use
 """
 
 import importlib
+import inspect
 from collections.abc import Callable
 from typing import Any
 
@@ -56,6 +58,33 @@ def import_function(name: str, *, quoted: bool = True) -> Callable[..., Any]:
     return func
 
 
+def import_adapter(name: str) -> type:
+    """Import a connection's ``"module.path:ClassName"`` adapter class.
+
+    The user-function grammar and import, in an adapter's words: a name that
+    is no class (a function, an instance) is refused here, before the plugin
+    calls it with the connection's ``params``.
+    """
+    try:
+        module_path, class_name = parse_user_function_name(name, kind="adapter")
+    except ValueError as e:
+        raise UserFunctionError(str(e)) from None
+
+    try:
+        module = importlib.import_module(module_path)
+    except Exception as e:
+        raise UserFunctionError(f"Failed to import module '{module_path}': {e}") from e
+
+    try:
+        adapter = getattr(module, class_name)
+    except AttributeError:
+        raise UserFunctionError(f"Adapter '{class_name}' not found in module '{module_path}'") from None
+    if not inspect.isclass(adapter):
+        raise UserFunctionError(f"'{module_path}:{class_name}' is not a class: an adapter is a class, built with the connection's params")
+
+    return adapter
+
+
 def call_function(name: str, /, *args, **kwargs) -> Any:
     """Import and call a user function."""
     func = import_function(name)
@@ -100,7 +129,7 @@ def call_user_function(func_call: UserFunctionCall, **extra_kwargs: Any) -> obje
     """Import and call a user function described by a model.
 
     Declared kwargs merge under ``extra_kwargs``, which carries the ``response``
-    for verify/save functions.
+    for verify/save functions (a connection stage's ``message``).
     """
     name, kwargs = call_target(func_call)
     return call_function(name, **{**kwargs, **extra_kwargs})
@@ -110,6 +139,7 @@ __all__ = [
     "NAME_PATTERN",
     "call_target",
     "call_user_function",
+    "import_adapter",
     "import_function",
     "call_function",
     "wrap_function",

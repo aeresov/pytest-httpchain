@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import secrets
 import socket
@@ -630,6 +631,86 @@ def _tls_server_context(ca, *, require_client_cert: bool) -> ssl.SSLContext:
         context.verify_mode = ssl.CERT_REQUIRED
         context.load_verify_locations(cafile=HTTPS_CA_BUNDLE)
     return context
+
+
+# The environment variable `line_json_server` exports its port in.
+LINE_JSON_PORT_ENV = "HTTPCHAIN_EXAMPLE_LINE_JSON_PORT"
+
+
+def _line_json_answer(message: dict) -> dict:
+    """What the newline-JSON server answers a message with: a pong for a
+    ping, a bye for a bye (and it hangs up), an echo for anything else."""
+    match message.get("op"):
+        case "ping":
+            return {"op": "pong", "id": message.get("id"), "time": 1700000000}
+        case "bye":
+            return {"op": "bye"}
+        case _:
+            return {"echo": message}
+
+
+def _line_json_client(conn: socket.socket) -> None:
+    """Serve one connection: greet it, then answer each line until a bye or EOF."""
+    with conn, conn.makefile("rb") as lines:
+        try:
+            conn.sendall(b'{"greeting": "hello"}\n')
+            for line in lines:
+                message = json.loads(line)
+                conn.sendall(json.dumps(_line_json_answer(message)).encode() + b"\n")
+                if message.get("op") == "bye":
+                    break
+        except OSError:
+            # The client went away, or teardown shut the socket.
+            pass
+
+
+@contextmanager
+def _serve_line_json():
+    """A newline-delimited JSON server over TCP, on an OS-assigned port of
+    127.0.0.1, for connection stages: stdlib only, a thread per connection."""
+    listener = socket.create_server(("127.0.0.1", 0))
+    clients: list[socket.socket] = []
+    threads: list[threading.Thread] = []
+
+    def accept() -> None:
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return
+            clients.append(conn)
+            thread = threading.Thread(target=_line_json_client, args=(conn,), name="examples-line-json-client", daemon=True)
+            threads.append(thread)
+            thread.start()
+
+    acceptor = threading.Thread(target=accept, name="examples-line-json-server", daemon=True)
+    acceptor.start()
+    try:
+        yield listener.getsockname()[1]
+    finally:
+        # Shut down, not just closed, so a thread blocked on it wakes.
+        for sock in (listener, *clients):
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            sock.close()
+        for thread in (acceptor, *threads):
+            thread.join(5)
+
+
+@pytest.fixture(scope="class")
+def line_json_server():
+    """A newline-JSON TCP server for a whole scenario's connection stages
+    (``connections/line_json.py`` is its adapter), its port exported as
+    ``HTTPCHAIN_EXAMPLE_LINE_JSON_PORT``, so a connection's params read it
+    as a real suite's would: ``"port": "{{ env('HTTPCHAIN_EXAMPLE_LINE_JSON_PORT') }}"``.
+    A scenario asks for it with ``usefixtures('line_json_server')``. It greets
+    each connection with ``{"greeting": "hello"}``, answers a ``ping`` with a
+    ``pong`` of the same ``id``, a ``bye`` with a ``bye``, then hangs up, and
+    echoes anything else."""
+    with _serve_line_json() as port, _exported(LINE_JSON_PORT_ENV, str(port)):
+        yield port
 
 
 @pytest.fixture

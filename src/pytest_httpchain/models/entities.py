@@ -9,7 +9,7 @@ value.
 
 import re
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http import HTTPMethod, HTTPStatus
@@ -1085,10 +1085,32 @@ def validate_rendered_verify(declared: Verify, value: Any) -> Verify:
     JSON Schema fragment) would be checked as that matcher, and could pass where
     the objects differ. So what was declared decides: a value stays a value
     (`_DeclaredValue`) and is compared by equality, whatever it rendered to."""
-    values = {expression for expression, expected in declared.jmespath.items() if not isinstance(expected, JMESPathMatcher)}
-    if values and isinstance(value, dict) and isinstance(expectations := value.get("jmespath"), dict):
-        value = {**value, "jmespath": {expression: _DeclaredValue(expected) if expression in values else expected for expression, expected in expectations.items()}}
+    if isinstance(value, dict) and isinstance(expectations := value.get("jmespath"), dict):
+        value = {**value, "jmespath": _kept_as_declared(declared.jmespath, expectations)}
     return Verify.model_validate(value, context=RENDERED)
+
+
+def _kept_as_declared(declared: Mapping[str, Any], rendered: dict[str, Any]) -> dict[str, Any]:
+    """``rendered``, expectations declared as ``declared`` with their templates
+    rendered, each value the scenario declared as a value marked as one
+    (`_DeclaredValue`), whatever it rendered to: only an object the scenario
+    writes is a matcher."""
+    values = {expression for expression, expected in declared.items() if not isinstance(expected, JMESPathMatcher)}
+    if not values:
+        return rendered
+    return {expression: _DeclaredValue(expected) if expression in values else expected for expression, expected in rendered.items()}
+
+
+_RENDERED_EXPECTATIONS: TypeAdapter[dict[str, Any]] = TypeAdapter(dict[JMESPathKey, JMESPathExpectation], config=ConfigDict(hide_input_in_errors=True, title="match"))
+
+
+def validate_rendered_expectations(declared: Mapping[str, Any], value: dict[str, Any]) -> dict[str, Any]:
+    """``verify.jmespath``-style expectations once their templates rendered
+    (a connection's ``expect.match`` object): validated again, each keeping
+    the kind it was declared as, as `validate_rendered_verify` keeps a verify
+    step's. A value stays a value, even one that rendered to an object with
+    a matcher's keys."""
+    return _RENDERED_EXPECTATIONS.validate_python(_kept_as_declared(declared, value), context=RENDERED)
 
 
 class SaveStep(StrictModel):

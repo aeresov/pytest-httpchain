@@ -7,6 +7,7 @@ round trip itself is the integration suite's.
 
 import contextvars
 import json
+import logging
 import math
 import re
 import ssl
@@ -41,6 +42,7 @@ from pytest_httpchain.carrier import (
     fresh_chain_state,
     fresh_scenario_state,
 )
+from pytest_httpchain.connections import Connections
 from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.models import (
     AuthCredentials,
@@ -67,7 +69,9 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
 from pytest_httpchain.request_builder import build_client_kwargs
+from pytest_httpchain.scoping import base_global_context
 from pytest_httpchain.templates import TemplatesError, walk
+from pytest_httpchain.utils import process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
 from tests.unit.models.helpers import make_stage
 
@@ -3904,3 +3908,384 @@ class TestScenarioRerunReset:
         cls.execute_stage(stage, {})
         assert cls.client is not first_client
         assert cls.global_context["v"] == 1
+
+
+class TestConnectionStages:
+    """A connection stage end to end in the carrier, on an in-process adapter
+    (`tests.unit.connections_test_helpers`): the step's order, what the
+    response steps see, retry, close, and the lifecycle rules. The sessions'
+    own waits are test_connections.py's."""
+
+    ADAPTER = "tests.unit.connections_test_helpers:FakeAdapter"
+
+    @classmethod
+    def _carrier(
+        cls, stages: list[dict], *, adapter: str | None = None, fixtures: list[str] | None = None, params: dict | None = None, **scenario_fields
+    ) -> tuple[type[Carrier], Scenario]:
+        """A carrier for a scenario of ``stages`` on connection ``dev``, its
+        substitutions resolved and its HTTP stages answered 200."""
+        scenario = Scenario.model_validate(
+            {
+                "fixtures": fixtures or [],
+                "connections": {"dev": {"adapter": adapter or cls.ADAPTER, "params": params if params is not None else {"peer": "carrier"}, "connect_timeout": 2}},
+                "stages": stages,
+                **scenario_fields,
+            }
+        )
+        carrier = _make_carrier_subclass(
+            scenario=scenario,
+            global_context=base_global_context(process_substitutions(scenario.substitutions)),
+            client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200))),
+        )
+        return carrier, scenario
+
+    @staticmethod
+    def _run(carrier: type[Carrier], scenario: Scenario, fixtures: dict | None = None) -> list[str]:
+        """Run every stage as pytest would, a failure aborting the chain, then end it: each stage's outcome."""
+        outcomes: list[str] = []
+        try:
+            for stage in scenario.stages:
+                try:
+                    carrier.execute_stage(stage, fixtures or {})
+                    outcomes.append("passed")
+                except pytest.skip.Exception as e:
+                    outcomes.append(f"skipped: {e.msg}")
+                except pytest.fail.Exception as e:
+                    outcomes.append(f"failed: {e.msg}")
+                    carrier.aborted = True
+        finally:
+            carrier.teardown_class()
+        assert not [thread.name for thread in threading.enumerate() if thread.name.startswith("httpchain-connection-")]
+        return outcomes
+
+    def test_open_send_expect_and_the_response_steps(self):
+        from tests.unit import connections_test_helpers as helpers
+
+        peer = helpers.peer("carrier", greeting={"hello": "world"}, reply=lambda message: [{"op": "pong", "id": message["id"], "t": 7}], send_return={"seq": 3})
+        carrier, scenario = self._carrier(
+            [
+                {
+                    "name": "hello",
+                    "connection": {"name": "dev", "open": True},
+                    "response": [{"verify": {"jmespath": {"hello": "world"}, "expressions": ["{{ message.hello == 'world' }}"]}}],
+                },
+                {
+                    "name": "ping",
+                    "connection": {"name": "dev", "send": {"op": "ping", "id": "{{ next_id }}"}, "expect": {"match": {"op": "pong", "id": "{{ next_id }}"}, "timeout": 2}},
+                    "response": [
+                        {"save": {"jmespath": {"t": "t"}}},
+                        {
+                            "verify": {
+                                "expressions": ["{{ sent.seq == 3 }}", "{{ message.op == 'pong' and t == 7 }}"],
+                                "user_functions": ["tests.unit.connections_test_helpers:is_pong"],
+                            }
+                        },
+                    ],
+                },
+                {"name": "later", "request": {"url": "http://mock/ok"}, "response": [{"verify": {"expressions": ["{{ t == 7 }}"]}}]},
+            ],
+            substitutions=[{"vars": {"next_id": 5}}],
+        )
+        snapshots = []
+        original = carrier.execute_stage.__func__
+
+        def recording(cls, stage, fixtures):
+            try:
+                original(cls, stage, fixtures)
+            finally:
+                snapshots.append(cls.last_connection_exchange)
+
+        carrier.execute_stage = classmethod(recording)  # ty: ignore[invalid-assignment]
+        assert self._run(carrier, scenario) == ["passed", "passed", "passed"]
+        assert peer.sent == [{"op": "ping", "id": 5}]
+        hello, ping, later = snapshots
+        assert hello is not None
+        assert hello.generation == 1
+        assert hello.result is None
+        assert ping is not None
+        assert ping.taken is not None
+        assert ping.taken.message == {"op": "pong", "id": 5, "t": 7}
+        assert (ping.sent, ping.sent_return, ping.result, ping.timeout) == ({"op": "ping", "id": 5}, {"seq": 3}, "taken", 2.0)
+        assert later is None, "an HTTP stage reports no connection exchange"
+
+    def test_first_stage_naming_the_connection_opens_it(self):
+        from tests.unit import connections_test_helpers as helpers
+
+        peer = helpers.peer("carrier", reply=lambda message: [message])
+        carrier, scenario = self._carrier([{"name": "echo", "connection": {"name": "dev", "send": {"n": 1}, "expect": {}}, "response": [{"verify": {"jmespath": {"n": 1}}}]}])
+        assert self._run(carrier, scenario) == ["passed"]
+        assert peer.connects == 1
+
+    def test_retry_sends_and_expects_anew(self, monkeypatch):
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr(carrier_module, "_wait_to_retry", lambda seconds, cancel: True)
+        peer = helpers.peer("carrier", reply=lambda message: [{"attempt": len(peer.sent)}])
+        carrier, scenario = self._carrier(
+            [
+                {
+                    "name": "poll",
+                    "retry": {"attempts": 3, "delay": 0, "on": "verify"},
+                    "connection": {"name": "dev", "send": {"op": "status"}, "expect": {"timeout": 1}},
+                    "response": [{"verify": {"jmespath": {"attempt": 2}}}],
+                }
+            ]
+        )
+        assert self._run(carrier, scenario) == ["passed"]
+        assert len(peer.sent) == 2
+
+    def test_expect_timeout_retried_and_counted(self, monkeypatch):
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr(carrier_module, "_wait_to_retry", lambda seconds, cancel: True)
+        monkeypatch.setattr("pytest_httpchain.connections.LATE_WINDOW", 0)
+        peer = helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [
+                {
+                    "name": "wait",
+                    "retry": {"attempts": 2, "delay": 0},
+                    "connection": {"name": "dev", "send": {"op": "x"}, "expect": {"timeout": 0.05}},
+                    "response": [{"verify": {"jmespath": {"a": 1}}}],
+                }
+            ]
+        )
+        [outcome] = self._run(carrier, scenario)
+        assert outcome == "failed: Stage 'wait': no message on connection 'dev' matched any message within 0.05 s (0 messages arrived after the send) (after 2 attempts)"
+        assert len(peer.sent) == 2
+
+    def test_connect_oserror_is_retried_on_request(self, monkeypatch):
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr(carrier_module, "_wait_to_retry", lambda seconds, cancel: True)
+        helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [
+                {
+                    "name": "reconnect",
+                    "retry": {"attempts": 3, "delay": 0, "on": "request"},
+                    "connection": {"name": "dev", "open": True},
+                    "response": [{"verify": {"jmespath": {"ready": True}}}],
+                }
+            ],
+            adapter="tests.unit.connections_test_helpers:RetryableAdapter",
+        )
+        assert self._run(carrier, scenario) == ["passed"]
+
+    def test_close_runs_whatever_the_outcome(self):
+        from tests.unit import connections_test_helpers as helpers
+
+        peer = helpers.peer("carrier", greeting={"ok": False})
+        carrier, scenario = self._carrier([{"name": "check", "connection": {"name": "dev", "open": True, "close": True}, "response": [{"verify": {"jmespath": {"ok": True}}}]}])
+        [outcome] = self._run(carrier, scenario)
+        assert outcome.startswith("failed: JMESPath 'ok' doesn't match")
+        assert peer.closes == 1
+
+    def test_close_error_fails_a_passing_stage_and_commits_no_saves(self):
+        from tests.unit import connections_test_helpers as helpers
+
+        helpers.peer("carrier", greeting={"id": 1}, close_error=RuntimeError("busy"))
+        carrier, scenario = self._carrier([{"name": "bye", "connection": {"name": "dev", "open": True, "close": True}, "response": [{"save": {"jmespath": {"id": "id"}}}]}])
+        stage = scenario.stages[0]
+        try:
+            with pytest.raises(pytest.fail.Exception, match=r"^Closing connection 'dev' failed: RuntimeError: busy$"):
+                carrier.execute_stage(stage, {})
+            assert "id" not in carrier.global_context
+        finally:
+            carrier.teardown_class()
+
+    def test_closed_connection_is_not_open_and_never_retried(self, monkeypatch):
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr(carrier_module, "_wait_to_retry", lambda seconds, cancel: True)
+        peer = helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [
+                {"name": "bye", "connection": {"name": "dev", "send": {"op": "bye"}, "close": True}},
+                {"name": "status", "retry": {"attempts": 3, "on": "request"}, "connection": {"name": "dev", "send": {"op": "status"}}},
+                {"name": "again", "always_run": True, "connection": {"name": "dev", "open": True, "close": True}},
+            ]
+        )
+        assert self._run(carrier, scenario) == [
+            "passed",
+            "failed: Stage 'status': connection 'dev' is not open (closed by stage 'bye'); set \"open\": true to connect again",
+            "skipped: Flow aborted, and connection 'dev' is not open",
+        ]
+        assert peer.sent == [{"op": "bye"}]
+        assert peer.connects == 1, "an always_run stage after an abort never connects"
+
+    def test_open_true_connects_again(self):
+        from tests.unit import connections_test_helpers as helpers
+
+        peer = helpers.peer("carrier", greeting={"hello": 1})
+        carrier, scenario = self._carrier(
+            [
+                {"name": "bye", "connection": {"name": "dev", "open": True, "close": True}},
+                {"name": "back", "connection": {"name": "dev", "open": True}, "response": [{"verify": {"jmespath": {"hello": 1}}}]},
+            ]
+        )
+        assert self._run(carrier, scenario) == ["passed", "passed"]
+        assert peer.connects == 2
+
+    def test_always_run_after_abort_uses_an_open_connection(self):
+        from tests.unit import connections_test_helpers as helpers
+
+        peer = helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [
+                {"name": "open", "connection": {"name": "dev", "open": True}},
+                {"name": "fails", "request": {"url": "http://mock/ok"}, "response": [{"verify": {"status": 500}}]},
+                {"name": "farewell", "always_run": True, "connection": {"name": "dev", "send": {"op": "bye"}}},
+            ]
+        )
+        outcomes = self._run(carrier, scenario)
+        assert outcomes[0] == outcomes[2] == "passed"
+        assert peer.sent == [{"op": "bye"}]
+
+    def test_sending_on_a_connection_the_other_side_ended_fails(self):
+        from tests.unit import connections_test_helpers as helpers
+
+        peer = helpers.peer("carrier")
+        carrier, scenario = self._carrier([{"name": "open", "connection": {"name": "dev", "open": True}}, {"name": "send", "connection": {"name": "dev", "send": {"x": 1}}}])
+        stage_open, stage_send = scenario.stages
+        try:
+            carrier.execute_stage(stage_open, {})
+            peer.end(ConnectionResetError("reset"))
+            session = carrier.connections.session("dev")
+            assert session is not None
+            deadline = time.monotonic() + 2
+            while session.end is None and time.monotonic() < deadline:
+                time.sleep(0.005)
+            with pytest.raises(pytest.fail.Exception, match=r"connection 'dev' is not open \(failed: ConnectionResetError: reset\)"):
+                carrier.execute_stage(stage_send, {})
+        finally:
+            carrier.teardown_class()
+
+    def test_params_read_scenario_names_and_saves_never_the_stage_own(self):
+        from tests.unit import connections_test_helpers as helpers
+
+        helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [{"name": "open", "fixtures": ["stage_fx"], "connection": {"name": "dev", "open": True}}],
+            params={"peer": "carrier", "token": "{{ stage_fx }}"},
+        )
+        [outcome] = self._run(carrier, scenario, {"stage_fx": "stage value"})
+        assert outcome.startswith("failed: Stage 'open': connection 'dev' params did not render:")
+        assert "stage_fx" in outcome
+
+        peer = helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [{"name": "open", "connection": {"name": "dev", "open": True}}],
+            fixtures=["scenario_fx"],
+            params={"peer": "carrier", "token": "{{ scenario_fx }}-{{ base }}"},
+            substitutions=[{"vars": {"base": "b"}}],
+        )
+        assert self._run(carrier, scenario, {"scenario_fx": "f"}) == ["passed"]
+        assert peer.adapters[0].params == {"token": "f-b"}
+
+    def test_params_refuse_a_function_scoped_fixture(self):
+        from tests.unit import connections_test_helpers as helpers
+
+        helpers.peer("carrier")
+        carrier, scenario = self._carrier([{"name": "open", "connection": {"name": "dev", "open": True}}], fixtures=["token"], params={"peer": "carrier", "token": "{{ token }}"})
+        carrier.fixture_scopes = {"token": "function"}
+        [outcome] = self._run(carrier, scenario, {"token": "t"})
+        assert outcome == (
+            "failed: Stage 'open': connection 'dev' params read fixture 'token', which is function-scoped: "
+            "the connection outlives the stage that opens it, so a fixture its params read must be class-scoped or wider"
+        )
+        carrier, scenario = self._carrier([{"name": "open", "connection": {"name": "dev", "open": True}}], fixtures=["token"], params={"peer": "carrier", "token": "{{ token }}"})
+        carrier.fixture_scopes = {"token": "class"}
+        assert self._run(carrier, scenario, {"token": "t"}) == ["passed"]
+
+    def test_undeclared_connection_fails_the_stage(self):
+        carrier, scenario = self._carrier([{"name": "s", "connection": {"name": "nope", "open": True}}])
+        assert self._run(carrier, scenario) == ["failed: Stage 's': connection 'nope' is not declared in the scenario's connections"]
+
+    def test_parallel_is_refused(self):
+        carrier, scenario = self._carrier([{"name": "s", "parallel": {"repeat": 2}, "connection": {"name": "dev", "open": True}}])
+        assert self._run(carrier, scenario) == ["failed: Stage 's': parallel is not supported on a connection stage"]
+
+    def test_absent_expect_binds_no_message(self):
+        from tests.unit import connections_test_helpers as helpers
+
+        helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [
+                {
+                    "name": "quiet",
+                    "connection": {"name": "dev", "expect": {"match": "op == 'push'", "absent": True, "timeout": 0.05}},
+                    "response": [{"verify": {"jmespath": {"op": "x"}}}],
+                }
+            ]
+        )
+        [outcome] = self._run(carrier, scenario)
+        assert outcome == "failed: Cannot check verify.jmespath: the stage took no message (it has no expect, or an absent one, and does not open)"
+
+    def test_match_object_value_stays_a_value_after_rendering(self):
+        """A value declared as a template compares by equality, even when it
+        renders to an object with a matcher's keys."""
+        from tests.unit import connections_test_helpers as helpers
+
+        peer = helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [
+                {"name": "open", "connection": {"name": "dev", "open": True}},
+                {"name": "take", "connection": {"name": "dev", "expect": {"match": {"meta": "{{ shape }}"}, "timeout": 2}}, "response": [{"verify": {"jmespath": {"n": 2}}}]},
+            ],
+            substitutions=[{"vars": {"shape": {"type": "object"}}}],
+        )
+        stage_open, stage_take = scenario.stages
+        try:
+            carrier.execute_stage(stage_open, {})
+            peer.push({"meta": {"a": 1}, "n": 1}, {"meta": {"type": "object"}, "n": 2})
+            carrier.execute_stage(stage_take, {})
+        finally:
+            carrier.teardown_class()
+
+    def test_unusable_match_operand_fails_at_once_never_retried(self, monkeypatch):
+        from tests.unit import connections_test_helpers as helpers
+
+        monkeypatch.setattr(carrier_module, "_wait_to_retry", lambda seconds, cancel: True)
+        peer = helpers.peer("carrier", reply=lambda message: [{"n": 1}])
+        carrier, scenario = self._carrier(
+            [{"name": "s", "retry": {"attempts": 3}, "connection": {"name": "dev", "send": {}, "expect": {"match": {"n": {"gt": "{{ limit }}"}}, "timeout": 30}}}],
+            # Rendered, the operand is template text, which the field's template branch takes.
+            substitutions=[{"vars": {"limit": "\\{{ x }}"}}],
+        )
+        started = time.monotonic()
+        [outcome] = self._run(carrier, scenario)
+        assert time.monotonic() - started < 5
+        assert outcome.startswith("failed: expect.match: JMESPath 'n': gt must resolve to a number")
+        assert len(peer.sent) == 1
+
+    def test_reserved_name_saved_dynamically_is_warned_of(self):
+        from tests.unit import connections_test_helpers as helpers
+
+        helpers.peer("carrier", greeting={"a": 1})
+        carrier, scenario = self._carrier(
+            [{"name": "s", "connection": {"name": "dev", "open": True}, "response": [{"save": {"user_functions": ["tests.unit.connections_test_helpers:saves_message"]}}]}]
+        )
+        with pytest.warns(ScenarioValidationWarning, match="reserved name 'message': inside response steps it is shadowed by the message the stage took"):
+            assert self._run(carrier, scenario) == ["passed"]
+
+    def test_end_chain_resets_state_when_client_close_raises(self, caplog):
+        from tests.unit import connections_test_helpers as helpers
+
+        peer = helpers.peer("carrier")
+        carrier, scenario = self._carrier([{"name": "open", "connection": {"name": "dev", "open": True}}])
+        carrier.execute_stage(scenario.stages[0], {})
+
+        class BrokenClient:
+            def close(self):
+                raise RuntimeError("client close failed")
+
+        carrier.client = BrokenClient()  # ty: ignore[invalid-assignment]
+        carrier.aborted = True
+        with caplog.at_level(logging.ERROR, logger="pytest_httpchain.carrier"):
+            carrier._end_chain()
+        assert "Closing the HTTP client at the end of the chain failed: RuntimeError: client close failed" in caplog.text
+        assert carrier.client is None
+        assert not carrier.aborted
+        assert peer.closes == 1
+        assert carrier.connections == Connections()

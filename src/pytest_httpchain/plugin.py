@@ -13,7 +13,7 @@ import re
 import sys
 import types
 import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -495,6 +495,19 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     that chain, not be reset away when its second stage enters it."""
     if (cls := _carrier_class(item)) is not None:
         cls.begin_chain(item.stash.get(_CHAIN_KEY, ()))
+        cls.fixture_scopes = _fixture_scopes(item)
+
+
+def _fixture_scopes(item: pytest.Item) -> dict[str, str]:
+    """Each fixture ``item`` requests, by name, with the scope of the
+    definition it gets (the last, the closest): a connection's params must
+    read none narrower than the class (`Carrier._open_connection`). pytest
+    keeps them on the item's fixture info, which is not public API: without
+    it, no scope is known and nothing is checked."""
+    definitions = getattr(getattr(item, "_fixtureinfo", None), "name2fixturedefs", None)
+    if not isinstance(definitions, Mapping):
+        return {}
+    return {name: str(defs[-1].scope) for name, defs in definitions.items() if defs}
 
 
 @pytest.hookimpl(optionalhook=True)

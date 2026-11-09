@@ -1,0 +1,36 @@
+{
+    "description": "A connection stage opens a newline-JSON connection, sends a ping and takes its pong, then says bye and closes it",
+    "marks": ["usefixtures('line_json_server')"],
+    "connections": {
+        "device": {
+            "adapter": "line_json:LineJsonAdapter",
+            "params": { "host": "127.0.0.1", "port": "{{ env('HTTPCHAIN_EXAMPLE_LINE_JSON_PORT') }}" },
+            "connect_timeout": 5
+        }
+    },
+    "stages": [
+        {
+            "name": "hello",
+            "description": "open: true, so the stage's message is what connect() returned, the greeting",
+            "connection": { "name": "device", "open": true },
+            "response": [{ "verify": { "jmespath": { "greeting": "hello" } } }]
+        },
+        {
+            "name": "ping",
+            "connection": {
+                "name": "device",
+                "send": { "op": "ping", "id": 1 },
+                "expect": { "match": { "op": "pong", "id": 1 }, "timeout": 5 }
+            },
+            "response": [
+                { "save": { "jmespath": { "server_time": "time" } } },
+                { "verify": { "expressions": ["{{ message.op == 'pong' and server_time == 1700000000 }}"] } }
+            ]
+        },
+        {
+            "name": "bye",
+            "connection": { "name": "device", "send": { "op": "bye" }, "expect": { "match": "op == 'bye'", "timeout": 5 }, "close": true },
+            "response": [{ "verify": { "jmespath": { "op": "bye" } } }]
+        }
+    ]
+}
