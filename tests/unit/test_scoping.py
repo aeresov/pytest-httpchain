@@ -714,15 +714,22 @@ class TestConnectionLifecycles:
         assert lifecycle.not_open == {}
         assert lifecycle.sessions == {2: {1}}
 
-    @pytest.mark.parametrize("idle", [{"close": True}, {"drain": True}, {"drain": True, "close": True}], ids=["close", "drain", "drain-close"])
-    def test_a_stage_that_only_drains_or_closes_opens_nothing(self, idle):
-        """The runtime connects for a stage that sends or waits: one that only
-        drains or closes a connection never opened has nothing to do to it,
-        and the next stage that uses it is the one that opens it."""
+    @pytest.mark.parametrize("idle", [{"close": True}, {"drain": True, "close": True}], ids=["close", "drain-close"])
+    def test_a_stage_that_would_only_close_it_again_opens_nothing(self, idle):
+        """The runtime does not connect for a stage that would only close the
+        connection again: one never opened has nothing to close, and the next
+        stage that names it is the one that opens it."""
         lifecycle = _lifecycle(_on(**idle), _on(expect={}))
         assert lifecycle.openers == (1,)
         assert lifecycle.not_open == {}
         assert lifecycle.sessions == {}
+
+    def test_a_stage_that_only_drains_opens_it(self):
+        """It leaves the connection open and listening: a push an HTTP stage
+        after it causes is queued for the stage that expects it."""
+        lifecycle = _lifecycle(_on(drain=True), _on(expect={}))
+        assert lifecycle.openers == (0,)
+        assert lifecycle.sessions == {1: {0}}
 
     def test_a_skippable_opener_leaves_the_next_stage_an_opener(self):
         lifecycle = _lifecycle({**_on(send={"a": 1}), "skip_if": "{{ x }}"}, _on(expect={}))

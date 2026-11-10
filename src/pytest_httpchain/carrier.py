@@ -1026,13 +1026,15 @@ def _rendered_to_none(where: str, vanished: _Vanished, relocate: _Relocation | N
     return f"{message}; to compare with null, write null" if vanished.compared else message
 
 
-def _rendered_match(declared: dict[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
+def _rendered_match(declared: dict[str, Any], context: Mapping[str, Any], redaction: Redaction = DEFAULT_REDACTION) -> dict[str, Any]:
     """A connection's ``expect.match`` object with its values' templates
     rendered, all with one walker, and validated again
     (`validate_rendered_expectations`), so a value declared as a value stays
     one, whatever it rendered to. A matcher operand a template rendered to
     None is refused, as `_render_declared` refuses a field's. Each failure is
-    the scenario's: no attempt retries it."""
+    the scenario's: no attempt retries it. A value that does not validate is
+    quoted by its error, so the error is shown through ``redaction``: an
+    operand a template rendered from a secret, on a listed key, is hidden."""
     if not needs_rendering(declared):
         return declared
     dumped = {expression: expected.model_dump(mode="python", exclude_unset=True) if isinstance(expected, BaseModel) else expected for expression, expected in declared.items()}
@@ -1042,7 +1044,7 @@ def _rendered_match(declared: dict[str, Any], context: Mapping[str, Any]) -> dic
     try:
         return validate_rendered_expectations(declared, substituted)
     except ValidationError as e:
-        raise VerificationError(str(e), retryable=False) from e
+        raise VerificationError(redaction.message_text(str(e), *_listed_expectations(substituted, redaction)), retryable=False) from e
 
 
 # What a connection stage binds over its response steps, by what shadows a
@@ -1050,7 +1052,7 @@ def _rendered_match(declared: dict[str, Any], context: Mapping[str, Any]) -> dic
 _CONNECTION_RESERVED = {name: f"{what} (HTTPCHAIN045)" for name, what in CONNECTION_BINDINGS.items()}
 
 
-def _message_miss(match: Any, rendered: Mapping[str, Any] | None, redaction: Redaction, listed: Sequence[Mapping[str, Any]], message: dict[str, Any]) -> Miss | None:
+def _message_miss(match: Any, rendered: Mapping[str, Any] | None, redaction: Redaction, listed: Sequence[Any], message: dict[str, Any]) -> Miss | None:
     """The predicate a connection stage's wait takes (`connections.MatchPredicate`):
     `response_steps.message_matches`' verdict on ``message``.
 
@@ -1066,16 +1068,21 @@ def _message_miss(match: Any, rendered: Mapping[str, Any] | None, redaction: Red
     return Miss(redaction.message_text(verdict.reason, message, *listed), verdict.error)
 
 
-def _listed_expectations(rendered: Mapping[str, Any] | None, redaction: Redaction) -> list[dict[str, Any]]:
-    """Each rendered expectation whose JMESPath expression reads a key
-    ``redaction`` lists, as ``{that key: what it expects}``, for
-    `Redaction.message_text` to hide where a miss quotes it: a value as it
-    is, a matcher as its operands (``{"eq": "s3cret"}``), since a secret
-    rendered into one is as much the key's value."""
-    listed: list[dict[str, Any]] = []
+def _listed_expectations(rendered: Mapping[str, Any] | None, redaction: Redaction) -> list[Any]:
+    """What ``rendered`` expects, as `Redaction.message_text` takes messages,
+    to hide where a miss quotes it: each expectation whose JMESPath
+    expression reads a key ``redaction`` lists, as ``{that key: what it
+    expects}`` (a value as it is, a matcher as its operands, ``{"eq":
+    "s3cret"}``: a secret rendered into one is as much the key's value), and
+    every expected object or array as it is, for a listed key inside it
+    (``{"auth": {"eq": {"token": "s3cret"}}}``)."""
+    listed: list[Any] = []
     if not rendered or not redaction.message_keys:
         return listed
     for expression, expected in rendered.items():
+        dumped = expected.model_dump(mode="python", exclude_unset=True) if isinstance(expected, BaseModel) else expected
+        if isinstance(dumped, dict | list):
+            listed.append(dumped)
         try:
             pending: list[Any] = [jmespath.compile(expression).parsed]
         except ValueError:  # a JMESPathError: validated, so never expected
@@ -1083,7 +1090,7 @@ def _listed_expectations(rendered: Mapping[str, Any] | None, redaction: Redactio
         while pending:
             node = pending.pop()
             if node.get("type") == "field" and isinstance(name := node.get("value"), str) and redaction.redacts_message_key(name):
-                listed.append({name: expected.model_dump(mode="python", exclude_unset=True) if isinstance(expected, BaseModel) else expected})
+                listed.append({name: dumped})
                 break
             pending.extend(child for child in node.get("children", ()) if isinstance(child, dict))
     return listed
@@ -1419,10 +1426,12 @@ class Carrier:
     # The record that snapshot was taken from: its last attempt's.
     _connection_record: ClassVar[ExchangeRecord | None] = None
     # Whether a passing stage's report sections are printed too (-rP, an
-    # xdist worker), which the plugin says for each item: a connection stage
-    # that passes then takes the full snapshot a failing one always does.
-    # Otherwise it copies nothing and does not call the adapter's
-    # debug_info(), for a section nobody reads.
+    # xdist worker, a stage marked xfail, which fails by passing), which the
+    # plugin says for each item: a connection stage that passes then takes
+    # the full snapshot a failing one always does. Otherwise it copies
+    # nothing and does not call the adapter's debug_info(), for a section
+    # nobody reads; a stage that fails after its attempt, or closes its
+    # connection, takes it in full then (`execute_stage`).
     snapshot_passed_exchanges: ClassVar[bool] = True
     # What a connection's params render against: the scenario's substitutions
     # and fixtures and the saves so far, never the stage's own names, since
@@ -1734,6 +1743,13 @@ class Carrier:
         if isinstance(outcome, _STAGE_FAILURE_EXCEPTIONS) and (record := cls._connection_record) is not None and (exchange := cls.last_connection_exchange) is not None:
             if late := record.late():
                 cls.last_connection_exchange = replace(exchange, late=late)
+        # A stage whose attempt passed took its snapshot light, for a section
+        # nobody reads. One that fails yet (an exit that raised) or still may
+        # (its close) is reported: its snapshot is taken in full now, the
+        # adapter's debug_info() asked before the close.
+        if (record := cls._connection_record) is not None and (exchange := cls.last_connection_exchange) is not None and not exchange.full:
+            if (exit_errors or closing is not None) and not isinstance(outcome, pytest.skip.Exception):
+                cls.last_connection_exchange = record.freeze()
         # With them, and as they do: a close that fails fails the stage, its
         # own failure first, and no saves commit.
         if closing is not None and not isinstance(outcome, pytest.skip.Exception):
@@ -2395,9 +2411,10 @@ class Carrier:
         the stage's, once its attempts are done: `execute_stage`).
 
         It opens the connection on ``open: true``, and at the first stage of
-        the chain that sends or waits on it while it was never opened: a
-        stage that only drains or closes one never opened has nothing to do
-        to it, and does not connect for that. One a stage closed, or whose
+        the chain that names it while it was never opened, unless that stage
+        would only close it again (``close`` without a send or an expect):
+        one never opened has nothing to close, and the stage does not
+        connect for that. One a stage closed, or whose
         reopening failed, is not open, and a stage that does not open it
         fails, as no attempt changes that; so does one that sends on a
         connection whose reader has ended. A reader that ended since this
@@ -2426,16 +2443,17 @@ class Carrier:
             bound: dict[str, Any] = {}
             subject = NO_MESSAGE
             session: Any = None
-            # Only a stage that sends or waits needs a connection never opened.
-            uses = step.send is not None or step.expect is not None
-            if step.open or (uses and cls.connections.never_opened(step.name)):
+            # A stage that would only close a connection never opened again
+            # does not connect for that.
+            only_closes = step.close and step.send is None and step.expect is None
+            if step.open or (not only_closes and cls.connections.never_opened(step.name)):
                 session, connected = cls._open_connection(stage, step.name, config)
                 record.opened, record.connected = True, connected
                 if step.open and step.expect is None:
                     subject = MessageSubject(connected)
                     bound[MESSAGE_META_NAME] = connected
             elif cls.connections.never_opened(step.name):
-                pass  # nothing to drain or close
+                pass  # nothing to close
             elif (why := cls.connections.not_open(step.name)) is not None:
                 raise not_open_failure(stage.name, step.name, why)
             else:
@@ -2547,7 +2565,7 @@ class Carrier:
         assert expect is not None, "only a step that expects waits"
         context = connection_step_context(iter_context, connection_bindings(**{name: bound[name] for name in (SENT_NAME,) if name in bound}))
         timeout = _setting_number("connection.expect.timeout", walk(expect.timeout, context) if isinstance(expect.timeout, str) else expect.timeout)
-        rendered = _rendered_match(expect.match, context) if isinstance(expect.match, dict) else None
+        rendered = _rendered_match(expect.match, context, cls.redaction) if isinstance(expect.match, dict) else None
         mode = "closed" if expect.closed else "absent" if expect.absent else "message"
         record.match, record.timeout, record.mode = expect.match, timeout, mode
         predicate = functools.partial(_message_miss, expect.match, rendered, cls.redaction, _listed_expectations(rendered, cls.redaction)) if expect.match is not None else None

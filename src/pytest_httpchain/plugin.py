@@ -496,7 +496,8 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     if (cls := _carrier_class(item)) is not None:
         cls.begin_chain(item.stash.get(_CHAIN_KEY, ()))
         cls.fixture_scopes = _fixture_scopes(item)
-        cls.snapshot_passed_exchanges = _passed_sections_shown(item.config)
+        # A stage marked xfail is reported failed when it passes (strict).
+        cls.snapshot_passed_exchanges = _passed_sections_shown(item.config) or item.get_closest_marker("xfail") is not None
 
 
 def _fixture_scopes(item: pytest.Item) -> dict[str, str]:

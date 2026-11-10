@@ -653,9 +653,11 @@ class TestConnectionExchange:
 
     def test_messages_dropped_unseen_during_the_wait_are_said(self):
         exchange = self._exchange(sent={"op": "x"}, match="n == `0`", timeout=1.0, mode="absent", waited=1.0, result="absent", unseen=3, dropped=5)
-        assert format_connection_exchange(exchange).endswith(
-            "Not considered: 0 messages queued before the send, 5 dropped by inbox_limit (3 of them during the wait, before it could look at them)"
-        )
+        text = format_connection_exchange(exchange)
+        assert text.endswith("Not considered: 0 messages queued before the send, 5 dropped by inbox_limit (3 of them before the wait could look at them)")
+        # The wait failed the stage: its result does not read as a pass.
+        assert "Result: no message it looked at matched, but 3 messages dropped before it could: it cannot tell" in text
+        assert "as expected" not in text
 
     def test_considered_list_is_capped_at_the_last_ones(self):
         considered = tuple(Arrival(seq, -1.0, {"n": seq}, Miss("no")) for seq in range(1, 26))
@@ -710,7 +712,8 @@ class TestConnectionExchange:
 
     def test_open_returning_nothing_and_no_session(self):
         assert format_connection_exchange(self._exchange(opened=True)).endswith("Opened: connect() returned nothing")
-        assert format_connection_exchange(ConnectionExchange("device", self.ADAPTER)) == f"Connection 'device' (adapter {self.ADAPTER}), no session"
+        # A stage that failed before it had a session, or only closes a connection never opened.
+        assert format_connection_exchange(ConnectionExchange("device", self.ADAPTER)) == f"Connection 'device' (adapter {self.ADAPTER}), not open"
 
     def test_reader_end_the_plugin_caused_is_not_shown(self):
         assert "Reader" not in format_connection_exchange(self._exchange(end=ReaderEnd(OSError("closed"), after_stop=True)))

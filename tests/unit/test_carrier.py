@@ -4096,6 +4096,78 @@ class TestConnectionStages:
         finally:
             carrier.teardown_class()
 
+    @pytest.mark.parametrize("failing", ["close", "exit"])
+    def test_a_stage_failed_after_its_attempt_passed_is_reported_in_full(self, failing):
+        """The attempt passes, so its snapshot is the light one, for a section
+        nobody reads; then the stage fails all the same (its close raises, a
+        context manager's exit does), and its report is printed: it has the
+        adapter's debug_info(), asked before the close, and copies."""
+        from tests.unit import connections_test_helpers as helpers
+
+        helpers.peer("carrier", reply=lambda message: [{"op": "pong"}], debug="buffer: 00ff", close_error=RuntimeError("busy") if failing == "close" else None)
+        carrier, scenario = self._carrier(
+            [{"name": "bye", "connection": {"name": "dev", "send": {"op": "ping"}, "expect": {"match": "op == 'pong'"}, "close": failing == "close"}}]
+        )
+        carrier.snapshot_passed_exchanges = False
+        if failing == "exit":
+
+            class Failing:
+                def __exit__(self, *exc_info):
+                    raise RuntimeError("rollback failed")
+
+            original = carrier._execute_connection_attempt.__func__
+
+            def entering(cls, stage, iter_context):
+                cls.active_context_managers.append(("transaction", Failing()))
+                return original(cls, stage, iter_context)
+
+            carrier._execute_connection_attempt = classmethod(entering)  # ty: ignore[invalid-assignment]
+        kept = self._recording(carrier)
+        [outcome] = self._run(carrier, scenario)
+        assert outcome.startswith("failed: ")
+        snapshot = kept[0][0]
+        assert (snapshot.full, snapshot.debug_info, snapshot.result) == (True, "buffer: 00ff", "taken")
+
+    def test_a_match_that_does_not_validate_once_rendered_hides_a_listed_keys_operand(self):
+        """The validation error quotes the operand a template rendered: on a
+        listed key that is the secret itself."""
+        from tests.unit import connections_test_helpers as helpers
+
+        helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [{"name": "bad", "connection": {"name": "dev", "send": {"op": "x"}, "expect": {"match": {"user.token": {"gt": "{{ secret }}"}}, "timeout": 1}}}],
+            substitutions=[{"vars": {"secret": "s3cret-VALUE"}}],
+        )
+        [failed] = self._run(carrier, scenario)
+        assert failed.startswith("failed: ")
+        assert "s3cret-VALUE" not in failed
+        assert "[REDACTED]" in failed
+
+    @pytest.mark.parametrize(
+        ("match", "reply"),
+        [
+            # A secret long enough for the reason to show it cut.
+            pytest.param({"user.token": "{{ secret * 20 }}"}, {"user": {"token": "wrong"}}, id="long-expected"),
+            pytest.param({"user.token": "short"}, {"user": {"token": "REPLY-s3cret-" * 20}}, id="long-actual"),
+            # A listed key inside an expected object, which no expression names.
+            pytest.param({"user": {"eq": {"token": "{{ secret }}", "name": "bob"}}}, {"user": {"token": "other", "name": "bob"}}, id="expected-object"),
+        ],
+    )
+    def test_a_miss_reason_hides_listed_values_however_they_are_shown(self, match, reply):
+        from tests.unit import connections_test_helpers as helpers
+
+        helpers.peer("carrier", reply=lambda message: [reply])
+        carrier, scenario = self._carrier(
+            [{"name": "miss", "connection": {"name": "dev", "send": {"op": "who"}, "expect": {"match": match, "timeout": 0.05}}}],
+            substitutions=[{"vars": {"secret": "s3cret-VALUE-"}}],
+        )
+        kept = self._recording(carrier)
+        [failed] = self._run(carrier, scenario)
+        [arrival] = kept[0][0].considered
+        for text in (failed, arrival.miss.reason):
+            assert "s3cret" not in text
+        assert "[REDACTED]" in arrival.miss.reason
+
     def test_closed_connection_is_not_open_and_never_retried(self, monkeypatch):
         from tests.unit import connections_test_helpers as helpers
 
@@ -4273,9 +4345,19 @@ class TestConnectionStages:
         assert self._run(carrier, scenario) == ["failed: Stage 'hello': connection 'dev' closed by the other side before the stage could send"]
         assert peer.sent == []
 
-    @pytest.mark.parametrize("idle", [{"close": True}, {"drain": True}, {"drain": True, "close": True}], ids=["close", "drain", "drain-close"])
-    def test_a_stage_that_only_drains_or_closes_never_connects(self, idle):
-        """A connection never opened has nothing to drain or close: the stage
+    def test_a_stage_that_only_drains_opens_the_connection(self):
+        """A drain leaves the connection open and listening, so the first
+        stage naming it opens it, as any stage that does not only close does."""
+        from tests.unit import connections_test_helpers as helpers
+
+        peer = helpers.peer("carrier")
+        carrier, scenario = self._carrier([{"name": "listen", "connection": {"name": "dev", "drain": True}}])
+        assert self._run(carrier, scenario) == ["passed"]
+        assert peer.connects == 1
+
+    @pytest.mark.parametrize("idle", [{"close": True}, {"drain": True, "close": True}], ids=["close", "drain-close"])
+    def test_a_stage_that_would_only_close_it_again_never_connects(self, idle):
+        """A connection never opened has nothing to close: the stage
         connected, handshake and all, only to close it again."""
         from tests.unit import connections_test_helpers as helpers
 
@@ -4420,7 +4502,7 @@ class TestConnectionStages:
             helpers.FakeAdapter.send = original
         assert outcome == (
             "failed: Stage 'quiet': cannot tell that no message on connection 'dev' matched \"n == `0`\" within 0.3 s: "
-            "4 messages that arrived meanwhile were dropped by the connection's inbox_limit before the stage could look at them. Raise connections.dev.inbox_limit."
+            "4 messages were dropped by the connection's inbox_limit before the stage could look at them. Raise connections.dev.inbox_limit."
         )
 
     @staticmethod

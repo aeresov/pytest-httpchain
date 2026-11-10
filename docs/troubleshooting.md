@@ -300,14 +300,16 @@ path: convert tuples and sets to lists, and dates, decimals or protocol
 objects to strings or numbers. A message `receive()` returns that is not one
 ends the connection, and the stage waiting on it fails saying so.
 
-### "failed and no stage saw it" at the End of a Run
+### "failed and no stage saw it" in the Log
 
 ```text
 WARNING  pytest_httpchain.connections: Connection 'device' (open 1) failed and no stage saw it: ConnectionResetError: [Errno 104] Connection reset by peer
 ```
 
-At the end of a scenario the plugin logs, as a warning, a connection whose
-reader failed after the last stage that used it. It is most often the other
+When a connection is closed (at the end of a scenario, by a stage's
+`close: true`, or by an `open: true` that reconnects), the plugin logs, as a
+warning, that its reader failed after the last stage that used it. At the end
+of a scenario it is most often the other
 side going first: a fixture that serves the peer and is torn down before the
 scenario's connections are closed, which happens after its class-scoped
 fixtures are torn down. Give such a fixture module scope or wider, or expect

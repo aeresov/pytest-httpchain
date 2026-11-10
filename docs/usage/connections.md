@@ -64,7 +64,7 @@ A stage sets at least one of these, and they run in this order: open, drain, sen
 
 ### Opening and closing
 
-The first stage of the chain that sends or waits on a connection opens it, so `open` is needed only to check the handshake result or to connect again. A stage that opens the connection this way takes no message from it: only `open: true` makes the result of `connect()` a message to check. A stage that only drains or closes a connection never opened has nothing to do to it, and does not connect for that.
+The first stage of the chain that names a connection opens it, so `open` is needed only to check the handshake result or to connect again. A stage that opens the connection this way takes no message from it: only `open: true` makes the result of `connect()` a message to check. The one exception is a stage that would only close it again (`close` without a `send` or an `expect`): a connection never opened has nothing to close, so the stage does not connect for that.
 
 Each open is a new session, with its own adapter instance, reader and queue: messages queued on the old one are discarded with it.
 
@@ -104,9 +104,9 @@ A message the match cannot be evaluated against (a `length()` of its null field)
 Stage 'ping': no message on connection 'device' matched {"op": "pong", "id": 1} within 2 s (3 messages arrived after the send)
 ```
 
-The failure names the first message the match could not be evaluated against, if any, and how many messages `inbox_limit` dropped during the wait before the stage could look at them. The [report](#reports) lists the messages, and for each one the first expectation it did not meet.
+The failure names the first message the match could not be evaluated against, if any, and how many messages `inbox_limit` dropped before the stage could look at them. The [report](#reports) lists the messages, and for each one the first expectation it did not meet.
 
-**Making sure something does not happen.** `absent: true` turns the wait around. It is how a test checks that a rejected call pushed nothing, or that an acknowledged command is not sent again. It passes at the deadline, and fails at once on the first message that matches, which no retry changes. It also fails when messages that arrived during the wait were dropped by `inbox_limit` before it could look at them, since one of them may have matched: raise the limit, or drain before the wait.
+**Making sure something does not happen.** `absent: true` turns the wait around. It is how a test checks that a rejected call pushed nothing, or that an acknowledged command is not sent again. It passes at the deadline, and fails at once on the first message that matches, which no retry changes. It also fails when `inbox_limit` dropped messages before it could look at them, since one of them may have matched. For a stage that sends, those are messages that arrived after its send; for one that does not, every message dropped since the connection was last drained or opened, as it looks at the whole queue. Raise the limit, or drain closer to the wait.
 
 ```json
 {"name": "flush", "connection": {"name": "spk1", "drain": true}},
@@ -153,7 +153,7 @@ HTTP-only settings have nothing to work on here and are refused on a connection 
 - **The connection ending** while the stage waits, or between its own `open` and its send, is a `request` failure, retried only on a stage with `open: true`, which connects again. A server that accepts a connection and hangs up while it is still starting is ridden out this way.
 - **Not retried:**
     - using a connection that is not open, without `open: true`, since no attempt can change that;
-    - an `absent` expect that saw its message;
+    - an `absent` expect that saw its message, or that could not look at every message (`inbox_limit` dropped some);
     - a `connect()` or `send()` result that is not a message, and an adapter that cannot be imported.
 - **Reconnect polling:** use `open: true` together with `retry`.
 
@@ -226,7 +226,7 @@ The plugin calls the adapter like this:
 - **`send(message)`** on the test's thread, with one rendered `send` object. Values may be bytes, so a binary protocol can carry raw fields. The message is a copy, the adapter's to change: writing a frame number into it changes nothing the next attempt sends. If it returns a dict, such as the frame header it assigned, the stage reads that as `sent`, for example `"match": {"reply_to": "{{ sent.seq }}"}`.
 - **`receive(timeout)`** on the connection's reader thread, over and over. It returns one decoded message as a dict, or `None` if nothing arrived within `timeout`. It must return within about `timeout`; the plugin passes 0.2 seconds. Frames the adapter deals with itself, such as heartbeats and automatic acknowledgements, should return `None` and are then not queued. To report a clean end of the connection, raise `EOFError`; any other exception it raises ends the connection as failed, with that exception.
 - **`close()`** when a stage closes the connection, before it is reopened, after a failed `connect()`, and when the scenario ends, including after a failure. It may run while `receive()` is still waiting, and it must make that `receive()` return. For a socket, `shutdown()` before `close()` does this.
-- **`debug_info()`** is optional. It returns text for failure reports, such as the bytes the adapter holds undecoded, or `None` when it has nothing to say, and may run while `receive()` does. It is cut at 4000 characters, and what it raises is shown in its place. It is called when a stage's attempt fails, and for a passing stage only when passing stages' sections are printed (`-rP`).
+- **`debug_info()`** is optional. It returns text for failure reports, such as the bytes the adapter holds undecoded, or `None` when it has nothing to say, and may run while `receive()` does. It is cut at 4000 characters, and what it raises is shown in its place. It is called when a stage's attempt fails or the stage fails after it, before a stage closes its connection (`close: true`), and for any other passing stage only when passing stages' sections are printed (`-rP`).
 
 **Threads.** `send()` runs on the test's thread at the same time as `receive()` runs on the reader's. If the adapter also writes from `receive()` or from threads of its own, which heartbeats and acknowledgements often do, it must guard every write with one lock, as `write_lock` does above. Otherwise two frames can interleave. `receive()` must also not change state that `send()` relies on: setting the socket timeout in `receive()` would apply to `sendall()` too, which is why the adapter above keeps the socket blocking and waits with `select`. An adapter that starts threads of its own stops them in `close()`.
 
@@ -246,7 +246,7 @@ Connections belong to the scenario's chain of stages. A class-scoped parametrize
 
 **After a failure.** The stages after a failing one are skipped as usual, but connections stay open, so an `always_run` stage can still send a farewell message. An `always_run` stage whose connection is not open at that point is skipped, with `Flow aborted, and connection 'device' is not open`: it never connects.
 
-**When the scenario ends.** Every connection is closed: the plugin stops its reader, calls `close()`, and waits up to 2 seconds in all for the readers to finish. No stage is left to fail, so what goes wrong is logged: a `close()` that raised, and a reader still running at the deadline, as errors; a connection whose reader failed after the last stage that used it, as a warning:
+**When the scenario ends.** Every connection is closed: the plugin stops its reader, calls `close()`, and waits up to 2 seconds in all for the readers to finish. No stage is left to fail, so what goes wrong is logged: a `close()` that raised, and a reader still running at the deadline, as errors; a connection whose reader failed after the last stage that used it, as a warning, which a stage that closes or reopens such a connection logs too:
 
 ```text
 Connection 'device' (open 1) failed and no stage saw it: ConnectionResetError: [Errno 104] Connection reset by peer
@@ -301,7 +301,7 @@ It shows:
 - the match as written (its templates, not their values), the timeout, and how long the stage waited;
 - how the wait ended, and the message taken, or the message an `absent` wait saw;
 - when nothing matched, the messages that were considered (the last 20), each with its arrival time and the first expectation it did not meet, and those that arrived within 0.2 seconds after the deadline of the attempt that failed the stage, marked as late and left queued;
-- how many queued messages were left out as older than the send, how many `inbox_limit` dropped, and how many of those during the wait, before it could look at them;
+- how many queued messages were left out as older than the send, how many `inbox_limit` dropped, and how many of those before the wait could look at them;
 - how the connection's reader ended, if it has;
 - the adapter's `debug_info()`, taken when the stage's attempt ended, before any close, unless it returned `None`.
 

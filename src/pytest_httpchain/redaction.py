@@ -175,20 +175,29 @@ class Redaction:
         replaced where the line quotes it, as JSON or ``repr()`` write a
         string (``"s3cret"``, ``'s3cret'``) and as a report writes bytes
         (``0x`` and their hex). Only those quoted forms, as `error_text`: an
-        unquoted value could match any part of the line."""
-        secrets = sorted(self._message_secrets(messages), key=len, reverse=True)
-        for secret in secrets:
+        unquoted value could match any part of the line. A long string a
+        line shows cut (``"eyJhbGci... (322 characters)``) is replaced by the
+        start of it that is shown. A number a listed key holds is replaced
+        where it stands alone, if it is written in four characters or more
+        (a PIN, an id): a shorter one is as likely an index or a count the
+        line gives."""
+        secrets = self._message_secrets(messages)
+        for secret in sorted((secret for secret in secrets if isinstance(secret, str | bytes)), key=len, reverse=True):
             if isinstance(secret, str):
-                text = text.replace(json.dumps(secret, ensure_ascii=False), json.dumps(REDACTED)).replace(repr(secret), repr(REDACTED))
+                for quoted, hidden in ((json.dumps(secret, ensure_ascii=False), json.dumps(REDACTED)), (repr(secret), repr(REDACTED))):
+                    text = _hide_cut(text.replace(quoted, hidden), quoted)
             else:
                 text = text.replace(f"0x{secret[:64].hex()}", REDACTED).replace(repr(secret), repr(REDACTED))
+        for secret in secrets:
+            if isinstance(secret, int | float) and len(written := json.dumps(secret)) >= _MIN_NUMBER_LENGTH:
+                text = re.sub(rf"(?<![\w.+-]){re.escape(written)}(?![\w.])", REDACTED, text)
         return text
 
-    def _message_secrets(self, messages: Iterable[Any]) -> set[str | bytes]:
-        """The non-empty strings and bytes listed keys hold in ``messages``,
+    def _message_secrets(self, messages: Iterable[Any]) -> set[str | bytes | int | float]:
+        """The non-empty strings and bytes, and the numbers, listed keys hold in ``messages``,
         at any depth, under them too: iteratively, each container once (and
         once more where a listed key holds it)."""
-        secrets: set[str | bytes] = set()
+        secrets: set[str | bytes | int | float] = set()
         if not self.message_keys:
             return secrets
         seen: set[tuple[int, bool]] = set()
@@ -204,7 +213,7 @@ class Redaction:
                     pending.extend((member, listed or (isinstance(key, str) and self.redacts_message_key(key))) for key, member in value.items())
                 else:
                     pending.extend((member, listed) for member in value)
-            elif listed and isinstance(value, str | bytes) and value:
+            elif listed and ((isinstance(value, str | bytes) and value) or (isinstance(value, int | float) and not isinstance(value, bool))):
                 secrets.add(value)
         return secrets
 
@@ -220,6 +229,29 @@ class Redaction:
                 pair = f"{key}{equals}{REDACTED}"
             pairs.append(pair)
         return "&".join(pairs)
+
+
+# What a value shown cut ends with (`response_steps._shown`, `connections.shown_message`).
+_CUT_MARKER = "... ("
+# The shortest start of a quoted secret taken for it before a cut, its quote
+# included, and the shortest number hidden where it stands alone.
+_MIN_CUT_START = 4
+_MIN_NUMBER_LENGTH = 4
+
+
+def _hide_cut(text: str, quoted: str) -> str:
+    """``text`` with ``quoted`` (a secret as a line quotes it) hidden where
+    the line shows only its start, cut: before each cut marker, the longest
+    start of it that the text ends with there, of `_MIN_CUT_START`
+    characters or more, is replaced, its opening quote kept."""
+    start = 0
+    while (at := text.find(_CUT_MARKER, start)) != -1:
+        shown = next((k for k in range(min(len(quoted) - 1, at), _MIN_CUT_START - 1, -1) if text.startswith(quoted[:k], at - k)), 0)
+        if shown:
+            text = f"{text[: at - shown]}{quoted[0]}{REDACTED}{text[at:]}"
+            at += 1 + len(REDACTED) - shown
+        start = at + len(_CUT_MARKER)
+    return text
 
 
 def _empty(value: Any) -> bool:

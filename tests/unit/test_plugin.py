@@ -1,3 +1,4 @@
+import json
 import logging
 import warnings
 from pathlib import Path
@@ -529,6 +530,38 @@ class TestReportSectionsBuiltOnlyWhenShown:
         (`Carrier.snapshot_passed_exchanges`): in full only where pytest
         prints a passing report's sections."""
         assert _passed_sections_shown(pytester.parseconfigure(*args)) is shown
+
+    def test_an_xfail_stage_snapshots_in_full(self, pytester):
+        """A stage marked xfail is reported failed when it passes (strict), and
+        its sections printed: its connection snapshot is the full one."""
+        pytester.makeconftest("")
+        pytester.makepyfile(
+            adapters="""
+            class Adapter:
+                def __init__(self): self.sent = []
+                def connect(self, timeout): return {"ok": True}
+                def send(self, message): self.sent.append(message)
+                def receive(self, timeout):
+                    import time
+                    time.sleep(timeout)
+                def close(self): pass
+                def debug_info(self): return "ADAPTER-DEBUG"
+            """
+        )
+        scenario = {
+            "connections": {"dev": {"adapter": "adapters:Adapter"}},
+            "stages": [
+                {"name": "known bug", "marks": ["xfail(strict=True)"], "connection": {"name": "dev", "open": True}},
+                {"name": "plain", "always_run": True, "connection": {"name": "dev", "send": {"op": "x"}}},
+            ],
+        }
+        pytester.path.joinpath("test_xpass.http.json").write_text(json.dumps(scenario))
+        result = pytester.runpytest("-rP")
+        result.assert_outcomes(failed=1, passed=1)
+        text = result.stdout.str()
+        assert text.count("debug_info():\nADAPTER-DEBUG") == 2  # -rP prints the passing stage's too
+        result = pytester.runpytest()
+        assert result.stdout.str().count("debug_info():\nADAPTER-DEBUG") == 1, "the strict XPASS alone is printed, in full"
 
     def test_worker_without_terminal_reporter_formats_everything(self, pytester):
         """An xdist worker unregisters the terminal reporter and ships its

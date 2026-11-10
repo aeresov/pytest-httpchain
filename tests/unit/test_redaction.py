@@ -233,6 +233,26 @@ def test_message_text(text, expected):
     assert DEFAULT_REDACTION.message_text(text, message) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A long value is shown cut: the start of it that is shown is hidden.
+        pytest.param(f'expected "{("A1b2" * 80)[:199]}... (322 characters), got 1', 'expected "[REDACTED]... (322 characters), got 1', id="cut-json"),
+        pytest.param(f"got '{'A1b2' * 10}... (322 characters)", "got '[REDACTED]... (322 characters)", id="cut-repr"),
+        pytest.param(f'gave {{"user": {{"jwt": "{"A1b2" * 30}... (400 characters)', 'gave {"user": {"jwt": "[REDACTED]... (400 characters)', id="cut-inside-an-object"),
+        # Another value's cut is left alone.
+        pytest.param('got "something else... (300 characters)', 'got "something else... (300 characters)', id="cut-of-another-value"),
+        # A number where it stands alone, if long enough not to be an index.
+        pytest.param("expected gt 987654321, got 1234", "expected gt 987654321, got [REDACTED]", id="number"),
+        pytest.param("items[1234] is 12345, 1234.5 or x1234", "items[[REDACTED]] is 12345, 1234.5 or x1234", id="number-alone-only"),
+        pytest.param("items[7] gave 7", "items[7] gave 7", id="short-number-left-alone"),
+    ],
+)
+def test_message_text_hides_cut_strings_and_numbers(text, expected):
+    message = {"token": "A1b2" * 80, "pin": {"password": 1234}, "count": {"api_key": 7}, "flag": {"token": True}}
+    assert DEFAULT_REDACTION.message_text(text, message) == expected
+
+
 def test_message_text_takes_several_messages_and_skips_empty_values():
     assert DEFAULT_REDACTION.message_text('"a" "b" ""', {"token": "a"}, {"password": "b", "api_key": ""}) == '"[REDACTED]" "[REDACTED]" ""'
     assert NO_REDACTION.message_text('"a"', {"token": "a"}) == '"a"'

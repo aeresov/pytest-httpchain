@@ -213,7 +213,9 @@ def test_schema_accepts_documented_shapes(validator, document):
         pytest.param(_request(timeout=r"\{{ t }}"), id="timeout-escaped"),
         pytest.param(_request(timeout=r"\\{{ t }}"), id="timeout-backslash-then-template"),
         pytest.param(_with_stage(skip_if=r"\{{ flag }}"), id="skip-if-escaped"),
-        # A stage is exactly one kind, and neither kind is null.
+        # A stage is exactly one kind, and a scenario file writes neither as
+        # null. (The model takes a null kind as not set, as a dumped model
+        # writes it: `test_a_null_kind_is_a_kind_not_set`.)
         pytest.param({"stages": [{"name": "s"}]}, id="stage-without-kind"),
         pytest.param(_with_stage(connection={"name": "c", "open": True}), id="stage-with-both-kinds"),
         pytest.param({"stages": [{"name": "s", "request": None, "connection": {"name": "c", "open": True}}]}, id="stage-null-request"),

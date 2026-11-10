@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `params`, `connect_timeout`, `inbox_limit`), and a stage is now one HTTP `request` or one
   `connection` step on one of them: `"connection": {"name": "device", "send": {"op": "ping"},
   "expect": {"match": {"op": "pong"}, "timeout": 2}}`. The step opens (implicitly at the first stage
-  that sends or waits on the connection, or on `open: true`, which reconnects), drains, sends, expects and closes,
+  naming the connection, or on `open: true`, which reconnects), drains, sends, expects and closes,
   in that order. Each open is a new session whose reader thread queues every message `receive()`
   returns; `expect` takes the oldest that matches a JMESPath expression or an object of
   `verify.jmespath` expectations, after the stage's send if it sends, or waits for none to match
