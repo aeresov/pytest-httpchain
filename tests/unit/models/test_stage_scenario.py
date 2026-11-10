@@ -75,6 +75,13 @@ class TestStageFields:
         again = Scenario.model_validate(scenario.model_dump(**dump))
         assert again.model_dump() == scenario.model_dump()
 
+    def test_a_null_kind_is_a_kind_not_set(self):
+        """As a model dumped whole writes the kind a stage is not. The JSON
+        Schema, an editor's, holds a scenario file to the one kind written."""
+        stage = Stage.model_validate({"name": "test", "request": None, "connection": {"name": "c", "open": True}})
+        assert stage.request is None
+        assert stage.connection is not None
+
     def test_connection_stage(self):
         stage = Stage.model_validate({"name": "test", "connection": {"name": "device", "open": True}})
         assert stage.request is None

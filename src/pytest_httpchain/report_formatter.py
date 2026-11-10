@@ -290,7 +290,11 @@ def format_connection_exchange(exchange: ConnectionExchange, redaction: Redactio
     Each message is shown through ``redaction`` (`Redaction.message`), as
     pretty JSON cut at the body cap, bytes as hex.
     """
-    session = f", open {exchange.generation}, {exchange.session_age:.3f} s old" if exchange.generation is not None and exchange.session_age is not None else ", no session"
+    if exchange.generation is not None and exchange.session_age is not None:
+        session = f", open {exchange.generation}, {exchange.session_age:.3f} s old"
+    else:
+        # A stage that failed before it had one, or only closes a connection never opened.
+        session = ", not open"
     lines = [f"Connection '{exchange.connection}' (adapter {exchange.adapter}){session}"]
     if exchange.opened:
         if exchange.connected is None:
@@ -319,6 +323,8 @@ def format_connection_exchange(exchange: ConnectionExchange, redaction: Redactio
             lines.append("Result: the wait did not finish (see the failure message)")
         elif exchange.result == "timeout" and exchange.mode == "closed":
             lines.append("Result: timed out, the connection did not end")
+        elif exchange.result == "absent" and exchange.unseen:
+            lines.append(f"Result: no message it looked at matched, but {count(exchange.unseen, 'message')} dropped before it could: it cannot tell")
         else:
             lines.append(f"Result: {_RESULTS[exchange.result]}")
         if (taken := exchange.taken) is not None:
@@ -329,9 +335,7 @@ def format_connection_exchange(exchange: ConnectionExchange, redaction: Redactio
             lines.extend(_arrivals(f"Late, within {LATE_WINDOW:g} s after the deadline, left queued", exchange.late, relative_to, redaction, late=True))
         if exchange.result is not None:
             left_out = [f"{count(exchange.earlier, 'message')} queued before the send"] if exchange.sent is not None else []
-            left_out.append(
-                f"{exchange.dropped} dropped by inbox_limit" + (f" ({exchange.unseen} of them during the wait, before it could look at them)" if exchange.unseen else "")
-            )
+            left_out.append(f"{exchange.dropped} dropped by inbox_limit" + (f" ({exchange.unseen} of them before the wait could look at them)" if exchange.unseen else ""))
             lines.append(f"Not considered: {', '.join(left_out)}")
     elif exchange.dropped:
         lines.append(f"Not considered: {exchange.dropped} dropped by inbox_limit")

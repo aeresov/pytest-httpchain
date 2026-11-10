@@ -154,7 +154,8 @@ waits anew.
   send, unless the stage says `open: true`, so the next attempt connects again.
 
 Never retried on a connection stage: a step on a connection that is not open (closed by a stage,
-or ended by the other side) without `open: true`; an `absent` expect that saw a matching message;
+or ended by the other side) without `open: true`; an `absent` expect that saw a matching message, or could not look at every message because
+`inbox_limit` dropped some;
 a `connect()` or `send()` result that is no message (a dict of JSON values or bytes); an adapter
 that cannot be imported; and an `expect.match` value that does not render.
 

@@ -84,7 +84,8 @@ RECEIVE_TIMEOUT = 0.2
 # The longest an `expect` sleeps between looks at its inbox: an interrupt
 # (Ctrl-C) or the deadline is never further away than this.
 WAIT_SLICE = 0.1
-# How long a timed-out `expect` keeps watching, for the report's "late" messages.
+# How long after a timed-out `expect`'s deadline a message still counts as
+# late, in the report of the stage it failed (`_Session.late`).
 LATE_WINDOW = 0.2
 # How long closing or reopening a connection waits for its reader to stop.
 JOIN_BUDGET = 2.0
@@ -279,19 +280,19 @@ ExpectResult = Literal["taken", "seen", "timeout", "absent", "closed", "ended"]
 class ExpectOutcome:
     """How one `_Session.expect` ended (`ExpectResult`), with what it saw:
     the message it took, or that an absent one saw (``taken``); the messages
-    it considered that did not match, oldest first; those that arrived within
-    `LATE_WINDOW` after a timeout (``late``); how long it waited; how many
-    queued messages it left out as older than the stage's send
-    (``earlier``); how many arrived during the wait and were dropped by the
-    inbox_limit before it could look at them (``unseen``); and the reader's
-    end, if it saw one. ``seen`` is the last message it looked at, and
-    ``ended_at`` when it ended (monotonic): what `_Session.late` goes by."""
+    it considered that did not match, oldest first; how long it waited; how
+    many queued messages it left out as older than the stage's send
+    (``earlier``); how many the inbox_limit dropped before it could look at
+    them (``unseen``: since the stage's send, and for a stage that sends nothing
+    since the connection was last drained or opened, as it looks at the whole
+    queue); and the reader's end, if it saw one. ``seen`` is the last message
+    it looked at, and ``ended_at`` when it ended (monotonic): what
+    `_Session.late` goes by."""
 
     result: ExpectResult
     waited: float
     taken: Arrival | None = None
     considered: tuple[Arrival, ...] = ()
-    late: tuple[Arrival, ...] = ()
     earlier: int = 0
     unseen: int = 0
     end: ReaderEnd | None = None
@@ -325,6 +326,9 @@ class _Session:
         self._inbox: deque[tuple[int, float, dict[str, Any]]] = deque(maxlen=inbox_limit)
         self._seq = 0
         self.dropped = 0
+        # `dropped` when the inbox was last drained: what was dropped since
+        # is what a wait over the whole queue could not look at.
+        self._dropped_at_drain = 0
         self._condition = threading.Condition()
         self._stop = threading.Event()
         self._end: ReaderEnd | None = None
@@ -395,6 +399,7 @@ class _Session:
         with self._condition:
             count = len(self._inbox)
             self._inbox.clear()
+            self._dropped_at_drain = self.dropped
             return count
 
     def mark(self) -> int:
@@ -434,6 +439,9 @@ class _Session:
         A message that arrived since the last look and is no longer queued
         was dropped by the inbox_limit before the wait could judge it
         (``unseen``): a wait that then finds no match cannot say none came.
+        A stage that sends nothing looks at the whole queue, so for it that
+        goes for every message dropped since the queue was last drained (or
+        the connection opened), whenever it arrived.
         A timed-out wait does not linger for late messages: `late` does, for
         the one whose failure is reported.
         """
@@ -445,7 +453,8 @@ class _Session:
         considered: list[Arrival] = []
         unseen = 0
         # A stage that did not send looks at the whole queue first: what is
-        # missing from it then was taken or drained before, not unseen.
+        # missing from it then was taken or drained before, or dropped since
+        # the last drain, which is what it could not look at.
         counting = after is not None
 
         def ended(result: ExpectResult, **fields: Any) -> ExpectOutcome:
@@ -457,8 +466,8 @@ class _Session:
                 fresh = [entry for entry in self._inbox if entry[0] > seen]
                 end = self._end
                 newest = self._seq
-            if counting:
-                unseen += (newest - seen) - len(fresh)
+                dropped_since_drain = self.dropped - self._dropped_at_drain
+            unseen = unseen + (newest - seen) - len(fresh) if counting else dropped_since_drain
             counting = True
             if mode != "closed":
                 for seq, arrived, message in fresh:
@@ -496,8 +505,10 @@ class _Session:
         for the attempt that failed the stage, not by every attempt."""
         if (remaining := outcome.ended_at + LATE_WINDOW - time.monotonic()) > 0:
             self._stop.wait(remaining)
+        until = outcome.ended_at + LATE_WINDOW
         with self._condition:
-            return tuple(Arrival(seq, arrived - since, message) for seq, arrived, message in self._inbox if seq > outcome.seen)
+            # By arrival time too: this may be asked well after the window.
+            return tuple(Arrival(seq, arrived - since, message) for seq, arrived, message in self._inbox if seq > outcome.seen and arrived <= until)
 
     def stop(self) -> None:
         self._stop.set()
@@ -535,7 +546,8 @@ class _Session:
 class ConnectionExchange:
     """What one connection stage did, for its report: an immutable
     snapshot the carrier takes once the step has run, before any close,
-    never read from the live session. Its messages are copies.
+    never read from the live session. Its messages are copies when it is
+    ``full``, as every snapshot a report shows is.
 
     ``generation`` is which open of the connection the session is (from 1),
     and ``session_age`` how long it had been open, in seconds; both None when
@@ -547,9 +559,12 @@ class ConnectionExchange:
     ``taken`` is the message the wait took, or an absent one saw;
     ``considered`` the messages that did not match, ``late`` those that
     arrived just after a timeout, ``earlier`` how many queued messages were
-    older than the send, ``unseen`` how many arrived during the wait and
-    were dropped before it could look at them, and ``dropped`` how many the
-    session's inbox_limit discarded in all. ``end`` is how the session's reader ended, if it has, as the
+    older than the send, ``unseen`` how many were dropped before the wait
+    could look at them, and ``dropped`` how many the session's inbox_limit
+    discarded in all. ``full`` is False for the snapshot of a stage that
+    passed and whose section is not expected to be printed: its messages are
+    then the adapter's own, not copies, and ``debug_info()`` was not asked
+    (`ExchangeRecord.freeze`). ``end`` is how the session's reader ended, if it has, as the
     wait saw it or, without one, by the snapshot. ``debug_info`` is the
     adapter's, cut (`debug_text`).
 
@@ -577,6 +592,7 @@ class ConnectionExchange:
     dropped: int = 0
     end: ReaderEnd | None = None
     debug_info: str | None = None
+    full: bool = True
 
 
 @dataclass(slots=True)
@@ -625,12 +641,12 @@ class ExchangeRecord:
             result=outcome.result if outcome is not None else None,
             taken=arrival(outcome.taken) if outcome is not None and outcome.taken is not None else None,
             considered=tuple(map(arrival, outcome.considered)) if outcome is not None else (),
-            late=tuple(map(arrival, outcome.late)) if outcome is not None else (),
             earlier=outcome.earlier if outcome is not None else 0,
             unseen=outcome.unseen if outcome is not None else 0,
             dropped=session.dropped if session is not None else 0,
             end=end,
             debug_info=debug_text(session.adapter) if full and session is not None else None,
+            full=full,
         )
 
     def late(self) -> tuple[Arrival, ...]:
@@ -871,7 +887,7 @@ def expect_failure(
     a miss reason it quotes is the predicate's, which redacts its own.
     """
     unseen = (
-        f"{count(outcome.unseen, 'message')} that arrived meanwhile {'was' if outcome.unseen == 1 else 'were'} dropped by the connection's inbox_limit "
+        f"{count(outcome.unseen, 'message')} {'was' if outcome.unseen == 1 else 'were'} dropped by the connection's inbox_limit "
         f"before the stage could look at {'it' if outcome.unseen == 1 else 'them'}"
     )
     match outcome.result:

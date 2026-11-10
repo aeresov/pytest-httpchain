@@ -359,7 +359,6 @@ class TestExpect:
         started = time.monotonic()
         outcome = session.expect(_is({"n": 9}), 0.05, after=None, since=started)
         assert outcome.result == "timeout"
-        assert outcome.late == ()
         assert time.monotonic() - started < 0.05 + LATE_WINDOW / 2
 
     def test_late_messages_are_collected_for_the_failure_that_is_reported(self, registry):
@@ -409,23 +408,56 @@ class TestExpect:
         _queued(session, 2)
         outcome = session.expect(_is({"n": 9}), 0.05, after=after, since=0)
         failure = expect_failure(outcome, stage="wait", connection="dev", match="n == `9`", timeout=0.05, mode="message", sent=True, reopens=False, ended_before=False)
-        assert str(failure).endswith(
-            "(1 message arrived after the send); 1 message that arrived meanwhile was dropped by the connection's inbox_limit before the stage could look at it"
-        )
+        assert str(failure).endswith("(1 message arrived after the send); 1 message was dropped by the connection's inbox_limit before the stage could look at it")
         assert failure is not None
         assert failure.retryable
 
-    def test_what_was_taken_or_dropped_before_a_wait_is_not_unseen(self, registry):
-        """A stage that did not send looks at the whole queue: the messages
-        earlier stages took from it, and those dropped before it began, are
-        no part of its wait."""
+    def test_what_an_earlier_wait_took_is_not_unseen(self, registry):
+        """A stage that did not send looks at the whole queue: a message an
+        earlier stage took from it is no part of its wait."""
         peer = helpers.peer("seen")
-        session, _ = _open(registry, "seen", inbox_limit=3)
+        session, _ = _open(registry, "seen", inbox_limit=5)
         peer.push(*({"n": n} for n in range(5)))
         _queued(session, 5)
         assert session.expect(_is({"n": 3}), 1, after=None, since=0).result == "taken"
         outcome = session.expect(_is({"n": 9}), 0.05, after=None, since=0, mode="absent")
         assert (outcome.result, outcome.unseen) == ("absent", 0)
+        assert len(outcome.considered) == 4
+
+    def test_a_wait_over_the_whole_queue_counts_what_was_dropped_since_the_last_drain(self, registry):
+        """Messages pile up while other stages run: those the inbox_limit
+        dropped before a stage that sends nothing looked at the queue may
+        have matched, as much as those dropped during its wait. Draining
+        starts the count again: what was discarded then was meant to be."""
+        peer = helpers.peer("piled")
+        session, _ = _open(registry, "piled", inbox_limit=3)
+        peer.push(*({"n": n} for n in range(5)))
+        _queued(session, 5)
+        outcome = session.expect(_is({"n": 0}), 0.05, after=None, since=0, mode="absent")
+        assert (outcome.result, outcome.unseen) == ("absent", 2)
+        failure = expect_failure(outcome, stage="quiet", connection="dev", match="n == `0`", timeout=0.05, mode="absent", sent=False, reopens=False, ended_before=False)
+        assert isinstance(failure, VerificationError)
+        assert not failure.retryable
+        assert "2 messages were dropped by the connection's inbox_limit before the stage could look at them" in str(failure)
+
+        assert session.drain() == 3
+        peer.push({"n": 7})
+        _queued(session, 6)
+        outcome = session.expect(_is({"n": 0}), 0.05, after=None, since=0, mode="absent")
+        assert (outcome.result, outcome.unseen) == ("absent", 0)
+
+    def test_late_messages_are_those_that_arrived_within_the_window(self, registry):
+        """Asked well after the deadline (the stage's context managers exit
+        first), the late list is still what arrived within the window."""
+        peer = helpers.peer("too late")
+        session, _ = _open(registry, "too late")
+        since = time.monotonic()
+        record = ExchangeRecord("dev", ADAPTER, session=session, mode="message", since=since)
+        record.outcome = session.expect(_is({"n": 9}), 0.02, after=None, since=since)
+        time.sleep(LATE_WINDOW + 0.05)
+        peer.push({"n": 1})
+        _queued(session, 1)
+        assert record.late() == ()
 
     def test_absent_passes_at_the_deadline(self, registry):
         peer = helpers.peer("absent")
