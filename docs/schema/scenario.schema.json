@@ -3292,11 +3292,25 @@
           "additionalProperties": false,
           "oneOf": [
             {
+              "properties": {
+                "request": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
               "required": [
                 "request"
               ]
             },
             {
+              "properties": {
+                "connection": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
               "required": [
                 "connection"
               ]
@@ -3546,11 +3560,27 @@
               "description": "Attempt the stage again while it fails, after a wait: each attempt renders and sends the request (or the connection step) anew and runs every response step. With parallel, each iteration retries on its own."
             },
             "request": {
-              "$ref": "#/$defs/Request",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Request"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
               "description": "HTTP request details."
             },
             "connection": {
-              "$ref": "#/$defs/ConnectionStep",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConnectionStep"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
               "description": "A step on one of the scenario's connections, in place of a request."
             },
             "response_codec": {
