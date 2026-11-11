@@ -13,7 +13,7 @@ import asyncio
 import concurrent.futures
 import ssl
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from functools import partial
 from urllib.parse import parse_qs, urlsplit
@@ -214,7 +214,7 @@ class _BarrierConnection(asyncio.Protocol):
 
 
 @contextmanager
-def _serve_barrier(context: ssl.SSLContext) -> Iterator[str]:
+def _serve_barrier(context: ssl.SSLContext) -> Generator[str]:
     """Serve the barrier over TLS from an event loop in a background thread."""
     started: concurrent.futures.Future = concurrent.futures.Future()
 

@@ -56,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   named by its type alone in the stage's failure (`RuntimeError`, not `RuntimeError: `).
 - An error closing the HTTP client at the end of a scenario is logged, and the scenario's state
   is still reset; it no longer surfaces as a teardown error.
+- Refresh the lockfile for `deepmerge` 4.0.0, `pydantic` 2.14.3, `pytest` 9.2.0, `msgpack` 1.2.4,
+  `graphql-core` 3.3.1, `pyrate-limiter` 4.5.1, `typer` 0.27.3, `ruff` 0.17.4 and `ty` 0.0.98, allow
+  `uv_build` 0.13 as the build backend, and move CI to `astral-sh/setup-uv` 10.3.0.
 
 ## [0.18.1] - 2026-10-02
 
