@@ -75,9 +75,40 @@ class TestStageFields:
         again = Scenario.model_validate(scenario.model_dump(**dump))
         assert again.model_dump() == scenario.model_dump()
 
+    @pytest.mark.parametrize(
+        ("stage", "valid"),
+        [
+            ({"name": "s", "request": {"url": "http://x.test"}}, True),
+            ({"name": "s", "connection": {"name": "c", "open": True}}, True),
+            ({"name": "s", "request": None, "connection": {"name": "c", "open": True}}, True),
+            ({"name": "s", "request": {"url": "http://x.test"}, "connection": None}, True),
+            ({"name": "s"}, False),
+            ({"name": "s", "request": None}, False),
+            ({"name": "s", "request": None, "connection": None}, False),
+            ({"name": "s", "request": {"url": "http://x.test"}, "connection": {"name": "c", "open": True}}, False),
+        ],
+        ids=["request", "connection", "null-request", "null-connection", "neither", "null-alone", "both-null", "both"],
+    )
+    def test_the_model_and_the_schema_agree_on_a_stage_kind(self, stage, valid):
+        """One rule, in the plugin and in an editor: exactly one kind is set,
+        and a null one is not."""
+        import jsonschema
+
+        from pytest_httpchain.schema import build_schema
+
+        scenario = {"stages": [stage]}
+        try:
+            Scenario.model_validate(scenario)
+            model_accepts = True
+        except ValidationError:
+            model_accepts = False
+        schema = build_schema()
+        schema_accepts = jsonschema.validators.validator_for(schema)(schema).is_valid(scenario)
+        assert (model_accepts, schema_accepts) == (valid, valid)
+
     def test_a_null_kind_is_a_kind_not_set(self):
-        """As a model dumped whole writes the kind a stage is not. The JSON
-        Schema, an editor's, holds a scenario file to the one kind written."""
+        """As a model dumped whole writes the kind a stage is not, and as
+        the JSON Schema has it too."""
         stage = Stage.model_validate({"name": "test", "request": None, "connection": {"name": "c", "open": True}})
         assert stage.request is None
         assert stage.connection is not None

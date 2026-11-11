@@ -175,6 +175,10 @@ def test_schema_patterns_are_ecma262_compatible():
             },
             id="connection-stages",
         ),
+        # A null kind is a kind not set, as the model has it, and as a model
+        # dumped whole writes the kind a stage is not.
+        pytest.param({"stages": [{"name": "s", "request": None, "connection": {"name": "c", "open": True}}]}, id="stage-null-request"),
+        pytest.param(_with_stage(connection=None), id="stage-null-connection"),
     ],
 )
 def test_schema_accepts_documented_shapes(validator, document):
@@ -213,12 +217,11 @@ def test_schema_accepts_documented_shapes(validator, document):
         pytest.param(_request(timeout=r"\{{ t }}"), id="timeout-escaped"),
         pytest.param(_request(timeout=r"\\{{ t }}"), id="timeout-backslash-then-template"),
         pytest.param(_with_stage(skip_if=r"\{{ flag }}"), id="skip-if-escaped"),
-        # A stage is exactly one kind, and a scenario file writes neither as
-        # null. (The model takes a null kind as not set, as a dumped model
-        # writes it: `test_a_null_kind_is_a_kind_not_set`.)
+        # A stage is exactly one kind, and a null kind is a kind not set.
         pytest.param({"stages": [{"name": "s"}]}, id="stage-without-kind"),
         pytest.param(_with_stage(connection={"name": "c", "open": True}), id="stage-with-both-kinds"),
-        pytest.param({"stages": [{"name": "s", "request": None, "connection": {"name": "c", "open": True}}]}, id="stage-null-request"),
+        pytest.param({"stages": [{"name": "s", "request": None}]}, id="stage-null-request-alone"),
+        pytest.param({"stages": [{"name": "s", "request": None, "connection": None}]}, id="stage-both-kinds-null"),
         pytest.param({"stages": [{"name": "s", "connection": {"name": "c", "opne": True}}]}, id="connection-key"),
     ],
 )

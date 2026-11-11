@@ -1478,19 +1478,10 @@ class ConnectionStep(StrictModel):
         return self
 
 
-def _no_null_branch(schema: JsonDict) -> None:
-    """A stage kind's schema: the kind itself, without the null branch and
-    default its Optional type adds: a scenario file writes the one kind
-    the stage is."""
-    schema.pop("default", None)
-    branches = schema.get("anyOf")
-    if isinstance(branches, list) and {"type": "null"} in branches:
-        rest = [branch for branch in branches if branch != {"type": "null"}]
-        del schema["anyOf"]
-        if len(rest) == 1 and isinstance(rest[0], dict):
-            schema.update(rest[0])
-        else:
-            schema["anyOf"] = rest
+def _is_the_kind(kind: str) -> JsonDict:
+    """The schema branch of a stage that is ``kind``: it sets it, to
+    something other than null."""
+    return {"required": [kind], "properties": {kind: {"not": {"type": "null"}}}}
 
 
 class Stage(Marked, Fixtured, Descripted):
@@ -1499,11 +1490,11 @@ class Stage(Marked, Fixtured, Descripted):
 
     KINDS: ClassVar[tuple[str, ...]] = ("request", "connection")
 
-    # Exactly one kind: the schema says so too. Neither field has a null
-    # branch in it (`_no_null_branch`), so an editor's oneOf holds a scenario
-    # file to one kind written out; `_one_kind` counts a null as not set, as
-    # a dumped model writes the kind a stage is not.
-    model_config = ConfigDict(json_schema_extra={"oneOf": [{"required": ["request"]}, {"required": ["connection"]}]})
+    # Exactly one kind, a null one being a kind not set, as any optional
+    # field left null is (and as a dumped model writes the kind a stage is
+    # not): `_one_kind` counts by value, and the schema says the same, each
+    # oneOf branch a kind that is set and not null.
+    model_config = ConfigDict(json_schema_extra={"oneOf": [_is_the_kind("request"), _is_the_kind("connection")]})
 
     name: str = Field(default="", description="Stage name (human-readable).")
     substitutions: Substitutions = Field(default_factory=list, description="Variable substitution configuration.")
@@ -1527,12 +1518,8 @@ class Stage(Marked, Fixtured, Descripted):
         description="Attempt the stage again while it fails, after a wait: each attempt renders and sends the request (or the connection step) anew "
         "and runs every response step. With parallel, each iteration retries on its own.",
     )
-    request: Request | None = Field(default=None, description="HTTP request details.", json_schema_extra=_no_null_branch)
-    connection: ConnectionStep | None = Field(
-        default=None,
-        description="A step on one of the scenario's connections, in place of a request.",
-        json_schema_extra=_no_null_branch,
-    )
+    request: Request | None = Field(default=None, description="HTTP request details.")
+    connection: ConnectionStep | None = Field(default=None, description="A step on one of the scenario's connections, in place of a request.")
     response_codec: Literal["auto", "json", "msgpack"] = Field(
         default="auto",
         description="Codec for JMESPath and body schema checks: auto uses MessagePack for a MessagePack Content-Type, otherwise JSON.",
