@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-11
+
 ### Added
 
 - `sha1(value)` template helper: the hex SHA-1 digest of text (as UTF-8) or bytes,
@@ -25,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user functions) and what `send()` returned (`sent`). A timed-out `expect` is a `verify` failure
   for `retry`, an adapter's `OSError`, `EOFError` or retryable `RequestError` a `request` failure; a step on a
   connection a stage closed or the other side ended, without `open: true`, and an `absent` hit are
-  never retried. Connections stay open after a failure for an `always_run` farewell, and close at
+  never retried. A connection keeps at most `inbox_limit` queued messages (1000 by default): an
+  `absent` wait fails, not passes, when some were dropped before it could look at them, and a
+  timeout says how many. Connections stay open after a failure for an `always_run` farewell, and close at
   the scenario's end, a reader failure no stage saw logged as a warning. A failing (or `-rP`)
   connection stage's report gets a Connection Exchange section: the message sent, the match as
   declared, how the wait ended, the messages considered and why each did not match, the late and
@@ -48,6 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `connection` and `actions` (`null` and `[]` on an HTTP stage), and the output a
   `connection_edges` list; a connection stage's `method` is `"CONNECTION"` and its `url` the
   connection's name. Existing fields are unchanged for HTTP stages.
+- An exception without a message, raised by a factory fixture's context manager on exit, is
+  named by its type alone in the stage's failure (`RuntimeError`, not `RuntimeError: `).
+- An error closing the HTTP client at the end of a scenario is logged, and the scenario's state
+  is still reset; it no longer surfaces as a teardown error.
 
 ## [0.18.1] - 2026-10-02
 
@@ -1803,7 +1811,8 @@ This release carries a test-suite and CI pass.
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.18.1...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.18.1...v0.19.0
 [0.18.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.17.0...v0.17.1
