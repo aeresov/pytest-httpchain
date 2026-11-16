@@ -246,7 +246,7 @@ def _error_request(e: Exception) -> httpx.Request | None:
     getattr with a default.
     """
     try:
-        request = e.request  # ty: ignore[unresolved-attribute]
+        request = e.request  # ty: ignore[missing-attribute]
     except (AttributeError, RuntimeError):
         return None
     return request if isinstance(request, httpx.Request) else None

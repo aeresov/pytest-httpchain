@@ -325,7 +325,7 @@ class _OwnOptionsFirst(typer.core.TyperCommand):
 
     # typer.Context is the context typer makes; the base names the click
     # Context typer vendors privately.
-    def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:  # ty: ignore[invalid-method-override]
+    def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:  # ty: ignore[incompatible-method-override]
         own = {name: param for param in self.get_params(ctx) if param.param_type_name == "option" for name in (*param.opts, *param.secondary_opts)}
         index = 0
         while index < len(args) and args[index] != "--":
