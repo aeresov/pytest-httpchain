@@ -144,7 +144,8 @@ include = ["tests/**"]
 [tool.ty.overrides.rules]
 invalid-argument-type = "ignore"
 unknown-argument = "ignore"
-unresolved-attribute = "ignore"
+missing-attribute = "ignore"
+missing-union-attribute = "ignore"
 not-subscriptable = "ignore"
 missing-argument = "ignore"
 

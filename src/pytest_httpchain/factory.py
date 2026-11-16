@@ -143,17 +143,17 @@ def create_test_class(
                 stage_method = pytest.mark.parametrize(",".join(param_names), param_values, ids=step.ids or None)(stage_method)
 
         all_fixtures = ["self", *dict.fromkeys(all_param_names + stage.fixtures + scenario.fixtures)]
-        stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # ty: ignore[unresolved-attribute]
+        stage_method.__signature__ = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in all_fixtures])  # ty: ignore[missing-attribute]
 
         # Read by the chain-contiguity hook to restore stage order.
-        stage_method._httpchain_stage_index = i  # ty: ignore[unresolved-attribute]
+        stage_method._httpchain_stage_index = i  # ty: ignore[missing-attribute]
 
         # The generated name ("test NN - <stage>") satisfies pytest's default
         # `python_functions` only via its bare "test" prefix rule — the space
         # defeats every glob form, so a narrowed `python_functions = test_*`
         # would collect ZERO stages and leave CI green. __test__ is honored by
         # pytest's istestfunction regardless of the name filter.
-        stage_method.__test__ = True  # ty: ignore[unresolved-attribute]
+        stage_method.__test__ = True  # ty: ignore[missing-attribute]
 
         for mark_str in stage.marks:
             try:

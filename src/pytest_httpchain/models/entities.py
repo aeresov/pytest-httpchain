@@ -449,7 +449,7 @@ with _suppress_field_shadow_warning("json"):
     class JsonBody(StrictModel):
         # "json" is the domain's name for the field, as the suppressed pydantic
         # warning says: it shadows BaseModel's deprecated json() method.
-        json: Annotated[JsonValue, BeforeValidator(convert_namespace_to_dict)] = Field(description="JSON data to send.")  # ty: ignore[invalid-attribute-override]
+        json: Annotated[JsonValue, BeforeValidator(convert_namespace_to_dict)] = Field(description="JSON data to send.")  # ty: ignore[incompatible-attribute-override]
 
 
 class XmlBody(StrictModel):
@@ -821,7 +821,7 @@ with _suppress_field_shadow_warning("schema"):
         # stands for the dict it was declared as: converted all the way down, as
         # a schema is plain JSON. Ahead of the union, keeping its member tags in
         # pydantic's error locations.
-        schema: Annotated[  # ty: ignore[invalid-attribute-override]  (shadows BaseModel.schema(), deprecated: the domain's name)
+        schema: Annotated[  # ty: ignore[incompatible-attribute-override]  (shadows BaseModel.schema(), deprecated: the domain's name)
             JSONSchemaInline | SchemaFileRefStr | PartialTemplateStr | None,
             BeforeValidator(convert_namespace_to_dict),
             BeforeValidator(refuse_escaped_braces("A schema file reference")),
