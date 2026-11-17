@@ -138,6 +138,15 @@ def test_help_flags_names_every_command():
     assert set(HELP_FLAGS) == set(_command_paths(typer.main.get_command(app)))
 
 
+def _listed_without_a_value_type(output: str) -> set[str]:
+    """The options a help lists with nothing but their help beside them.
+
+    What each row holds after the option's first name: a short name and a
+    value type, where the table shows them, then its help."""
+    listed = {name: re.split(r"\s{2,}", rest) for name, rest in _OPTION_ROW.findall(_ANSI.sub("", output))}
+    return {name for name, cells in listed.items() if len(cells) == 1}
+
+
 @pytest.mark.parametrize(("command", "flags"), [pytest.param(command, flags, id="-".join(command) or "app") for command, flags in HELP_FLAGS.items()])
 def test_help_lists_a_value_type_for_every_option_but_a_flag(command, flags):
     """A flag takes no value (`--force true` reads `true` as the next
@@ -147,15 +156,27 @@ def test_help_lists_a_value_type_for_every_option_but_a_flag(command, flags):
     # Wide enough for every flag's name: a narrow terminal cuts names short.
     result = runner.invoke(app, [*command, "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0, result.output
-    # What each row holds after the option's first name: a short name and a
-    # value type, where the table shows them, then its help.
-    listed = {name: re.split(r"\s{2,}", rest) for name, rest in _OPTION_ROW.findall(_ANSI.sub("", result.output))}
-    assert {name for name, cells in listed.items() if len(cells) == 1} == flags, listed
+    assert _listed_without_a_value_type(result.output) == flags, result.output
+
+
+@pytest.mark.parametrize("command", [pytest.param((), id="app"), pytest.param(("import",), id="import")])
+def test_help_without_a_command_lists_no_value_type_for_a_flag(command):
+    """A group given no command shows its help as a usage error, which typer
+    draws apart from --help, by the same class."""
+    result = runner.invoke(app, list(command), env={"COLUMNS": "200"})
+    assert result.exit_code == 2, result.output
+    assert _listed_without_a_value_type(result.output) == HELP_FLAGS[command], result.output
 
 
 # --- option values, read alike on every supported typer ---
 
 DEPTH_COMMANDS = ["validate", "resolve", "show", "graph"]
+
+
+def _unspaced(text: str) -> str:
+    """``text`` without colour, rich's box border and any whitespace: rich
+    wraps an error in its box, a word too long for a line across lines."""
+    return "".join(_ANSI.sub("", text).replace("│", "").split())
 
 
 @pytest.fixture
@@ -172,7 +193,7 @@ def test_every_command_refuses_a_float_depth(far_include, command):
     3, is refused by each; the tables below hold what that declaration reads."""
     result = runner.invoke(app, [command, "--ref-parent-traversal-depth", "3.0", str(far_include)])
     assert result.exit_code == 2, result.output
-    assert "Invalid value for '--ref-parent-traversal-depth': '3.0' is not a valid integer." in " ".join(_ANSI.sub("", result.stderr).replace("│", "").split())
+    assert _unspaced("Invalid value for '--ref-parent-traversal-depth': '3.0' is not a valid integer.") in _unspaced(result.stderr)
 
 
 @pytest.mark.parametrize(
@@ -203,16 +224,20 @@ def test_ref_parent_traversal_depth_reads_as_int_does(far_include, word, depth):
         pytest.param("-3.0", id="negative-float"),
         pytest.param("3.5", id="fraction"),
         pytest.param("3e0", id="exponent"),
+        pytest.param("1_000.0", id="float-with-underscore"),
         pytest.param("0x3", id="hex"),
         pytest.param("", id="empty"),
         pytest.param("true", id="bool"),
+        # More digits than int() reads (4300 by default), zeros or not, which
+        # typer 0.29 took as 3.
+        pytest.param("0" * 4300 + "3", id="past-the-digit-limit"),
     ],
 )
 def test_ref_parent_traversal_depth_refuses_what_int_does(far_include, word):
     """A usage error in the CLI's own words, whichever typer is installed."""
     result = runner.invoke(app, ["resolve", "--ref-parent-traversal-depth", word, str(far_include)])
     assert result.exit_code == 2, result.output
-    assert f"Invalid value for '--ref-parent-traversal-depth': {word!r} is not a valid integer." in " ".join(_ANSI.sub("", result.stderr).replace("│", "").split())
+    assert _unspaced(f"Invalid value for '--ref-parent-traversal-depth': {word!r} is not a valid integer.") in _unspaced(result.stderr)
 
 
 def test_ref_parent_traversal_depth_help_names_an_int():
