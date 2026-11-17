@@ -15,7 +15,11 @@ from pytest_httpchain.cli import _output_option, app
 from pytest_httpchain.schema import build_schema
 from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
 
-runner = CliRunner()
+# rich draws typer's help and error boxes as wide as the terminal it finds:
+# COLUMNS, else the real one behind the test run. Narrow, it wraps the words
+# the tests look for, so every invocation gets this width, wide enough for
+# every help row and message here.
+runner = CliRunner(env={"COLUMNS": "200"})
 # typer renders usage errors through rich, which colours them whenever
 # GITHUB_ACTIONS (or FORCE_COLOR) is set and splits `--output` across styles.
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -154,8 +158,7 @@ def test_help_lists_a_value_type_for_every_option_but_a_flag(command, flags):
     argument), so --help shows none beside it, typer's own flags included:
     typer 0.29 lists `--force <bool>` and `--help <bool>`. An option that
     takes a value keeps its type."""
-    # Wide enough for every flag's name: a narrow terminal cuts names short.
-    result = runner.invoke(app, [*command, "--help"], env={"COLUMNS": "200"})
+    result = runner.invoke(app, [*command, "--help"])
     assert result.exit_code == 0, result.output
     assert _listed_without_a_value_type(result.output) == flags, result.output
 
@@ -164,7 +167,7 @@ def test_help_lists_a_value_type_for_every_option_but_a_flag(command, flags):
 def test_help_without_a_command_lists_no_value_type_for_a_flag(command):
     """A group given no command shows its help as a usage error, which typer
     draws apart from --help, by the same class."""
-    result = runner.invoke(app, list(command), env={"COLUMNS": "200"})
+    result = runner.invoke(app, list(command))
     assert result.exit_code == 2, result.output
     assert _listed_without_a_value_type(result.output) == HELP_FLAGS[command], result.output
 
@@ -208,6 +211,9 @@ def test_every_command_refuses_a_float_depth(far_include, command):
         # Any Unicode decimal digit, which typer 0.29 refused.
         pytest.param("\uff13", 3, id="fullwidth"),
         pytest.param("\u0661\u0660", 10, id="arabic-indic"),
+        # No parent directory at all; minus zero is zero.
+        pytest.param("0", 0, id="zero"),
+        pytest.param("-0", 0, id="minus-zero"),
     ],
 )
 def test_ref_parent_traversal_depth_reads_as_int_does(far_include, word, depth):
@@ -241,30 +247,40 @@ def test_ref_parent_traversal_depth_refuses_what_int_does(far_include, word):
     assert _unspaced(f"Invalid value for '--ref-parent-traversal-depth': {word!r} is not a valid integer.") in _unspaced(result.stderr)
 
 
+@pytest.mark.parametrize("command", DEPTH_COMMANDS)
+@pytest.mark.parametrize("word", ["-1", "-3"])
+def test_ref_parent_traversal_depth_refuses_a_negative_depth(far_include, command, word):
+    """As the httpchain_ref_parent_traversal_depth ini option does: the
+    resolver read a negative depth as 0 while naming it."""
+    result = runner.invoke(app, [command, "--ref-parent-traversal-depth", word, str(far_include)])
+    assert result.exit_code == 2, result.output
+    assert _unspaced(f"Invalid value for '--ref-parent-traversal-depth': {word!r} must be non-negative.") in _unspaced(result.stderr)
+
+
 def test_ref_parent_traversal_depth_help_names_an_int():
     """typer up to 0.28 names a parser's type after its function: INT on 0.26, <int> after."""
-    # Wide enough that the help text does not wrap before the words matched.
-    result = runner.invoke(app, ["resolve", "--help"], env={"COLUMNS": "200"})
+    result = runner.invoke(app, ["resolve", "--help"])
     assert result.exit_code == 0, result.output
     assert re.search(r"\s(<int>|INT)\s+Maximum \$ref parent", _ANSI.sub("", result.output)), result.output
 
 
 @pytest.mark.parametrize(
-    ("args", "option"),
+    ("args", "message"),
     [
-        # A value exactly as declared, on every typer. The wording is typer's
-        # own (0.29 adds "Value error, "), so only the option is asserted.
-        pytest.param(["validate", "--format", "JSON"], "--format", id="other-case"),
-        pytest.param(["show", "--format", " json"], "--format", id="whitespace"),
-        pytest.param(["validate", "--format", ""], "--format", id="empty"),
-        pytest.param(["validate", "--format", "OutputFormat.json"], "--format", id="qualified-name"),
-        pytest.param(["graph", "--direction", "lr"], "--direction", id="direction-other-case"),
+        # A value exactly as declared, in the same words on every typer:
+        # typer 0.29 put "Value error, " before them.
+        pytest.param(["validate", "--format", "JSON"], "Invalid value for '--format': 'JSON' is not one of 'text', 'json'.", id="other-case"),
+        pytest.param(["show", "--format", " json"], "Invalid value for '--format': ' json' is not one of 'text', 'json'.", id="whitespace"),
+        pytest.param(["validate", "--format", ""], "Invalid value for '--format': '' is not one of 'text', 'json'.", id="empty"),
+        pytest.param(["validate", "--format", "OutputFormat.json"], "Invalid value for '--format': 'OutputFormat.json' is not one of 'text', 'json'.", id="qualified-name"),
+        pytest.param(["graph", "--direction", "lr"], "Invalid value for '--direction': 'lr' is not one of 'TD', 'LR'.", id="direction-other-case"),
     ],
 )
-def test_choice_options_refuse_any_other_value(ok_scenario, args, option):
+def test_choice_options_refuse_any_other_value(ok_scenario, args, message):
     result = runner.invoke(app, [*args, str(ok_scenario)])
     assert result.exit_code == 2, result.output
-    assert f"Invalid value for '{option}'" in " ".join(_ANSI.sub("", result.stderr).replace("│", "").split())
+    assert message in " ".join(_ANSI.sub("", result.stderr).replace("│", "").split())
+    assert "Value error" not in result.stderr
 
 
 # --- validate ---

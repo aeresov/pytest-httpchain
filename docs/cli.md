@@ -25,7 +25,7 @@ affect how `$include`/`$merge`/`$ref` resolve:
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--root-path DIR` | pytest's `rootdir` | Directory references must not escape. Collection uses pytest's `rootdir`, and so does the CLI by default: the one [pytest would determine](https://docs.pytest.org/en/stable/reference/customize.html#initialization-determining-rootdir-and-configfile) for a run on the same paths from the current directory (`validate a b` holds both to the rootdir of `pytest a b`). Pass it when a run uses `--rootdir` or `-c`. |
-| `--ref-parent-traversal-depth N` | `3` | How many `../` levels a reference may climb. Mirrors the `httpchain_ref_parent_traversal_depth` ini option. |
+| `--ref-parent-traversal-depth N` | `3` | How many `../` levels a reference may climb: 0 or more, read as Python's `int()` reads it. Mirrors the `httpchain_ref_parent_traversal_depth` ini option. |
 
 The default root is the directory of the configuration file pytest would read
 (`pytest.toml`, `pytest.ini`, or a `pyproject.toml` with a `[tool.pytest…]`

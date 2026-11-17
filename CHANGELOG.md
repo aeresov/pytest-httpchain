@@ -12,9 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refresh the lockfile for `graphql-core` 3.3.2, `typer` 0.29.1, `import-linter` 2.16, `ruff` 0.17.5,
   `ty` 0.0.102 and `mkdocs-material` 9.8.1, and follow ty 0.0.100's rule renames in the ty
   configuration and the source's `ty: ignore` comments. The `ty` dev floor is now 0.0.100, the first
-  release that knows the new names. With `graphql-core` 3.3.2 installed (as with 3.2.14), a GraphQL
-  `query` nested more than 200 levels deep fails with `Invalid GraphQL query`; 3.3.1 and older parse
-  one until Python's recursion limit, near 240 levels.
+  release that knows the new names.
+- A GraphQL `query` nested more than 200 levels deep fails with `Invalid GraphQL query` whichever
+  `graphql-core` is installed, counted as 3.2.14 and 3.3.2 count it: selection sets, list and object
+  values and list types together. Those versions refuse one themselves; 3.3.1 and older parsed one
+  until Python's recursion limit, near 240 levels of selection sets.
 
 ### Fixed
 
@@ -34,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `３` was refused. An invalid value is reported as `'3.0' is not a valid integer.` on every typer.
 - `pytest-httpchain import har|curl --output ''` is a usage error (exit 2) on every supported typer.
   Up to typer 0.28 it reached the import as the current directory and failed there (exit 1).
+- `--ref-parent-traversal-depth` refuses a negative depth (exit 2, `'-1' must be non-negative.`), as
+  the `httpchain_ref_parent_traversal_depth` ini option does. It was taken, and references were
+  held to no parent directory while the error named the depth as -1.
+- An invalid `--format` or `--direction` value is reported in the same words on every supported
+  typer: `'xml' is not one of 'text', 'json'.`. With typer 0.29 the message began `Value error, `.
 
 ## [0.19.0] - 2026-11-11
 

@@ -422,12 +422,14 @@ pass through unchanged.
 The query is checked as a GraphQL document when the scenario loads, and again
 once rendered when a template writes it (unless the rendered text still holds
 template syntax). A syntax error fails with `Invalid GraphQL query`, as the
-installed `graphql-core` parses the query: 3.2.14 and 3.3.2, for one, also
-refuse nesting deeper than 200 levels. A selection set that selects nothing
-(`{ user { } }`) fails the same way whichever `graphql-core` is installed; an
-empty input object or list (`search(filter: {})`) is a value and is fine. To
-send a document the check refuses on purpose, post it as a `json` body:
-`{"json": {"query": "...", "variables": {...}}}` sends the same request.
+installed `graphql-core` parses the query. Two rules hold whichever
+`graphql-core` is installed: a selection set must select something
+(`{ user { } }` fails; an empty input object or list, `search(filter: {})`, is
+a value and is fine), and a query nests at most 200 levels deep, counting
+selection sets, list and object values and list types together, as
+`graphql-core` 3.3.2 counts them. To send a document the check refuses on
+purpose, post it as a `json` body, which sends the same request:
+`{"json": {"query": "...", "variables": {...}}}`.
 
 ## Authentication
 

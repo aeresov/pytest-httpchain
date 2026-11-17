@@ -58,6 +58,20 @@ class _Command(typer.core.TyperCommand):
         _hide_flag_value_types(self, ctx)
         return super().get_help(ctx)
 
+    def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:  # ty: ignore[incompatible-method-override]
+        """A value an option refuses is reported in the same words on every
+        typer. typer 0.29 converts values through pydantic, which puts
+        "Value error, " before what a check that raised ValueError said:
+        ``--format xml`` was "Value error, 'xml' is not one of 'text',
+        'json'.", where typer up to 0.28 says the check's words alone, as
+        click does. The CLI's options that take a value are all on its
+        commands."""
+        try:
+            return super().parse_args(ctx, args)
+        except typer.BadParameter as e:
+            e.message = e.message.removeprefix("Value error, ")
+            raise
+
 
 class _Group(typer.core.TyperGroup):
     def get_help(self, ctx: typer.Context) -> str:  # ty: ignore[incompatible-method-override]
@@ -97,11 +111,18 @@ def _depth_option(value: str | int) -> int:
     0.28, with the CLI's own error. typer 0.29 converts an ``int`` through
     pydantic, which takes ``3.0`` and refuses ``３``; a parser is given the
     word as typed (and the default, 3) on every typer, and the error it
-    raises, not being a ValueError, reaches click unchanged."""
+    raises, not being a ValueError, reaches click unchanged.
+
+    A depth below 0 is refused, as the ini option's is ("must be
+    non-negative"): it counts parent directories, and the resolver read one
+    as 0 while naming it, "exceeds maximum parent traversal depth of -1"."""
     try:
-        return int(value)
+        depth = int(value)
     except ValueError:
         raise typer.BadParameter(f"{value!r} is not a valid integer.") from None
+    if depth < 0:
+        raise typer.BadParameter(f"{value!r} must be non-negative.")
+    return depth
 
 
 # What --help names the type after up to typer 0.28 (0.29 names the
@@ -394,9 +415,7 @@ class _OwnOptionsFirst(_Command):
     (``-sSL -o page.html https://...``) as the import's own, and write the
     scenario where curl was to write its answer."""
 
-    # typer.Context is the context typer makes; the base names the click
-    # Context typer vendors privately.
-    def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:  # ty: ignore[incompatible-method-override]
+    def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:
         own = {name: param for param in self.get_params(ctx) if param.param_type_name == "option" for name in (*param.opts, *param.secondary_opts)}
         index = 0
         while index < len(args) and args[index] != "--":

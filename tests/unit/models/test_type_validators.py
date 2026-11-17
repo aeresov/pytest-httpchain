@@ -141,11 +141,38 @@ def _nested_selection_sets(depth: int, innermost: str) -> str:
     return "{ a " * depth + innermost + " }" * depth
 
 
+def _nested(kind: str, levels: int) -> str:
+    """A query nested ``levels`` deep by ``kind``, counted as graphql-core
+    3.2.14 and 3.3.2 count toward their limit: each selection set, list
+    value, object value and list type is a level, whatever holds it."""
+    match kind:
+        case "selection-sets":
+            return _nested_selection_sets(levels - 1, "{ id }")
+        case "list-values":
+            # Inside the argument of a field of the operation's selection set,
+            # which is the first level.
+            return "{ f(x: " + "[" * (levels - 1) + "1" + "]" * (levels - 1) + ") }"
+        case "object-values":
+            return "{ f(x: " + "{a: " * (levels - 1) + "1" + "}" * (levels - 1) + ") }"
+        case "list-types":
+            # A variable's type, outside every selection set.
+            return "query ($v: " + "[" * levels + "Int" + "]" * levels + ") { f }"
+        case "selection-sets-and-list-values":
+            inner = levels // 2
+            return _nested_selection_sets(levels - inner - 1, "{ f(x: " + "[" * inner + "1" + "]" * inner + ") }")
+    raise AssertionError(kind)
+
+
+NESTING_KINDS = ["selection-sets", "list-values", "object-values", "list-types", "selection-sets-and-list-values"]
+
+
 class TestGraphQLQuery:
     """One verdict whichever graphql-core is installed: these run on the
     declared floor and on the locked version, and the parsers differ. From
     3.3.2 ``graphql.parse`` takes a selection set that selects nothing, which
-    every version before it refused."""
+    every version before it refused; and 3.2.14 and 3.3.2 refuse a document
+    nested more than 200 levels deep, which older versions parse until the
+    interpreter's recursion limit."""
 
     @pytest.mark.parametrize(
         "value",
@@ -154,13 +181,22 @@ class TestGraphQLQuery:
             "query GetUser { user { id name email } }",
             "mutation CreateUser($name: String!) { createUser(name: $name) { id } }",
             "query GetUsers($limit: Int) { users(limit: $limit) { id name } }",
-            # Under every version's ceiling: 200 levels where the parser counts
-            # them, the interpreter's recursion limit (near 240) where not.
-            pytest.param(_nested_selection_sets(149, "{ id }"), id="nested-150-deep"),
         ],
     )
     def test_valid(self, value):
         assert validate(GraphQLQuery, value) == value
+
+    @pytest.mark.parametrize("kind", NESTING_KINDS)
+    def test_nesting_200_levels_deep_is_valid(self, kind):
+        value = _nested(kind, 200)
+        assert validate(GraphQLQuery, value) == value
+
+    @pytest.mark.parametrize("kind", NESTING_KINDS)
+    def test_nesting_201_levels_deep_is_invalid(self, kind):
+        """Refused by the parser of 3.2.14 and 3.3.2, and by the check on
+        older versions, which parse it."""
+        with pytest.raises(ValidationError, match="Invalid GraphQL query"):
+            validate(GraphQLQuery, _nested(kind, 201))
 
     def test_valid_with_fragments_from_file(self, datadir):
         query = (datadir / "graphql_with_fragments.graphql").read_text()

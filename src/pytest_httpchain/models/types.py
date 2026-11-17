@@ -5,6 +5,7 @@ objects readable by attribute and by key in templates and JSON-serializable in
 bodies."""
 
 import base64
+import functools
 import keyword
 import re
 import threading
@@ -239,9 +240,35 @@ def regex_group(pattern: re.Pattern[str], group: int | str | None) -> int | str:
 validate_xml = create_string_validator(xml.etree.ElementTree.fromstring, "Invalid XML")
 
 
+# How deep graphql-core 3.2.14 and 3.3.2 let a document nest: they count
+# selection sets, list and object values and list types together, and refuse
+# a document where that count passes 200 (graphql.language.parser's
+# MAX_NESTING_DEPTH, absent before them).
+_GRAPHQL_NESTING = (graphql.language.SelectionSetNode, graphql.language.ListValueNode, graphql.language.ObjectValueNode, graphql.language.ListTypeNode)
+_GRAPHQL_MAX_NESTING = 200
+
+
+@functools.cache
+def _graphql_child_keys(node_type: type[graphql.language.Node]) -> tuple[str, ...]:
+    """The fields of a GraphQL AST node type that may hold nodes: its
+    ``keys`` but the location."""
+    return tuple(key for key in node_type.keys if key != "loc")
+
+
+def _graphql_children(node: Any) -> Iterator[Any]:
+    """The nodes ``node`` holds, directly or in a list, but names: a name
+    holds nothing, and a third of a document's nodes are names."""
+    for key in _graphql_child_keys(type(node)):
+        child = getattr(node, key, None)
+        for item in child if isinstance(child, list | tuple) else (child,):
+            if isinstance(item, graphql.language.Node) and not isinstance(item, graphql.language.NameNode):
+                yield item
+
+
 def _parse_graphql_query(text: str) -> None:
     """Parse a GraphQL document, or raise why it is not one. One grammar,
-    whichever graphql-core is installed: a selection set selects something.
+    whichever graphql-core is installed: a selection set selects something,
+    and a document nests at most 200 levels deep.
 
     A selection set with nothing in it (``{ user { } }``, ``query Q { }``)
     is a syntax error to graphql-core 3.0.0 through 3.3.1, and to a server
@@ -250,32 +277,34 @@ def _parse_graphql_query(text: str) -> None:
     1227), so the same scenario would load or not by the version installed:
     it is refused here, from what was parsed. The parser's own switch
     (``allow_empty_selection_sets=False``) is not the way: versions before
-    3.3.2 do not have it, and it is deprecated, to be removed.
+    3.3.2 do not have it, and it is deprecated, to be removed. An input
+    object or a list with nothing in it (``f(arg: {})``, ``[]``) is a value,
+    not a selection set, and stays valid.
 
-    An operation or fragment definition, a field and an inline fragment
-    hold a selection set, each as its ``selection_set`` (a field that
-    selects nothing has None there; a fragment spread and a type-system
-    definition have no such attribute, which getattr reads as None). All a
-    selection set holds is fields, fragment spreads and inline fragments. So
-    following that one attribute reaches every selection set and nothing
-    else: the empty braces of an input object (``f(arg: {})``) or a list are
-    a value, never looked at. The nodes wait on a list, not on the call
-    stack, so nesting the parser got through costs no frames here.
+    Nesting the other way round: 3.2.14 and 3.3.2 refuse a document nested
+    more than 200 levels deep (`_GRAPHQL_NESTING`), where 3.3.1 and older
+    parse one until the interpreter's recursion limit, some 240 levels of
+    selection sets. So it is counted here as those versions count it, and
+    refused on every version past 200. Only the parser can refuse one deeper
+    still, by that limit or its own.
 
-    It makes no other verdict the same across versions. How deep a document
-    may nest is graphql-core's to say: 3.2.14 and 3.3.2 refuse more than 200
-    levels, where 3.3.1 and older parse until the interpreter's recursion
-    limit.
+    Both are read from the whole document: each node is followed into every
+    node it holds (`_graphql_children`, by its ``keys``, the same on every
+    version), with how many of the nesting kinds hold it. The nodes wait on a
+    list, not on the call stack, so nesting the parser got through costs no
+    frames here.
     """
     document = graphql.parse(text)
-    pending: list[Any] = [*document.definitions]
+    pending: list[tuple[Any, int]] = [(document, 0)]
     while pending:
-        selection_set = getattr(pending.pop(), "selection_set", None)
-        if selection_set is None:
-            continue
-        if not selection_set.selections:
-            raise graphql.GraphQLSyntaxError(selection_set.loc.source, selection_set.loc.start, "A selection set must not be empty.")
-        pending.extend(selection_set.selections)
+        node, depth = pending.pop()
+        if isinstance(node, _GRAPHQL_NESTING):
+            depth += 1
+            if depth > _GRAPHQL_MAX_NESTING:
+                raise graphql.GraphQLSyntaxError(node.loc.source, node.loc.start, f"Document is nested more than {_GRAPHQL_MAX_NESTING} levels deep.")
+        if isinstance(node, graphql.language.SelectionSetNode) and not node.selections:
+            raise graphql.GraphQLSyntaxError(node.loc.source, node.loc.start, "A selection set must not be empty.")
+        pending.extend((child, depth) for child in _graphql_children(node))
 
 
 validate_graphql_query = create_string_validator(_parse_graphql_query, "Invalid GraphQL query")
