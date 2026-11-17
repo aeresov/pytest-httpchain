@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was sent as written. This verdict no longer depends on the installed `graphql-core`: a query a
   template renders gets the same verdict when its stage runs, and an empty input object or list
   (`f(arg: {})`, `[]`) is still valid. To send such a document on purpose, post it as a `json` body.
+- The `--help` of `pytest-httpchain` and of every command lists no value type beside a flag again
+  with typer 0.29 installed. It showed `--strict <bool>`, `--force <bool>`, even `--help <bool>` and
+  `--version <bool>`, though a flag takes no value: `validate --strict true` reads `true` as a path.
+- `--ref-parent-traversal-depth` (`validate`, `resolve`, `show`, `graph`) is read as Python's `int()`
+  reads it, as pytest reads the `httpchain_ref_parent_traversal_depth` ini option, whichever
+  supported typer is installed. With typer 0.29, `3.0` was taken as 3 and a non-ASCII digit such as
+  `３` was refused. An invalid value is reported as `'3.0' is not a valid integer.` on every typer.
+- `pytest-httpchain import har|curl --output ''` is a usage error (exit 2) on every supported typer.
+  Up to typer 0.28 it reached the import as the current directory and failed there (exit 1).
 
 ## [0.19.0] - 2026-11-11
 

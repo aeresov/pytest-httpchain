@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from pytest_httpchain.cli import app
@@ -102,6 +103,142 @@ def test_no_output_option(command, flag):
     result = runner.invoke(app, [command, flag, "x.json"])
     assert result.exit_code == 2, result.output
     assert f"No such option: {flag}" in _ANSI.sub("", result.stderr)
+
+
+# Every command and group, and the flags its --help lists: its own, and the
+# ones typer adds (--help to each, the completion options to the app).
+HELP_FLAGS = {
+    (): {"--version", "--install-completion", "--show-completion", "--help"},
+    ("validate",): {"--deep", "--strict", "--help"},
+    ("schema",): {"--help"},
+    ("resolve",): {"--help"},
+    ("show",): {"--help"},
+    ("graph",): {"--help"},
+    ("import",): {"--help"},
+    ("import", "har"): {"--force", "--all", "--help"},
+    ("import", "curl"): {"--force", "--help"},
+}
+
+# An option's row in --help, from its first name on: in the table typer draws
+# with rich, and in the plain list it writes without (TYPER_USE_RICH=0). Two
+# or more spaces part the table's cells; in the list they part an option from
+# its help, and a value type follows the name after one. A help text that
+# wraps goes on in rows that start with no name.
+_OPTION_ROW = re.compile(r"^(?:│ |  )(--\S+)\s{2,}(.*?)\s*│?$", re.MULTILINE)
+
+
+def _command_paths(command, path: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
+    return [path, *(found for name, sub in getattr(command, "commands", {}).items() for found in _command_paths(sub, (*path, name)))]
+
+
+def test_help_flags_names_every_command():
+    """A command made without the CLI's command class lists its flags as the
+    installed typer does, value type and all: one added later gets its row in
+    HELP_FLAGS, so the test below holds it to the same."""
+    assert set(HELP_FLAGS) == set(_command_paths(typer.main.get_command(app)))
+
+
+@pytest.mark.parametrize(("command", "flags"), [pytest.param(command, flags, id="-".join(command) or "app") for command, flags in HELP_FLAGS.items()])
+def test_help_lists_a_value_type_for_every_option_but_a_flag(command, flags):
+    """A flag takes no value (`--force true` reads `true` as the next
+    argument), so --help shows none beside it, typer's own flags included:
+    typer 0.29 lists `--force <bool>` and `--help <bool>`. An option that
+    takes a value keeps its type."""
+    # Wide enough for every flag's name: a narrow terminal cuts names short.
+    result = runner.invoke(app, [*command, "--help"], env={"COLUMNS": "200"})
+    assert result.exit_code == 0, result.output
+    # What each row holds after the option's first name: a short name and a
+    # value type, where the table shows them, then its help.
+    listed = {name: re.split(r"\s{2,}", rest) for name, rest in _OPTION_ROW.findall(_ANSI.sub("", result.output))}
+    assert {name for name, cells in listed.items() if len(cells) == 1} == flags, listed
+
+
+# --- option values, read alike on every supported typer ---
+
+DEPTH_COMMANDS = ["validate", "resolve", "show", "graph"]
+
+
+@pytest.fixture
+def far_include(tmp_path) -> Path:
+    """A scenario including a file eleven directories up: past every depth
+    below, so each command's error names the depth it read."""
+    return _write(tmp_path / "test_x.http.json", {"stages": [{"name": "s", "request": {"$include": "../" * 11 + "common.json"}}]})
+
+
+@pytest.mark.parametrize("command", DEPTH_COMMANDS)
+def test_every_command_refuses_a_float_depth(far_include, command):
+    """Each command reads --ref-parent-traversal-depth through the one
+    declaration (RefParentTraversalDepth), so `3.0`, which typer 0.29 took as
+    3, is refused by each; the tables below hold what that declaration reads."""
+    result = runner.invoke(app, [command, "--ref-parent-traversal-depth", "3.0", str(far_include)])
+    assert result.exit_code == 2, result.output
+    assert "Invalid value for '--ref-parent-traversal-depth': '3.0' is not a valid integer." in " ".join(_ANSI.sub("", result.stderr).replace("│", "").split())
+
+
+@pytest.mark.parametrize(
+    ("word", "depth"),
+    [
+        pytest.param(None, 3, id="default"),
+        pytest.param("3", 3, id="plain"),
+        # What Python's int() reads, as typer did up to 0.28.
+        pytest.param(" +03\n", 3, id="sign-zeros-whitespace"),
+        pytest.param("1_0", 10, id="underscore"),
+        # Any Unicode decimal digit, which typer 0.29 refused.
+        pytest.param("\uff13", 3, id="fullwidth"),
+        pytest.param("\u0661\u0660", 10, id="arabic-indic"),
+    ],
+)
+def test_ref_parent_traversal_depth_reads_as_int_does(far_include, word, depth):
+    args = [] if word is None else ["--ref-parent-traversal-depth", word]
+    result = runner.invoke(app, ["resolve", *args, str(far_include)])
+    assert result.exit_code == 1, result.output
+    assert result.output.endswith(f"exceeds maximum parent traversal depth of {depth}\n")
+
+
+@pytest.mark.parametrize(
+    "word",
+    [
+        # A float's spelling, even of a whole number, which typer 0.29 took.
+        pytest.param("3.0", id="float"),
+        pytest.param("-3.0", id="negative-float"),
+        pytest.param("3.5", id="fraction"),
+        pytest.param("3e0", id="exponent"),
+        pytest.param("0x3", id="hex"),
+        pytest.param("", id="empty"),
+        pytest.param("true", id="bool"),
+    ],
+)
+def test_ref_parent_traversal_depth_refuses_what_int_does(far_include, word):
+    """A usage error in the CLI's own words, whichever typer is installed."""
+    result = runner.invoke(app, ["resolve", "--ref-parent-traversal-depth", word, str(far_include)])
+    assert result.exit_code == 2, result.output
+    assert f"Invalid value for '--ref-parent-traversal-depth': {word!r} is not a valid integer." in " ".join(_ANSI.sub("", result.stderr).replace("│", "").split())
+
+
+def test_ref_parent_traversal_depth_help_names_an_int():
+    """typer up to 0.28 names a parser's type after its function: INT on 0.26, <int> after."""
+    result = runner.invoke(app, ["resolve", "--help"])
+    assert result.exit_code == 0, result.output
+    # The option's name may be cut short to fit: its row is found by its help.
+    assert re.search(r"\s(<int>|INT)\s+Maximum \$ref parent", _ANSI.sub("", result.output)), result.output
+
+
+@pytest.mark.parametrize(
+    ("args", "option"),
+    [
+        # A value exactly as declared, on every typer. The wording is typer's
+        # own (0.29 adds "Value error, "), so only the option is asserted.
+        pytest.param(["validate", "--format", "JSON"], "--format", id="other-case"),
+        pytest.param(["show", "--format", " json"], "--format", id="whitespace"),
+        pytest.param(["validate", "--format", ""], "--format", id="empty"),
+        pytest.param(["validate", "--format", "OutputFormat.json"], "--format", id="qualified-name"),
+        pytest.param(["graph", "--direction", "lr"], "--direction", id="direction-other-case"),
+    ],
+)
+def test_choice_options_refuse_any_other_value(ok_scenario, args, option):
+    result = runner.invoke(app, [*args, str(ok_scenario)])
+    assert result.exit_code == 2, result.output
+    assert f"Invalid value for '{option}'" in " ".join(_ANSI.sub("", result.stderr).replace("│", "").split())
 
 
 # --- validate ---
@@ -982,6 +1119,18 @@ def test_import_overwrites_only_with_force(tmp_path, args, exit_code, content):
     else:
         assert output.read_text() == content
         assert result.stderr == f"error: {output} exists; pass --force to overwrite it\n"
+
+
+@pytest.mark.parametrize("output", [pytest.param("", id="empty"), pytest.param(".", id="current-directory")])
+@pytest.mark.parametrize("source", [pytest.param(["curl", "curl https://api.test/a"], id="curl"), pytest.param(["har", str(HAR_EXAMPLE)], id="har")])
+def test_import_refuses_an_output_path_naming_no_file(tmp_path, monkeypatch, source, output):
+    """A usage error, whichever typer is installed: up to 0.28 an empty one
+    reached the import as the directory ``.``, to fail there (with --force,
+    writing to it)."""
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["import", source[0], "-o", output, "--force", *source[1:]])
+    assert result.exit_code == 2, result.output
+    assert "Invalid value for '--output' / '-o'" in " ".join(_ANSI.sub("", result.stderr).replace("│", "").split())
 
 
 def test_import_into_a_missing_directory_exits_one(tmp_path):

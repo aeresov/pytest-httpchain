@@ -24,7 +24,50 @@ from pytest_httpchain.models import Scenario
 from pytest_httpchain.schema import build_schema
 from pytest_httpchain.validation import DiagnosticCode, DiscoveryError, ValidateResult, load_scenario, load_scenario_json, validate_paths
 
-app = typer.Typer(no_args_is_help=True)
+
+def _hide_flag_value_types(command: typer.core.TyperCommand | typer.core.TyperGroup, ctx: typer.Context) -> None:
+    """Have the command's help list its flags with no value type beside them.
+
+    typer 0.29.0 and 0.29.1 (the newest when this was written) list a value
+    type beside every option, a flag included: ``--force <bool>``, even
+    ``--help <bool>``. A flag takes no value (``--force true`` reads ``true``
+    as the next argument), and typer up to 0.28 listed none. What 0.29 lists
+    is an option's metavar when it has one, so each flag without one is given
+    an empty one; typer up to 0.28 shows a flag's metavar nowhere. The flags
+    are the command's own and the ones typer adds (--help, the completion
+    options), which no declaration here reaches. Only help reads a flag's
+    metavar (an error names an option by its names), so a command whose help
+    was drawn parses as it did before.
+
+    Delete this, the two classes below and every ``cls=`` naming them
+    (_OwnOptionsFirst then derives from typer.core.TyperCommand again) once
+    no typer the ``typer>=`` requirement admits lists a type for a flag; the
+    CLI's test of every command's help goes red on one that does.
+    """
+    for param in command.get_params(ctx):
+        if getattr(param, "is_flag", False) and param.metavar is None:
+            param.metavar = ""
+
+
+# The classes every command and group of this CLI is made with (`cls=`), for
+# the help they draw. typer has no default class for a whole app: a command
+# made without one lists `<bool>` again on typer 0.29, which HELP_FLAGS in the
+# CLI's tests, naming every command, is there to catch. typer.Context is the
+# context typer makes; the base names the click Context typer vendors
+# privately.
+class _Command(typer.core.TyperCommand):
+    def get_help(self, ctx: typer.Context) -> str:  # ty: ignore[incompatible-method-override]
+        _hide_flag_value_types(self, ctx)
+        return super().get_help(ctx)
+
+
+class _Group(typer.core.TyperGroup):
+    def get_help(self, ctx: typer.Context) -> str:  # ty: ignore[incompatible-method-override]
+        _hide_flag_value_types(self, ctx)
+        return super().get_help(ctx)
+
+
+app = typer.Typer(cls=_Group, no_args_is_help=True)
 
 
 class OutputFormat(StrEnum):
@@ -37,7 +80,24 @@ class GraphDirection(StrEnum):
     LR = "LR"
 
 
-RefParentTraversalDepth = Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.")]
+def _depth_option(value: str | int) -> int:
+    """The depth as Python's ``int()`` reads it, as pytest reads the
+    ``httpchain_ref_parent_traversal_depth`` ini option and typer did up to
+    0.28, with the CLI's own error. typer 0.29 converts an ``int`` through
+    pydantic, which takes ``3.0`` and refuses ``３``; a parser is given the
+    word as typed (and the default, 3) on every typer, and the error it
+    raises, not being a ValueError, reaches click unchanged."""
+    try:
+        return int(value)
+    except ValueError:
+        raise typer.BadParameter(f"{value!r} is not a valid integer.") from None
+
+
+# What --help names the type after up to typer 0.28 (0.29 names the
+# annotation): <int> on 0.27 and 0.28 as before, INT where 0.26 wrote INTEGER.
+_depth_option.__name__ = "int"
+
+RefParentTraversalDepth = Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.", parser=_depth_option)]
 RootPath = Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: the rootdir pytest would use).")]
 OutputFormatOption = Annotated[OutputFormat, typer.Option("--format", help="Output format: human-readable text or machine-readable JSON.")]
 
@@ -101,7 +161,7 @@ def _summary(results: list[tuple[Path, ValidateResult]]) -> str | None:
     return line
 
 
-@app.command()
+@app.command(cls=_Command)
 def validate(
     paths: Annotated[list[Path], typer.Argument(help="Scenario files to validate, or directories to search for them.")],
     ref_parent_traversal_depth: RefParentTraversalDepth = 3,
@@ -171,7 +231,7 @@ def validate(
     raise typer.Exit(0 if all_passed else 1)
 
 
-@app.command()
+@app.command(cls=_Command)
 def schema() -> None:
     """Emit the JSON Schema for scenario files (editor autocomplete/validation).
 
@@ -180,7 +240,7 @@ def schema() -> None:
     typer.echo(json.dumps(build_schema(), indent=2, default=str))
 
 
-@app.command()
+@app.command(cls=_Command)
 def resolve(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to resolve.")],
     ref_parent_traversal_depth: RefParentTraversalDepth = 3,
@@ -254,7 +314,7 @@ def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[st
     return lines
 
 
-@app.command()
+@app.command(cls=_Command)
 def show(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to summarize.")],
     output_format: OutputFormatOption = OutputFormat.text,
@@ -298,7 +358,7 @@ def _to_mermaid(flow: DataFlow, direction: str = "TD") -> str:
     return "\n".join(lines)
 
 
-@app.command()
+@app.command(cls=_Command)
 def graph(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to graph.")],
     direction: Annotated[GraphDirection, typer.Option("--direction", help="Flowchart orientation.")] = GraphDirection.TD,
@@ -311,11 +371,11 @@ def graph(
     typer.echo(_to_mermaid(flow, direction.value))
 
 
-import_app = typer.Typer(no_args_is_help=True, help="Write a starter scenario from recorded traffic: a HAR file or curl commands.")
+import_app = typer.Typer(cls=_Group, no_args_is_help=True, help="Write a starter scenario from recorded traffic: a HAR file or curl commands.")
 app.add_typer(import_app, name="import")
 
 
-class _OwnOptionsFirst(typer.core.TyperCommand):
+class _OwnOptionsFirst(_Command):
     """A command whose own options come first: from the first word that is
     none of them on, every word is its argument's, as after a ``--``. For
     ``import curl``, whose argument is a curl command: told to leave options
@@ -348,7 +408,17 @@ class _OwnOptionsFirst(typer.core.TyperCommand):
         return super().parse_args(ctx, args)
 
 
-OutputPathOption = Annotated[Path | None, typer.Option("--output", "-o", help="Write the scenario to this file instead of stdout.", dir_okay=False)]
+def _output_option(value: Path | None) -> Path | None:
+    """An empty --output is a usage error on every typer: 0.29 refuses it as
+    the directory ``.`` it reads it as, and up to 0.28 it reached the import
+    as that directory, to fail there. (A ``.`` typed never gets here: typer
+    refuses a directory.)"""
+    if value == Path():
+        raise typer.BadParameter("an empty path names no file")
+    return value
+
+
+OutputPathOption = Annotated[Path | None, typer.Option("--output", "-o", help="Write the scenario to this file instead of stdout.", dir_okay=False, callback=_output_option)]
 ForceOption = Annotated[bool, typer.Option("--force", help="Overwrite the --output file if it exists.")]
 
 
@@ -421,7 +491,7 @@ def _emit(result: ImportResult, warnings: list[str], output: Path | None) -> Non
         raise typer.Exit(1) from None
 
 
-@import_app.command("har")
+@import_app.command("har", cls=_Command)
 def import_har(
     har: Annotated[Path, typer.Argument(help="HAR file to import (- for stdin), as a browser's developer tools or the plugin's --httpchain-output-dir export it.")],
     output: OutputPathOption = None,
