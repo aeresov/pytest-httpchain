@@ -254,13 +254,13 @@ def _parse_graphql_query(text: str) -> None:
 
     An operation or fragment definition, a field and an inline fragment
     hold a selection set, each as its ``selection_set`` (a field that
-    selects nothing, and a fragment spread, has None there; so does a
-    type-system definition, which has no such attribute). All a selection
-    set holds is fields, fragment spreads and inline fragments. So following
-    that one attribute reaches every selection set and nothing else: the
-    empty braces of an input object (``f(arg: {})``) or a list are a value,
-    never looked at. The nodes wait on a list, not on the call stack, so
-    nesting the parser got through costs no frames here.
+    selects nothing has None there; a fragment spread and a type-system
+    definition have no such attribute, which getattr reads as None). All a
+    selection set holds is fields, fragment spreads and inline fragments. So
+    following that one attribute reaches every selection set and nothing
+    else: the empty braces of an input object (``f(arg: {})``) or a list are
+    a value, never looked at. The nodes wait on a list, not on the call
+    stack, so nesting the parser got through costs no frames here.
 
     It makes no other verdict the same across versions. How deep a document
     may nest is graphql-core's to say: 3.2.14 and 3.3.2 refuse more than 200

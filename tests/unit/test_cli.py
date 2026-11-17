@@ -11,7 +11,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from pytest_httpchain.cli import app
+from pytest_httpchain.cli import _output_option, app
 from pytest_httpchain.schema import build_schema
 from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
 
@@ -132,9 +132,10 @@ def _command_paths(command, path: tuple[str, ...] = ()) -> list[tuple[str, ...]]
 
 
 def test_help_flags_names_every_command():
-    """A command made without the CLI's command class lists its flags as the
-    installed typer does, value type and all: one added later gets its row in
-    HELP_FLAGS, so the test below holds it to the same."""
+    """A command made without the CLI's command class (another app, or a
+    ``cls=`` of typer's own) lists its flags as the installed typer does,
+    value type and all: one added later gets its row in HELP_FLAGS, so the
+    test below holds it to the same."""
     assert set(HELP_FLAGS) == set(_command_paths(typer.main.get_command(app)))
 
 
@@ -242,9 +243,9 @@ def test_ref_parent_traversal_depth_refuses_what_int_does(far_include, word):
 
 def test_ref_parent_traversal_depth_help_names_an_int():
     """typer up to 0.28 names a parser's type after its function: INT on 0.26, <int> after."""
-    result = runner.invoke(app, ["resolve", "--help"])
+    # Wide enough that the help text does not wrap before the words matched.
+    result = runner.invoke(app, ["resolve", "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0, result.output
-    # The option's name may be cut short to fit: its row is found by its help.
     assert re.search(r"\s(<int>|INT)\s+Maximum \$ref parent", _ANSI.sub("", result.output)), result.output
 
 
@@ -1156,6 +1157,14 @@ def test_import_refuses_an_output_path_naming_no_file(tmp_path, monkeypatch, sou
     result = runner.invoke(app, ["import", source[0], "-o", output, "--force", *source[1:]])
     assert result.exit_code == 2, result.output
     assert "Invalid value for '--output' / '-o'" in " ".join(_ANSI.sub("", result.stderr).replace("│", "").split())
+
+
+def test_output_option_refuses_the_path_an_empty_word_becomes():
+    """What typer up to 0.28 hands the callback for ``-o ''``, ``Path('')``
+    (that is, ``.``), is refused; called here, as typer 0.29, the locked one,
+    refuses the empty word before the callback would run."""
+    with pytest.raises(typer.BadParameter, match="an empty path names no file"):
+        _output_option(Path(""))
 
 
 def test_import_into_a_missing_directory_exits_one(tmp_path):

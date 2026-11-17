@@ -39,22 +39,20 @@ def _hide_flag_value_types(command: typer.core.TyperCommand | typer.core.TyperGr
     metavar (an error names an option by its names), so a command whose help
     was drawn parses as it did before.
 
-    Delete this, the two classes below and every ``cls=`` naming them
-    (_OwnOptionsFirst then derives from typer.core.TyperCommand again) once
-    no typer the ``typer>=`` requirement admits lists a type for a flag; the
-    CLI's test of every command's help goes red on one that does.
+    Delete this, the classes below and `_Typer`, making the apps plain
+    ``typer.Typer`` again (_OwnOptionsFirst then derives from
+    typer.core.TyperCommand), once no typer the ``typer>=`` requirement admits
+    lists a type for a flag; the CLI's test of every command's help goes red
+    on one that does.
     """
     for param in command.get_params(ctx):
         if getattr(param, "is_flag", False) and param.metavar is None:
             param.metavar = ""
 
 
-# The classes every command and group of this CLI is made with (`cls=`), for
-# the help they draw. typer has no default class for a whole app: a command
-# made without one lists `<bool>` again on typer 0.29, which HELP_FLAGS in the
-# CLI's tests, naming every command, is there to catch. typer.Context is the
-# context typer makes; the base names the click Context typer vendors
-# privately.
+# The classes every command and group of this CLI is made with, for the help
+# they draw. typer.Context is the context typer makes; the base names the
+# click Context typer vendors privately.
 class _Command(typer.core.TyperCommand):
     def get_help(self, ctx: typer.Context) -> str:  # ty: ignore[incompatible-method-override]
         _hide_flag_value_types(self, ctx)
@@ -67,7 +65,20 @@ class _Group(typer.core.TyperGroup):
         return super().get_help(ctx)
 
 
-app = typer.Typer(cls=_Group, no_args_is_help=True)
+class _Typer(typer.Typer):
+    """An app whose group and commands are made with the classes above unless
+    a ``cls=`` says otherwise: typer has no setting for an app's default
+    classes, and a command made with typer's own would list `<bool>` again on
+    typer 0.29."""
+
+    def __init__(self, *, cls: type[typer.core.TyperGroup] | None = _Group, **kwargs) -> None:
+        super().__init__(cls=cls, **kwargs)
+
+    def command(self, name: str | None = None, *, cls: type[typer.core.TyperCommand] | None = _Command, **kwargs):
+        return super().command(name, cls=cls, **kwargs)
+
+
+app = _Typer(no_args_is_help=True)
 
 
 class OutputFormat(StrEnum):
@@ -161,7 +172,7 @@ def _summary(results: list[tuple[Path, ValidateResult]]) -> str | None:
     return line
 
 
-@app.command(cls=_Command)
+@app.command()
 def validate(
     paths: Annotated[list[Path], typer.Argument(help="Scenario files to validate, or directories to search for them.")],
     ref_parent_traversal_depth: RefParentTraversalDepth = 3,
@@ -231,7 +242,7 @@ def validate(
     raise typer.Exit(0 if all_passed else 1)
 
 
-@app.command(cls=_Command)
+@app.command()
 def schema() -> None:
     """Emit the JSON Schema for scenario files (editor autocomplete/validation).
 
@@ -240,7 +251,7 @@ def schema() -> None:
     typer.echo(json.dumps(build_schema(), indent=2, default=str))
 
 
-@app.command(cls=_Command)
+@app.command()
 def resolve(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to resolve.")],
     ref_parent_traversal_depth: RefParentTraversalDepth = 3,
@@ -314,7 +325,7 @@ def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[st
     return lines
 
 
-@app.command(cls=_Command)
+@app.command()
 def show(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to summarize.")],
     output_format: OutputFormatOption = OutputFormat.text,
@@ -358,7 +369,7 @@ def _to_mermaid(flow: DataFlow, direction: str = "TD") -> str:
     return "\n".join(lines)
 
 
-@app.command(cls=_Command)
+@app.command()
 def graph(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to graph.")],
     direction: Annotated[GraphDirection, typer.Option("--direction", help="Flowchart orientation.")] = GraphDirection.TD,
@@ -371,7 +382,7 @@ def graph(
     typer.echo(_to_mermaid(flow, direction.value))
 
 
-import_app = typer.Typer(cls=_Group, no_args_is_help=True, help="Write a starter scenario from recorded traffic: a HAR file or curl commands.")
+import_app = _Typer(no_args_is_help=True, help="Write a starter scenario from recorded traffic: a HAR file or curl commands.")
 app.add_typer(import_app, name="import")
 
 
@@ -491,7 +502,7 @@ def _emit(result: ImportResult, warnings: list[str], output: Path | None) -> Non
         raise typer.Exit(1) from None
 
 
-@import_app.command("har", cls=_Command)
+@import_app.command("har")
 def import_har(
     har: Annotated[Path, typer.Argument(help="HAR file to import (- for stdin), as a browser's developer tools or the plugin's --httpchain-output-dir export it.")],
     output: OutputPathOption = None,
