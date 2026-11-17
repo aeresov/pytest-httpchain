@@ -37,8 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pytest-httpchain import har|curl --output ''` is a usage error (exit 2) on every supported typer.
   Up to typer 0.28 it reached the import as the current directory and failed there (exit 1).
 - `--ref-parent-traversal-depth` refuses a negative depth (exit 2, `'-1' must be non-negative.`), as
-  the `httpchain_ref_parent_traversal_depth` ini option does. It was taken, and references were
-  held to no parent directory while the error named the depth as -1.
+  the `httpchain_ref_parent_traversal_depth` ini option does. It was taken, and every file reference
+  was then refused, even one in the scenario's own directory, with an error naming the depth as -1.
 - An invalid `--format` or `--direction` value is reported in the same words on every supported
   typer: `'xml' is not one of 'text', 'json'.`. With typer 0.29 the message began `Value error, `.
 

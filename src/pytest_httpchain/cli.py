@@ -114,8 +114,9 @@ def _depth_option(value: str | int) -> int:
     raises, not being a ValueError, reaches click unchanged.
 
     A depth below 0 is refused, as the ini option's is ("must be
-    non-negative"): it counts parent directories, and the resolver read one
-    as 0 while naming it, "exceeds maximum parent traversal depth of -1"."""
+    non-negative"): it counts parent directories, and with one the resolver
+    refused every file reference, even one beside the scenario, as
+    "exceeds maximum parent traversal depth of -1"."""
     try:
         depth = int(value)
     except ValueError:

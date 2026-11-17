@@ -9,22 +9,31 @@ from pathlib import Path
 
 import pytest
 import typer
+import typer.rich_utils
 from typer.testing import CliRunner
 
 from pytest_httpchain.cli import _output_option, app
 from pytest_httpchain.schema import build_schema
 from tests.unit.helpers import TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, on_bounded_stack
 
-# rich draws typer's help and error boxes as wide as the terminal it finds:
-# COLUMNS, else the real one behind the test run. Narrow, it wraps the words
-# the tests look for, so every invocation gets this width, wide enough for
-# every help row and message here.
+# rich draws typer's help and error boxes as wide as it is told: by
+# TERMINAL_WIDTH, which typer reads when it is imported (see
+# _width_from_columns), else COLUMNS, else the real terminal behind the test
+# run. Narrow, it wraps the words the tests look for, so every invocation
+# gets this width, wide enough for every help row and message here.
 runner = CliRunner(env={"COLUMNS": "200"})
 # typer renders usage errors through rich, which colours them whenever
 # GITHUB_ACTIONS (or FORCE_COLOR) is set and splits `--output` across styles.
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 USERFUNCS_DIR = Path(__file__).parent / "test_validation_userfuncs"
+
+
+@pytest.fixture(autouse=True)
+def _width_from_columns(monkeypatch):
+    """The runner's COLUMNS, not a TERMINAL_WIDTH in the environment: typer
+    reads that once, on import, and hands it to rich over COLUMNS."""
+    monkeypatch.setattr(typer.rich_utils, "MAX_WIDTH", None, raising=False)
 
 
 def _write(path: Path, data: dict) -> Path:
@@ -250,8 +259,9 @@ def test_ref_parent_traversal_depth_refuses_what_int_does(far_include, word):
 @pytest.mark.parametrize("command", DEPTH_COMMANDS)
 @pytest.mark.parametrize("word", ["-1", "-3"])
 def test_ref_parent_traversal_depth_refuses_a_negative_depth(far_include, command, word):
-    """As the httpchain_ref_parent_traversal_depth ini option does: the
-    resolver read a negative depth as 0 while naming it."""
+    """As the httpchain_ref_parent_traversal_depth ini option does: with a
+    negative depth the resolver refused every file reference, even one
+    beside the scenario."""
     result = runner.invoke(app, [command, "--ref-parent-traversal-depth", word, str(far_include)])
     assert result.exit_code == 2, result.output
     assert _unspaced(f"Invalid value for '--ref-parent-traversal-depth': {word!r} must be non-negative.") in _unspaced(result.stderr)
