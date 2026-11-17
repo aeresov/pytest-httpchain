@@ -65,7 +65,12 @@ dev = [
     "flask-httpauth>=4.8.0",
     "import-linter>=2.0",
     "ruff>=0.12.1",
-    "ty>=0.0.84",
+    # 0.0.100 renamed the rules that [tool.ty.overrides.rules] and the
+    # `ty: ignore[...]` comments in src/ name: unresolved-attribute became
+    # missing-attribute (its union case split out as missing-union-attribute)
+    # and invalid-{method,attribute}-override became incompatible-...-override.
+    # An older ty does not know the new names, so `ty check` fails on it.
+    "ty>=0.0.100",
     "coverage[toml]>=7.10", # `patch = ["subprocess"]` needs 7.10
 
     "pytest-datadir>=1.7.2",
