@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Refresh the lockfile for `graphql-core` 3.3.2, `typer` 0.29.1, `import-linter` 2.16, `ruff` 0.17.5,
+  `ty` 0.0.102 and `mkdocs-material` 9.8.1, and follow ty 0.0.100's rule renames in the ty
+  configuration and the source's `ty: ignore` comments. The `ty` dev floor is now 0.0.100, the first
+  release that knows the new names. With `graphql-core` 3.3.2 installed (as with 3.2.14), a GraphQL
+  `query` nested more than 200 levels deep fails with `Invalid GraphQL query`; 3.3.1 and older parse
+  one until Python's recursion limit, near 240 levels.
+
+### Fixed
+
+- A GraphQL `query` with an empty selection set (`{ user { } }`, `{ }`, `query Q { }`,
+  `fragment F on T { }`) fails validation with `Invalid GraphQL query` whichever `graphql-core` is
+  installed. `graphql-core` 3.3.2 parses one where 3.0.0 through 3.3.1 report a syntax error, so with
+  3.3.2 installed such a scenario passed collection and `pytest-httpchain validate`, and the query
+  was sent as written. This verdict no longer depends on the installed `graphql-core`: a query a
+  template renders gets the same verdict when its stage runs, and an empty input object or list
+  (`f(arg: {})`, `[]`) is still valid. To send such a document on purpose, post it as a `json` body.
+
 ## [0.19.0] - 2026-11-11
 
 ### Added

@@ -136,7 +136,17 @@ class TestXMLString:
             validate(XMLString, value)
 
 
+def _nested_selection_sets(depth: int, innermost: str) -> str:
+    """``innermost`` as the selection set of a field ``depth`` fields down."""
+    return "{ a " * depth + innermost + " }" * depth
+
+
 class TestGraphQLQuery:
+    """One verdict whichever graphql-core is installed: these run on the
+    declared floor and on the locked version, and the parsers differ. From
+    3.3.2 ``graphql.parse`` takes a selection set that selects nothing, which
+    every version before it refused."""
+
     @pytest.mark.parametrize(
         "value",
         [
@@ -144,6 +154,9 @@ class TestGraphQLQuery:
             "query GetUser { user { id name email } }",
             "mutation CreateUser($name: String!) { createUser(name: $name) { id } }",
             "query GetUsers($limit: Int) { users(limit: $limit) { id name } }",
+            # Under every version's ceiling: 200 levels where the parser counts
+            # them, the interpreter's recursion limit (near 240) where not.
+            pytest.param(_nested_selection_sets(149, "{ id }"), id="nested-150-deep"),
         ],
     )
     def test_valid(self, value):
@@ -153,8 +166,67 @@ class TestGraphQLQuery:
         query = (datadir / "graphql_with_fragments.graphql").read_text()
         assert validate(GraphQLQuery, query) == query
 
-    @pytest.mark.parametrize("value", ["{ user { id name }", "not a graphql query"])
+    # Empty braces that are no selection set: an input object or a list with
+    # nothing in it is a value, and braces in a string or a comment are text.
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("{ search(filter: {}) { id } }", id="object-argument"),
+            pytest.param("{ search(filter: {tags: {}, ids: []}) { id } }", id="nested-in-an-object-argument"),
+            pytest.param("{ search(ids: []) { id } }", id="list-argument"),
+            pytest.param("query ($filter: Filter = {}) { search(filter: $filter) { id } }", id="object-variable-default"),
+            pytest.param("query ($ids: [ID!] = []) { search(ids: $ids) { id } }", id="list-variable-default"),
+            pytest.param("{ user @audit(context: {}) { id } }", id="directive-argument"),
+            pytest.param('{ echo(text: "{ user { } }") }', id="string"),
+            pytest.param('{ echo(text: """\n  { user { } }\n""") }', id="block-string"),
+            pytest.param("{ user { id # { }\n } }", id="comment"),
+        ],
+    )
+    def test_empty_braces_that_are_no_selection_set_are_valid(self, value):
+        assert validate(GraphQLQuery, value) == value
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "{ user { id name }",
+            "not a graphql query",
+            # Deeper than any version parses, which one says as a syntax error
+            # and another by running into the recursion limit: both are this.
+            pytest.param(_nested_selection_sets(BEYOND_RECURSION_LIMIT, "{ id }"), id="nested-too-deep"),
+        ],
+    )
     def test_invalid(self, value):
+        with pytest.raises(ValidationError, match="Invalid GraphQL query"):
+            validate(GraphQLQuery, value)
+
+    # Every place a selection set is written. Commas and comments are ignored,
+    # so a set holding only those selects nothing either.
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("{ }", id="anonymous-operation"),
+            pytest.param("query GetUser { }", id="query"),
+            pytest.param("mutation { }", id="mutation"),
+            pytest.param("subscription OnUser { }", id="subscription"),
+            pytest.param("query GetUser($id: ID!) @cached { }", id="operation-with-variables-and-directive"),
+            pytest.param("{ user { } }", id="field"),
+            pytest.param("{ me: user(id: 1) @include(if: true) { } }", id="field-with-alias-arguments-and-directive"),
+            pytest.param("{ user { team { lead { } } } }", id="nested-field"),
+            pytest.param("{ user { id } team { } }", id="after-a-field-that-selects"),
+            pytest.param("{ team { } user { id } }", id="before-a-field-that-selects"),
+            pytest.param("{ node { ... on User { } } }", id="inline-fragment"),
+            pytest.param("{ node { ... { } } }", id="inline-fragment-without-a-type"),
+            pytest.param("{ node { ... @include(if: true) { } } }", id="inline-fragment-with-a-directive"),
+            pytest.param("{ user { ...Fields } } fragment Fields on User { }", id="fragment-definition"),
+            pytest.param("{ user { ...Fields } } fragment Fields on User { team { } }", id="field-in-a-fragment-definition"),
+            pytest.param("query A { user { id } } query B { }", id="second-operation"),
+            pytest.param("{ user { , } }", id="only-commas"),
+            pytest.param("{ user { # id\n } }", id="only-a-comment"),
+            pytest.param("{ search(filter: {}) { } }", id="after-an-empty-object-argument"),
+            pytest.param(_nested_selection_sets(149, "{ }"), id="nested-150-deep"),
+        ],
+    )
+    def test_empty_selection_set_is_invalid(self, value):
         with pytest.raises(ValidationError, match="Invalid GraphQL query"):
             validate(GraphQLQuery, value)
 

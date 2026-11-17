@@ -238,7 +238,47 @@ def regex_group(pattern: re.Pattern[str], group: int | str | None) -> int | str:
 
 validate_xml = create_string_validator(xml.etree.ElementTree.fromstring, "Invalid XML")
 
-validate_graphql_query = create_string_validator(graphql.parse, "Invalid GraphQL query")
+
+def _parse_graphql_query(text: str) -> None:
+    """Parse a GraphQL document, or raise why it is not one. One grammar,
+    whichever graphql-core is installed: a selection set selects something.
+
+    A selection set with nothing in it (``{ user { } }``, ``query Q { }``)
+    is a syntax error to graphql-core 3.0.0 through 3.3.1, and to a server
+    built on any of them. From 3.3.2 ``graphql.parse`` takes it by default,
+    after a proposed change to the specification (graphql-spec pull request
+    1227), so the same scenario would load or not by the version installed:
+    it is refused here, from what was parsed. The parser's own switch
+    (``allow_empty_selection_sets=False``) is not the way: versions before
+    3.3.2 do not have it, and it is deprecated, to be removed.
+
+    An operation or fragment definition, a field and an inline fragment
+    hold a selection set, each as its ``selection_set`` (a field that
+    selects nothing, and a fragment spread, has None there; so does a
+    type-system definition, which has no such attribute). All a selection
+    set holds is fields, fragment spreads and inline fragments. So following
+    that one attribute reaches every selection set and nothing else: the
+    empty braces of an input object (``f(arg: {})``) or a list are a value,
+    never looked at. The nodes wait on a list, not on the call stack, so
+    nesting the parser got through costs no frames here.
+
+    It makes no other verdict the same across versions. How deep a document
+    may nest is graphql-core's to say: 3.2.14 and 3.3.2 refuse more than 200
+    levels, where 3.3.1 and older parse until the interpreter's recursion
+    limit.
+    """
+    document = graphql.parse(text)
+    pending: list[Any] = [*document.definitions]
+    while pending:
+        selection_set = getattr(pending.pop(), "selection_set", None)
+        if selection_set is None:
+            continue
+        if not selection_set.selections:
+            raise graphql.GraphQLSyntaxError(selection_set.loc.source, selection_set.loc.start, "A selection set must not be empty.")
+        pending.extend(selection_set.selections)
+
+
+validate_graphql_query = create_string_validator(_parse_graphql_query, "Invalid GraphQL query")
 
 validate_base64 = create_string_validator(lambda v: base64.b64decode(v, validate=True), "Invalid base64 encoding")
 

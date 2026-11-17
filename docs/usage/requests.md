@@ -419,6 +419,15 @@ pass through unchanged.
 }
 ```
 
+The query is checked as a GraphQL document when the scenario loads, and again
+once rendered when a template writes it (unless the rendered text still holds
+template syntax): a syntax error, or a selection set that selects nothing
+(`{ user { } }`), fails with `Invalid GraphQL query`, whichever `graphql-core`
+is installed. An empty input object or list (`search(filter: {})`) is a value
+and is fine. To send a document the check refuses on purpose, post it as a
+`json` body: `{"json": {"query": "...", "variables": {...}}}` sends the same
+request.
+
 ## Authentication
 
 A scenario's `auth` applies to every request, and a request's `auth` replaces it for that request.

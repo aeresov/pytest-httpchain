@@ -160,6 +160,22 @@ def test_invalid_content_rejected(construct, message):
         construct()
 
 
+def test_graphql_query_a_template_rendered_is_valid():
+    """A query a template rendered is validated again, as the `GraphQL` it
+    goes into, when its stage runs (`validate_rendered`, as the carrier does):
+    an empty input object is a value, not a selection set."""
+    query = "{ search(filter: {}) { id } }"
+    assert validate_rendered(GraphQL, {"query": query}).query == query
+
+
+@pytest.mark.parametrize("query", [pytest.param("{ user { } }", id="field"), pytest.param("{ }", id="operation")])
+def test_graphql_query_a_template_rendered_selecting_nothing_is_invalid(query):
+    """Refused as a query the scenario wrote out is, whichever graphql-core
+    is installed: 3.3.2 parses an empty selection set, older versions do not."""
+    with pytest.raises(ValidationError, match="Invalid GraphQL query"):
+        validate_rendered(GraphQL, {"query": query})
+
+
 def test_json_namespace_becomes_dict():
     """A rendered ``{{ var }}`` may be a SimpleNamespace (vars are namespaces);
     JSON-serialized fields turn it back into a plain dict, recursively."""
