@@ -4010,6 +4010,180 @@ class TestConnectionStages:
         assert (ping.sent, ping.sent_return, ping.result, ping.timeout) == ({"op": "ping", "id": 5}, {"seq": 3}, "taken", 2.0)
         assert later is None, "an HTTP stage reports no connection exchange"
 
+    @pytest.mark.parametrize("ending", ["close", "reopen", "teardown"])
+    def test_params_factory_resources_live_until_the_session_closes(self, monkeypatch, ending):
+        """An exclusive lease survives the opening iteration and a later send,
+        and is released after the adapter closes, before a reopen acquires it."""
+        from tests.unit import connections_test_helpers as helpers
+
+        events = []
+        active = set()
+        generation = 0
+
+        @contextmanager
+        def resource():
+            nonlocal generation
+            assert not active, "the previous session still holds the exclusive resource"
+            generation += 1
+            value = generation
+            active.add(value)
+            events.append(("enter", value))
+            try:
+                yield value
+            finally:
+                active.remove(value)
+                events.append(("exit", value))
+
+        send, close = helpers.FakeAdapter.send, helpers.FakeAdapter.close
+
+        def send_with_resource(adapter, message):
+            assert adapter.params["resource"] in active
+            return send(adapter, message)
+
+        def close_with_resource(adapter):
+            assert adapter.params["resource"] in active
+            events.append(("close", adapter.params["resource"]))
+            close(adapter)
+
+        monkeypatch.setattr(helpers.FakeAdapter, "send", send_with_resource)
+        monkeypatch.setattr(helpers.FakeAdapter, "close", close_with_resource)
+        helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [
+                {"name": "open", "connection": {"name": "dev", "open": True}},
+                {"name": "use", "connection": {"name": "dev", "send": {"op": "ping"}}},
+                {"name": "end", "connection": {"name": "dev", "open": ending == "reopen", "close": ending != "reopen"}},
+            ],
+            fixtures=["resource"],
+            params={"peer": "carrier", "resource": "{{ resource() }}"},
+        )
+        carrier.fixture_scopes = {"resource": "class"}
+        try:
+            for stage in scenario.stages[:2]:
+                carrier.execute_stage(stage, {"resource": resource})
+                assert active == {1}
+                assert events == [("enter", 1)]
+            if ending != "teardown":
+                carrier.execute_stage(scenario.stages[2], {"resource": resource})
+                assert events[:3] == [("enter", 1), ("close", 1), ("exit", 1)]
+                assert active == ({2} if ending == "reopen" else set())
+                if ending == "reopen":
+                    carrier.execute_stage(scenario.stages[1], {"resource": resource})
+        finally:
+            carrier.teardown_class()
+        assert not active
+        assert events == [(action, value) for value in range(1, generation + 1) for action in ("enter", "close", "exit")]
+
+    @pytest.mark.parametrize("failure", ["params", "timeout", "connect"])
+    def test_failed_open_releases_params_resources_before_retry_or_return(self, failure):
+        from tests.unit import connections_test_helpers as helpers
+
+        events = []
+
+        @contextmanager
+        def resource():
+            assert not events or events[-1] == "exit", "a failed attempt retained its lease"
+            events.append("enter")
+            try:
+                yield "lease"
+            finally:
+                events.append("exit")
+
+        peer = helpers.peer("carrier", connect_error=ConnectionRefusedError("refused") if failure == "connect" else None)
+        params = {"peer": "carrier", "resource": "{{ resource() }}"}
+        if failure == "params":
+            params["bad"] = "{{ 1 / 0 }}"
+        carrier, scenario = self._carrier(
+            [{"name": "open", "retry": {"attempts": 2, "delay": 0}, "connection": {"name": "dev", "open": True}}],
+            fixtures=["resource"],
+            params=params,
+        )
+        if failure == "timeout":
+            scenario.connections["dev"].connect_timeout = "{{ 1 / 0 }}"
+        try:
+            with pytest.raises(pytest.fail.Exception):
+                carrier.execute_stage(scenario.stages[0], {"resource": resource})
+            attempts = 2 if failure == "connect" else 1
+            assert events == ["enter", "exit"] * attempts
+            assert peer.connects == (attempts if failure == "connect" else 0)
+        finally:
+            carrier.teardown_class()
+        assert events == ["enter", "exit"] * attempts
+
+    def test_timeout_factory_keeps_its_iteration_lifetime(self):
+        """The timeout's value is used only while connecting, so a function
+        fixture providing it must not be retained with the session's params."""
+        from tests.unit import connections_test_helpers as helpers
+
+        events = []
+        resource = TestContextManagerFixtureCleanup._resource(events, "lease")
+
+        @contextmanager
+        def timeout():
+            events.append("enter timeout")
+            yield 1
+            events.append("exit timeout")
+
+        helpers.peer("carrier")
+        carrier, scenario = self._carrier(
+            [{"name": "open", "connection": {"name": "dev", "open": True}}],
+            fixtures=["resource", "timeout"],
+            params={"peer": "carrier", "resource": "{{ resource() }}"},
+        )
+        carrier.fixture_scopes = {"resource": "class", "timeout": "function"}
+        scenario.connections["dev"].connect_timeout = "{{ timeout() }}"
+        try:
+            carrier.execute_stage(scenario.stages[0], {"resource": resource, "timeout": timeout})
+            assert events == ["enter lease", "enter timeout", "exit timeout"]
+        finally:
+            carrier.teardown_class()
+        assert events == ["enter lease", "enter timeout", "exit timeout", "exit lease"]
+
+    @pytest.mark.parametrize("ending", ["close", "reopen", "failed-open", "teardown"])
+    def test_params_resource_exit_errors_are_reported_and_cleanup_runs_once(self, ending, caplog):
+        from tests.unit import connections_test_helpers as helpers
+
+        exits = []
+
+        @contextmanager
+        def resource():
+            try:
+                yield "lease"
+            finally:
+                exits.append("exit")
+                raise RuntimeError("lease release failed")
+
+        peer = helpers.peer("carrier", connect_error=ConnectionRefusedError("refused") if ending == "failed-open" else None)
+        carrier, scenario = self._carrier(
+            [
+                {"name": "open", "retry": {"attempts": 2, "delay": 0}, "connection": {"name": "dev", "open": True}},
+                {
+                    "name": "end",
+                    "connection": {"name": "dev", "open": ending == "reopen", "close": ending != "reopen"},
+                    "response": [{"save": {"substitutions": [{"vars": {"committed": True}}]}}],
+                },
+            ],
+            fixtures=["resource"],
+            params={"peer": "carrier", "resource": "{{ resource() }}"},
+        )
+        try:
+            if ending == "failed-open":
+                with pytest.raises(pytest.fail.Exception, match="(?s)refused.*lease release failed"):
+                    carrier.execute_stage(scenario.stages[0], {"resource": resource})
+                assert peer.connects == 1, "a resource exit error must stop retries"
+            else:
+                carrier.execute_stage(scenario.stages[0], {"resource": resource})
+                if ending in {"close", "reopen"}:
+                    with pytest.raises(pytest.fail.Exception, match="lease release failed"):
+                        carrier.execute_stage(scenario.stages[1], {"resource": resource})
+                    assert "committed" not in carrier.global_context
+                    assert peer.connects == 1
+        finally:
+            carrier.teardown_class()
+        assert exits == ["exit"]
+        if ending == "teardown":
+            assert "lease release failed" in caplog.text
+
     def test_first_stage_naming_the_connection_opens_it(self):
         from tests.unit import connections_test_helpers as helpers
 
@@ -4640,6 +4814,35 @@ class TestConnectionStages:
         assert time.monotonic() - started < 5
         assert outcome.startswith("failed: expect.match: JMESPath 'n': gt must resolve to a number")
         assert len(peer.sent) == 1
+
+    @pytest.mark.parametrize("redaction", [DEFAULT_REDACTION, NO_REDACTION], ids=["default", "disabled"])
+    @pytest.mark.parametrize(
+        ("key", "secret", "actual", "problem"),
+        [
+            pytest.param("gt", "{{ s3cret-VALUE }}", 1, "gt must resolve to a number", id="number"),
+            pytest.param("matches", "({{ s3cret-VALUE }}", "value", "matches must resolve to a regular expression", id="regex"),
+        ],
+    )
+    def test_unusable_match_operand_redacts_the_raised_error(self, redaction, key, secret, actual, problem):
+        """A template-looking rendered operand passes model validation, then
+        raises while matching: that error needs the same redaction as misses."""
+        match = Verify.model_validate({"jmespath": {"user.token": {key: "{{ secret }}"}}}).jmespath
+        rendered = carrier_module._rendered_match(match, {"secret": secret}, redaction)
+        listed = carrier_module._listed_expectations(rendered, redaction)
+
+        with pytest.raises(VerificationError, match=problem) as caught:
+            carrier_module._message_miss(match, rendered, redaction, listed, {"user": {"token": actual}})
+
+        error = caught.value
+        assert error.retryable is False
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        for text in (str(error), repr(error), repr(error.args)):
+            if redaction.message_keys:
+                assert "s3cret-VALUE" not in text
+                assert "[REDACTED]" in text
+            else:
+                assert "s3cret-VALUE" in text
 
     def test_reserved_name_saved_dynamically_is_warned_of(self):
         from tests.unit import connections_test_helpers as helpers

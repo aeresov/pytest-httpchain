@@ -54,6 +54,15 @@ def registry() -> Iterator[Connections]:
     assert not _readers(), "a test left a reader running"
 
 
+@pytest.fixture
+def timed_session(monkeypatch):
+    """A session driven synchronously, with a clock its wait can advance."""
+    clock = types.SimpleNamespace(now=100.0)
+    monkeypatch.setattr(connections_module, "time", types.SimpleNamespace(monotonic=lambda: clock.now))
+    session = connections_module._Session("dev", ADAPTER, object(), 1, 2, "unused-reader")
+    return session, clock
+
+
 def _open(registry: Connections, peer_name: str, adapter: str = ADAPTER, inbox_limit: int = 1000, **params: Any):
     return registry.open("dev", adapter, {"peer": peer_name, **params}, 3.0, inbox_limit, label="UnitScenario")
 
@@ -87,11 +96,13 @@ class TestCheckedMessage:
             ({"a-b": {"c": ()}}, 'receive() returned tuple at ["a-b"].c; return a list'),
             ({1: "x"}, "receive() returned a key of type int at the top level; keys must be strings"),
             ({"a": {2: "x"}}, "receive() returned a key of type int at a; keys must be strings"),
+            ({None: "x", 7: "also invalid"}, "receive() returned a key of type NoneType at the top level; keys must be strings"),
+            ({"a": {None: object()}}, "receive() returned a key of type NoneType at a; keys must be strings"),
             ([1, 2], "receive() returned list; return a dict"),
             ((1, 2), "receive() returned tuple; return a dict"),
             ("text", "receive() returned str; return a dict"),
         ],
-        ids=["tuple", "set-in-list", "bytearray", "object", "quoted-key", "int-key", "nested-int-key", "list", "top-tuple", "text"],
+        ids=["tuple", "set-in-list", "bytearray", "object", "quoted-key", "int-key", "nested-int-key", "none-before-int-key", "nested-none-key", "list", "top-tuple", "text"],
     )
     def test_refuses_what_no_message_holds(self, value, message):
         with pytest.raises(MessageValueError) as excinfo:
@@ -313,6 +324,259 @@ class TestInbox:
 
 
 class TestExpect:
+    @pytest.mark.parametrize("mode", ["message", "absent"])
+    @pytest.mark.parametrize("arrival_offset", [-0.05, 0.05], ids=["in-time", "late"])
+    def test_arrival_during_matching_is_checked_before_the_deadline_outcome(self, timed_session, mode, arrival_offset):
+        session, clock = timed_session
+        since = clock.now
+        deadline = since + 1
+        noise, wanted = {"kind": "noise"}, {"kind": "wanted"}
+        session._append(noise)
+        evaluated = []
+
+        def matches(message):
+            evaluated.append(message)
+            if message == wanted:
+                return None
+            clock.now = deadline + arrival_offset
+            session._append(wanted)
+            clock.now = deadline + 0.1
+            return Miss("noise")
+
+        outcome = session.expect(matches, 1, after=None, since=since, mode=mode)
+        if arrival_offset < 0:
+            assert outcome.result == ("taken" if mode == "message" else "seen")
+            assert outcome.taken is not None
+            assert outcome.taken.message == wanted
+            assert evaluated == [noise, wanted]
+        else:
+            assert outcome.result == ("timeout" if mode == "message" else "absent")
+            assert outcome.taken is None
+            assert evaluated == [noise]
+        assert [arrival.message for arrival in outcome.considered] == [noise]
+
+    @pytest.mark.parametrize("mode", ["message", "absent"])
+    @pytest.mark.parametrize("error", [None, ConnectionResetError("reset during matching")], ids=["eof", "reset"])
+    @pytest.mark.parametrize("end_offset", [-0.05, 0.05], ids=["in-time", "late"])
+    def test_reader_end_during_matching_is_checked_before_the_deadline_outcome(self, timed_session, mode, error, end_offset):
+        session, clock = timed_session
+        since = clock.now
+        deadline = since + 1
+        session._append({"noise": True})
+        evaluated = []
+
+        def disconnected(timeout):
+            raise error if error is not None else EOFError()
+
+        session.adapter = types.SimpleNamespace(receive=disconnected)
+
+        def rejects(message):
+            evaluated.append(message)
+            clock.now = deadline + end_offset
+            session._read()
+            clock.now = deadline + 0.1
+            return Miss("noise")
+
+        outcome = session.expect(rejects, 1, after=None, since=since, mode=mode)
+        assert evaluated == [{"noise": True}]
+        if end_offset < 0:
+            assert outcome.result == "ended"
+            assert outcome.end is not None
+            assert outcome.end.error is error
+            assert session.observed
+        else:
+            assert outcome.result == ("timeout" if mode == "message" else "absent")
+            assert outcome.end is None
+            assert not session.observed
+
+    @pytest.mark.parametrize("after", [None, 0], ids=["whole-queue", "after-send"])
+    def test_late_overflow_during_matching_is_not_counted_as_unseen(self, timed_session, after):
+        session, clock = timed_session
+        since = clock.now
+        deadline = since + 1
+        session._append({"noise": True})
+        evaluated = []
+
+        def rejects(message):
+            evaluated.append(message)
+            clock.now = deadline + 0.05
+            for n in range(3):
+                session._append({"late": n})
+            clock.now = deadline + 0.1
+            return Miss("noise")
+
+        outcome = session.expect(rejects, 1, after=after, since=since, mode="absent")
+        assert (outcome.result, outcome.unseen) == ("absent", 0)
+        assert evaluated == [{"noise": True}]
+
+    def test_continuous_late_arrivals_do_not_prolong_a_wait_after_matching(self, timed_session):
+        session, clock = timed_session
+        since = clock.now
+        deadline = since + 1
+        session._append({"noise": True})
+        produced = []
+        evaluated = []
+        injecting = False
+
+        class BusyCondition(threading.Condition):
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                nonlocal injecting
+                super().__exit__(exc_type, exc_val, exc_tb)
+                if clock.now > deadline and not injecting:
+                    assert len(produced) < 10, "late traffic kept the expired wait running"
+                    produced.append({"late": len(produced)})
+                    injecting = True
+                    try:
+                        session._append(produced[-1])
+                    finally:
+                        injecting = False
+
+        session._condition = BusyCondition()
+
+        def rejects(message):
+            evaluated.append(message)
+            clock.now = deadline + 0.1
+            return Miss("noise")
+
+        outcome = session.expect(rejects, 1, after=None, since=since, mode="absent")
+        assert (outcome.result, outcome.unseen) == ("absent", 0)
+        assert evaluated == [{"noise": True}]
+        assert len(produced) >= 2
+
+    @pytest.mark.parametrize("after", [None, 0], ids=["whole-queue", "after-send"])
+    @pytest.mark.parametrize("on_time_count", [0, 3], ids=["only-late-drops", "in-time-and-late-drops"])
+    def test_late_overflow_does_not_make_an_absent_wait_uncertain(self, timed_session, monkeypatch, after, on_time_count):
+        session, clock = timed_session
+        since = clock.now
+        deadline = since + 1
+
+        def delayed_wake(timeout):
+            clock.now = deadline - 0.05
+            for n in range(on_time_count):
+                session._append({"n": n})
+            clock.now = deadline + 0.05
+            for n in range(3):
+                session._append({"late": n})
+            clock.now = deadline + 0.1
+
+        monkeypatch.setattr(session._condition, "wait", delayed_wake)
+        outcome = session.expect(None, 1, after=after, since=since, mode="absent")
+        assert (outcome.result, outcome.unseen) == ("absent", on_time_count)
+        failure = expect_failure(outcome, stage="quiet", connection="dev", match=None, timeout=1, mode="absent", sent=after is not None, reopens=False, ended_before=False)
+        if on_time_count:
+            assert isinstance(failure, VerificationError)
+            assert "3 messages were dropped" in str(failure)
+        else:
+            assert failure is None
+
+    @pytest.mark.parametrize("after", [None, 0], ids=["whole-queue", "after-send"])
+    def test_deadline_includes_a_delay_acquiring_the_inbox_lock(self, timed_session, after):
+        """The deadline and drop cutoff exist before the first lock acquisition,
+        so scheduler delay there does not admit late matches or late losses."""
+        session, clock = timed_session
+        since = clock.now
+        deadline = since + 1
+        entering = threading.Event()
+
+        class NotifyingCondition(threading.Condition):
+            def __enter__(self):
+                entering.set()
+                return super().__enter__()
+
+        session._condition = NotifyingCondition()
+        outcomes = []
+        worker = threading.Thread(target=lambda: outcomes.append(session.expect(None, 1, after=after, since=since, mode="absent")))
+        with session._condition:
+            entering.clear()
+            worker.start()
+            assert entering.wait(2), "the waiter never tried to acquire the inbox lock"
+            clock.now = deadline + 0.05
+            for n in range(3):
+                session._append({"late": n})
+            clock.now = deadline + 0.1
+        worker.join(2)
+        assert not worker.is_alive()
+        outcome = outcomes[0]
+        assert (outcome.result, outcome.unseen) == ("absent", 0)
+        assert outcome.considered == ()
+        assert session.drain() == 2
+
+    @pytest.mark.parametrize(
+        ("mode", "arrival_offset", "result"),
+        [("message", -0.05, "taken"), ("message", 0.05, "timeout"), ("absent", -0.05, "seen"), ("absent", 0.05, "absent")],
+        ids=["message-in-time", "message-late", "absent-in-time", "absent-late"],
+    )
+    def test_arrival_time_decides_a_wait_that_resumes_after_its_deadline(self, timed_session, monkeypatch, mode, arrival_offset, result):
+        """A delayed wake neither accepts a late match nor overlooks an
+        on-time one. Late matches remain available to subsequent stages."""
+        session, clock = timed_session
+        since = clock.now
+        deadline = since + 1
+        message = {"op": "reply"}
+
+        def delayed_wake(timeout):
+            clock.now = deadline + arrival_offset
+            session._append(message)
+            clock.now = deadline + 0.1
+
+        monkeypatch.setattr(session._condition, "wait", delayed_wake)
+        outcome = session.expect(None, 1, after=None, since=since, mode=mode)
+        assert outcome.result == result
+        assert outcome.considered == ()
+        if arrival_offset < 0:
+            assert outcome.taken is not None
+            assert outcome.taken.message == message
+        else:
+            assert outcome.taken is None
+            assert outcome.ended_at == deadline
+            if mode == "message":
+                # A delayed return must not move the late-report window.
+                clock.now = deadline + LATE_WINDOW + 0.05
+                session._append({"op": "outside the late window"})
+                assert [arrival.message for arrival in session.late(outcome, since)] == [message]
+            taken = session.expect(None, 1, after=None, since=since).taken
+            assert taken is not None
+            assert taken.message == message
+
+    @pytest.mark.parametrize("mode", ["message", "absent", "closed"])
+    @pytest.mark.parametrize("end_offset", [-0.05, 0.05], ids=["in-time", "late"])
+    def test_reader_end_time_decides_a_wait_that_resumes_after_its_deadline(self, timed_session, monkeypatch, mode, end_offset):
+        session, clock = timed_session
+        since = clock.now
+        deadline = since + 1
+
+        def disconnected(timeout):
+            raise EOFError
+
+        session.adapter = types.SimpleNamespace(receive=disconnected)
+
+        def delayed_wake(timeout):
+            clock.now = deadline + end_offset
+            session._read()
+            clock.now = deadline + 0.1
+
+        monkeypatch.setattr(session._condition, "wait", delayed_wake)
+        outcome = session.expect(None, 1, after=None, since=since, mode=mode)
+        if end_offset < 0:
+            assert outcome.result == ("closed" if mode == "closed" else "ended")
+            assert outcome.end is not None
+            assert session.observed
+        else:
+            assert outcome.result == ("absent" if mode == "absent" else "timeout")
+            assert outcome.end is None
+            assert not session.observed
+            assert session.expect(None, 1, after=None, since=since, mode="closed").result == "closed"
+
+    def test_prequeued_message_is_available_to_a_zero_timeout_wait(self, timed_session):
+        session, clock = timed_session
+        message = {"queued": True}
+        session._append(message)
+        clock.now += 1
+        outcome = session.expect(None, 0, after=None, since=clock.now)
+        assert outcome.result == "taken"
+        assert outcome.taken is not None
+        assert outcome.taken.message == message
+
     def test_takes_the_oldest_match_and_leaves_the_rest_queued(self, registry):
         peer = helpers.peer("match")
         session, _ = _open(registry, "match")
@@ -775,6 +1039,40 @@ class TestCloseAll:
         assert (first.closes, second.closes, third.closes) == (1, 1, 1)
         _wait_for(lambda: not _readers())
 
+    @pytest.mark.parametrize("interrupted", ["join", "cleanup"])
+    def test_interrupt_still_releases_every_sessions_resources(self, monkeypatch, interrupted):
+        released = []
+        sessions = []
+        for name in ("first", "second"):
+            helpers.peer(name)
+            session, _ = Connections().open(name, ADAPTER, {"peer": name}, 1, 10, "Unit")
+            session.set_cleanup(lambda name=name: released.append(name) or [])
+            sessions.append(session)
+
+        def stop():
+            raise KeyboardInterrupt
+
+        if interrupted == "join":
+            join = sessions[0].join
+
+            def interrupted_join(timeout):
+                join(timeout)
+                stop()
+
+            monkeypatch.setattr(sessions[0], "join", interrupted_join)
+        else:
+
+            def interrupted_cleanup():
+                released.append("first")
+                stop()
+
+            sessions[0].set_cleanup(interrupted_cleanup)
+        with pytest.raises(KeyboardInterrupt):
+            close_all(sessions)
+        assert released == ["first", "second"]
+        assert sessions[0].cleanup() == []
+        _wait_for(lambda: not _readers())
+
 
 def test_reader_end_describes_itself():
     assert ReaderEnd(None).describe() == "closed by the other side"
@@ -896,11 +1194,15 @@ class TestOpenAndCloseGuards:
         assert peer.closes == 1
         assert registry.session("dev") is None
 
-    def test_close_interrupt_propagates_the_reader_stopped(self, registry):
+    def test_close_interrupt_propagates_the_reader_stopped(self, registry, caplog):
         helpers.peer("interrupted close", close_error=KeyboardInterrupt())
-        _open(registry, "interrupted close")
+        session, _ = _open(registry, "interrupted close")
+        released = []
+        session.set_cleanup(lambda: released.append("lease") or ["lease release failed"])
         with pytest.raises(KeyboardInterrupt):
             registry.close("dev", "bye")
+        assert released == ["lease"]
+        assert "lease release failed" in caplog.text
         _wait_for(lambda: not _readers())
         assert registry.not_open("dev") == "closed by stage 'bye'"
 

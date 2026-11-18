@@ -344,6 +344,261 @@ def test_http_save_feeds_connection_params(run_scenario):
     assert not _readers()
 
 
+@pytest.mark.parametrize(
+    ("declared_scope", "effective_scope", "outcomes"),
+    [
+        pytest.param("class", "function", {"failed": 1, "skipped": 2}, id="narrowed-to-function"),
+        pytest.param("function", "class", {"passed": 3}, id="widened-to-class"),
+    ],
+)
+def test_connection_params_use_effective_fixture_scope(run_scenario, pytester, declared_scope, effective_scope, outcomes):
+    """An indirect parametrize can change a fixture's lifetime in either
+    direction. Check the actual scope before an adapter retains its resource,
+    allowing a widened fixture that survives until the chain ends."""
+    module = f"scope_adapter_{effective_scope}"
+    pytester.syspathinsert()
+    pytester.makepyfile(
+        **{
+            module: f"""
+import pytest
+from line_json import LineJsonAdapter
+
+
+class Resource:
+    alive = True
+
+
+@pytest.fixture(scope={declared_scope!r})
+def resource(request):
+    value = Resource()
+    print("RESOURCE-SETUP", request.scope)
+    yield value
+    value.alive = False
+    print("RESOURCE-TEARDOWN", request.scope)
+
+
+class ScopedAdapter(LineJsonAdapter):
+    def __init__(self, host, port, resource):
+        super().__init__(host, port)
+        self.resource = resource
+
+    def connect(self, timeout):
+        print("ADAPTER-CONNECTED")
+        return super().connect(timeout)
+
+    def send(self, message):
+        assert self.resource.alive, "resource already torn down"
+        return super().send(message)
+"""
+        }
+    )
+    scenario = line_json_scenario(connection_stage("open", open=True), _ping("ping", 1), _bye())
+    scenario["fixtures"] = ["resource"]
+    scenario["marks"].append(f"parametrize('resource', ['case'], indirect=True, scope={effective_scope!r})")
+    device = scenario["connections"]["device"]
+    scenario["connections"]["device"] = {**device, "adapter": f"{module}:ScopedAdapter", "params": {**device["params"], "resource": "{{ resource }}"}}
+    result = run_scenario(scenario, ADAPTER, args=("-s", "-p", module))
+    result.assert_outcomes(**outcomes)
+    output = result.stdout.str()
+    assert f"RESOURCE-SETUP {effective_scope}" in output
+    if effective_scope == "function":
+        assert "params read fixture 'resource', which is function-scoped" in output
+        assert "ADAPTER-CONNECTED" not in output
+    else:
+        assert output.count("ADAPTER-CONNECTED") == 1
+        assert output.count("RESOURCE-TEARDOWN class") == 1
+    assert not _readers()
+
+
+def _parent_resource_adapter(pytester, module, *, params=None, setup_outcome="pass", close_outcome="pass", send_outcome="pass"):
+    """An adapter retaining a lease from a class fixture's pool."""
+    blocked = {"pass": "pass", "skip": "pytest.skip('setup blocked')", "error": "raise RuntimeError('setup blocked')"}[setup_outcome]
+    pytester.syspathinsert()
+    pytester.makepyfile(
+        **{
+            module: f"""
+from contextlib import contextmanager
+
+import pytest
+from line_json import LineJsonAdapter
+
+
+class Pool:
+    alive = True
+    leases = 0
+
+
+@pytest.fixture(scope="class")
+def resource_tenant(request):
+    return getattr(request, "param", "default")
+
+
+@pytest.fixture(scope="class", params={params!r})
+def resource(request, resource_tenant):
+    pool = Pool()
+    pool.label = getattr(request, "param", resource_tenant)
+
+    @contextmanager
+    def lease():
+        assert pool.alive
+        pool.leases += 1
+        print("LEASE-ENTER", pool.label)
+        try:
+            yield pool
+        finally:
+            assert pool.alive, "factory parent already finalized"
+            pool.leases -= 1
+            print("LEASE-EXIT", pool.label)
+
+    yield lease
+    print("POOL-TEARDOWN", pool.label, pool.leases)
+    assert pool.leases == 0, "pool has outstanding connection leases"
+    pool.alive = False
+
+
+@pytest.fixture
+def stop_setup():
+    {blocked}
+
+
+@pytest.fixture(scope="class")
+def sibling():
+    yield
+    print("SIBLING-EXIT")
+
+
+class ParentAdapter(LineJsonAdapter):
+    def __init__(self, host, port, resource):
+        super().__init__(host, port)
+        self.resource = resource
+
+    def connect(self, timeout):
+        assert self.resource.alive
+        print("ADAPTER-CONNECT", self.resource.label)
+        return super().connect(timeout)
+
+    def send(self, message):
+        assert self.resource.alive
+        {send_outcome}
+        return super().send(message)
+
+    def close(self):
+        assert self.resource.alive, "adapter parent already finalized"
+        print("ADAPTER-CLOSE", self.resource.label)
+        super().close()
+        {close_outcome}
+"""
+        }
+    )
+
+
+def _with_parent_resource(scenario, module):
+    scenario["fixtures"] = ["resource"]
+    device = scenario["connections"]["device"]
+    scenario["connections"]["device"] = {**device, "adapter": f"{module}:ParentAdapter", "params": {**device["params"], "resource": "{{ resource() }}"}}
+    return scenario
+
+
+@pytest.mark.parametrize("ending", ["pass", "abort", "skip", "error"])
+def test_params_resources_close_before_parent_fixture_teardown(run_scenario, pytester, ending):
+    """Automatic cleanup precedes a class pool's teardown for every chain,
+    including after setup outcomes and after an always_run farewell."""
+    module = f"parent_adapter_{ending}"
+    _parent_resource_adapter(pytester, module, params=["a", "b"], setup_outcome=ending if ending in {"skip", "error"} else "pass")
+    stages = [connection_stage("open", open=True), _ping("use", 1)]
+    outcomes = {"passed": 4}
+    if ending == "abort":
+        stages.extend(
+            [
+                _ping("fails", 2, response=[{"verify": {"jmespath": {"id": 999}}}]),
+                _ping("farewell", 3, stage={"always_run": True}),
+            ]
+        )
+        outcomes = {"passed": 6, "failed": 2}
+    elif ending in {"skip", "error"}:
+        stages.append(connection_stage("blocked", send={"op": "ping"}, stage={"fixtures": ["stop_setup"]}))
+        outcomes["skipped" if ending == "skip" else "errors"] = 2
+    scenario = _with_parent_resource(line_json_scenario(*stages), module)
+    result = run_scenario(scenario, ADAPTER, args=("-s", "-rP", "-p", module))
+    result.assert_outcomes(**outcomes)
+    output = result.stdout.str()
+    for label in ("a", "b"):
+        assert output.count(f"ADAPTER-CONNECT {label}") == 1
+        result.stdout.fnmatch_lines([f"*ADAPTER-CLOSE {label}", f"LEASE-EXIT {label}", f"POOL-TEARDOWN {label} 0"])
+    assert not _readers()
+
+
+def test_replaced_parent_fixture_closes_connections_before_its_old_pool(run_scenario, pytester):
+    """A dependency parametrized only on the first stage is replaced during
+    the next stage's setup in the same chain, before class finalization."""
+    module = "parent_adapter_replaced"
+    _parent_resource_adapter(pytester, module)
+    scenario = _with_parent_resource(
+        line_json_scenario(
+            connection_stage("open", open=True, stage={"marks": ["parametrize('resource_tenant', ['one'], indirect=True, scope='class')"]}),
+            _ping("use", 1),
+        ),
+        module,
+    )
+    result = run_scenario(scenario, ADAPTER, args=("-s", "-p", module))
+    result.assert_outcomes(passed=2)
+    result.stdout.fnmatch_lines(
+        [
+            "*ADAPTER-CLOSE one",
+            "LEASE-EXIT one",
+            "POOL-TEARDOWN one 0",
+            "LEASE-ENTER default",
+            "ADAPTER-CONNECT default",
+            "*ADAPTER-CLOSE default",
+            "LEASE-EXIT default",
+            "POOL-TEARDOWN default 0",
+        ]
+    )
+    assert not _readers()
+
+
+@pytest.mark.slow  # a real interrupt must stay in the child pytest process
+@pytest.mark.parametrize(
+    ("phase", "interrupt", "returncode"),
+    [
+        pytest.param("teardown", "raise KeyboardInterrupt('adapter close')", 2, id="teardown-keyboard"),
+        pytest.param("teardown", "pytest.exit('adapter close', returncode=0)", 0, id="teardown-exit-zero"),
+        pytest.param("teardown", "pytest.exit('adapter close', returncode=7)", 7, id="teardown-exit-seven"),
+        pytest.param("sessionfinish", "raise KeyboardInterrupt('adapter close')", 2, id="sessionfinish-keyboard"),
+        pytest.param("setup", "raise KeyboardInterrupt('adapter close')", 2, id="replaced-parent-keyboard"),
+    ],
+)
+def test_cleanup_interrupt_finishes_parent_fixtures(run_scenario, pytester, phase, interrupt, returncode):
+    """A cleanup interrupt must not escape a class finalizer and abandon
+    pytest's remaining fixture stack, including when cleanup runs at exit."""
+    module = f"parent_adapter_interrupt_{phase}_{returncode}"
+    _parent_resource_adapter(
+        pytester,
+        module,
+        close_outcome=interrupt,
+        send_outcome="raise KeyboardInterrupt('early call interrupt')" if phase == "sessionfinish" else "pass",
+    )
+    opener = connection_stage("open", open=True)
+    stages = [opener]
+    if phase == "setup":
+        opener["marks"] = ["parametrize('resource_tenant', ['one'], indirect=True, scope='class')"]
+    if phase != "teardown":
+        stages.append(_ping("use", 1))
+    scenario = _with_parent_resource(line_json_scenario(*stages), module)
+    scenario["fixtures"].append("sibling")
+    result = run_scenario(scenario, ADAPTER, args=("-s", "-p", module), subprocess=True)
+    assert result.ret == returncode
+    output = result.stdout.str()
+    label = "one" if phase == "setup" else "default"
+    assert f"ADAPTER-CLOSE {label}" in output
+    assert f"LEASE-EXIT {label}" in output
+    assert f"POOL-TEARDOWN {label} 0" in output
+    assert "SIBLING-EXIT" in output
+    if phase == "setup":
+        assert "POOL-TEARDOWN default 0" in output
+        assert "ADAPTER-CONNECT default" not in output
+
+
 @pytest.mark.slow
 def test_connection_scenarios_under_xdist(run_scenario):
     """Two connection scenarios on two xdist workers: each worker's chain

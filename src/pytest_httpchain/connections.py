@@ -146,8 +146,10 @@ def checked_message(value: Any, source: str) -> dict[str, Any]:
                 continue
             seen.add(id(current))
             members: list[tuple[Any, Any]] = list(current.items()) if isinstance(current, dict) else list(enumerate(current))
-            if isinstance(current, dict) and (key := next((key for key, _ in members if not isinstance(key, str)), None)) is not None:
-                raise MessageValueError(f"{source} returned a key of type {type(key).__name__} at {_path(keys) or 'the top level'}; keys must be strings")
+            if isinstance(current, dict):
+                for key, _ in members:
+                    if not isinstance(key, str):
+                        raise MessageValueError(f"{source} returned a key of type {type(key).__name__} at {_path(keys) or 'the top level'}; keys must be strings")
             # Last first, so the first comes off the stack first.
             pending.extend((member, (*keys, key)) for key, member in reversed(members))
         elif current is None or isinstance(current, str | bool | int | float | bytes):
@@ -286,8 +288,8 @@ class ExpectOutcome:
     them (``unseen``: since the stage's send, and for a stage that sends nothing
     since the connection was last drained or opened, as it looks at the whole
     queue); and the reader's end, if it saw one. ``seen`` is the last message
-    it looked at, and ``ended_at`` when it ended (monotonic): what
-    `_Session.late` goes by."""
+    it looked at, and ``ended_at`` when it ended (monotonic), the deadline
+    for a timed-out or absent wait: what `_Session.late` goes by."""
 
     result: ExpectResult
     waited: float
@@ -302,6 +304,15 @@ class ExpectOutcome:
 
 # What a predicate says of a message: None, it matches; a `Miss`, why not.
 type MatchPredicate = Callable[[dict[str, Any]], Miss | None]
+
+
+@dataclass(slots=True)
+class _WaitWindow:
+    """An active wait's cutoff and the evicted arrivals after it: these
+    cannot make an absent wait uncertain about what arrived in time."""
+
+    deadline: float
+    dropped_late: int = 0
 
 
 class _Session:
@@ -329,9 +340,14 @@ class _Session:
         # `dropped` when the inbox was last drained: what was dropped since
         # is what a wait over the whole queue could not look at.
         self._dropped_at_drain = 0
+        self._wait_window: _WaitWindow | None = None
         self._condition = threading.Condition()
         self._stop = threading.Event()
+        # Resources a connection's params created (factory fixtures): released
+        # after the adapter is closed and its reader has had time to stop.
+        self._cleanup: Callable[[], list[str]] | None = None
         self._end: ReaderEnd | None = None
+        self._ended_at: float | None = None
         # Whether a stage saw the reader's end, so teardown does not log it.
         self.observed = False
         # Run in a context of its own, empty: nothing a stage set (an
@@ -384,6 +400,7 @@ class _Session:
         finally:
             with self._condition:
                 self._end = ReaderEnd(error, after_stop=self._stop.is_set())
+                self._ended_at = time.monotonic()
                 self._condition.notify_all()
 
     def _append(self, message: dict[str, Any]) -> None:
@@ -391,6 +408,9 @@ class _Session:
             self._seq += 1
             if len(self._inbox) == self._inbox.maxlen:
                 self.dropped += 1
+                window = self._wait_window
+                if window is not None and self._inbox[0][1] > window.deadline:
+                    window.dropped_late += 1
             self._inbox.append((self._seq, time.monotonic(), message))
             self._condition.notify_all()
 
@@ -433,8 +453,10 @@ class _Session:
         copied under the lock and judged outside it. The wait sleeps in slices
         of at most `WAIT_SLICE`, against a monotonic deadline, and the reader
         ending wakes it: a wait for a message then ends at once, not at its
-        timeout. Whatever ``predicate`` raises (the scenario's own error)
-        ends the wait as it is.
+        timeout. Only arrivals and a reader end at or before that deadline
+        count, even if the waiter resumes after it; later messages stay queued.
+        Whatever ``predicate`` raises (the scenario's own error) ends the wait
+        as it is.
 
         A message that arrived since the last look and is no longer queued
         was dropped by the inbox_limit before the wait could judge it
@@ -447,11 +469,15 @@ class _Session:
         """
         started = time.monotonic()
         deadline = started + min(timeout, threading.TIMEOUT_MAX)
+        # Publish before taking the inbox lock: a waiter delayed acquiring it
+        # must still exclude late evictions from its deadline's drop count.
+        window = self._wait_window = _WaitWindow(deadline)
         seen = after if after is not None else 0
         with self._condition:
             earlier = sum(1 for seq, _, _ in self._inbox if seq <= seen) if after is not None else 0
         considered: list[Arrival] = []
         unseen = 0
+        dropped_late_seen = 0
         # A stage that did not send looks at the whole queue first: what is
         # missing from it then was taken or drained before, or dropped since
         # the last drain, which is what it could not look at.
@@ -459,37 +485,61 @@ class _Session:
 
         def ended(result: ExpectResult, **fields: Any) -> ExpectOutcome:
             now = time.monotonic()
-            return ExpectOutcome(result, waited=now - started, considered=tuple(considered), earlier=earlier, unseen=unseen, seen=seen, ended_at=now, **fields)
+            ended_at = deadline if result in {"timeout", "absent"} else now
+            return ExpectOutcome(result, waited=now - started, considered=tuple(considered), earlier=earlier, unseen=unseen, seen=seen, ended_at=ended_at, **fields)
 
-        while True:
+        try:
+            while True:
+                with self._condition:
+                    fresh: list[tuple[int, float, dict[str, Any]]] = []
+                    newest = self._seq
+                    for entry in self._inbox:
+                        if entry[0] <= seen:
+                            continue
+                        if entry[1] > deadline:
+                            # Sequence numbers and arrival times have the same
+                            # order. Do not mark late messages as inspected: the
+                            # timeout report and later stages still need them.
+                            newest = entry[0] - 1
+                            break
+                        fresh.append(entry)
+                    end = self._end if self._ended_at is not None and self._ended_at <= deadline else None
+                    dropped_since_drain = self.dropped - self._dropped_at_drain
+                    dropped_late = window.dropped_late
+                    deadline_reached = time.monotonic() >= deadline
+                unseen = unseen + (newest - seen) - len(fresh) - (dropped_late - dropped_late_seen) if counting else dropped_since_drain - dropped_late
+                dropped_late_seen = dropped_late
+                counting = True
+                if mode != "closed":
+                    for seq, arrived, message in fresh:
+                        miss = predicate(message) if predicate is not None else None
+                        arrival = Arrival(seq, arrived - since, message, miss)
+                        if miss is None:
+                            if mode == "message":
+                                self._remove(seq)
+                                return ended("taken", taken=arrival)
+                            return ended("seen", taken=arrival)
+                        considered.append(arrival)
+                # What is not in the inbox past `seen` was dropped (inbox_limit).
+                seen = newest
+                if end is not None:
+                    self.observed = True
+                    return ended("closed" if mode == "closed" else "ended", end=end)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    if not deadline_reached:
+                        # Matching this batch may have crossed the deadline
+                        # while more messages arrived or the reader ended in
+                        # time. One snapshot taken after the deadline sees all
+                        # such events; later traffic cannot prolong the wait.
+                        continue
+                    return ended("absent" if mode == "absent" else "timeout")
+                with self._condition:
+                    if self._end is None and self._seq <= seen:
+                        self._condition.wait(min(WAIT_SLICE, remaining))
+        finally:
             with self._condition:
-                fresh = [entry for entry in self._inbox if entry[0] > seen]
-                end = self._end
-                newest = self._seq
-                dropped_since_drain = self.dropped - self._dropped_at_drain
-            unseen = unseen + (newest - seen) - len(fresh) if counting else dropped_since_drain
-            counting = True
-            if mode != "closed":
-                for seq, arrived, message in fresh:
-                    miss = predicate(message) if predicate is not None else None
-                    arrival = Arrival(seq, arrived - since, message, miss)
-                    if miss is None:
-                        if mode == "message":
-                            self._remove(seq)
-                            return ended("taken", taken=arrival)
-                        return ended("seen", taken=arrival)
-                    considered.append(arrival)
-            # What is not in the inbox past `seen` was dropped (inbox_limit).
-            seen = newest
-            if end is not None:
-                self.observed = True
-                return ended("closed" if mode == "closed" else "ended", end=end)
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return ended("absent" if mode == "absent" else "timeout")
-            with self._condition:
-                if self._end is None and self._seq <= seen:
-                    self._condition.wait(min(WAIT_SLICE, remaining))
+                self._wait_window = None
 
     def _remove(self, seq: int) -> None:
         with self._condition:
@@ -508,26 +558,44 @@ class _Session:
         until = outcome.ended_at + LATE_WINDOW
         with self._condition:
             # By arrival time too: this may be asked well after the window.
-            return tuple(Arrival(seq, arrived - since, message) for seq, arrived, message in self._inbox if seq > outcome.seen and arrived <= until)
+            return tuple(Arrival(seq, arrived - since, message) for seq, arrived, message in self._inbox if seq > outcome.seen and outcome.ended_at < arrived <= until)
 
     def stop(self) -> None:
         self._stop.set()
 
-    def shutdown(self, budget: float | None = None) -> str | None:
+    def set_cleanup(self, cleanup: Callable[[], list[str]]) -> None:
+        """Own the resources entered while rendering this session's params."""
+        self._cleanup = cleanup
+
+    def cleanup(self) -> list[str]:
+        """Release the session's resources once; return their exit errors."""
+        cleanup, self._cleanup = self._cleanup, None
+        return cleanup() if cleanup is not None else []
+
+    def shutdown(self, budget: float | None = None) -> tuple[str | None, list[str]]:
         """Stop the reader, ``close()`` the adapter and wait up to ``budget``
-        seconds (`JOIN_BUDGET`) for the reader to end: why ``close()`` failed,
-        or None. An interrupt it raises propagates, the reader stopped."""
+        seconds (`JOIN_BUDGET`) for the reader to end: the adapter's close
+        error, if any, and resource exit errors. An interrupt propagates once
+        resources have been released too."""
         budget = JOIN_BUDGET if budget is None else budget
         self._stop.set()
         error = None
+        interrupt: BaseException | None = None
         try:
             self.adapter.close()
-        except _INTERRUPTS:
-            raise
+        except _INTERRUPTS as e:
+            interrupt = e
         except BaseException as e:
             error = describe_exception(e)
-        self._thread.join(budget)
-        return error
+        try:
+            self._thread.join(budget)
+        finally:
+            cleanup_errors = self.cleanup()
+        if interrupt is not None:
+            for failure in ([error] if error is not None else []) + cleanup_errors:
+                logger.error("Closing connection '%s' failed: %s", self.name, failure)
+            raise interrupt
+        return error, cleanup_errors
 
     def join(self, timeout: float) -> None:
         self._thread.join(timeout)
@@ -698,7 +766,11 @@ def close_all(sessions: Iterable[_Session]) -> None:
             logger.error("Closing connection '%s' at the end of the chain failed: %s", session.name, describe_exception(e))
     deadline = time.monotonic() + TEARDOWN_BUDGET
     for session in sessions:
-        session.join(max(0.0, deadline - time.monotonic()))
+        try:
+            session.join(max(0.0, deadline - time.monotonic()))
+        except _INTERRUPTS as e:
+            if interrupt is None:
+                interrupt = e
         if session.reader_alive:
             logger.error(
                 "The reader of connection '%s' did not stop within %gs of the chain's end: its receive() does not return once close() is called",
@@ -707,6 +779,12 @@ def close_all(sessions: Iterable[_Session]) -> None:
             )
     for session in sessions:
         session.log_unobserved()
+        try:
+            for error in session.cleanup():
+                logger.error("Closing connection '%s' at the end of the chain failed: %s", session.name, error)
+        except _INTERRUPTS as e:
+            if interrupt is None:
+                interrupt = e
     if interrupt is not None:
         raise interrupt
 
@@ -760,17 +838,12 @@ class Connections:
             return None
         return f"closed by stage '{entry.closed_by}'" if entry.closed_by is not None else f"failed: {entry.failure}"
 
-    def open(self, name: str, adapter_name: str, params: Mapping[str, Any], connect_timeout: float, inbox_limit: int, label: str) -> tuple[_Session, dict[str, Any] | None]:
-        """Open ``name`` anew: end its session, if it has one, then import the
-        adapter, build it with ``params``, ``connect()`` it and start its
-        reader, registering the session only then. The result: the session
-        and what ``connect()`` returned.
+    def prepare_open(self, name: str) -> None:
+        """End the old session before acquiring resources for the next one.
 
-        An old session is detached before it is ended, so its reader can
-        only reach its own inbox. A reader that does not stop within
-        `JOIN_BUDGET` bars reopening: a new socket could reuse its file
-        descriptor. A ``connect()`` that raises has ``close()`` called in its
-        own guard, so a half-open connection is not left behind.
+        A second call before opening is harmless. Detach the old reader from
+        the registry first, and bar reopening if it does not stop: a new
+        socket could reuse its file descriptor.
         """
         entry = self._entries.setdefault(name, _Entry())
         if entry.stuck:
@@ -778,13 +851,28 @@ class Connections:
         old, entry.session = entry.session, None
         if old is not None:
             entry.closed_by, entry.failure = None, "reopening"
-            error = old.shutdown()
+            error, cleanup_errors = old.shutdown()
             old.log_unobserved()
             if old.reader_alive:
                 entry.stuck = True
                 raise RequestError(f"Connection '{name}': the previous reader for '{name}' did not stop within {JOIN_BUDGET:g}s of close()", retryable=False)
             if error is not None:
                 logger.error("Closing connection '%s' to reopen it failed: %s", name, error)
+            if cleanup_errors:
+                entry.failure = "\n".join(cleanup_errors)
+                raise RequestError(f"Closing connection '{name}' before reopening failed: {entry.failure}", retryable=False)
+
+    def open(self, name: str, adapter_name: str, params: Mapping[str, Any], connect_timeout: float, inbox_limit: int, label: str) -> tuple[_Session, dict[str, Any] | None]:
+        """Open ``name`` anew, ending its previous session first.
+
+        Import the adapter, build it with ``params``, ``connect()`` it and
+        start its reader, registering the session only then. A failed
+        ``connect()`` still closes its half-open adapter. The carrier calls
+        ``prepare_open`` before rendering params, so resources held by the
+        old session are available to factories creating the new ones.
+        """
+        self.prepare_open(name)
+        entry = self._entries[name]
         try:
             generation = entry.generations + 1
             opening = _Session.Opening(generation, inbox_limit, f"httpchain-connection-{label}-{name}-{generation}")
@@ -836,12 +924,13 @@ class Connections:
         entry.closed_by, entry.failure = stage, None
         if session is None:
             return None
-        error = session.shutdown()
+        error, cleanup_errors = session.shutdown()
         session.log_unobserved()
         if session.reader_alive:
             entry.stuck = True
             logger.error("The reader of connection '%s' did not stop within %gs of close()", name, JOIN_BUDGET)
-        return f"Closing connection '{name}' failed: {error}" if error is not None else None
+        errors = ([error] if error is not None else []) + cleanup_errors
+        return f"Closing connection '{name}' failed: " + "\n".join(errors) if errors else None
 
     def close_all(self) -> None:
         """End every session (`close_all`), and forget them all."""

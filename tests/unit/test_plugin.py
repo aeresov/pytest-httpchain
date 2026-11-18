@@ -1,6 +1,7 @@
 import json
 import logging
 import warnings
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -15,22 +16,166 @@ from pytest_httpchain.models import Scenario
 from pytest_httpchain.parallel_stats import ParallelStats, parallel_stats
 from pytest_httpchain.plugin import (
     _CHAIN_KEY,
+    _CONNECTION_CLEANUP_INTERRUPT,
     _HAR_REDACTION,
     _HTTPX_LOG_FILTER,
     _REDACTION,
     _apply_xdist_group_nodeids,
     _chain_args,
     _earlier_hops,
+    _fixture_scopes,
     _format_section,
     _passed_sections_shown,
+    _register_connection_finalizers,
     _regroup_carrier_items,
     _sections_will_be_shown,
     _warn_on_params_varying_across_stages,
     pytest_collect_file,
     pytest_collection_modifyitems,
     pytest_runtest_makereport,
+    pytest_runtest_setup,
+    pytest_runtest_teardown,
+    pytest_sessionfinish,
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
+
+
+class TestFixtureScopes:
+    def test_closest_definition_without_parametrize(self):
+        item = SimpleNamespace(_fixtureinfo=SimpleNamespace(name2fixturedefs={"resource": [SimpleNamespace(scope="session"), SimpleNamespace(scope="class")], "missing": []}))
+        assert _fixture_scopes(item) == {"resource": "class"}
+
+    def test_parametrize_overrides_only_its_fixtures(self):
+        item = SimpleNamespace(
+            _fixtureinfo=SimpleNamespace(name2fixturedefs={"resource": [SimpleNamespace(scope="class")], "server": [SimpleNamespace(scope="module")]}),
+            callspec=SimpleNamespace(_arg2scope={"resource": SimpleNamespace(value="function")}),
+        )
+        assert _fixture_scopes(item) == {"resource": "function", "server": "module"}
+
+    def test_missing_fixture_info_is_unknown(self):
+        assert _fixture_scopes(SimpleNamespace()) == {}
+
+
+@pytest.fixture
+def connection_finalizers():
+    class_callbacks, parent_callbacks, local_callbacks = [], [], []
+    parent = MagicMock(cached_result=(object(), None, None))
+    parent.addfinalizer.side_effect = parent_callbacks.append
+    local = MagicMock(cached_result=(object(), None, None))
+    local.addfinalizer.side_effect = local_callbacks.append
+    class_node = SimpleNamespace(stash=pytest.Stash(), addfinalizer=class_callbacks.append)
+    cls = type(
+        "_Scenario",
+        (Carrier,),
+        {
+            "scenario": Scenario(fixtures=["pool", "local"]),
+            "connections": MagicMock(),
+            "fixture_scopes": {"pool": "class", "local": "function"},
+            "begin_chain": MagicMock(),
+        },
+    )
+    item = SimpleNamespace(
+        cls=cls,
+        stash=pytest.Stash(),
+        config=MagicMock(),
+        getparent=lambda _: class_node,
+        get_closest_marker=lambda _: None,
+        _request=SimpleNamespace(_fixture_defs={"pool": parent, "local": local}),
+    )
+    item.config.stash = pytest.Stash()
+    return SimpleNamespace(cls=cls, item=item, parent=parent, class_callbacks=class_callbacks, parent_callbacks=parent_callbacks, local_callbacks=local_callbacks)
+
+
+class TestConnectionFinalizers:
+    def test_registers_once_and_captures_each_chain_registry(self, connection_finalizers):
+        state = connection_finalizers
+        first = state.cls.connections
+        _register_connection_finalizers(state.item, state.cls)
+        _register_connection_finalizers(state.item, state.cls)
+        assert len(state.class_callbacks) == len(state.parent_callbacks) == 1
+        assert state.local_callbacks == [], "a function fixture must not close connections between stages"
+
+        second = state.cls.connections = MagicMock()
+        _register_connection_finalizers(state.item, state.cls)
+        assert len(state.class_callbacks) == len(state.parent_callbacks) == 2
+        state.parent_callbacks[0]()
+        first.close_all.assert_called_once_with()
+        second.close_all.assert_not_called()
+        state.class_callbacks[1]()
+        second.close_all.assert_called_once_with()
+
+    def test_replaced_parent_is_registered_again_in_the_same_chain(self, connection_finalizers):
+        state = connection_finalizers
+        _register_connection_finalizers(state.item, state.cls)
+        state.parent_callbacks.pop()()  # pytest finishes the old fixture instance
+        state.parent.cached_result = (object(), None, None)
+        _register_connection_finalizers(state.item, state.cls)
+        assert len(state.class_callbacks) == len(state.parent_callbacks) == 1
+        state.parent_callbacks[0]()
+        assert state.cls.connections.close_all.call_count == 2
+
+    def test_finished_parent_releases_its_cached_fixture_value(self, connection_finalizers):
+        state = connection_finalizers
+
+        class Payload:
+            pass
+
+        payload = Payload()
+        reference = weakref.ref(payload)
+        state.parent.cached_result = (payload, None, None)
+        _register_connection_finalizers(state.item, state.cls)
+        state.parent.reset_mock()  # discard mock call records retaining the callback
+        state.parent.cached_result = None
+        del payload
+        assert reference() is not None
+        state.parent_callbacks.pop()()
+        assert reference() is None
+
+    def test_setup_registers_only_after_fixtures_succeed(self, connection_finalizers):
+        state = connection_finalizers
+        with patch("pytest_httpchain.plugin._fixture_scopes", return_value=state.cls.fixture_scopes):
+            hook = pytest_runtest_setup(state.item)
+            next(hook)
+            assert state.class_callbacks == state.parent_callbacks == []
+            with pytest.raises(StopIteration):
+                next(hook)
+        assert len(state.class_callbacks) == len(state.parent_callbacks) == 1
+
+        with patch("pytest_httpchain.plugin._fixture_scopes", return_value=state.cls.fixture_scopes):
+            hook = pytest_runtest_setup(state.item)
+            next(hook)
+            with pytest.raises(RuntimeError, match="fixture setup failed"):
+                hook.throw(RuntimeError("fixture setup failed"))
+        assert len(state.class_callbacks) == len(state.parent_callbacks) == 1
+
+    def test_cleanup_interrupt_waits_for_the_native_teardown(self, connection_finalizers):
+        state = connection_finalizers
+        interrupt = KeyboardInterrupt("adapter close")
+        state.cls.connections.close_all.side_effect = interrupt
+        _register_connection_finalizers(state.item, state.cls)
+        hook = pytest_runtest_teardown(state.item)
+        next(hook)
+        state.class_callbacks[0]()
+        state.parent_callbacks[0]()
+        assert state.item.config.stash[_CONNECTION_CLEANUP_INTERRUPT] is interrupt
+        with pytest.raises(KeyboardInterrupt) as caught:
+            next(hook)
+        assert caught.value is interrupt
+        assert _CONNECTION_CLEANUP_INTERRUPT not in state.item.config.stash
+
+    @pytest.mark.parametrize(
+        ("interrupt", "returncode"),
+        [(KeyboardInterrupt("close"), 2), (SystemExit(7), 7), (pytest.exit.Exception("close", returncode=0), 0)],
+        ids=["keyboard", "system-exit", "pytest-exit-zero"],
+    )
+    def test_sessionfinish_preserves_an_interrupted_cleanup_exit_code(self, interrupt, returncode):
+        config = SimpleNamespace(stash=pytest.Stash())
+        hook = pytest_sessionfinish(SimpleNamespace(config=config))
+        next(hook)
+        config.stash[_CONNECTION_CLEANUP_INTERRUPT] = interrupt
+        with pytest.raises(pytest.exit.Exception) as caught:
+            next(hook)
+        assert caught.value.returncode == returncode
 
 
 class TestPytestConfigure:

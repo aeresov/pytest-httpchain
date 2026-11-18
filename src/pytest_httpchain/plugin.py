@@ -13,7 +13,7 @@ import re
 import sys
 import types
 import warnings
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,7 +30,7 @@ from pytest_httpchain.parallel_stats import ParallelStats
 from pytest_httpchain.redaction import DEFAULT_REDACT_HEADERS, DEFAULT_REDACT_MESSAGE_KEYS, DEFAULT_REDACT_QUERY_PARAMS, NO_REDACTION, Redaction
 from pytest_httpchain.report_formatter import format_connection_exchange, format_curl, format_request, format_response
 from pytest_httpchain.templates import get_max_comprehension_length, set_max_comprehension_length
-from pytest_httpchain.utils import make_marker, xdist_group_names
+from pytest_httpchain.utils import INTERRUPTS, describe_exception, make_marker, xdist_group_names
 from pytest_httpchain.validation import check_scenario, load_with_diagnostics
 from pytest_httpchain.warnings import ScenarioValidationWarning
 
@@ -192,6 +192,15 @@ def _stage_index(item: pytest.Item) -> int:
 # by `Carrier.begin_chain`.
 type _ChainKey = tuple[tuple[str, int], ...]
 _CHAIN_KEY: pytest.StashKey[_ChainKey] = pytest.StashKey()
+
+# Connection cleanup is registered once per registry on the class node, and
+# once per live parent fixture instance. Keep the cached-result object itself:
+# its identity changes when pytest replaces a parametrized fixture.
+_REGISTERED_CONNECTIONS: pytest.StashKey[object] = pytest.StashKey()
+_CONNECTION_PARENT_FINALIZERS: pytest.StashKey[dict[object, tuple[object, object]]] = pytest.StashKey()
+# A cleanup interrupt must leave pytest's native finalizer stack intact. Raise
+# it only after the surrounding setup/teardown hook has finished draining it.
+_CONNECTION_CLEANUP_INTERRUPT: pytest.StashKey[BaseException] = pytest.StashKey()
 
 # `_chain_args` over each scenario class's every stage, recorded by `JsonClass`
 # before any selection narrows them: which fixtures every stage requests is a
@@ -487,29 +496,126 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     _warn_on_split_chains(session.items)
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_runtest_setup(item: pytest.Item) -> None:
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> Iterator[None]:
     """Start a scenario's next chain from fresh state, after the previous
     chain's last report (which may have aborted it). ``tryfirst`` puts this
     ahead of fixture setup: a setup error in a chain's first stage must abort
-    that chain, not be reset away when its second stage enters it."""
-    if (cls := _carrier_class(item)) is not None:
+    that chain, not be reset away when its second stage enters it. After
+    fixtures are set up, register connection cleanup ahead of their exits."""
+    cls = _carrier_class(item)
+    if cls is not None:
         cls.begin_chain(item.stash.get(_CHAIN_KEY, ()))
         cls.fixture_scopes = _fixture_scopes(item)
         # A stage marked xfail is reported failed when it passes (strict).
         cls.snapshot_passed_exchanges = _passed_sections_shown(item.config) or item.get_closest_marker("xfail") is not None
+    try:
+        yield
+    finally:
+        if (interrupt := _take_connection_cleanup_interrupt(item.config)) is not None:
+            raise interrupt
+    if cls is not None:
+        _register_connection_finalizers(item, cls)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Iterator[None]:
+    try:
+        yield
+    finally:
+        if (interrupt := _take_connection_cleanup_interrupt(item.config)) is not None:
+            raise interrupt
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_sessionfinish(session: pytest.Session) -> Iterator[None]:
+    try:
+        yield
+    finally:
+        interrupt = _take_connection_cleanup_interrupt(session.config)
+        if isinstance(interrupt, pytest.exit.Exception):
+            raise interrupt
+        if interrupt is not None:
+            # pytest catches exit() during sessionfinish; raw interrupts there
+            # would bypass its unconfiguration.
+            code = interrupt.code if isinstance(interrupt, SystemExit) else pytest.ExitCode.INTERRUPTED
+            returncode = code if isinstance(code, int) else 0 if code is None else 1
+            pytest.exit(describe_exception(interrupt), returncode=returncode)
+
+
+def _take_connection_cleanup_interrupt(config: pytest.Config) -> BaseException | None:
+    interrupt = config.stash.get(_CONNECTION_CLEANUP_INTERRUPT, None)
+    if interrupt is not None:
+        del config.stash[_CONNECTION_CLEANUP_INTERRUPT]
+    return interrupt
+
+
+def _register_connection_finalizers(item: pytest.Item, cls: type[Carrier]) -> None:
+    """Close the chain's sessions before their fixture parents finish.
+
+    A late class finalizer runs before class fixtures' finalizers. A parent
+    fixture can also be replaced during setup, without leaving the class,
+    so its own finalizer closes connections before its resource or pool.
+    Capture the registry: callbacks from an earlier parameter chain must
+    never close the next chain's sessions. Closing leaves report state for
+    the ordinary class teardown to reset.
+    """
+    class_node = item.getparent(pytest.Class)
+    if class_node is None:
+        return
+    registry = cls.connections
+    config = item.config
+
+    def close_connections() -> None:
+        try:
+            registry.close_all()
+        except INTERRUPTS as interrupt:
+            config.stash.setdefault(_CONNECTION_CLEANUP_INTERRUPT, interrupt)
+
+    if class_node.stash.get(_REGISTERED_CONNECTIONS, None) is not registry:
+        class_node.addfinalizer(close_connections)
+        class_node.stash[_REGISTERED_CONNECTIONS] = registry
+
+    definitions = getattr(getattr(item, "_request", None), "_fixture_defs", {})
+    if not isinstance(definitions, Mapping):
+        return
+    registered = class_node.stash.setdefault(_CONNECTION_PARENT_FINALIZERS, {})
+    for name in cls.scenario.fixtures if cls.scenario is not None else ():
+        if cls.fixture_scopes.get(name) not in {"class", "module", "package", "session"}:
+            continue
+        definition = definitions.get(name)
+        if definition is None:
+            continue
+        cached_result = getattr(definition, "cached_result", None)
+        if cached_result is None:
+            continue
+        previous = registered.get(definition)
+        if previous is None or previous[0] is not registry or previous[1] is not cached_result:
+
+            def before_parent_finish(definition=definition, cached_result=cached_result, registry=registry) -> None:
+                current = registered.get(definition)
+                if current is not None and current[0] is registry and current[1] is cached_result:
+                    del registered[definition]
+                close_connections()
+
+            definition.addfinalizer(before_parent_finish)
+            registered[definition] = (registry, cached_result)
 
 
 def _fixture_scopes(item: pytest.Item) -> dict[str, str]:
-    """Each fixture ``item`` requests, by name, with the scope of the
-    definition it gets (the last, the closest): a connection's params must
-    read none narrower than the class (`Carrier._open_connection`). pytest
-    keeps them on the item's fixture info, which is not public API: without
-    it, no scope is known and nothing is checked."""
+    """Each fixture ``item`` requests, by name, with its effective scope:
+    a connection's params must read none narrower than the class
+    (`Carrier._open_connection`). An indirect parametrize's scope overrides
+    the fixture definition's, as pytest records on the callspec. pytest keeps
+    the definitions on the item's fixture info, which is not public API:
+    without it, no scope is known and nothing is checked."""
     definitions = getattr(getattr(item, "_fixtureinfo", None), "name2fixturedefs", None)
     if not isinstance(definitions, Mapping):
         return {}
-    return {name: str(defs[-1].scope) for name, defs in definitions.items() if defs}
+    scopes = {name: str(defs[-1].scope) for name, defs in definitions.items() if defs}
+    if (callspec := getattr(item, "callspec", None)) is not None:
+        scopes.update({name: scope.value for name, scope in callspec._arg2scope.items()})
+    return scopes
 
 
 @pytest.hookimpl(optionalhook=True)

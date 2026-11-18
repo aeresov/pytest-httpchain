@@ -49,6 +49,8 @@ A stage has either a `request` or a `connection`, never both. HTTP and connectio
 
 `params` and `connect_timeout` are rendered each time the connection opens. They can read scenario substitutions, scenario-level `fixtures`, and any value a stage before the opening one saved, such as a device id returned by a registration call. They cannot read the opening stage's own fixtures, parameters or substitutions: the connection outlives that stage. For the same reason a fixture `params` read must be class-scoped or wider; a function-scoped one fails the opening stage. `validate` checks these names against every stage that may open the connection.
 
+A context-manager factory fixture called by a `params` template keeps its resource until the session closes. A failed open releases the resources it acquired before retrying. Reopening releases the old session's resources before rendering the new parameters. An error releasing a resource fails the stage that closes or reopens the session; at chain teardown it is logged. The fixture's lifetime is its effective pytest scope, including any override from indirect parametrization.
+
 ## The connection step
 
 | Option | Type | Default | Description |
@@ -252,7 +254,7 @@ Connections belong to the scenario's chain of stages. A class-scoped parametrize
 Connection 'device' (open 1) failed and no stage saw it: ConnectionResetError: [Errno 104] Connection reset by peer
 ```
 
-The scenario's connections are closed after its class-scoped fixtures are torn down. A fixture that serves the other side, a local test server say, should be module-scoped or wider so it outlives them; a class-scoped one goes first, and the warning above is then expected for an adapter that does not raise `EOFError` on a clean end.
+The scenario's connections close before its class-scoped fixtures are torn down, so a class-scoped server or resource pool remains available while adapters close and factory resources are released. If pytest replaces a scenario fixture's parametrized value between stages, the scenario's connections also close before its old value is finalized.
 
 A reader that does not stop within 2 seconds of its connection being closed or reopened bars opening that connection again in the chain: `the previous reader for 'device' did not stop`.
 

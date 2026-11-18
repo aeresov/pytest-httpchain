@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Resources created by context-manager factory fixtures in connection parameters live until
+  their session closes, including across stages and retries. Failed opens release them before
+  retrying, and a reconnect releases the old session's resources before acquiring new ones.
+  Automatic cleanup releases them before their parent fixtures finalize, including when pytest
+  replaces a fixture's parametrized value between stages.
+- Connection parameter lifetime checks honor fixture scope overrides from indirect pytest
+  parametrization, allowing a fixture widened to class scope and refusing one narrowed to function scope.
+- Connection expectations judge messages and peer disconnects by when they arrived, so a delayed
+  waiter cannot accept an event after its timeout or extend the late-message report window.
+  An on-time message or disconnect arriving while earlier messages are matched is checked before
+  the wait can time out or an absence check can pass.
+- Errors from unusable connection matchers redact rendered operands on listed message keys,
+  including operands that still resemble template text.
+- Adapter messages with a `None` key fail with the string-key diagnostic instead of passing
+  validation or raising an unrelated `AttributeError`.
+
 ## [0.20.0] - 2026-11-18
 
 ### Added

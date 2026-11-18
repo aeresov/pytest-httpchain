@@ -1061,8 +1061,13 @@ def _message_miss(match: Any, rendered: Mapping[str, Any] | None, redaction: Red
     of the message under a listed key, and what an expectation on a listed key
     (``body.token``) expected (``listed``, `_listed_expectations`, the same
     for every message of the wait), which a template may have rendered from a
-    secret."""
-    verdict = message_matches(match, rendered, message)
+    secret. An unusable operand raises instead of returning a miss; its
+    exception's text is shown through the same redaction before it escapes."""
+    try:
+        verdict = message_matches(match, rendered, message)
+    except VerificationError as error:
+        error.args = (redaction.message_text(str(error), message, *listed),)
+        raise
     if isinstance(verdict, Match):
         return None
     return Miss(redaction.message_text(verdict.reason, message, *listed), verdict.error)
@@ -2511,6 +2516,8 @@ class Carrier:
     def _open_connection(cls, stage: Stage, name: str, config: ConnectionConfig) -> tuple[Any, dict[str, Any] | None]:
         """Open connection ``name`` for ``stage``, its ``params`` rendered
         (`_params_context`): its session, and what ``connect()`` returned.
+        Resources its templates enter belong to that session, and a failed
+        open exits them before the next attempt.
 
         A fixture the params read must be class-scoped or wider, or the
         connection would outlive it; the plugin gives each item's fixture
@@ -2524,13 +2531,35 @@ class Carrier:
                 f"Stage '{stage.name}': connection '{name}' params read fixture '{narrow[0]}', which is function-scoped: "
                 f"the connection outlives the stage that opens it, so a fixture its params read must be class-scoped or wider"
             )
+        cls.connections.prepare_open(name)
+        # Factories called by these templates create resources for the session,
+        # which outlives the iteration opening it. Capture their exits separately
+        # from the iteration's and transfer them only once the open succeeds.
+        resources = _IterationContextManagers()
         try:
-            params = convert_namespace_to_dict(walk(config.params, context))
-            connect_timeout = walk(config.connect_timeout, context)
-        except (TemplatesError, ValueError) as e:
-            raise StageExecutionError(f"Stage '{stage.name}': connection '{name}' params did not render: {e}") from e
-        timeout = _setting_number(f"connections.{name}.connect_timeout", connect_timeout)
-        return cls.connections.open(name, config.adapter, params, timeout, config.inbox_limit, label=cls.__name__)
+            try:
+                token = _ITERATION_CONTEXT_MANAGERS.set(resources)
+                try:
+                    params = convert_namespace_to_dict(walk(config.params, context))
+                finally:
+                    _ITERATION_CONTEXT_MANAGERS.reset(token)
+                # A timeout is used only by connect(), so factories providing
+                # it keep their usual iteration lifetime.
+                connect_timeout = walk(config.connect_timeout, context)
+            except (TemplatesError, ValueError) as e:
+                raise StageExecutionError(f"Stage '{stage.name}': connection '{name}' params did not render: {e}") from e
+            timeout = _setting_number(f"connections.{name}.connect_timeout", connect_timeout)
+            session, connected = cls.connections.open(name, config.adapter, params, timeout, config.inbox_limit, label=cls.__name__)
+        except BaseException as e:
+            errors = _exit_context_managers(resources.close())
+            if isinstance(e, _STAGE_OUTCOMES):
+                if errors:
+                    raise _IterationExitError(errors, own_failure=e) from e
+            else:
+                _log_exit_errors(errors)
+            raise
+        session.set_cleanup(lambda: _exit_context_managers(resources.close()))
+        return session, connected
 
     @staticmethod
     def _rendered_send(stage: Stage, step: ConnectionStep, context: Mapping[str, Any]) -> dict[str, Any]:
@@ -2598,7 +2627,8 @@ class Carrier:
     def _wrap_factory_fixture(cls, name: str, fixture: Callable) -> Callable:
         """Wrap a callable fixture so a context-manager result is entered and
         registered to be exited: by the running iteration when it ends, or
-        outside an iteration by the stage when it ends.
+        outside an iteration by the stage when it ends. A connection's params
+        temporarily use their own registry, transferred to its session.
 
         Each call opens a resource, so the wrapped value must be invoked once per
         instance needed. The registry is looked up at call time, not at
