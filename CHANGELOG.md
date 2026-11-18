@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-18
+
 ### Added
 
 - A `graphql` body's `operation_name` names the operation of its query to execute, sent as
@@ -22,32 +24,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Minimum `graphql-core` is now 3.2.10 (was 3.0.0), the first release that parses a description on
-  an operation, a fragment or a variable (`"Fetches the user." query User { ... }`), as every final
-  release after it does: below it, a query holding one failed with `Invalid GraphQL query` only where
-  that older version was installed. (The 3.3.0 pre-releases before 3.3.0a13, installed only when
-  pre-releases are asked for, still refuse one.) 3.2.10 suits the libraries a test environment may
-  also hold (graphene, graphql-relay and sgqlc require a `graphql-core` below 3.3).
-- A GraphQL `query` holds operations and fragments, at least one operation: a type-system
-  definition (`type`, `schema`, `scalar`, `directive`, an extension), alone or beside an operation,
-  and a document of fragments alone fail with `Invalid GraphQL query` when the scenario loads. A
-  server refuses both; this also keeps out the type-system syntax `graphql-core` 3.3 parses and 3.2
-  does not (`directive @a @b on FIELD`).
-- A GraphQL `query` with an anonymous operation beside another, or two operations of one name, fails
-  when the scenario loads, as every server refuses it: `Invalid GraphQL query: There can be only one
-  operation named 'A'.`
+- **BREAKING**: minimum `graphql-core` is now 3.2.10 (was 3.0.0), the first release that parses a
+  description on an operation, a fragment or a variable (`"Fetches the user." query User { ... }`),
+  as every final release after it does: below it, a query holding one failed with `Invalid GraphQL
+  query` only where that older version was installed. (The 3.3.0 pre-releases before 3.3.0a13,
+  installed only when pre-releases are asked for, still refuse one.) 3.2.10 suits the libraries a
+  test environment may also hold (graphene, graphql-relay and sgqlc require a `graphql-core` below
+  3.3).
+- **BREAKING**: a GraphQL `query` holds operations and fragments, at least one operation: a
+  type-system definition (`type`, `schema`, `scalar`, `directive`, an extension), alone or beside an
+  operation, and a document of fragments alone fail with `Invalid GraphQL query` when the scenario
+  loads. A server refuses both; this also keeps out the type-system syntax `graphql-core` 3.3 parses
+  and 3.2 does not (`directive @a @b on FIELD`).
+- **BREAKING**: a GraphQL `query` with an anonymous operation beside another, or two operations of
+  one name, fails when the scenario loads, as every server refuses it: `Invalid GraphQL query: There
+  can be only one operation named 'A'.`
+- **BREAKING**: a GraphQL `query` of several operations needs `operation_name` (see Added) to load:
+  without one it fails when the scenario loads, where it used to be sent for the server to refuse
+  ("Must provide operation name if query contains multiple operations.").
+- **BREAKING**: a GraphQL `query` nested more than 200 levels deep fails with `Invalid GraphQL
+  query` whichever `graphql-core` is installed, counted as 3.2.14 and 3.3.2 count it: selection
+  sets, list and object values and list types together. Those versions refuse one themselves; 3.3.1
+  and older parsed one until Python's recursion limit, near 240 levels of selection sets.
 - An invalid GraphQL `query` says why: `Invalid GraphQL query: ` is followed by the parser's or the
   rule's words (`Syntax Error: Expected Name, found <EOF>.`, `The object_type_definition is not
   executable: ...`), where it said `Invalid GraphQL query` alone.
-
 - Refresh the lockfile for `graphql-core` 3.3.2, `typer` 0.29.1, `import-linter` 2.16, `ruff` 0.17.5,
   `ty` 0.0.102 and `mkdocs-material` 9.8.1, and follow ty 0.0.100's rule renames in the ty
   configuration and the source's `ty: ignore` comments. The `ty` dev floor is now 0.0.100, the first
   release that knows the new names.
-- A GraphQL `query` nested more than 200 levels deep fails with `Invalid GraphQL query` whichever
-  `graphql-core` is installed, counted as 3.2.14 and 3.3.2 count it: selection sets, list and object
-  values and list types together. Those versions refuse one themselves; 3.3.1 and older parsed one
-  until Python's recursion limit, near 240 levels of selection sets.
 
 ### Fixed
 
@@ -1880,7 +1885,8 @@ This release carries a test-suite and CI pass.
 - Configurable test file suffix (default: `http`)
 - Configurable `$ref` path traversal depth
 
-[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/aeresov/pytest-httpchain/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.18.1...v0.19.0
 [0.18.1]: https://github.com/aeresov/pytest-httpchain/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/aeresov/pytest-httpchain/compare/v0.17.1...v0.18.0
