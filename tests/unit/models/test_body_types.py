@@ -284,6 +284,213 @@ def test_graphql_variables_namespace_becomes_dict():
     assert GraphQL(query="{ a }", variables=SimpleNamespace(id="1")).variables == {"id": "1"}
 
 
+def _nested_query_holding_a_template(levels: int) -> str:
+    """Two operations named A, the first nested ``levels`` deep by selection
+    sets, its innermost field taking a template in a string."""
+    return "query A " + "{ a " * (levels - 1) + '{ b(x: "{{ id }}") }' + " }" * (levels - 1) + " query A { c }"
+
+
+def _query_of_twelve_templates(second: str, third: str) -> str:
+    """Three operations, the second named ``second`` and the third
+    ``third``, around ten templates in strings: t0 in the first, t2 to t10 in
+    the second (t1 and t11 are for the names, in the order they are written)."""
+    strings = ", ".join(f'y{index}: "{{{{ t{index} }}}}"' for index in range(2, 11))
+    return f'query X {{ a(x: "{{{{ t0 }}}}") }} query {second} {{ b({strings}) }} query {third} {{ c }}'
+
+
+class TestGraphQLQueryHoldingTemplates:
+    """A query holding templates is checked when the scenario loads by a
+    stand-in, each template written as a name of its own: what a template
+    rendering a name, a value or a string's text parses as. An error the
+    stand-in has is one the rendered query cannot help having, so each query
+    refused here also fails once rendered (`validate_rendered`, as its stage
+    validates it), here as a template might render it. A template that
+    renders structure leaves a stand-in that does not parse, which tells
+    nothing: that query is checked once rendered only, as before."""
+
+    @pytest.mark.parametrize(
+        ("query", "message", "rendered"),
+        [
+            # The query's rules, the template in a string.
+            pytest.param(
+                'type T { a: Int } query A { a(x: "{{ id }}") }',
+                "The object_type_definition is not executable: a request holds operations and fragments.",
+                'type T { a: Int } query A { a(x: "7") }',
+                id="type-system-definition",
+            ),
+            # Refused whichever graphql-core is installed: 3.3.2 parses an
+            # empty selection set, older versions do not.
+            pytest.param('query A { a(x: "{{ id }}") { } }', "Syntax Error: A selection set must not be empty.", 'query A { a(x: "7") { } }', id="empty-selection-set"),
+            # A comment in the braces selects nothing, and an empty input
+            # object beside them is a value, not a selection set.
+            pytest.param(
+                'query A($v: In = {}) { a(x: $v, y: "{{ id }}") { # none\n } }',
+                "Syntax Error: A selection set must not be empty.",
+                'query A($v: In = {}) { a(x: $v, y: "7") { # none\n } }',
+                id="empty-selection-set-beside-an-empty-input-object",
+            ),
+            pytest.param(
+                'fragment F on T { a(x: "{{ id }}") }',
+                "A request holds at least one operation: fragments alone execute nothing.",
+                'fragment F on T { a(x: "7") }',
+                id="fragments-alone",
+            ),
+            pytest.param(
+                '{ a(x: "{{ id }}") } query B { b }', "This anonymous operation must be the only defined operation.", '{ a(x: "7") } query B { b }', id="anonymous-beside-another"
+            ),
+            pytest.param('query A { a(x: "{{ id }}") } query A { b }', "There can be only one operation named 'A'.", 'query A { a(x: "7") } query A { b }', id="two-of-one-name"),
+            # The template elsewhere: a value, a field, a type, a variable, an
+            # operation's name, which is still one beside an anonymous one.
+            pytest.param("query A { a(x: {{ id }}) } query A { b }", "There can be only one operation named 'A'.", "query A { a(x: 7) } query A { b }", id="template-as-a-value"),
+            pytest.param("{ {{ field }} } query B { b }", "This anonymous operation must be the only defined operation.", "{ me } query B { b }", id="template-as-a-field"),
+            pytest.param(
+                "query A($v: {{ type }}) { a(x: $v) } query A { b }",
+                "There can be only one operation named 'A'.",
+                "query A($v: Int) { a(x: $v) } query A { b }",
+                id="template-as-a-type",
+            ),
+            pytest.param(
+                "query A { a @include(if: ${{ flag }}) } query A { b }",
+                "There can be only one operation named 'A'.",
+                "query A { a @include(if: $on) } query A { b }",
+                id="template-as-a-variable",
+            ),
+            pytest.param(
+                "query {{ name }} { a } { b }", "This anonymous operation must be the only defined operation.", "query Me { a } { b }", id="template-as-an-operation-name"
+            ),
+            # Names templates write, wholly or in part, are told apart from
+            # each other and from the names written out, which still clash.
+            pytest.param(
+                "query {{ x }} { a } query A{{ x }} { b } query A { c } query A { d }",
+                "There can be only one operation named 'A'.",
+                "query B { a } query AB { b } query A { c } query A { d }",
+                id="templated-names-apart-from-names-written-out",
+            ),
+            # An escaped `\{{` is text, rendered as in a query written out.
+            pytest.param(
+                'query A { a(x: "\\{{ lit }}", y: "{{ id }}") } query A { b }',
+                "There can be only one operation named 'A'.",
+                'query A { a(x: "{{ lit }}", y: "7") } query A { b }',
+                id="escaped-braces-in-a-string",
+            ),
+            # A stand-in adds no nesting: 200 levels are the limit's own.
+            pytest.param(
+                _nested_query_holding_a_template(200),
+                "There can be only one operation named 'A'.",
+                _nested_query_holding_a_template(200).replace("{{ id }}", "7"),
+                id="nested-200-levels-deep",
+            ),
+        ],
+    )
+    def test_query_refused_at_load_as_once_rendered(self, query, message, rendered):
+        """One error, at the query, in the words of a query written out."""
+        with pytest.raises(ValidationError) as exc_info:
+            GraphQL(query=query)
+        assert [(error["loc"], error["msg"]) for error in exc_info.value.errors()] == [(("query",), f"Value error, Invalid GraphQL query: {message}")]
+        # Once rendered, the parser's words for some differ by version.
+        with pytest.raises(ValidationError, match="Invalid GraphQL query"):
+            validate_rendered(GraphQL, {"query": rendered})
+
+    @pytest.mark.parametrize(
+        ("query", "operation_name", "message", "rendered"),
+        [
+            pytest.param(
+                'query A { a(x: "{{ id }}") } query B { b }',
+                None,
+                "the query defines several operations ('A', 'B'): name the one to execute in operation_name",
+                'query A { a(x: "7") } query B { b }',
+                id="several-operations-unnamed",
+            ),
+            pytest.param(
+                "query A { a(x: {{ id }}) } query B { b }",
+                "C",
+                "operation_name 'C' names no operation in the query (it defines 'A', 'B')",
+                "query A { a(x: 7) } query B { b }",
+                id="unknown-name",
+            ),
+            pytest.param(
+                "{ a(x: {{ id }}) }",
+                "Me",
+                "operation_name 'Me' names no operation in the query (it defines an anonymous one)",
+                "{ a(x: 7) }",
+                id="name-for-an-anonymous-operation",
+            ),
+            # A name written out like a stand-in's is the query's own.
+            pytest.param(
+                'query __httpchain0__httpchain { a(x: "{{ id }}") } query B { b }',
+                "C",
+                "operation_name 'C' names no operation in the query (it defines '__httpchain0__httpchain', 'B')",
+                'query __httpchain0__httpchain { a(x: "7") } query B { b }',
+                id="name-written-out-like-a-stand-in",
+            ),
+        ],
+    )
+    def test_operation_name_refused_at_load_as_once_rendered(self, query, operation_name, message, rendered):
+        """One error, the model's, as for a query written out."""
+        with pytest.raises(ValidationError) as exc_info:
+            GraphQL(query=query, operation_name=operation_name)
+        assert [(error["loc"], error["msg"]) for error in exc_info.value.errors()] == [((), f"Value error, {message}")]
+        with pytest.raises(ValidationError, match=re.escape(message)):
+            validate_rendered(GraphQL, {"query": rendered, "operation_name": operation_name})
+
+    @pytest.mark.parametrize(
+        ("query", "operation_name"),
+        [
+            # The stand-in breaks no rule.
+            pytest.param('query A { a(x: "{{ id }}", y: {}) } query B { b }', "B", id="valid"),
+            pytest.param("query A($v: In = {}) { a(x: $v, y: {{ id }}) { b } }", None, id="empty-input-objects-beside-a-template"),
+            # An operation's name holding a template may render the name asked
+            # for, wholly or in part; with none asked for, the rule is not
+            # applied either (the names it gives would be the stand-ins').
+            pytest.param("query {{ name }} { a } query B { b }", "C", id="templated-operation-name"),
+            pytest.param("query Get{{ kind }} { a } query B { b }", "GetUser", id="partly-templated-operation-name"),
+            pytest.param("query {{ name }} { a } query B { b }", None, id="templated-operation-name-none-asked-for"),
+            # The name asked for is known once rendered.
+            pytest.param('query A { a(x: "{{ id }}") } query B { b }', "{{ operation }}", id="templated-name-asked-for"),
+            # Names templates write are told apart: numbered in order alone,
+            # the 2nd template's followed by a digit (`1`, `1`) would spell
+            # the 12th's (`11`).
+            pytest.param("query {{ a }} { a } query {{ b }} { b }", "{{ operation }}", id="templated-names"),
+            pytest.param(_query_of_twelve_templates("{{ t1 }}1", "{{ t11 }}"), "{{ operation }}", id="templated-names-a-digit-after-one"),
+            # The stand-in tells nothing where a template renders structure: a
+            # whole document, a keyword, punctuation, a number's digits, text
+            # after a backslash in a string (which may escape it).
+            pytest.param("{{ document }}", "A", id="whole-document"),
+            pytest.param("{{ kind }} A { a } query A { b }", None, id="keyword"),
+            pytest.param("query A { a(x: 1) {{ close }} query A { b }", None, id="punctuation"),
+            pytest.param("query A { a(x: 1{{ digits }}) } query A { b }", None, id="number"),
+            pytest.param('query A { a(x: "\\\\{{ escaped }}") } query A { b }', None, id="after-a-backslash"),
+            # Nor where it nests past the limit, which graphql-core 3.2.14 and
+            # 3.3.2 do not parse: the verdict is the same on every version.
+            pytest.param(_nested_query_holding_a_template(201), None, id="nested-201-levels-deep"),
+        ],
+    )
+    def test_query_loads_where_its_stand_in_breaks_no_rule_or_tells_nothing(self, query, operation_name):
+        assert GraphQL(query=query, operation_name=operation_name).query == query
+
+    @pytest.mark.parametrize(
+        "rendered",
+        [
+            pytest.param("query A { a } query A { b }", id="keyword"),
+            pytest.param("query A { a(x: 1) } query A { b }", id="punctuation"),
+            pytest.param("query A { a(x: 12) } query A { b }", id="number"),
+            pytest.param('query A { a(x: "\\n") } query A { b }', id="after-a-backslash"),
+            pytest.param(_nested_query_holding_a_template(201).replace("{{ id }}", "7"), id="nested-201-levels-deep"),
+        ],
+    )
+    def test_query_its_stand_in_tells_nothing_of_fails_once_rendered(self, rendered):
+        """Those above whose stand-in tells nothing, as their templates might
+        render, fail as their stage runs."""
+        with pytest.raises(ValidationError, match="Invalid GraphQL query"):
+            validate_rendered(GraphQL, {"query": rendered})
+
+    def test_rendered_text_is_not_read_for_templates(self):
+        """Once rendered, a query is final: braces a value put in it are no
+        template, and text that is no GraphQL is sent as it is."""
+        query = "query A { a(x: {{ x }}) } query A { b }"
+        assert validate_rendered(GraphQL, {"query": query}).query == query
+
+
 class TestMultipart:
     """``body.multipart`` and the file forms ``body.files`` shares with it."""
 

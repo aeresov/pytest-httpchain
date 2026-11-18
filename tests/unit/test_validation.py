@@ -344,6 +344,19 @@ DIAGNOSED = [
     # Rendered, an escape would leave literal braces, which the stage fails
     # as template text left in the client's URL: refused as it loads instead.
     ("escaped_braces_client_url.json", [(C.SCHEMA, "client -> base_url", r"base_url cannot hold a backslash before '\{\{'")]),
+    # A GraphQL query holding a template is checked as it loads, its template
+    # standing as a name, where the rendered query cannot help failing: one
+    # finding, at the query, in the words of a query written out.
+    (
+        "graphql_templated_query_invalid.json",
+        [
+            (
+                C.SCHEMA,
+                "stages -> 0 -> request -> body -> graphql -> graphql -> query",
+                r": Value error, Invalid GraphQL query: There can be only one operation named 'User'\.$",
+            )
+        ],
+    ),
     # A relative URL has nowhere to go without client.base_url, whether all of
     # it is literal or only the text before its first template.
     ("relative_url_without_base_url.json", [(C.RELATIVE_URL_WITHOUT_BASE_URL, "stages[0].request.url", r"'/users/1' is relative, but the scenario sets no client.base_url")]),

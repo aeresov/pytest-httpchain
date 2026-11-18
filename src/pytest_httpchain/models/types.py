@@ -313,20 +313,40 @@ def _parse_graphql_query(text: str) -> None:
     list, not on the call stack, so nesting the parser got through costs no
     frames here.
     """
-    document = graphql.parse(text)
+    _check_graphql_document(graphql.parse(text))
+
+
+class _NestedTooDeeply(graphql.GraphQLSyntaxError):
+    """The nesting rule's refusal, which a templated query's stand-in tells
+    from the others (`_graphql_stand_in`)."""
+
+
+def _check_graphql_document(document: Any, filler: str | None = None) -> list[Any]:
+    """The rules `_parse_graphql_query` holds a parsed document to, raising
+    the first it fails; else its operations. A selection set holding only a
+    field aliased ``filler`` selects nothing: the empty braces a stand-in
+    filled (`_fill_empty_braces`)."""
     # The grammar's own refusals first (what some versions' parser refuses
-    # itself), then the definitions, then the operations: a document failing
-    # several is refused for the same one on every version.
+    # itself), the nesting before an empty selection set, then the
+    # definitions, then the operations: a document failing several is refused
+    # for the same one on every version. No version parses a query written
+    # out that both nests past the limit and selects nothing somewhere, but a
+    # stand-in's filled braces parse on every version, and one nesting past
+    # the limit is let through, as 3.2.14 and 3.3.2 do not parse it, never
+    # refused for its braces (`_graphql_stand_in`).
     pending: list[tuple[Any, int]] = [(document, 0)]
+    empty = None
     while pending:
         node, depth = pending.pop()
         if isinstance(node, _GRAPHQL_NESTING):
             depth += 1
             if depth > _GRAPHQL_MAX_NESTING:
-                raise graphql.GraphQLSyntaxError(node.loc.source, node.loc.start, f"Document is nested more than {_GRAPHQL_MAX_NESTING} levels deep.")
-        if isinstance(node, graphql.language.SelectionSetNode) and not node.selections:
-            raise graphql.GraphQLSyntaxError(node.loc.source, node.loc.start, "A selection set must not be empty.")
+                raise _NestedTooDeeply(node.loc.source, node.loc.start, f"Document is nested more than {_GRAPHQL_MAX_NESTING} levels deep.")
+        if empty is None and isinstance(node, graphql.language.SelectionSetNode) and _selects_nothing(node, filler):
+            empty = node
         pending.extend((child, depth) for child in _graphql_children(node))
+    if empty is not None:
+        raise graphql.GraphQLSyntaxError(empty.loc.source, empty.loc.start, "A selection set must not be empty.")
     for definition in document.definitions:
         if not isinstance(definition, graphql.language.OperationDefinitionNode | graphql.language.FragmentDefinitionNode):
             raise graphql.GraphQLError(f"The {definition.kind} is not executable: a request holds operations and fragments.", definition)
@@ -334,6 +354,16 @@ def _parse_graphql_query(text: str) -> None:
     if not operations:
         raise graphql.GraphQLError("A request holds at least one operation: fragments alone execute nothing.")
     _tell_operations_apart(operations)
+    return operations
+
+
+def _selects_nothing(selection_set: Any, filler: str | None) -> bool:
+    """Whether a selection set selects nothing: it holds no selection, or
+    only the field ``filler: filler`` filling its braces."""
+    if not selection_set.selections:
+        return True
+    first = selection_set.selections[0]
+    return filler is not None and isinstance(first, graphql.language.FieldNode) and first.alias is not None and first.alias.value == filler
 
 
 def _tell_operations_apart(operations: list[Any]) -> None:
@@ -358,26 +388,32 @@ def _printable(text: str) -> str:
     return text.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
+def _invalid_query(e: Exception) -> ValueError:
+    """The refusal of a query whose check raised ``e``: "Invalid GraphQL
+    query: " and why, in the parser's or the rule's words. Only an error's
+    ``message``, never the error printed: graphql-core before 3.2.14 and
+    3.3.2 fails printing the location of one after a line separator Python
+    counts and its printer does not (U+2028, a form feed)."""
+    if isinstance(e, GraphQLOperationError):
+        return GraphQLOperationError(f"Invalid GraphQL query: {e}")
+    if isinstance(e, graphql.GraphQLError):
+        return ValueError(f"Invalid GraphQL query: {_printable(e.message)}")
+    if isinstance(e, RecursionError):
+        return ValueError("Invalid GraphQL query: Document is nested too deeply to parse.")
+    # graphql-core 3.2.10 to 3.2.13's lexer runs off the text it reads on
+    # some inputs (a string ending in a lone backslash): an IndexError, which
+    # is no GraphQL either.
+    return ValueError("Invalid GraphQL query: the parser could not read it")
+
+
 def validate_graphql_query(v: str, info: ValidationInfo) -> str:
     """A GraphQL request's query, judged as the text it is used as
     (`as_rendered`) and kept as written, or a ValueError naming why it is
-    none after "Invalid GraphQL query: ", in the parser's or the rule's
-    words. Only an error's ``message``, never the error printed: graphql-core
-    before 3.2.14 and 3.3.2 fails printing the location of one after a line
-    separator Python counts and its printer does not (U+2028, a form feed)."""
+    none (`_invalid_query`)."""
     try:
         _parse_graphql_query(as_rendered(v, info))
-    except GraphQLOperationError as e:
-        raise GraphQLOperationError(f"Invalid GraphQL query: {e}") from e
-    except graphql.GraphQLError as e:
-        raise ValueError(f"Invalid GraphQL query: {_printable(e.message)}") from e
-    except RecursionError as e:
-        raise ValueError("Invalid GraphQL query: Document is nested too deeply to parse.") from e
     except Exception as e:
-        # graphql-core 3.2.10 to 3.2.13's lexer runs off the text it reads
-        # on some inputs (a string ending in a lone backslash): an
-        # IndexError, which is no GraphQL either.
-        raise ValueError("Invalid GraphQL query: the parser could not read it") from e
+        raise _invalid_query(e) from e
     return v
 
 
@@ -405,6 +441,11 @@ def check_graphql_operation(query: str, operation_name: str | None) -> None:
     the query's own check did not read (braces an escape left in it) is
     held to its operation rules here too."""
     operations = [definition for definition in graphql.parse(query).definitions if isinstance(definition, graphql.language.OperationDefinitionNode)]
+    _check_operation(operations, operation_name)
+
+
+def _check_operation(operations: list[Any], operation_name: str | None) -> None:
+    """`check_graphql_operation` on a document's operations."""
     try:
         _tell_operations_apart(operations)
     except GraphQLOperationError as e:
@@ -416,6 +457,132 @@ def check_graphql_operation(query: str, operation_name: str | None) -> None:
             raise GraphQLOperationError(f"the query defines several operations ({defined}): name the one to execute in operation_name")
     elif operation_name not in names:
         raise GraphQLOperationError(f"operation_name {operation_name!r} names no operation in the query (it defines {defined})")
+
+
+# What a templated query's stand-in (`_graphql_stand_in`) writes in place of
+# its templates and inside its empty braces: names made of this.
+_STAND_IN = "__httpchain"
+
+
+class _StandIn(NamedTuple):
+    """A templated query's stand-in, judged: its operations, the ``marker``
+    its stand-in names are made of, and what the query's rules raised on it
+    (None: it passes them)."""
+
+    operations: list[Any]
+    marker: str
+    error: Exception | None
+
+
+def _graphql_stand_in(query: str) -> _StandIn | None:
+    """A query holding templates as GraphQL can judge it before it renders,
+    or None where it cannot.
+
+    The stand-in is the query with each template written as a name of its
+    own, ``<marker><n><marker>`` for the n-th, and its escapes rendered, as
+    `as_rendered` renders a literal's: the templates are the engine's own
+    (`find_templates`), so an escaped ``\\{{`` is text, and the backslashes
+    before a template's braces are halved as rendering halves them.
+
+    Why an error of the stand-in is one of the rendered query: a template is
+    taken to render a name, a value or a string's text, which is what the
+    name standing in its place parses as wherever it stands (a field, an
+    argument, a type, a variable, an operation's name, a value, a string's
+    text). The rendered query then holds the stand-in's definitions,
+    operations, selection sets and nesting (deeper only where a value a
+    template rendered nests), and the operation names it writes out, so it
+    breaks each rule the stand-in breaks: the check only moves a failure the
+    stage cannot escape to load time. A template that renders structure (a
+    keyword, punctuation, a number's digits, a whole document) leaves a
+    stand-in graphql-core does not parse, which tells nothing: None, and the
+    query is checked once rendered, as before. So is a query that is one
+    template.
+
+    No rule fails on the stand-in names alone. The marker occurs nowhere in
+    the query, and no prefix of it is also its suffix, so the only markers
+    in the stand-in are the ones written in it: an operation's name holding
+    one holds a template (`check_templated_graphql_operation`), and two
+    names holding them differ, each spelling out which templates it holds,
+    so no two operations share a name by them. A name nests nothing and
+    empties no selection set. The braces left empty are filled, with the
+    marker alone (`_fill_empty_braces`), and counted empty, so that every
+    supported graphql-core parses the stand-in alike. A stand-in nested past
+    the limit is None too: 3.2.14 and 3.3.2 do not parse one, so it tells
+    nothing there, and the verdict is the same on every version; once
+    rendered, it is refused."""
+    if is_complete_template(query):
+        return None
+    marker, n = _STAND_IN, 0
+    while marker in query:
+        marker, n = f"{_STAND_IN}{n}", n + 1
+    pieces: list[str] = []
+    end = 0
+    for index, match in enumerate(find_templates(query)):
+        backslashes = match.group("backslashes")
+        pieces += [unescape(query[end : match.start()]), backslashes[: len(backslashes) // 2], f"{marker}{index}{marker}"]
+        end = match.end()
+    pieces.append(unescape(query[end:]))
+    try:
+        document = graphql.parse(_fill_empty_braces("".join(pieces), marker))
+    except Exception:  # no GraphQL, or nested past the parser's limit or Python's
+        return None
+    try:
+        operations = _check_graphql_document(document, filler=marker)
+    except _NestedTooDeeply:
+        return None
+    except Exception as e:
+        return _StandIn([], marker, e)
+    return _StandIn(operations, marker, None)
+
+
+def _fill_empty_braces(text: str, filler: str) -> str:
+    """``text`` with the field ``filler: filler`` between each ``{`` and the
+    ``}`` right after it, comments and commas between them ignored as the
+    parser ignores them: a selection set that selects that field where the
+    braces were one, an object value holding it where they were a value
+    (``f(x: {})``), as valid. graphql-core 3.3.2 parses an empty selection
+    set and older versions do not, so a stand-in holding one would be
+    judged by the version installed; filled, it parses on every version,
+    and `_check_graphql_document` counts it empty. Raises what the lexer
+    raises for text that is no GraphQL."""
+    lexer = graphql.language.Lexer(graphql.language.Source(text))
+    pieces: list[str] = []
+    end = 0
+    previous = lexer.token
+    while (token := lexer.advance()).kind is not graphql.language.TokenKind.EOF:
+        if previous.kind is graphql.language.TokenKind.BRACE_L and token.kind is graphql.language.TokenKind.BRACE_R:
+            pieces += [text[end : previous.end], f" {filler}: {filler} "]
+            end = previous.end
+        previous = token
+    return "".join(pieces) + text[end:]
+
+
+def validate_templated_graphql_query(v: str, info: ValidationInfo) -> str:
+    """A GraphQL request's query holding templates, held when the scenario
+    loads to the rules the query's own check applies, by its stand-in
+    (`_graphql_stand_in`), where that can tell: refused as that check
+    refuses one (`_invalid_query`). A query a template rendered (`RENDERED`)
+    is final, and is that check's."""
+    if info.context is not RENDERED and contains_template(v):
+        stand_in = _graphql_stand_in(v)
+        if stand_in is not None and stand_in.error is not None:
+            raise _invalid_query(stand_in.error) from stand_in.error
+    return v
+
+
+def check_templated_graphql_operation(query: str, operation_name: str | None) -> None:
+    """`check_graphql_operation` at load for a query holding templates and
+    an ``operation_name`` written out (or none), by its stand-in
+    (`_graphql_stand_in`), where that can tell: not where an operation's
+    name holds a template, which may render the name asked for. With none
+    asked for, such a query of several operations is refused once rendered,
+    in a message naming its operations as they rendered, not by stand-ins."""
+    stand_in = _graphql_stand_in(query)
+    if stand_in is None or stand_in.error is not None:
+        return
+    if any(operation.name is not None and stand_in.marker in operation.name.value for operation in stand_in.operations):
+        return
+    _check_operation(stand_in.operations, operation_name)
 
 
 validate_base64 = create_string_validator(lambda v: base64.b64decode(v, validate=True), "Invalid base64 encoding")

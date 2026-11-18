@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from typing import Annotated, Any, ClassVar, Literal, LiteralString, Self, cast
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -84,12 +85,14 @@ from pytest_httpchain.models.types import (
     XMLString,
     as_rendered,
     check_graphql_operation,
+    check_templated_graphql_operation,
     convert_namespace_items_to_dict,
     convert_namespace_to_dict,
     parses_as_graphql,
     refuse_escaped_braces,
     regex_group,
     validate_function_import_name,
+    validate_templated_graphql_query,
     validate_unquoted_partial_template_str,
 )
 from pytest_httpchain.templates import contains_template
@@ -603,7 +606,9 @@ class MultipartBody(StrictModel):
 
 
 class GraphQL(StrictModel):
-    query: GraphQLQuery | PartialTemplateStr = Field(description="GraphQL query string.", examples=["query { user { id name } }", "{{ graphql_query }}"])
+    query: Annotated[GraphQLQuery | PartialTemplateStr, AfterValidator(validate_templated_graphql_query)] = Field(
+        description="GraphQL query string.", examples=["query { user { id name } }", "{{ graphql_query }}"]
+    )
     variables: NamespaceOrDict | PartialTemplateStr = Field(default_factory=dict, description="GraphQL query variables.")
     operation_name: GraphQLName | PartialTemplateStr | None = Field(
         default=None,
@@ -616,13 +621,18 @@ class GraphQL(StrictModel):
         """A query of several operations names the one to execute, and a
         name names one of them, as a server requires: checked at load for a
         literal query and name, the query's escapes rendered (`as_rendered`),
-        and once rendered when a template writes either. Rendered text is
-        final, braces an escape left in it included, so it is checked then
-        unless it is no GraphQL at all (text the template branch took)."""
+        and once rendered when a template writes either. A query holding
+        templates beside a literal name, or none, is checked at load by its
+        stand-in where that can tell (`check_templated_graphql_operation`). Rendered
+        text is final, braces an escape left in it included, so it is checked
+        then unless it is no GraphQL at all (text the template branch took)."""
         if info.context is RENDERED:
             if not parses_as_graphql(self.query):
                 return self
-        elif contains_template([self.query, self.operation_name]):
+        elif contains_template(self.operation_name):
+            return self
+        elif contains_template(self.query):
+            check_templated_graphql_operation(self.query, self.operation_name)
             return self
         check_graphql_operation(as_rendered(self.query, info), self.operation_name)
         return self

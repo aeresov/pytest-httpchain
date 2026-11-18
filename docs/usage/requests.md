@@ -433,9 +433,10 @@ if given. Like the query and the variables, it may be a template.
 }
 ```
 
-The query is checked as a GraphQL document when the scenario loads, and again
-once rendered when a template writes it (unless the rendered text still holds
-template syntax). A query the check refuses fails with
+The query is checked as a GraphQL document when the scenario loads, as far
+as its templates let (see below), and again once rendered when a template
+writes it (unless the rendered text still holds template syntax). A query the
+check refuses fails with
 `Invalid GraphQL query:` and why, a syntax error as the installed
 `graphql-core` parses the query. These rules hold whichever
 `graphql-core` is installed:
@@ -450,6 +451,24 @@ template syntax). A query the check refuses fails with
   input object or list (`search(filter: {})`) is a value and is fine;
 - a query nests at most 200 levels deep, counting selection sets, list and
   object values and list types together, as `graphql-core` 3.3.2 counts them.
+
+A query holding templates is checked as it loads as far as its text tells:
+each template is read as a name standing in its place, which is how a
+template rendering a name, a value or a string's text reads
+(`user(id: {{ user_id }})`, `"{{ text }}"`, `{ {{ field }} }`,
+`query {{ operation }}`). A rule the query breaks read so, it breaks whatever
+such templates render, so it fails as it loads, with the message a query
+written out gets: a type-system definition, fragments alone, an empty
+selection set, an anonymous operation beside another, two operations of one
+name written out. So does an `operation_name` that names no operation, or is
+missing beside several, unless it or an operation's name holds a template.
+The rest is checked once rendered only:
+
+- a query written as one template (`"{{ query }}"`), or where a template
+  stands for anything else (a keyword, punctuation, a number's digits), which
+  leaves no GraphQL to read;
+- a query nested more than 200 levels deep;
+- `operation_name` where it, or an operation's name, holds a template.
 
 To send a document the check refuses on purpose, post it as a `json` body,
 which sends the same request:
