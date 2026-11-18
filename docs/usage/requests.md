@@ -435,8 +435,9 @@ if given. Like the query and the variables, it may be a template.
 
 The query is checked as a GraphQL document when the scenario loads, and again
 once rendered when a template writes it (unless the rendered text still holds
-template syntax). A syntax error fails with `Invalid GraphQL query`, as the
-installed `graphql-core` parses the query. These rules hold whichever
+template syntax). A query the check refuses fails with
+`Invalid GraphQL query:` and why, a syntax error as the installed
+`graphql-core` parses the query. These rules hold whichever
 `graphql-core` is installed:
 
 - the query holds operations and fragments, at least one operation: a

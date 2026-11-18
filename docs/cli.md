@@ -449,10 +449,11 @@ whose content the browser did not record is sent empty, with a note.
   [`graphql` body](usage/requests.md#graphql) sends, is one, so its query is
   checked when the scenario loads; its variables' secrets are placeholders, as
   a `json` body's are. Any other stays a `json` body, sent as recorded: one
-  without `variables` or with a `null`, with `extensions`, a batch, or one
-  whose `query` is no GraphQL. So does GraphQL the `graphql` body's check
-  refuses, which a server refuses too (several operations and no
-  `operationName`, a type definition), and the note says why.
+  without `variables` or with a `null`, with `extensions`, a batch, and one
+  whose `query` the `graphql` body's check refuses (no GraphQL, a type
+  definition, ...). Where it refuses the operations, as every server does
+  (several and no `operationName`, an `operationName` naming none, an
+  anonymous one beside another, two of one name), the note says why.
 - **Authentication.** `Authorization: Basic` and curl's `-u` are the
   [`basic`](usage/requests.md#authentication) shorthand (`digest` with curl's
   `--digest`), `Authorization: Bearer` and `--oauth2-bearer` the `bearer` one,

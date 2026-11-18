@@ -307,3 +307,11 @@ def test_plugin_har_export_round_trips(original):
     requests, _ = read_har(json.dumps(har), source="export.har")
     [sent] = sent_requests(build_scenario(requests, description="export").scenario)
     assert comparable(sent) == comparable(original)
+
+
+def test_plugin_har_export_of_a_graphql_body_imports_as_one():
+    original = _plugin_request({"graphql": {"query": "query Me { me { id } } query Users { users { id } }", "variables": {"n": 1}, "operation_name": "Users"}})
+    har = create_har_log([request_response_to_har_entry(original, httpx.Response(200, request=original))])
+    requests, _ = read_har(json.dumps(har), source="export.har")
+    [stage] = build_scenario(requests, description="export").scenario["stages"]
+    assert stage["request"]["body"] == {"graphql": {"query": "query Me { me { id } } query Users { users { id } }", "variables": {"n": 1}, "operation_name": "Users"}}

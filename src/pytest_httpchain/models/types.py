@@ -240,6 +240,14 @@ def regex_group(pattern: re.Pattern[str], group: int | str | None) -> int | str:
 validate_xml = create_string_validator(xml.etree.ElementTree.fromstring, "Invalid XML")
 
 
+class GraphQLOperationError(ValueError):
+    """A GraphQL request's operations as no server executes them, whichever
+    is named: an anonymous one beside another, two of one name, several and
+    none named, a name naming none. GraphQL all the same, unlike a syntax
+    error or a type definition: `import har|curl` tells the user so when it
+    keeps such a recorded request a json body."""
+
+
 # How deep graphql-core 3.2.14 and 3.3.2 let a document nest: they count
 # selection sets, list and object values and list types together, and refuse
 # a document where that count passes 200 (graphql.language.parser's
@@ -306,21 +314,9 @@ def _parse_graphql_query(text: str) -> None:
     frames here.
     """
     document = graphql.parse(text)
-    for definition in document.definitions:
-        if not isinstance(definition, graphql.language.OperationDefinitionNode | graphql.language.FragmentDefinitionNode):
-            raise graphql.GraphQLError(f"The {definition.kind} is not executable: a request holds operations and fragments.", definition)
-    operations = [definition for definition in document.definitions if isinstance(definition, graphql.language.OperationDefinitionNode)]
-    if not operations:
-        raise graphql.GraphQLError("A request holds at least one operation: fragments alone execute nothing.")
-    named: set[str] = set()
-    for operation in operations:
-        if operation.name is None:
-            if len(operations) > 1:
-                raise graphql.GraphQLError("This anonymous operation must be the only defined operation.", operation)
-        elif operation.name.value in named:
-            raise graphql.GraphQLError(f"There can be only one operation named {operation.name.value!r}.", operation)
-        else:
-            named.add(operation.name.value)
+    # The grammar's own refusals first (what some versions' parser refuses
+    # itself), then the definitions, then the operations: a document failing
+    # several is refused for the same one on every version.
     pending: list[tuple[Any, int]] = [(document, 0)]
     while pending:
         node, depth = pending.pop()
@@ -331,9 +327,40 @@ def _parse_graphql_query(text: str) -> None:
         if isinstance(node, graphql.language.SelectionSetNode) and not node.selections:
             raise graphql.GraphQLSyntaxError(node.loc.source, node.loc.start, "A selection set must not be empty.")
         pending.extend((child, depth) for child in _graphql_children(node))
+    for definition in document.definitions:
+        if not isinstance(definition, graphql.language.OperationDefinitionNode | graphql.language.FragmentDefinitionNode):
+            raise graphql.GraphQLError(f"The {definition.kind} is not executable: a request holds operations and fragments.", definition)
+    operations = [definition for definition in document.definitions if isinstance(definition, graphql.language.OperationDefinitionNode)]
+    if not operations:
+        raise graphql.GraphQLError("A request holds at least one operation: fragments alone execute nothing.")
+    named: set[str] = set()
+    for operation in operations:
+        if operation.name is None:
+            if len(operations) > 1:
+                raise GraphQLOperationError("This anonymous operation must be the only defined operation.")
+        elif operation.name.value in named:
+            raise GraphQLOperationError(f"There can be only one operation named {operation.name.value!r}.")
+        else:
+            named.add(operation.name.value)
 
 
-validate_graphql_query = create_string_validator(_parse_graphql_query, "Invalid GraphQL query")
+def validate_graphql_query(v: str, info: ValidationInfo) -> str:
+    """A GraphQL request's query, judged as the text it is used as
+    (`as_rendered`) and kept as written, or a ValueError naming why it is
+    none after "Invalid GraphQL query: ", in the parser's or the rule's
+    words. Only an error's ``message``, never the error printed: graphql-core
+    before 3.2.14 and 3.3.2 fails printing the location of one after a line
+    separator Python counts and its printer does not (U+2028, a form feed)."""
+    try:
+        _parse_graphql_query(as_rendered(v, info))
+    except GraphQLOperationError as e:
+        raise GraphQLOperationError(f"Invalid GraphQL query: {e}") from e
+    except graphql.GraphQLError as e:
+        raise ValueError(f"Invalid GraphQL query: {e.message}") from e
+    except RecursionError as e:
+        raise ValueError("Invalid GraphQL query: Document is nested too deeply to parse.") from e
+    return v
+
 
 # A GraphQL name, which an operation's is (graphql-spec, Names).
 _GRAPHQL_NAME = re.compile(r"[_A-Za-z][_0-9A-Za-z]*")
@@ -341,7 +368,7 @@ _GRAPHQL_NAME = re.compile(r"[_A-Za-z][_0-9A-Za-z]*")
 
 def validate_graphql_name(v: str) -> str:
     if not _GRAPHQL_NAME.fullmatch(v):
-        raise ValueError(f"Invalid GraphQL operation name {v!r}: a name is letters, digits and underscores, not starting with a digit")
+        raise ValueError(f"Invalid GraphQL operation name {v!r}: a name is ASCII letters, digits and underscores, not starting with a digit")
     return v
 
 
@@ -356,12 +383,13 @@ def check_graphql_operation(query: str, operation_name: str | None) -> None:
     name at load and again once a template rendered either."""
     operations = [definition for definition in graphql.parse(query).definitions if isinstance(definition, graphql.language.OperationDefinitionNode)]
     names = [operation.name.value for operation in operations if operation.name is not None]
+    # Anonymous ones only in rendered text no check read as a query.
+    defined = ", ".join(repr(operation.name.value) if operation.name is not None else "an anonymous one" for operation in operations) or "none"
     if operation_name is None:
-        if len(names) > 1:
-            raise ValueError(f"the query defines several operations ({', '.join(map(repr, names))}): name the one to execute in operation_name")
+        if len(operations) > 1:
+            raise GraphQLOperationError(f"the query defines several operations ({defined}): name the one to execute in operation_name")
     elif operation_name not in names:
-        defined = f"it defines {', '.join(map(repr, names))}" if names else "its one operation is anonymous"
-        raise ValueError(f"operation_name {operation_name!r} names no operation in the query ({defined})")
+        raise GraphQLOperationError(f"operation_name {operation_name!r} names no operation in the query (it defines {defined})")
 
 
 validate_base64 = create_string_validator(lambda v: base64.b64decode(v, validate=True), "Invalid base64 encoding")
@@ -711,6 +739,17 @@ RegexGroupNumber = Annotated[StrictInt, Field(ge=0)]
 RegexGroupName = Annotated[str, AfterValidator(validate_regex_group_name)]
 XMLString = Annotated[str, AfterValidator(validate_xml)]
 GraphQLQuery = Annotated[str, AfterValidator(validate_graphql_query)]
+
+
+def parses_as_graphql(text: str) -> bool:
+    """Whether graphql-core parses ``text`` at all."""
+    try:
+        graphql.parse(text)
+    except (graphql.GraphQLError, RecursionError):
+        return False
+    return True
+
+
 GraphQLName = Annotated[str, AfterValidator(validate_graphql_name)]
 TemplateExpression = Annotated[str, AfterValidator(validate_template_expression)]
 PartialTemplateStr = Annotated[str, AfterValidator(validate_partial_template_str)]

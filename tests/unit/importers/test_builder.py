@@ -843,18 +843,40 @@ def test_graphql_request_variables_keep_their_secrets_out(monkeypatch):
         pytest.param({"query": "{ me { id } }", "variables": {}, "operationName": None}, None, id="null-operation-name"),
         pytest.param({"query": "{ me { id } }", "variables": {}, "extensions": {"persistedQuery": {"version": 1}}}, None, id="extensions"),
         pytest.param([{"query": "{ me { id } }", "variables": {}}], None, id="batch"),
-        # No GraphQL: an API of its own may name a field query.
+        # A query the check refuses, and no GraphQL request at all, or one
+        # some graphql-core versions parse and others do not: no note.
         pytest.param({"query": "SELECT * FROM users", "variables": {}}, None, id="not-graphql"),
-        # GraphQL the graphql body's check refuses, as a server does.
+        pytest.param({"query": "type User { id: ID }", "variables": {}}, None, id="type-definition"),
+        pytest.param({"query": "{ me { } }", "variables": {}}, None, id="empty-selection-set"),
+        pytest.param({"query": "{ a " * 200 + "{ id }" + " }" * 200, "variables": {}}, None, id="nested-past-the-limit"),
+        # GraphQL whose operations the check refuses, as every server does,
+        # whatever graphql-core is installed: a note says why.
         pytest.param(
             {"query": "query Me { me { id } } query Users { users { id } }", "variables": {}},
             "the query defines several operations ('Me', 'Users'): name the one to execute in operation_name",
             id="several-operations-unnamed",
         ),
         pytest.param(
-            {"query": "type User { id: ID }", "variables": {}},
-            "Invalid GraphQL query (The object_type_definition is not executable: a request holds operations and fragments.)",
-            id="type-definition",
+            {"query": "query Me { me { id } }", "variables": {}, "operationName": "Users"},
+            "operation_name 'Users' names no operation in the query (it defines 'Me')",
+            id="unknown-operation-name",
+        ),
+        pytest.param(
+            {"query": "query Me { me { id } } query Me { users { id } }", "variables": {}},
+            "Invalid GraphQL query: There can be only one operation named 'Me'.",
+            id="two-operations-of-one-name",
+        ),
+        # Noted from the error's message: printing it would fail on some
+        # graphql-core versions after this line separator.
+        pytest.param(
+            {"query": 'query Me { me(t: "\u2028") } query Me { b }', "variables": {}},
+            "Invalid GraphQL query: There can be only one operation named 'Me'.",
+            id="after-a-line-separator",
+        ),
+        pytest.param(
+            {"query": "{ me { id } } query Users { users { id } }", "variables": {}},
+            "Invalid GraphQL query: This anonymous operation must be the only defined operation.",
+            id="anonymous-beside-another",
         ),
     ],
 )

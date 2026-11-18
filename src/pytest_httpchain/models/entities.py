@@ -86,6 +86,7 @@ from pytest_httpchain.models.types import (
     check_graphql_operation,
     convert_namespace_items_to_dict,
     convert_namespace_to_dict,
+    parses_as_graphql,
     refuse_escaped_braces,
     regex_group,
     validate_function_import_name,
@@ -615,9 +616,15 @@ class GraphQL(StrictModel):
         """A query of several operations names the one to execute, and a
         name names one of them, as a server requires: checked at load for a
         literal query and name, the query's escapes rendered (`as_rendered`),
-        and once rendered when a template writes either."""
-        if not contains_template([self.query, self.operation_name]):
-            check_graphql_operation(as_rendered(self.query, info), self.operation_name)
+        and once rendered when a template writes either. Rendered text is
+        final, braces an escape left in it included, so it is checked then
+        unless it is no GraphQL at all (text the template branch took)."""
+        if info.context is RENDERED:
+            if not parses_as_graphql(self.query):
+                return self
+        elif contains_template([self.query, self.operation_name]):
+            return self
+        check_graphql_operation(as_rendered(self.query, info), self.operation_name)
         return self
 
 

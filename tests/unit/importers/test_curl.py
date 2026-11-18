@@ -750,6 +750,14 @@ ROUND_TRIPS = [
 ]
 
 
+def test_format_curl_of_a_graphql_body_imports_as_one():
+    body = {"query": "query Me { me { id } } query Users { users { id } }", "variables": {"n": 1}, "operation_name": "Users"}
+    original = _built(**build_request_kwargs(Request.model_validate({"url": "https://api.test/graphql", "method": "POST", "body": {"graphql": body}})))
+    requests, _ = parse_curl(format_curl(original, NO_REDACTION))
+    [stage] = build_scenario(requests, description="round trip").scenario["stages"]
+    assert stage["request"]["body"] == {"graphql": body}
+
+
 @pytest.mark.parametrize("make", ROUND_TRIPS)
 def test_format_curl_round_trips(make, tmp_path, monkeypatch):
     """The curl command a failing stage's report shows (F06's

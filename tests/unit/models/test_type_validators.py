@@ -230,6 +230,24 @@ class TestGraphQLQuery:
         with pytest.raises(ValidationError, match="Invalid GraphQL query"):
             validate(GraphQLQuery, value)
 
+    @pytest.mark.parametrize(
+        ("value", "reason"),
+        [
+            pytest.param("{ user { id name }", "Syntax Error: Expected Name, found <EOF>.", id="syntax-error"),
+            pytest.param("type User { id: ID }", "The object_type_definition is not executable: a request holds operations and fragments.", id="type-definition"),
+            pytest.param("query Me { me { id } } query Me { users { id } }", "There can be only one operation named 'Me'.", id="two-operations-of-one-name"),
+            pytest.param("{ me { id } } query Users { users { id } }", "This anonymous operation must be the only defined operation.", id="anonymous-beside-another"),
+            # graphql-core 3.2.10 to 3.2.13 and 3.3.0 to 3.3.1 fail printing
+            # an error's location after a line separator Python counts and
+            # their printer does not: the reason is the error's message alone.
+            pytest.param('query A { a(t: "\u2028") } query A { b }', "There can be only one operation named 'A'.", id="after-a-line-separator"),
+            pytest.param("# \x0c\nquery A { a } query A { b }", "There can be only one operation named 'A'.", id="after-a-form-feed"),
+        ],
+    )
+    def test_invalid_says_why(self, value, reason):
+        with pytest.raises(ValidationError, match=re.escape(f"Invalid GraphQL query: {reason}")):
+            validate(GraphQLQuery, value)
+
     @pytest.mark.parametrize("kind", NESTING_KINDS)
     def test_nesting_200_levels_deep_is_valid(self, kind):
         value = _nested(kind, 200)

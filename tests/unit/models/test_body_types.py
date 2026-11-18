@@ -213,7 +213,7 @@ def test_graphql_operation_name_valid(query, operation_name):
         # contains multiple operations.", "Unknown operation named 'Them'."
         pytest.param(TWO_OPERATIONS, None, "the query defines several operations ('Me', 'Users'): name the one to execute in operation_name", id="several-operations-unnamed"),
         pytest.param(TWO_OPERATIONS, "Them", "operation_name 'Them' names no operation in the query (it defines 'Me', 'Users')", id="unknown-name"),
-        pytest.param("{ me { id } }", "Me", "operation_name 'Me' names no operation in the query (its one operation is anonymous)", id="name-for-an-anonymous-operation"),
+        pytest.param("{ me { id } }", "Me", "operation_name 'Me' names no operation in the query (it defines an anonymous one)", id="name-for-an-anonymous-operation"),
         pytest.param(
             'query Me { echo(text: "\\{{ x }}") } query Users { users { id } }', None, "the query defines several operations ('Me', 'Users')", id="escaped-template-in-the-query"
         ),
@@ -238,6 +238,31 @@ def test_graphql_operation_name_a_template_rendered_is_checked(operation_name, m
     assert validate_rendered(GraphQL, {"query": TWO_OPERATIONS, "operation_name": "Users"}).operation_name == "Users"
     with pytest.raises(ValidationError, match=re.escape(message)):
         validate_rendered(GraphQL, {"query": TWO_OPERATIONS, "operation_name": operation_name})
+
+
+# A query written with an escape, `\{{ x }}`, renders to literal braces.
+_RENDERED_BRACES = 'query Me { echo(text: "{{ x }}") } query Users { users { id } }'
+
+
+@pytest.mark.parametrize(
+    ("operation_name", "message"),
+    [
+        pytest.param(None, "the query defines several operations ('Me', 'Users')", id="unnamed"),
+        pytest.param("Them", "operation_name 'Them' names no operation in the query (it defines 'Me', 'Users')", id="unknown-name"),
+    ],
+)
+def test_graphql_operation_name_is_checked_once_rendered_whatever_braces_the_text_holds(operation_name, message):
+    """Rendered text is final: the braces an escape left are text, not a
+    template, so the query and name are still checked."""
+    assert validate_rendered(GraphQL, {"query": _RENDERED_BRACES, "operation_name": "Users"}).operation_name == "Users"
+    with pytest.raises(ValidationError, match=re.escape(message)):
+        validate_rendered(GraphQL, {"query": _RENDERED_BRACES, "operation_name": operation_name})
+
+
+def test_graphql_rendered_text_that_is_no_graphql_is_not_checked_for_its_operation():
+    """Text a template rendered that holds template syntax and is no
+    GraphQL is taken as such, as the query field takes it, and sent as it is."""
+    assert validate_rendered(GraphQL, {"query": "{{ not graphql }}", "operation_name": "Users"}).operation_name == "Users"
 
 
 def test_graphql_variables_namespace_becomes_dict():
