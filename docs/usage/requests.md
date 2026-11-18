@@ -464,9 +464,14 @@ name written out. So does an `operation_name` that names no operation, or is
 missing beside several, unless it or an operation's name holds a template.
 The rest is checked once rendered only:
 
-- a query written as one template (`"{{ query }}"`), or where a template
-  stands for anything else (a keyword, punctuation, a number's digits), which
-  leaves no GraphQL to read;
+- a query that, read with names for its templates, is no GraphQL as the
+  installed `graphql-core` parses it, which tells nothing as it loads: none of
+  its rules is checked then, `operation_name`'s included. That is a query
+  with a syntax error of its own text (`query A { a(x: "{{ id }}")` without
+  its closing `}`), as well as one written as one template (`"{{ query }}"`)
+  or where a template stands for anything but a name, a value or a string's
+  text (a keyword, punctuation, a number's digits), which may well render to
+  GraphQL;
 - a query nested more than 200 levels deep;
 - `operation_name` where it, or an operation's name, holds a template.
 

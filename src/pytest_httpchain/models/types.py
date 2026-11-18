@@ -496,7 +496,13 @@ def _graphql_stand_in(query: str) -> _StandIn | None:
     keyword, punctuation, a number's digits, a whole document) leaves a
     stand-in graphql-core does not parse, which tells nothing: None, and the
     query is checked once rendered, as before. So is a query that is one
-    template.
+    template, and one with a syntax error of its own text (a brace missing):
+    a stand-in that does not parse cannot tell a template's structure from
+    the text's error, so it is let through whatever the cause, and the
+    rendered query is refused for its syntax. Syntax only some supported
+    graphql-core parses is judged by that version alone: type-system syntax
+    3.3 added (``directive @a @b on FIELD``) is refused here on 3.3 and
+    once rendered on 3.2, as a syntax error.
 
     No rule fails on the stand-in names alone. The marker occurs nowhere in
     the query, and no prefix of it is also its suffix, so the only markers
@@ -508,7 +514,7 @@ def _graphql_stand_in(query: str) -> _StandIn | None:
     marker alone (`_fill_empty_braces`), and counted empty, so that every
     supported graphql-core parses the stand-in alike. A stand-in nested past
     the limit is None too: 3.2.14 and 3.3.2 do not parse one, so it tells
-    nothing there, and the verdict is the same on every version; once
+    nothing there, and its verdict is the same on every version; once
     rendered, it is refused."""
     if is_complete_template(query):
         return None

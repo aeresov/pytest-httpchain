@@ -305,8 +305,9 @@ class TestGraphQLQueryHoldingTemplates:
     stand-in has is one the rendered query cannot help having, so each query
     refused here also fails once rendered (`validate_rendered`, as its stage
     validates it), here as a template might render it. A template that
-    renders structure leaves a stand-in that does not parse, which tells
-    nothing: that query is checked once rendered only, as before."""
+    renders structure, or a syntax error of the query's own text, leaves a
+    stand-in that does not parse, which tells nothing: that query is checked
+    once rendered only, as before."""
 
     @pytest.mark.parametrize(
         ("query", "message", "rendered"),
@@ -460,6 +461,11 @@ class TestGraphQLQueryHoldingTemplates:
             pytest.param("query A { a(x: 1) {{ close }} query A { b }", None, id="punctuation"),
             pytest.param("query A { a(x: 1{{ digits }}) } query A { b }", None, id="number"),
             pytest.param('query A { a(x: "\\\\{{ escaped }}") } query A { b }', None, id="after-a-backslash"),
+            # Nor where the query's own text is no GraphQL: the stand-in
+            # cannot tell its syntax error from a template's structure, so it
+            # does not tell the operation_name rule either.
+            pytest.param('query A { a(x: "{{ id }}") ', "C", id="syntax-error-a-brace-missing"),
+            pytest.param('query A { a(x: "{{ id }}") } }', None, id="syntax-error-a-brace-too-many"),
             # Nor where it nests past the limit, which graphql-core 3.2.14 and
             # 3.3.2 do not parse: the verdict is the same on every version.
             pytest.param(_nested_query_holding_a_template(201), None, id="nested-201-levels-deep"),
@@ -475,6 +481,8 @@ class TestGraphQLQueryHoldingTemplates:
             pytest.param("query A { a(x: 1) } query A { b }", id="punctuation"),
             pytest.param("query A { a(x: 12) } query A { b }", id="number"),
             pytest.param('query A { a(x: "\\n") } query A { b }', id="after-a-backslash"),
+            pytest.param('query A { a(x: "7") ', id="syntax-error-a-brace-missing"),
+            pytest.param('query A { a(x: "7") } }', id="syntax-error-a-brace-too-many"),
             pytest.param(_nested_query_holding_a_template(201).replace("{{ id }}", "7"), id="nested-201-levels-deep"),
         ],
     )
