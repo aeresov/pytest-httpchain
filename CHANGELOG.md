@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING**: a GraphQL `query` holding templates is checked when the scenario loads, as far as its text allows. Each template is read as a name standing in its place, which is how a template rendering a name, a value or a string's text reads (`user(id: {{ user_id }})`, `"{{ text }}"`, `{ {{ field }} }`, `query {{ operation }}`). A rule the query breaks when read that way is one it breaks whatever such templates render. So `validate` and collection now refuse, with the message a query written out gets (`Invalid GraphQL query: There can be only one operation named 'A'.`), what used to fail only when its stage ran:
+  - a type-system definition;
+  - fragments alone;
+  - an empty selection set;
+  - an anonymous operation beside another;
+  - two operations of one name written out;
+  - an `operation_name` written out that names no operation, or none given beside several operations. This applies unless an operation's name holds a template.
+
+  Still checked only once rendered:
+  - a query that does not parse as GraphQL when its templates are read as names, on the installed `graphql-core`, with none of its rules checked at load, `operation_name` included. That means:
+    - a syntax error of its own (`query A { a(x: "{{ id }}")` without its closing `}`);
+    - a query that is one template (`"{{ query }}"`);
+    - a template standing for a keyword, punctuation or a number's digits;
+  - nesting past 200 levels;
+  - `operation_name` where it, or an operation's name, holds a template.
+
+  The verdict is the same on every supported `graphql-core`, except type-system syntax that only 3.3 parses (`directive @a @b on FIELD`): beside a template, 3.3 refuses it at load and 3.2 refuses it once rendered.
+
+### Fixed
+
+- `validate`, `resolve`, `show` and `graph` read `httpchain_ref_parent_traversal_depth` from the
+  configuration file pytest would read for the same paths, so a scenario whose `$include` climbs
+  further than 3 levels in a project that raises the option no longer reports `HTTPCHAIN012`
+  while it collects. The value is read as pytest reads an int option: text in an ini file or
+  under `[tool.pytest.ini_options]`, an integer under `[tool.pytest]` or in a `pytest.toml`.
+  A value pytest would refuse (not an integer, or below 0) stops the command with an `error:` line
+  naming the file. A file `validate` is given from another project than the run's (a pre-commit
+  hook in a monorepo) takes its own project's depth, as it takes its root. A configuration file
+  pytest cannot read sets no depth, and the depth is 3. `--ref-parent-traversal-depth`, when
+  given, is used for every file and the configuration is not read for it.
+- A field that takes a literal or a template (a GraphQL `query` or `operation_name`, an `xml` or
+  `base64` body, a request URL, a JMESPath expression, a regex, ...) given a literal its check
+  refuses reports that check's error alone in `validate` and at collection (`HTTPCHAIN000`), no
+  longer also "Must contain at least one template expression", which invited templating the value
+  past the check it failed. The second line is still reported beside it where it helps: a string
+  where the field takes an object or a list (GraphQL `variables`), a value holding an empty
+  `{{ }}`, and a value whose `{{` opens no template (an unclosed `{{ id }`). A value a template
+  rendered fails its stage, or for a parametrize step its collection, on the field's own error
+  alone, a string where an object or a list goes included.
+
 ## [0.20.1] - 2026-11-18
 
 ### Fixed
