@@ -370,7 +370,7 @@ DIAGNOSED = [
     # invited templating the value, which escapes the check it failed.
     (
         "literal_or_template_graphql_query.json",
-        [(C.SCHEMA, f"{_GRAPHQL} -> query -> {_QUERY_BRANCH}", r": Value error, Invalid GraphQL query: Syntax Error: A selection set must not be empty\.$")],
+        [(C.SCHEMA, f"{_GRAPHQL} -> query -> {_QUERY_BRANCH}", r": Value error, Invalid GraphQL query: There can be only one operation named 'A'\.$")],
     ),
     ("literal_or_template_xml_body.json", [(C.SCHEMA, "stages -> 0 -> request -> body -> xml -> xml -> function-after[validator(), str]", r": Value error, Invalid XML$")]),
     (

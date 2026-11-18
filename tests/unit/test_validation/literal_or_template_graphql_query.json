@@ -2,7 +2,7 @@
     "stages": [
         {
             "name": "s",
-            "request": { "url": "https://x.test/graphql", "method": "POST", "body": { "graphql": { "query": "query { user { } }" } } },
+            "request": { "url": "https://x.test/graphql", "method": "POST", "body": { "graphql": { "query": "query A { a } query A { b }" } } },
             "response": [ { "verify": { "status": 200 } } ]
         }
     ]

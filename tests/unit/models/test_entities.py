@@ -94,9 +94,9 @@ class TestRenderedValidationErrors:
         return excinfo.value
 
     def test_validate_rendered(self):
-        error = self._refusal(validate_rendered, Request, {"url": "http://t/", "method": "POST", "body": {"graphql": {"query": "{ user { } }"}}})
+        error = self._refusal(validate_rendered, Request, {"url": "http://t/", "method": "POST", "body": {"graphql": {"query": "query A { a } query A { b }"}}})
         assert [e["loc"] for e in error.errors()] == [("body", "graphql", "graphql", "query", self._QUERY)]
-        assert "Invalid GraphQL query: Syntax Error: A selection set must not be empty." in str(error)
+        assert "Invalid GraphQL query: There can be only one operation named 'A'." in str(error)
         # Request hides its input: its auth and headers render credentials.
         assert "input_value" not in str(error)
 

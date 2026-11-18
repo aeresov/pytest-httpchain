@@ -575,10 +575,10 @@ class TestRenderedAwayFields:
         [
             pytest.param(
                 {"query": "{{ q }}"},
-                {"q": "{ user { } }"},
+                {"q": "query A { a } query A { b }"},
                 [
                     "body.graphql.graphql.query.function-after[validate_graphql_query(), str]",
-                    "  Value error, Invalid GraphQL query: Syntax Error: A selection set must not be empty. [type=value_error]",
+                    "  Value error, Invalid GraphQL query: There can be only one operation named 'A'. [type=value_error]",
                 ],
                 id="value-refusal",
             ),
