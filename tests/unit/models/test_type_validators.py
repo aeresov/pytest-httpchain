@@ -205,7 +205,8 @@ class TestGraphQLQuery:
             # Type-system syntax graphql-core 3.3 parses and 3.2 does not.
             pytest.param("directive @a @b on FIELD", id="directive-on-a-directive-definition"),
             pytest.param("directive @a on FRAGMENT_VARIABLE_DEFINITION", id="fragment-variable-location"),
-            # Fragments alone execute nothing: "Must provide an operation".
+            # Fragments alone hold no operation to execute, and a server refuses
+            # them as never used.
             pytest.param("fragment Fields on User { id }", id="fragments-only"),
         ],
     )

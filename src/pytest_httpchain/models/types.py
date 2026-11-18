@@ -274,7 +274,8 @@ def _parse_graphql_query(text: str) -> None:
     A request is executed, so its document is what a server executes: a
     type-system definition (``type``, ``schema``, ``directive``...) in it is
     refused by every server ("... is not executable"), and so is a document
-    of fragments alone ("Must provide an operation"). Refusing them here
+    of fragments alone, which holds no operation to execute (graphql-core's
+    validation: "Fragment 'F' is never used."). Refusing them here
     also keeps out the type-system syntax graphql-core 3.3 parses and 3.2
     does not (``directive @d @e on FIELD``).
 

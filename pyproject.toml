@@ -11,9 +11,11 @@ dependencies = [
     "attrs>=22.2.0",
     "deepmerge>=2.0",
     # 3.2.10 is the first release that parses a description on an operation,
-    # a fragment or a variable, as every later one does: below it, a query
-    # holding one loads or not by the version installed. Not 3.3: graphene,
-    # graphql-relay and sgqlc require a graphql-core below it.
+    # a fragment or a variable, as every final release after it does: below
+    # it, a query holding one loads or not by the version installed. (The
+    # 3.3.0 pre-releases before 3.3.0a13, which `>=` admits once pre-releases
+    # are allowed, do not.) Not 3.3: graphene, graphql-relay and sgqlc require
+    # a graphql-core below it.
     "graphql-core>=3.2.10",
     # 0.28.0 is the first release that takes a socks5h:// proxy, which
     # client.proxy accepts. (0.27.0 also percent-encoded a `\` in a URL path,
