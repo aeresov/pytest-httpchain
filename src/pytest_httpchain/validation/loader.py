@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from pytest_httpchain.constants import DEFAULT_REF_PARENT_TRAVERSAL_DEPTH
 from pytest_httpchain.jsonref import FileLoadError, InvalidJSONError, ReferenceResolverError, load_json
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, diag
@@ -130,7 +131,7 @@ def merges_whole(path: tuple[str | int, ...]) -> bool:
     return is_alternatives_position(path) or is_expected_value_position(path)
 
 
-def load_scenario_json(path: Path, *, root_path: Path | None = None, ref_parent_traversal_depth: int = 3) -> dict[str, Any]:
+def load_scenario_json(path: Path, *, root_path: Path | None = None, ref_parent_traversal_depth: int = DEFAULT_REF_PARENT_TRAVERSAL_DEPTH) -> dict[str, Any]:
     """Load a scenario file and ``$ref``-resolve it, unvalidated: the document
     collection, ``validate`` and ``resolve`` all see.
 
@@ -147,7 +148,7 @@ def load_scenario_json(path: Path, *, root_path: Path | None = None, ref_parent_
     )
 
 
-def load_scenario(path: Path, *, root_path: Path | None = None, ref_parent_traversal_depth: int = 3) -> tuple[Scenario, dict[str, Any]]:
+def load_scenario(path: Path, *, root_path: Path | None = None, ref_parent_traversal_depth: int = DEFAULT_REF_PARENT_TRAVERSAL_DEPTH) -> tuple[Scenario, dict[str, Any]]:
     """Load, ``$ref``-resolve and validate a scenario file -> ``(scenario, raw_data)``.
 
     Raises ``ReferenceResolverError`` / ``json.JSONDecodeError`` /
@@ -161,7 +162,7 @@ def load_with_diagnostics(
     path: Path,
     *,
     root_path: Path | None = None,
-    ref_parent_traversal_depth: int = 3,
+    ref_parent_traversal_depth: int = DEFAULT_REF_PARENT_TRAVERSAL_DEPTH,
 ) -> tuple[tuple[Scenario, dict[str, Any]] | None, list[Diagnostic]]:
     """`load_scenario`, with every failure mapped to a coded `Diagnostic`.
 

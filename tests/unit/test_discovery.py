@@ -534,14 +534,17 @@ def test_a_depth_pytest_refuses_is_an_error(tmp_path, filename, content, message
         pytest.param("setup.cfg", f"[pytest]\n{DEPTH} = 1\n".encode(), id="setup.cfg-pytest-section"),
     ],
 )
-def test_a_configuration_that_cannot_be_read_is_passed_over(tmp_path, filename, content):
-    """pytest stops on such a file before it reads a value from it, so it
-    sets no depth: the depth is the one the file found past it sets, the file
-    the root is taken from too, as if it were not there."""
-    (tmp_path / "pytest.ini").write_text(f"[pytest]\n{DEPTH} = 6\n")
+@pytest.mark.parametrize("past", ["6", "-1"], ids=["past-sets-a-depth", "past-sets-a-refused-depth"])
+def test_a_configuration_that_cannot_be_read_sets_the_default(tmp_path, filename, content, past):
+    """pytest stops on such a file before it reads a value, from it or from
+    any file past it, so no depth applies: the default does. The file past
+    it, the one the root is taken from (as if the other were not there), is
+    not read for the depth: neither a depth it sets nor one pytest would
+    refuse there counts."""
+    (tmp_path / "pytest.ini").write_text(f"[pytest]\n{DEPTH} = {past}\n")
     (tmp_path / "suite").mkdir()
     (tmp_path / "suite" / filename).write_bytes(content)
-    assert configured_depth([tmp_path / "suite"]) == 6
+    assert configured_depth([tmp_path / "suite"]) == 3
     assert pytest_rootdir([tmp_path / "suite"]) == tmp_path
 
 

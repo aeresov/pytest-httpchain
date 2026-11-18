@@ -1015,6 +1015,69 @@ class TestValidatePaths:
             validate_paths([tmp_path / "test_a.http.json", tmp_path])
         assert validated == []
 
+    @staticmethod
+    def _two_projects(tmp_path, b_depth):
+        """Project ``a``, whose configuration sets no depth, and ``b``, whose
+        sets ``b_depth``, with a scenario including a file four levels up:
+        the run on both takes its root, and depth, from ``a``'s."""
+        _skip_if_ancestors_set_a_rootdir(tmp_path)
+        for name in ("a", "b"):
+            (tmp_path / name).mkdir()
+        (tmp_path / "a" / "pytest.ini").write_text("[pytest]\n")
+        (tmp_path / "b" / "pytest.ini").write_text(f"[pytest]\nhttpchain_ref_parent_traversal_depth = {b_depth}\n")
+        (tmp_path / "b" / "common.json").write_text(json.dumps({"url": "http://server/x"}))
+        (tmp_path / "b" / "1" / "2" / "3" / "4").mkdir(parents=True)
+        return [_write(tmp_path / "a", [_stage()]), _write(tmp_path / "b" / "1" / "2" / "3" / "4", [_stage(request={"$include": "../../../../common.json"})])]
+
+    @pytest.mark.parametrize(
+        ("options", "b_depth", "alone", "beside"),
+        [
+            # b raises the depth, which b's file needs: it passes validated
+            # alone, and beside a's file, as it is collected under pytest in b.
+            pytest.param({}, 4, True, True, id="its-own-raised"),
+            # b lowers it: refused beside a's file as alone.
+            pytest.param({}, 2, False, False, id="its-own-lowered"),
+            # The option is every file's depth.
+            pytest.param({"ref_parent_traversal_depth": 3}, 4, False, False, id="option"),
+            # A root given holds every file, held to the run's depth, a's.
+            pytest.param({"root_path": True}, 4, True, False, id="root-path"),
+        ],
+    )
+    def test_a_file_of_another_project_takes_its_own_depth(self, tmp_path, options, b_depth, alone, beside):
+        """A file the run's root does not hold (a pre-commit hook passing
+        the changed files of a monorepo) takes the depth, as it takes the
+        root, pytest gives it alone, its own project's."""
+        files = self._two_projects(tmp_path, b_depth)
+        if "root_path" in options:
+            options = {**options, "root_path": tmp_path}
+        [(_, b_alone)] = validate_paths(files[1:], **options)
+        results = validate_paths(files, **options)
+        assert (b_alone.valid, [result.valid for _, result in results]) == (alone, [True, beside])
+        if not beside:
+            assert "exceeds maximum parent traversal depth" in results[1][1].errors[0]
+
+    def test_reads_every_files_depth_before_validating_a_file(self, tmp_path, monkeypatch):
+        """A depth pytest would refuse in the configuration of the project a
+        file is its own root in stops the run, before the files of the
+        run's own project, sorted first, are validated."""
+        files = self._two_projects(tmp_path, -1)
+        validated = []
+        monkeypatch.setattr(validation_validate, "validate_scenario", lambda path, **_: validated.append(path))
+        with pytest.raises(DiscoveryError, match=rf"^{re.escape(str(tmp_path / 'b' / 'pytest.ini'))}: httpchain_ref_parent_traversal_depth must be non-negative"):
+            validate_paths(files)
+        assert validated == []
+
+    def test_a_path_that_is_no_file_reads_no_configuration_of_its_own(self, tmp_path, monkeypatch):
+        """Reported as no file, its references never read: a configuration
+        a run on it alone would read (the current directory's, a missing
+        path standing for none) is not read, nor a depth there refused."""
+        (tmp_path / "pytest.ini").write_text("[pytest]\nhttpchain_ref_parent_traversal_depth = -1\n")
+        (tmp_path / "suite").mkdir()
+        (tmp_path / "suite" / "pytest.ini").write_text("[pytest]\n")
+        monkeypatch.chdir(tmp_path)
+        results = validate_paths([Path("suite") / _write(tmp_path / "suite", [_stage()]).name, Path("missing.http.json")])
+        assert [(path.as_posix(), _codes(result)) for path, result in results] == [("missing.http.json", [C.FILE_NOT_FOUND]), ("suite/test_x.http.json", [])]
+
 
 @pytest.mark.parametrize(
     ("content", "reason"),

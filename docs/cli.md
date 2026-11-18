@@ -40,15 +40,17 @@ cannot be read, or that pytest would refuse, is passed over here as one without
 pytest configuration is; pytest itself would stop on it.
 
 The default depth is the `httpchain_ref_parent_traversal_depth` that same file
-sets, one for all the paths `validate` is given, read as pytest reads it: text in
-an ini file or under `[tool.pytest.ini_options]` (where pytest turns a TOML
-value into text first, so `4` is read and `4.0` or `true` is not), an integer
-under `[tool.pytest]` or in a `pytest.toml` (where text is not one either). A
-value pytest would refuse, one that is not an integer or is below 0, stops the
-command with an `error:` line naming the file before anything is checked, as it
-stops pytest. A depth given on the command line is used as given, and the file
-is not read for it. A file pytest could not read sets no depth: it is passed
-over, and the depth is the one the file found past it sets, else `3`.
+sets, read as pytest reads it: text in an ini file or under
+`[tool.pytest.ini_options]` (where pytest turns a TOML value into text first, so
+`4` is read and `4.0` or `true` is not), an integer under `[tool.pytest]` or in
+a `pytest.toml` (where text is not one either). A file the default root does not
+hold, as in the monorepo run above, takes the depth its own project's
+configuration sets, as it takes that project's root. A value pytest would
+refuse, one that is not an integer or is below 0, stops the command with an
+`error:` line naming the file before anything is checked, as it stops pytest. A
+depth given on the command line is used as given, for every file, and no file is
+read for it. A configuration file pytest could not read sets no depth, and
+neither does one past it, which pytest never reaches: the depth is `3`.
 
 ## `validate`
 

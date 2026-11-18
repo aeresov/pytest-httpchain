@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from pytest_httpchain.body_schema import ReferenceBounds
-from pytest_httpchain.constants import SCENARIO_FILE_EXTENSIONS
+from pytest_httpchain.constants import DEFAULT_REF_PARENT_TRAVERSAL_DEPTH, SCENARIO_FILE_EXTENSIONS
 from pytest_httpchain.validation.deep import check_scenario_deep
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ValidateResult, diag, result
 from pytest_httpchain.validation.discovery import configured_depth, configured_suffix, find_scenario_files, pytest_rootdir
@@ -17,7 +17,7 @@ from pytest_httpchain.validation.semantic import check_scenario, describe_scenar
 
 def validate_scenario(
     path: Path,
-    ref_parent_traversal_depth: int = 3,
+    ref_parent_traversal_depth: int = DEFAULT_REF_PARENT_TRAVERSAL_DEPTH,
     root_path: Path | None = None,
     deep: bool = False,
     syspaths: list[Path] | None = None,
@@ -90,31 +90,39 @@ def validate_paths(
     depend on how a shell or ``find`` listed the arguments. Within a directory
     that is the order pytest collects in (`find_scenario_files`).
 
-    Every directory is searched before any file is validated, so the
-    `DiscoveryError` of one that cannot be (or of a configuration file that
-    cannot be read, or a depth it sets that pytest would refuse) stops the
-    run before it has done any work.
+    Every directory is searched, and every file's depth read, before any
+    file is validated, so the `DiscoveryError` of a directory that cannot be
+    searched (or of a configuration file that cannot be read, or a depth it
+    sets that pytest would refuse) stops the run before it has done any
+    work.
 
     References are held to ``root_path``, by default to the rootdir pytest
     would determine for a run on ``paths`` (`pytest_rootdir`): one root for
     every file, as a pytest run has, where a root derived for each file
     alone could be narrower than the run's and reject a reference it
-    resolves. A file that root does not hold (files of two projects in one
-    run, the run's root the first one's) is held to the root pytest gives
-    it alone: the run's would fail every reference it makes. They climb at
-    most ``ref_parent_traversal_depth`` parent directories, when that is
-    None the depth pytest's configuration sets for these paths
-    (`configured_depth`), one for every file.
+    resolves. They climb at most ``ref_parent_traversal_depth`` parent
+    directories, when that is None the depth pytest's configuration sets for
+    these paths (`configured_depth`). A file the run's root does not hold
+    (files of two projects in one run, the run's root the first one's),
+    unless ``root_path`` is given, is held to the root, and the depth, pytest
+    gives it alone, its own project's: the run's root would fail every
+    reference it makes, and the run's depth is the other project's.
     """
-    depth = ref_parent_traversal_depth if ref_parent_traversal_depth is not None else configured_depth(paths)
     run_root = root_path if root_path is not None else pytest_rootdir(paths)
+    run_depth = ref_parent_traversal_depth if ref_parent_traversal_depth is not None else configured_depth(paths)
 
-    def file_root(path: Path) -> Path:
-        if root_path is not None or Path(os.path.abspath(path)).is_relative_to(run_root):
-            return run_root
-        return pytest_rootdir([path])
+    def bounds(path: Path) -> tuple[Path, int]:
+        """The root and the depth ``path``'s references are held to. A path
+        that is no file is reported as such before either is used: it takes
+        the run's, and no configuration is read for it."""
+        if root_path is not None or not os.path.isfile(path) or Path(os.path.abspath(path)).is_relative_to(run_root):
+            return run_root, run_depth
+        depth = ref_parent_traversal_depth if ref_parent_traversal_depth is not None else configured_depth([path])
+        return pytest_rootdir([path]), depth
 
-    targets: list[tuple[Path, ValidateResult | None]] = []
+    # Each path's result, a directory's found in the search, or the root and
+    # the depth the file is to be validated with.
+    targets: list[tuple[Path, ValidateResult | tuple[Path, int]]] = []
     seen: set[str] = set()
 
     def add(path: Path, found: ValidateResult | None = None) -> None:
@@ -123,7 +131,10 @@ def validate_paths(
         key = os.path.abspath(path)
         if key not in seen:
             seen.add(key)
-            targets.append((path, found))
+            # A file's bounds are read here, before the first file is
+            # validated: a depth pytest would refuse in its own project's
+            # configuration stops the run before it has done any work too.
+            targets.append((path, found if found is not None else bounds(path)))
 
     for path in paths:
         if not path.is_dir():
@@ -142,7 +153,7 @@ def validate_paths(
     return [
         (
             path,
-            found if found is not None else validate_scenario(path, ref_parent_traversal_depth=depth, root_path=file_root(path), deep=deep, syspaths=syspaths),
+            target if isinstance(target, ValidateResult) else validate_scenario(path, ref_parent_traversal_depth=target[1], root_path=target[0], deep=deep, syspaths=syspaths),
         )
-        for path, found in targets
+        for path, target in targets
     ]

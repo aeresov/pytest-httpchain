@@ -354,15 +354,22 @@ def test_every_command_exits_one_on_a_configured_depth_pytest_refuses(tmp_path, 
 
 
 @pytest.mark.parametrize("command", DEPTH_COMMANDS)
-def test_every_command_passes_over_a_configuration_that_cannot_be_read(tmp_path, four_up, command):
-    """pytest stops on such a file before it reads a value from it: the depth,
-    like the root, is the one of the file found past it, so a command over a
-    file still runs on a project whose configuration is mid-edit. `validate`
-    over a directory reports the file, needing the suffix from it."""
-    (tmp_path / "pytest.ini").write_text(f"[pytest]\n{DEPTH_INI} = 4\n")
+@pytest.mark.parametrize("past", ["4", "-1"], ids=["past-sets-a-depth", "past-sets-a-refused-depth"])
+def test_every_command_takes_the_default_depth_over_a_configuration_that_cannot_be_read(tmp_path, four_up, command, past):
+    """pytest stops on such a file before it reads a value, from it or from
+    the file past it: no depth applies but the default, so a command over a
+    file still runs on a project whose configuration is mid-edit, holding
+    references to 3 levels, as before the depth was read. The file past it
+    is not read for the depth: neither its depth nor its refusal counts.
+    `validate` over a directory reports the file pytest stops on, needing
+    the suffix from it."""
+    (tmp_path / "pytest.ini").write_text(f"[pytest]\n{DEPTH_INI} = {past}\n")
     (tmp_path / "a" / "pyproject.toml").write_text("[tool.pytest\n")
     result = runner.invoke(app, [command, str(four_up)])
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output
+    assert "exceeds maximum parent traversal depth of 3" in result.output
+    assert "error: cannot read" not in result.output
+    assert "must be non-negative" not in result.output
     if command == "validate":
         result = runner.invoke(app, [command, str(four_up.parent)])
         assert result.exit_code == 1
@@ -373,7 +380,7 @@ def test_every_command_passes_over_a_configuration_that_cannot_be_read(tmp_path,
 def test_ref_parent_traversal_depth_help_names_the_configured_default(command):
     result = runner.invoke(app, [command, "--help"])
     assert result.exit_code == 0, result.output
-    assert _unspaced("(default: the httpchain_ref_parent_traversal_depth pytest's configuration sets for these paths, else 3)") in _unspaced(result.output)
+    assert _unspaced("(default: the httpchain_ref_parent_traversal_depth set in the configuration file pytest would read, else 3)") in _unspaced(result.output)
 
 
 @pytest.mark.parametrize(

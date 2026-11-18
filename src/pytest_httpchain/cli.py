@@ -132,12 +132,13 @@ def _depth_option(value: str) -> int:
 _depth_option.__name__ = "int"
 
 # None, the default, is the depth pytest's configuration sets for the paths
-# read (`configured_depth`): `validate_paths` reads it for validate's,
-# `_configured_depth` for the scenario resolve, show and graph read.
+# read (`configured_depth`): `validate_paths` reads it for validate's (a file
+# of another project than the run's, for that file alone), `_configured_depth`
+# for the scenario resolve, show and graph read.
 RefParentTraversalDepth = Annotated[
     int | None,
     typer.Option(
-        help="Maximum $ref parent directory traversal depth (default: the httpchain_ref_parent_traversal_depth pytest's configuration sets for these paths, else 3).",
+        help="Maximum $ref parent directory traversal depth (default: the httpchain_ref_parent_traversal_depth set in the configuration file pytest would read, else 3).",
         parser=_depth_option,
     ),
 ]

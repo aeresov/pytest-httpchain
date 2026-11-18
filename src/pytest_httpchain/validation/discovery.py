@@ -185,21 +185,28 @@ def configured_depth(paths: Sequence[Path]) -> int:
     ``-o``/``--override-ini`` and ``PYTEST_ADDOPTS`` belong to a pytest run and
     are not read; ``--ref-parent-traversal-depth`` stands in for them.
 
+    A configuration file pytest would stop on, one it cannot read or refuses
+    whole, sets no depth: the default holds.
+
     Raises `DiscoveryError` when the value is one pytest would refuse.
     """
     # Unlike the suffix, which only a directory needs, the depth is read for
-    # every command, a run over files included. A configuration file that
-    # cannot be read (or that pytest refuses whole) is passed over all the
-    # same, as `pytest_rootdir` passes over one, and the depth is the one the
-    # file found past it sets, the file the root is then taken from too:
-    # pytest stops on such a file before it reads any value from it, so it
-    # holds no depth pytest would apply, and refusing it here would stop
-    # `validate` on files, `resolve`, `show` and `graph` on a project whose
-    # configuration is mid-edit, which none of them did before the depth was
-    # read (`validate` on a directory, needing the suffix from the file,
-    # still reports it). A depth in a file pytest does read is read, and
+    # every command, a run over files included. When the file pytest would
+    # read cannot be read (or pytest refuses it whole), pytest stops on it
+    # before it reads any value, from it or from any file past it: no depth
+    # applies, so the default does, as it did before the depth was read.
+    # Refusing it here would stop `validate` on files, `resolve`, `show` and
+    # `graph` on a project whose configuration is mid-edit, none of which
+    # needs a setting from it (`validate` on a directory, needing the
+    # suffix, still reports the file, as pytest does). Passing over it to
+    # the file found past it, as `pytest_rootdir` does for the root, would
+    # take a depth from a file pytest never reads, and refuse one there that
+    # pytest never sees. A depth in a file pytest does read is read, and
     # refused, as pytest reads and refuses it.
-    found = _setup(paths, strict=False)[1]
+    try:
+        found = _locate_config(paths)
+    except DiscoveryError:
+        return DEFAULT_REF_PARENT_TRAVERSAL_DEPTH
     option = ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH
     if found is None or option not in found.settings:
         return DEFAULT_REF_PARENT_TRAVERSAL_DEPTH
@@ -241,7 +248,7 @@ def pytest_rootdir(paths: Sequence[Path]) -> Path:
     passed over here, as one holding no pytest configuration is: pytest reads
     no setting from it, so a run over files takes none from it
     (`configured_suffix` reports it when a directory needs the suffix;
-    `configured_depth` passes over it too)."""
+    `configured_depth` takes the default depth then)."""
     return _setup(paths, strict=False)[0]
 
 
