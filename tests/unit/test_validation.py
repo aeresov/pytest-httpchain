@@ -228,6 +228,13 @@ def test_clean_fixture_has_no_diagnostics(datadir, fixture):
     assert result.valid is True
 
 
+# Where a GraphQL body's fields are, and the member tags pydantic puts after a
+# field that takes a literal or a template, in a schema error's location.
+_GRAPHQL = "stages -> 0 -> request -> body -> graphql -> graphql"
+_QUERY_BRANCH = "function-after[validate_graphql_query(), str]"
+_VARIABLES_BRANCH = "function-before[convert_namespace_to_dict(), dict[str,json-or-python[json=any,python=tagged-union[list[...],dict[str,...],str,bool,int,float,none]]]]"
+_TEMPLATE_BRANCH = "function-after[validate_partial_template_str(), str]"
+
 DIAGNOSED = [
     ("does_not_exist.json", [(C.FILE_NOT_FOUND, None, "File not found")]),
     # A directory holding no file pytest would collect: its one scenario is
@@ -355,6 +362,52 @@ DIAGNOSED = [
                 "stages -> 0 -> request -> body -> graphql -> graphql -> query",
                 r": Value error, Invalid GraphQL query: There can be only one operation named 'User'\.$",
             )
+        ],
+    ),
+    # A field that takes a literal or a template, given a literal its literal
+    # branch refuses: that branch's error alone. The template branch's "Must
+    # contain at least one template expression" is not reported beside it: it
+    # invited templating the value, which escapes the check it failed.
+    (
+        "literal_or_template_graphql_query.json",
+        [(C.SCHEMA, f"{_GRAPHQL} -> query -> {_QUERY_BRANCH}", r": Value error, Invalid GraphQL query: Syntax Error: A selection set must not be empty\.$")],
+    ),
+    ("literal_or_template_xml_body.json", [(C.SCHEMA, "stages -> 0 -> request -> body -> xml -> xml -> function-after[validator(), str]", r": Value error, Invalid XML$")]),
+    (
+        "literal_or_template_operation_name.json",
+        [(C.SCHEMA, f"{_GRAPHQL} -> operation_name -> function-after[validate_graphql_name(), str]", r": Value error, Invalid GraphQL operation name '1st': a name is")],
+    ),
+    # pydantic's check of a URL's text refuses what the string says, as a validator does.
+    (
+        "literal_or_template_url_scheme.json",
+        [(C.SCHEMA, "stages -> 0 -> request -> url -> function-wrap[validate_http_url_reference()]", r": URL scheme should be 'http' or 'https'$")],
+    ),
+    # Both kept where the hint helps: a string where the literal branch takes
+    # an object may have been meant as a template ...
+    (
+        "literal_or_template_variables_string.json",
+        [
+            (C.SCHEMA, f"{_GRAPHQL} -> variables -> {_VARIABLES_BRANCH}", r": Input should be a valid dictionary$"),
+            (C.SCHEMA, f"{_GRAPHQL} -> variables -> {_TEMPLATE_BRANCH}", r": Value error, Must contain at least one template expression like '\{\{ expr \}\}', got: 'id=1'$"),
+        ],
+    ),
+    # ... and the template branch's complaint is another one: the value holds
+    # a template, an empty one.
+    (
+        "literal_or_template_empty_expression.json",
+        [
+            (C.SCHEMA, f"{_GRAPHQL} -> query -> {_QUERY_BRANCH}", r": Value error, Invalid GraphQL query: Syntax Error: Expected Name, found '\{'\.$"),
+            (C.SCHEMA, f"{_GRAPHQL} -> query -> {_TEMPLATE_BRANCH}", r": Value error, Template expression cannot be empty at position 17$"),
+        ],
+    ),
+    # Sibling fields share their model's location: a literal one refuses does
+    # not take the other's hint away, and each is reported as it would be alone.
+    (
+        "literal_or_template_siblings.json",
+        [
+            (C.SCHEMA, f"{_GRAPHQL} -> variables -> {_VARIABLES_BRANCH}", r": Input should be a valid dictionary$"),
+            (C.SCHEMA, f"{_GRAPHQL} -> variables -> {_TEMPLATE_BRANCH}", r": Value error, Must contain at least one template expression"),
+            (C.SCHEMA, f"{_GRAPHQL} -> operation_name -> function-after[validate_graphql_name(), str]", r": Value error, Invalid GraphQL operation name '1st'"),
         ],
     ),
     # A relative URL has nowhere to go without client.base_url, whether all of

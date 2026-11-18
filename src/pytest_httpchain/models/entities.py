@@ -95,6 +95,7 @@ from pytest_httpchain.models.types import (
     validate_templated_graphql_query,
     validate_unquoted_partial_template_str,
 )
+from pytest_httpchain.models.validation_errors import reported
 from pytest_httpchain.templates import contains_template
 
 
@@ -438,16 +439,29 @@ _RENDERED_SCENARIO_AUTH: TypeAdapter[Any] = TypeAdapter(ScenarioAuth, config=Con
 
 
 def validate_rendered_scenario_auth(value: Any) -> Auth:
-    """A scenario's ``auth`` once its templates rendered (see above)."""
-    return _RENDERED_SCENARIO_AUTH.validate_python(value, context=RENDERED)
+    """A scenario's ``auth`` once its templates rendered (see above), its
+    `ValidationError` as `validate_rendered` reports one."""
+    try:
+        return _RENDERED_SCENARIO_AUTH.validate_python(value, context=RENDERED)
+    except ValidationError as e:
+        raise reported(e, hide_input=True) from None
 
 
 def validate_rendered[M: BaseModel](model: type[M], value: Any) -> M:
     """``value``, a model of ``model`` dumped with its templates rendered,
     validated again as one (the `RENDERED` context): its text is final, so
     what only the scenario's own text means, an escaped ``\\{{``, is not
-    read in it."""
-    return model.model_validate(value, context=RENDERED)
+    read in it.
+
+    Its `ValidationError` is reported as the loader reports one (`reported`):
+    a value a template rendered that a literal branch refuses (a query that
+    is no GraphQL) is not also told to hold a template. Rebuilt, it hides its
+    input as ``model`` does: the outermost validator's setting is the one
+    that counts."""
+    try:
+        return model.model_validate(value, context=RENDERED)
+    except ValidationError as e:
+        raise reported(e, hide_input=model.model_config.get("hide_input_in_errors", False)) from None
 
 
 with _suppress_field_shadow_warning("json"):
@@ -1123,7 +1137,7 @@ def validate_rendered_verify(declared: Verify, value: Any) -> Verify:
     (`_DeclaredValue`) and is compared by equality, whatever it rendered to."""
     if isinstance(value, dict) and isinstance(expectations := value.get("jmespath"), dict):
         value = {**value, "jmespath": _kept_as_declared(declared.jmespath, expectations)}
-    return Verify.model_validate(value, context=RENDERED)
+    return validate_rendered(Verify, value)
 
 
 def _kept_as_declared(declared: Mapping[str, Any], rendered: dict[str, Any]) -> dict[str, Any]:
@@ -1145,8 +1159,12 @@ def validate_rendered_expectations(declared: Mapping[str, Any], value: dict[str,
     (a connection's ``expect.match`` object): validated again, each keeping
     the kind it was declared as, as `validate_rendered_verify` keeps a verify
     step's. A value stays a value, even one that rendered to an object with
-    a matcher's keys."""
-    return _RENDERED_EXPECTATIONS.validate_python(_kept_as_declared(declared, value), context=RENDERED)
+    a matcher's keys. Its `ValidationError` is as `validate_rendered`
+    reports one."""
+    try:
+        return _RENDERED_EXPECTATIONS.validate_python(_kept_as_declared(declared, value), context=RENDERED)
+    except ValidationError as e:
+        raise reported(e, hide_input=True) from None
 
 
 class SaveStep(StrictModel):

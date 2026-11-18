@@ -101,6 +101,7 @@ from pytest_httpchain.models.types import (
     parse_schema_file_ref,
     regex_group,
 )
+from pytest_httpchain.models.validation_errors import validation_error, without_template_hints
 
 __all__ = [
     "Scenario",
@@ -184,4 +185,6 @@ __all__ = [
     "validate_rendered_scenario_auth",
     "validate_rendered_expectations",
     "validate_rendered_verify",
+    "validation_error",
+    "without_template_hints",
 ]

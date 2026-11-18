@@ -28,13 +28,12 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar, LiteralString, NamedTuple, TypeGuard, cast
+from typing import Any, ClassVar, NamedTuple, TypeGuard
 
 import httpx
 import jmespath
 import pytest
 from pydantic import BaseModel, RootModel, ValidationError
-from pydantic_core import InitErrorDetails, PydanticCustomError
 from pyrate_limiter import Duration, Limiter, Rate
 
 from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds
@@ -69,6 +68,7 @@ from pytest_httpchain.models import (
     validate_rendered_expectations,
     validate_rendered_scenario_auth,
     validate_rendered_verify,
+    validation_error,
 )
 from pytest_httpchain.models.types import convert_namespace_to_dict
 from pytest_httpchain.parallel_stats import IterationEnd, ParallelStats, failed_iterations, parallel_stats, threshold_failure
@@ -855,20 +855,12 @@ def _relocating[M](validate: Callable[[Any], M], relocate: _Relocation) -> Calla
 
 def _relocated(e: ValidationError, relocate: _Relocation) -> ValidationError:
     """``e``, each error at the location ``relocate`` gives its own: the same
-    errors, in the same order, each of its type, message and input. One of
-    pydantic's own (it has a ``url``) is rebuilt as that type with its
-    context, which writes its message, the link included, as pydantic did; a
-    custom one, whose template is not kept, as a custom error of the same type
-    and message."""
-    details: list[InitErrorDetails] = []
-    for error in e.errors():
-        detail: InitErrorDetails = {"type": error["type"], "loc": relocate(error["loc"]), "input": error["input"]}
-        if "url" not in error:
-            detail["type"] = PydanticCustomError(cast(LiteralString, error["type"]), cast(LiteralString, error["msg"]))
-        elif "ctx" in error:
-            detail["ctx"] = error["ctx"]
-        details.append(detail)
-    return ValidationError.from_exception_data(e.title, details)
+    errors, in the same order, each of its type, message and input, rebuilt
+    as pydantic wrote them (`validation_error`)."""
+    errors = e.errors()
+    for error in errors:
+        error["loc"] = relocate(error["loc"])
+    return validation_error(e.title, errors)
 
 
 def _verify_renderer(declared: Verify, context: Mapping[str, Any]) -> VerifyRender:

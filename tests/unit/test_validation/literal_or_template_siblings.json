@@ -1,0 +1,13 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": {
+                "url": "https://x.test/graphql",
+                "method": "POST",
+                "body": { "graphql": { "query": "query Team($id: ID!) { team(id: $id) { name } }", "variables": "id=1", "operation_name": "1st" } }
+            },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}

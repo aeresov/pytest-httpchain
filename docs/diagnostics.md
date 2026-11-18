@@ -18,7 +18,7 @@ not free their numbers for reuse.
 
 | Code | Severity | Meaning |
 | --- | --- | --- |
-| `HTTPCHAIN000` | error | Schema validation failed (Pydantic `Scenario` model) |
+| `HTTPCHAIN000` | error | Schema validation failed (Pydantic `Scenario` model), one finding per error. A field that takes a literal or a template (a GraphQL `query` or `operation_name`, an `xml` or `base64` body, a request URL, a JMESPath expression, a regex, ...) given a literal its check refuses reports that check's error alone (`Invalid GraphQL query: ...`), not also `Must contain at least one template expression`: written as a template, the value would escape the check it failed. Both are reported where the second helps: a string where the field's literal is an object or a list (GraphQL `variables`, a connection's `send`), and a value holding an empty `{{ }}` |
 | `HTTPCHAIN001` | error | Duplicate stage names |
 | `HTTPCHAIN002` | error | Fixture and variable share the same name |
 | `HTTPCHAIN003` | warning | Variable referenced but never defined/saved/fixture (typo), or saved only by earlier stages with a [`skip_if`](usage/scenarios.md#skipping-a-stage-at-runtime) or a [`skip`, `skipif` or `xfail` mark](usage/scenarios.md#stages-a-mark-may-skip) of their own, which leave it undefined when they skip (read it with `get()`) |

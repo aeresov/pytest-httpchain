@@ -600,10 +600,15 @@ def validate_template_expression(v: str) -> str:
     return v
 
 
+# What `PartialTemplateStr` says of a string holding no template, which
+# `validation_errors.without_template_hints` knows it by.
+NO_TEMPLATE = "Must contain at least one template expression like '{{ expr }}'"
+
+
 def _check_partial_template_str(v: str, got: str) -> str:
     matches = list(find_templates(v))
     if not matches:
-        raise ValueError(f"Must contain at least one template expression like '{{{{ expr }}}}'{got}")
+        raise ValueError(f"{NO_TEMPLATE}{got}")
 
     for match in matches:
         if not match.group("expr").strip():

@@ -570,6 +570,19 @@ class TestRenderedAwayFields:
         with pytest.raises(ValidationError, match="timeout"):
             _render_declared(Request.model_validate({"url": "http://t/", "timeout": "{{ x }}"}), {"x": "slow"}, "request")
 
+    def test_rendered_literal_refused_is_not_told_to_hold_a_template(self):
+        """A query a template rendered that is no GraphQL fails on the query's
+        check alone: the template branch's "Must contain at least one template
+        expression" beside it read as if the template had gone missing."""
+        declared = Request.model_validate({"url": "http://t/", "method": "POST", "body": {"graphql": {"query": "{{ q }}"}}})
+        with pytest.raises(ValidationError) as excinfo:
+            _render_declared(declared, {"q": "{ user { } }"}, "request")
+        assert str(excinfo.value).splitlines()[:3] == [
+            "1 validation error for Request",
+            "body.graphql.graphql.query.function-after[validate_graphql_query(), str]",
+            "  Value error, Invalid GraphQL query: Syntax Error: A selection set must not be empty. [type=value_error]",
+        ]
+
     @pytest.mark.parametrize(
         ("save", "context", "message"),
         [

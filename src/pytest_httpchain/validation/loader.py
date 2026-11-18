@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from pytest_httpchain.constants import DEFAULT_REF_PARENT_TRAVERSAL_DEPTH
 from pytest_httpchain.jsonref import FileLoadError, InvalidJSONError, ReferenceResolverError, load_json
-from pytest_httpchain.models import Scenario
+from pytest_httpchain.models import Scenario, without_template_hints
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, diag
 from pytest_httpchain.validation.discovery import pytest_rootdir
 from pytest_httpchain.warnings import AmbiguousReferenceWarning
@@ -207,7 +207,10 @@ def load_with_diagnostics(
         except json.JSONDecodeError as e:
             diagnostics.append(diag(DiagnosticCode.INVALID_JSON, f"Invalid JSON syntax: {e}"))
         except ValidationError as e:
-            for err in e.errors():
+            # A literal its field's literal branch refused is not also told to
+            # hold a template (`without_template_hints`): the hint invites
+            # templating it, which escapes the check it failed.
+            for err in without_template_hints(e.errors()):
                 loc = " -> ".join(str(x) for x in err["loc"])
                 diagnostics.append(diag(DiagnosticCode.SCHEMA, f"Schema validation failed: {loc}: {err['msg']}", location=loc))
         except Exception as e:

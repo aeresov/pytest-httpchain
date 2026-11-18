@@ -1,0 +1,9 @@
+{
+    "stages": [
+        {
+            "name": "s",
+            "request": { "url": "ftp://x.test/users" },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    ]
+}
