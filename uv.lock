@@ -1171,7 +1171,7 @@ wheels = [
 
 [[package]]
 name = "pytest-httpchain"
-version = "0.20.0"
+version = "0.20.1"
 source = { editable = "." }
 default-groups = ["dev", "docs"]
 dependencies = [
