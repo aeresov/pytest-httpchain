@@ -1,12 +1,13 @@
-"""The scenario files a directory given to ``validate`` holds, and the
-``httpchain_suffix`` they are named by.
+"""The scenario files a directory given to ``validate`` holds, the
+``httpchain_suffix`` they are named by, and the
+``httpchain_ref_parent_traversal_depth`` their references are held to.
 
 `find_scenario_files` walks a directory as pytest's collection does by default,
-and `configured_suffix` reads ``httpchain_suffix`` from the configuration file
-pytest would read for the same paths, so ``validate tests/`` checks the files
-``pytest tests/`` runs. Both follow what pytest documents, by public means
-(``tomllib``, and ``iniconfig``, the parser pytest reads ini files with), not
-``_pytest``'s internals.
+and `configured_suffix` and `configured_depth` read their options from the
+configuration file pytest would read for the same paths, so ``validate tests/``
+checks the files ``pytest tests/`` runs, loaded as collection loads them. All
+follow what pytest documents, by public means (``tomllib``, and ``iniconfig``,
+the parser pytest reads ini files with), not ``_pytest``'s internals.
 """
 
 import errno
@@ -15,10 +16,11 @@ import os
 import tomllib
 from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 import iniconfig
 
-from pytest_httpchain.constants import DEFAULT_SUFFIX, ConfigOptions, check_suffix, scenario_file_pattern
+from pytest_httpchain.constants import DEFAULT_REF_PARENT_TRAVERSAL_DEPTH, DEFAULT_SUFFIX, ConfigOptions, check_suffix, scenario_file_pattern
 
 # pytest's default ``norecursedirs``, matched against a directory's name, as
 # pytest matches a pattern without a path separator (``fnmatch``, which ignores
@@ -42,8 +44,20 @@ _CONFIG_FILE_NAMES = ("pytest.toml", ".pytest.toml", "pytest.ini", ".pytest.ini"
 
 
 class DiscoveryError(Exception):
-    """A directory cannot be searched, or the configured suffix cannot be read:
-    ``validate`` exits with the message before it validates anything."""
+    """A directory cannot be searched, or the configured suffix or depth cannot
+    be read: the command exits with the message before it checks anything."""
+
+
+class _Config(NamedTuple):
+    """A configuration file pytest reads, and the settings it holds:
+    ``native``, with TOML's own types (a ``[tool.pytest]`` or ``pytest.toml``
+    table), else as the string-based forms hand them over, text or lists (an
+    ini file, ``[tool.pytest.ini_options]``). pytest reads a typed option's
+    value by which of the two it is."""
+
+    file: Path
+    settings: dict[str, object]
+    native: bool
 
 
 def find_scenario_files(directory: Path, suffix: str) -> Iterator[Path]:
@@ -142,7 +156,7 @@ def configured_suffix(paths: Sequence[Path]) -> str:
     found = _locate_config(paths)
     if found is None:
         return DEFAULT_SUFFIX
-    file, settings = found
+    file, settings, _ = found
     value = settings.get(ConfigOptions.SUFFIX, DEFAULT_SUFFIX)
     # A [tool.pytest] table keeps TOML's types, and pytest refuses a
     # non-string there; the string-based forms hand over text, or a list.
@@ -152,6 +166,60 @@ def configured_suffix(paths: Sequence[Path]) -> str:
         return check_suffix(value)
     except ValueError as e:
         raise DiscoveryError(f"{file}: {ConfigOptions.SUFFIX} {e}") from None
+
+
+def configured_depth(paths: Sequence[Path]) -> int:
+    """The ``httpchain_ref_parent_traversal_depth`` pytest would hold a run on
+    ``paths`` from the current directory to: the value in the configuration
+    file it would read (found as `configured_suffix` finds it), else
+    `DEFAULT_REF_PARENT_TRAVERSAL_DEPTH`.
+
+    Read as pytest reads an ``int`` option. Text, from an ini file or the
+    string-based ``[tool.pytest.ini_options]`` (where pytest turns any value
+    but a list into text first: a TOML integer, a float, a boolean), is read
+    as Python's ``int()`` reads it. A ``[tool.pytest]`` or ``pytest.toml``
+    table keeps TOML's types, and there pytest takes a TOML integer and
+    refuses anything else, text and a boolean included. Below 0 is refused,
+    as the plugin refuses it.
+
+    ``-o``/``--override-ini`` and ``PYTEST_ADDOPTS`` belong to a pytest run and
+    are not read; ``--ref-parent-traversal-depth`` stands in for them.
+
+    Raises `DiscoveryError` when the value is one pytest would refuse.
+    """
+    # Unlike the suffix, which only a directory needs, the depth is read for
+    # every command, a run over files included. A configuration file that
+    # cannot be read (or that pytest refuses whole) is passed over all the
+    # same, as `pytest_rootdir` passes over one, and the depth is the one the
+    # file found past it sets, the file the root is then taken from too:
+    # pytest stops on such a file before it reads any value from it, so it
+    # holds no depth pytest would apply, and refusing it here would stop
+    # `validate` on files, `resolve`, `show` and `graph` on a project whose
+    # configuration is mid-edit, which none of them did before the depth was
+    # read (`validate` on a directory, needing the suffix from the file,
+    # still reports it). A depth in a file pytest does read is read, and
+    # refused, as pytest reads and refuses it.
+    found = _setup(paths, strict=False)[1]
+    option = ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH
+    if found is None or option not in found.settings:
+        return DEFAULT_REF_PARENT_TRAVERSAL_DEPTH
+    value = found.settings[option]
+    if found.native:
+        # A bool is an int to Python, not to TOML, nor to pytest.
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise DiscoveryError(f"{found.file}: {option} must be an integer, not {type(value).__name__}: {value!r}")
+        depth = value
+    else:
+        # Text, or a list, which an int option is never given as.
+        if not isinstance(value, str):
+            raise DiscoveryError(f"{found.file}: {option} must be an integer, not {type(value).__name__}: {value!r}")
+        try:
+            depth = int(value)
+        except ValueError:
+            raise DiscoveryError(f"{found.file}: {option} must be an integer, not {value!r}") from None
+    if depth < 0:
+        raise DiscoveryError(f"{found.file}: {option} must be non-negative, not {value!r}")
+    return depth
 
 
 def pytest_rootdir(paths: Sequence[Path]) -> Path:
@@ -170,19 +238,20 @@ def pytest_rootdir(paths: Sequence[Path]) -> Path:
     on the same paths resolves, and one run's files share one root.
 
     A configuration file that cannot be read, which pytest stops on, is
-    passed over here, as one holding no pytest configuration is: a run over
-    files needs no setting from it (`configured_suffix` reports it when a
-    directory needs the suffix)."""
+    passed over here, as one holding no pytest configuration is: pytest reads
+    no setting from it, so a run over files takes none from it
+    (`configured_suffix` reports it when a directory needs the suffix;
+    `configured_depth` passes over it too)."""
     return _setup(paths, strict=False)[0]
 
 
-def _locate_config(paths: Sequence[Path]) -> tuple[Path, dict[str, object]] | None:
+def _locate_config(paths: Sequence[Path]) -> _Config | None:
     """The configuration file pytest would read for ``paths`` and the settings
     it holds, or None when it would read none (see `configured_suffix`)."""
     return _setup(paths, strict=True)[1]
 
 
-def _setup(paths: Sequence[Path], *, strict: bool) -> tuple[Path, tuple[Path, dict[str, object]] | None]:
+def _setup(paths: Sequence[Path], *, strict: bool) -> tuple[Path, _Config | None]:
     """pytest's rootdir for ``paths``, and the configuration file it reads
     with its settings, or None (see `pytest_rootdir`); ``strict`` raises
     `DiscoveryError` for a configuration file that cannot be read, else it is
@@ -196,12 +265,12 @@ def _setup(paths: Sequence[Path], *, strict: bool) -> tuple[Path, tuple[Path, di
             dirs.append(absolute if os.path.isdir(absolute) else absolute.parent)
     ancestor = _common_ancestor(dirs) if dirs else Path.cwd()
     if (found := _find_config([ancestor], strict=strict)) is not None:
-        return found[0].parent, found
+        return found.file.parent, found
     for base in (ancestor, *ancestor.parents):
         if os.path.isfile(base / "setup.py"):
             return base, None
     if dirs != [ancestor] and (found := _find_config(dirs, strict=strict)) is not None:
-        return found[0].parent, found
+        return found.file.parent, found
     try:
         rootdir = Path(os.path.commonpath([Path.cwd(), ancestor]))
     except ValueError:
@@ -224,7 +293,7 @@ def _common_ancestor(dirs: list[Path]) -> Path:
     return ancestor
 
 
-def _find_config(starts: Iterable[Path], *, strict: bool = True) -> tuple[Path, dict[str, object]] | None:
+def _find_config(starts: Iterable[Path], *, strict: bool = True) -> _Config | None:
     """The first configuration file holding pytest configuration in each of
     ``starts`` or above it, in turn; else the first ``pyproject.toml`` met.
     Not ``strict``, one that cannot be read, or that pytest would refuse, is
@@ -238,21 +307,21 @@ def _find_config(starts: Iterable[Path], *, strict: bool = True) -> tuple[Path, 
                 if not os.path.isfile(file):
                     continue
                 try:
-                    settings = _read_config(file)
+                    config = _read_config(file)
                 except DiscoveryError:
                     if strict:
                         raise
-                    settings = None
-                if settings is not None:
-                    return file, settings
+                    config = None
+                if config is not None:
+                    return config
                 if name == "pyproject.toml" and bare_pyproject is None:
                     bare_pyproject = file
-    return (bare_pyproject, {}) if bare_pyproject is not None else None
+    return _Config(bare_pyproject, {}, native=False) if bare_pyproject is not None else None
 
 
-def _read_config(file: Path) -> dict[str, object] | None:
-    """The pytest settings ``file`` holds, or None when it holds no pytest
-    configuration, read as pytest reads each kind of file: the ``[pytest]``
+def _read_config(file: Path) -> _Config | None:
+    """``file`` and the pytest settings it holds, or None when it holds no
+    pytest configuration, read as pytest reads each kind of file: the ``[pytest]``
     section of an ``.ini`` file (a ``pytest.ini`` is pytest's even without
     one), the ``[tool:pytest]`` section of a ``setup.cfg``, the ``[pytest]``
     table of a ``pytest.toml`` (pytest's even without one), and the
@@ -266,20 +335,20 @@ def _read_config(file: Path) -> dict[str, object] | None:
         raise DiscoveryError(f"cannot read pytest configuration from {file}: {e}") from e
     if file.suffix == ".cfg":
         if "tool:pytest" in ini:
-            return dict(ini["tool:pytest"].items())
+            return _Config(file, dict(ini["tool:pytest"].items()), native=False)
         if "pytest" in ini:
             # pytest stops on it, in these words.
             raise DiscoveryError(f"{file}: [pytest] section in setup.cfg files is no longer supported, change to [tool:pytest] instead.")
         return None
     if "pytest" in ini:
-        return dict(ini["pytest"].items())
-    return {} if file.name in ("pytest.ini", ".pytest.ini") else None
+        return _Config(file, dict(ini["pytest"].items()), native=False)
+    return _Config(file, {}, native=False) if file.name in ("pytest.ini", ".pytest.ini") else None
 
 
-def _read_toml_config(file: Path, data: dict[str, object]) -> dict[str, object] | None:
+def _read_toml_config(file: Path, data: dict[str, object]) -> _Config | None:
     if file.name in ("pytest.toml", ".pytest.toml"):
         table = data.get("pytest")
-        return dict(table) if isinstance(table, dict) else {}
+        return _Config(file, dict(table) if isinstance(table, dict) else {}, native=True)
     tool = data.get("tool")
     table = tool.get("pytest") if isinstance(tool, dict) else None
     if not isinstance(table, dict):
@@ -290,9 +359,9 @@ def _read_toml_config(file: Path, data: dict[str, object]) -> dict[str, object] 
         # pytest stops on it too.
         raise DiscoveryError(f"{file}: cannot use both [tool.pytest] and [tool.pytest.ini_options]")
     if native:
-        return native
+        return _Config(file, native, native=True)
     if ini_options is None:
         return None
     # The string-based form: pytest turns every value but a list into text.
     items = ini_options.items() if isinstance(ini_options, dict) else ()
-    return {key: value if isinstance(value, list) else str(value) for key, value in items}
+    return _Config(file, {key: value if isinstance(value, list) else str(value) for key, value in items}, native=False)

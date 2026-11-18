@@ -10,7 +10,7 @@ from pytest_httpchain.body_schema import ReferenceBounds
 from pytest_httpchain.constants import SCENARIO_FILE_EXTENSIONS
 from pytest_httpchain.validation.deep import check_scenario_deep
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ValidateResult, diag, result
-from pytest_httpchain.validation.discovery import configured_suffix, find_scenario_files, pytest_rootdir
+from pytest_httpchain.validation.discovery import configured_depth, configured_suffix, find_scenario_files, pytest_rootdir
 from pytest_httpchain.validation.loader import load_with_diagnostics, resolve_root_path
 from pytest_httpchain.validation.semantic import check_scenario, describe_scenario
 
@@ -68,7 +68,7 @@ def validate_scenario(
 def validate_paths(
     paths: Sequence[Path],
     suffix: str | None = None,
-    ref_parent_traversal_depth: int = 3,
+    ref_parent_traversal_depth: int | None = None,
     root_path: Path | None = None,
     deep: bool = False,
     syspaths: list[Path] | None = None,
@@ -92,7 +92,8 @@ def validate_paths(
 
     Every directory is searched before any file is validated, so the
     `DiscoveryError` of one that cannot be (or of a configuration file that
-    cannot be read) stops the run before it has done any work.
+    cannot be read, or a depth it sets that pytest would refuse) stops the
+    run before it has done any work.
 
     References are held to ``root_path``, by default to the rootdir pytest
     would determine for a run on ``paths`` (`pytest_rootdir`): one root for
@@ -100,8 +101,12 @@ def validate_paths(
     alone could be narrower than the run's and reject a reference it
     resolves. A file that root does not hold (files of two projects in one
     run, the run's root the first one's) is held to the root pytest gives
-    it alone: the run's would fail every reference it makes.
+    it alone: the run's would fail every reference it makes. They climb at
+    most ``ref_parent_traversal_depth`` parent directories, when that is
+    None the depth pytest's configuration sets for these paths
+    (`configured_depth`), one for every file.
     """
+    depth = ref_parent_traversal_depth if ref_parent_traversal_depth is not None else configured_depth(paths)
     run_root = root_path if root_path is not None else pytest_rootdir(paths)
 
     def file_root(path: Path) -> Path:
@@ -137,7 +142,7 @@ def validate_paths(
     return [
         (
             path,
-            found if found is not None else validate_scenario(path, ref_parent_traversal_depth=ref_parent_traversal_depth, root_path=file_root(path), deep=deep, syspaths=syspaths),
+            found if found is not None else validate_scenario(path, ref_parent_traversal_depth=depth, root_path=file_root(path), deep=deep, syspaths=syspaths),
         )
         for path, found in targets
     ]

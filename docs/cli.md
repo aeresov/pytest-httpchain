@@ -25,7 +25,7 @@ affect how `$include`/`$merge`/`$ref` resolve:
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--root-path DIR` | pytest's `rootdir` | Directory references must not escape. Collection uses pytest's `rootdir`, and so does the CLI by default: the one [pytest would determine](https://docs.pytest.org/en/stable/reference/customize.html#initialization-determining-rootdir-and-configfile) for a run on the same paths from the current directory (`validate a b` holds both to the rootdir of `pytest a b`). Pass it when a run uses `--rootdir` or `-c`. |
-| `--ref-parent-traversal-depth N` | `3` | How many `../` levels a reference may climb: 0 or more, read as Python's `int()` reads it. Mirrors the `httpchain_ref_parent_traversal_depth` ini option. |
+| `--ref-parent-traversal-depth N` | pytest's `httpchain_ref_parent_traversal_depth`, else `3` | How many `../` levels a reference may climb: 0 or more, read as Python's `int()` reads it. By default, the `httpchain_ref_parent_traversal_depth` set in the configuration file pytest would read for a run on the same paths, so a command resolves the references collection resolves. Pass it when a run uses `-c` or `-o httpchain_ref_parent_traversal_depth=...`. |
 
 The default root is the directory of the configuration file pytest would read
 (`pytest.toml`, `pytest.ini`, or a `pyproject.toml` with a `[tool.pytest…]`
@@ -38,6 +38,17 @@ run names the files of two projects (a pre-commit hook in a monorepo), is held
 to the root pytest gives it alone, its own project's. A configuration file that
 cannot be read, or that pytest would refuse, is passed over here as one without
 pytest configuration is; pytest itself would stop on it.
+
+The default depth is the `httpchain_ref_parent_traversal_depth` that same file
+sets, one for all the paths `validate` is given, read as pytest reads it: text in
+an ini file or under `[tool.pytest.ini_options]` (where pytest turns a TOML
+value into text first, so `4` is read and `4.0` or `true` is not), an integer
+under `[tool.pytest]` or in a `pytest.toml` (where text is not one either). A
+value pytest would refuse, one that is not an integer or is below 0, stops the
+command with an `error:` line naming the file before anything is checked, as it
+stops pytest. A depth given on the command line is used as given, and the file
+is not read for it. A file pytest could not read sets no depth: it is passed
+over, and the depth is the one the file found past it sets, else `3`.
 
 ## `validate`
 

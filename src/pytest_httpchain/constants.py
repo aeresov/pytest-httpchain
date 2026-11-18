@@ -57,6 +57,12 @@ def check_suffix(suffix: str) -> str:
     return suffix
 
 
+# The ``httpchain_ref_parent_traversal_depth`` when the ini option is unset:
+# the default pytest registers it with, and the one the CLI's commands take
+# when neither their option nor the configuration file pytest would read sets it.
+DEFAULT_REF_PARENT_TRAVERSAL_DEPTH = 3
+
+
 @functools.cache
 def scenario_file_pattern(suffix: str) -> re.Pattern[str]:
     """The names pytest collects as scenarios: ``test_<name>.<suffix>`` and one

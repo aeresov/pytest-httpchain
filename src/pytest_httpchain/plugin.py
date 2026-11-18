@@ -22,7 +22,7 @@ import pytest
 
 from pytest_httpchain.body_schema import ReferenceBounds
 from pytest_httpchain.carrier import Carrier
-from pytest_httpchain.constants import DEFAULT_SUFFIX, ConfigOptions, check_suffix, scenario_file_pattern
+from pytest_httpchain.constants import DEFAULT_REF_PARENT_TRAVERSAL_DEPTH, DEFAULT_SUFFIX, ConfigOptions, check_suffix, scenario_file_pattern
 from pytest_httpchain.factory import create_test_class
 from pytest_httpchain.har_writer import write_har_file
 from pytest_httpchain.models import Scenario
@@ -628,7 +628,7 @@ def pytest_configure_node(node) -> None:
 def pytest_addoption(parser: pytest.Parser) -> None:
     ini_options: list[tuple[ConfigOptions, str, Literal["string", "int", "args", "bool"], Any]] = [
         (ConfigOptions.SUFFIX, "File suffix for HTTP test files.", "string", DEFAULT_SUFFIX),
-        (ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "Maximum number of parent directory traversals allowed in $ref paths.", "int", 3),
+        (ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH, "Maximum number of parent directory traversals allowed in $ref paths.", "int", DEFAULT_REF_PARENT_TRAVERSAL_DEPTH),
         (ConfigOptions.MAX_COMPREHENSION_LENGTH, "Maximum length for list/dict comprehensions in template expressions.", "int", 50000),
         (ConfigOptions.MAX_PARALLEL_ITERATIONS, "Maximum number of parallel iterations allowed per stage.", "int", 10000),
         (

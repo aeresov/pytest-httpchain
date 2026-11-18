@@ -1,10 +1,13 @@
 """Unit tests for validation/discovery.py: the files a directory given to
-`validate` stands for (`find_scenario_files`), and the suffix they are named by
-when `--suffix` is not given (`configured_suffix`). That both agree with a real
-pytest run is pinned in tests/integration/test_validate_directories.py."""
+`validate` stands for (`find_scenario_files`), the suffix they are named by
+when `--suffix` is not given (`configured_suffix`), and the depth references
+are held to when `--ref-parent-traversal-depth` is not (`configured_depth`).
+That they agree with a real pytest run is pinned in
+tests/integration/test_validate_directories.py."""
 
 import errno
 import itertools
+import json
 import os
 import re
 import sys
@@ -12,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from pytest_httpchain.validation import DiscoveryError, configured_suffix, find_scenario_files
+from pytest_httpchain.validation import DiscoveryError, configured_depth, configured_suffix, find_scenario_files
+from pytest_httpchain.validation.discovery import pytest_rootdir
 
 symlinks = pytest.mark.skipif(sys.platform == "win32", reason="creating a symlink takes a privilege a Windows runner may not have")
 
@@ -405,3 +409,142 @@ def test_configuration_pytest_stops_on_is_an_error(tmp_path, filename, content, 
         configured_suffix([tmp_path])
     expected = message.format(file=file)
     assert str(raised.value).startswith(expected) if expected.endswith(": ") else str(raised.value) == expected
+
+
+# --- configured_depth ---
+
+DEPTH = "httpchain_ref_parent_traversal_depth"
+
+
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [
+        # Text, read by int().
+        pytest.param("pytest.ini", f"[pytest]\n{DEPTH} = 5\n", id="pytest.ini"),
+        pytest.param(".pytest.ini", f"[pytest]\n{DEPTH} = 5\n", id=".pytest.ini"),
+        pytest.param("tox.ini", f"[pytest]\n{DEPTH} = 5\n", id="tox.ini"),
+        pytest.param("setup.cfg", f"[tool:pytest]\n{DEPTH} = 5\n", id="setup.cfg"),
+        # A TOML integer, in the tables that keep TOML's types.
+        pytest.param("pytest.toml", f"[pytest]\n{DEPTH} = 5\n", id="pytest.toml"),
+        pytest.param(".pytest.toml", f"[pytest]\n{DEPTH} = 5\n", id=".pytest.toml"),
+        pytest.param("pyproject.toml", f"[tool.pytest]\n{DEPTH} = 5\n", id="pyproject.toml"),
+        # The string-based table turns a TOML integer into text, and takes text.
+        pytest.param("pyproject.toml", f"[tool.pytest.ini_options]\n{DEPTH} = 5\n", id="pyproject.toml-ini_options-integer"),
+        pytest.param("pyproject.toml", f'[tool.pytest.ini_options]\n{DEPTH} = "5"\n', id="pyproject.toml-ini_options-text"),
+    ],
+)
+def test_reads_the_depth_from_each_file_pytest_reads(tmp_path, filename, content):
+    (tmp_path / filename).write_text(content)
+    (tmp_path / "tests").mkdir()
+    assert configured_depth([tmp_path / "tests"]) == 5
+
+
+@pytest.mark.parametrize(
+    ("text", "depth"),
+    [
+        pytest.param(" +05\n", 5, id="sign-zeros-whitespace"),
+        pytest.param("1_0", 10, id="underscore"),
+        pytest.param("５", 5, id="fullwidth"),
+        pytest.param("0", 0, id="zero"),
+        pytest.param("-0", 0, id="minus-zero"),
+    ],
+)
+def test_reads_text_as_int_does(tmp_path, text, depth):
+    """As pytest reads an int option's text, and `--ref-parent-traversal-depth`
+    its word: Python's int()."""
+    (tmp_path / "pyproject.toml").write_text(f"[tool.pytest.ini_options]\n{DEPTH} = {json.dumps(text)}\n")
+    assert configured_depth([tmp_path]) == depth
+
+
+def test_a_configuration_without_the_depth_sets_the_default(tmp_path):
+    (tmp_path / "pytest.ini").write_text("[pytest]\ntestpaths = tests\n")
+    assert configured_depth([tmp_path]) == 3
+
+
+def test_without_a_configuration_file_the_depth_is_the_default(tmp_path, clean_ancestors):
+    assert configured_depth([tmp_path]) == 3
+
+
+def test_reads_the_depth_for_all_the_paths(tmp_path):
+    """Found as the suffix is: from the common ancestor of the paths, a file
+    standing for its directory."""
+    (tmp_path / "pytest.ini").write_text(f"[pytest]\n{DEPTH} = 4\n")
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "pytest.ini").write_text(f"[pytest]\n{DEPTH} = 6\n")
+    _touch(tmp_path, "a/test_x.http.json", "b/test_y.http.json")
+    assert configured_depth([tmp_path / "a" / "test_x.http.json", tmp_path / "b"]) == 4
+    assert configured_depth([tmp_path / "a" / "test_x.http.json"]) == 6
+
+
+def test_a_depth_past_the_configuration_is_not_read(tmp_path):
+    """Only the file pytest reads sets it: one above, which pytest never
+    reads, is not read, a value it would refuse there included."""
+    (tmp_path / "pytest.ini").write_text(f"[pytest]\n{DEPTH} = -1\n")
+    (tmp_path / "suite").mkdir()
+    (tmp_path / "suite" / "pytest.toml").write_text(f"[pytest]\n{DEPTH} = 7\n")
+    assert configured_depth([tmp_path / "suite"]) == 7
+
+
+def test_reads_the_depth_beside_a_suffix_pytest_would_refuse(tmp_path):
+    """Each option is read alone: a command over files reads the depth, and
+    never the suffix, which only a directory needs."""
+    (tmp_path / "pytest.ini").write_text(f"[pytest]\nhttpchain_suffix = a.b\n{DEPTH} = 5\n")
+    assert configured_depth([tmp_path]) == 5
+
+
+@pytest.mark.parametrize(
+    ("filename", "content", "message"),
+    [
+        # Text int() refuses.
+        pytest.param("pytest.ini", f"[pytest]\n{DEPTH} = 3.0\n", "must be an integer, not '3.0'", id="ini-float"),
+        pytest.param("tox.ini", f"[pytest]\n{DEPTH} = three\n", "must be an integer, not 'three'", id="ini-word"),
+        pytest.param("setup.cfg", f"[tool:pytest]\n{DEPTH} =\n", "must be an integer, not ''", id="ini-empty"),
+        # The string-based table turns a float or a boolean into text int()
+        # refuses, and hands a list over as one.
+        pytest.param("pyproject.toml", f"[tool.pytest.ini_options]\n{DEPTH} = 3.0\n", "must be an integer, not '3.0'", id="ini_options-float"),
+        pytest.param("pyproject.toml", f"[tool.pytest.ini_options]\n{DEPTH} = true\n", "must be an integer, not 'True'", id="ini_options-bool"),
+        pytest.param("pyproject.toml", f"[tool.pytest.ini_options]\n{DEPTH} = [3]\n", "must be an integer, not list: [3]", id="ini_options-list"),
+        # A table that keeps TOML's types takes an integer, and nothing else.
+        pytest.param("pyproject.toml", f'[tool.pytest]\n{DEPTH} = "3"\n', "must be an integer, not str: '3'", id="native-text"),
+        pytest.param("pytest.toml", f"[pytest]\n{DEPTH} = 3.0\n", "must be an integer, not float: 3.0", id="native-float"),
+        pytest.param("pytest.toml", f"[pytest]\n{DEPTH} = true\n", "must be an integer, not bool: True", id="native-bool"),
+        # Below 0, which the plugin refuses, in either form.
+        pytest.param("pytest.ini", f"[pytest]\n{DEPTH} = -1\n", "must be non-negative, not '-1'", id="ini-negative"),
+        pytest.param("pyproject.toml", f"[tool.pytest.ini_options]\n{DEPTH} = -1\n", "must be non-negative, not '-1'", id="ini_options-negative"),
+        pytest.param("pytest.toml", f"[pytest]\n{DEPTH} = -3\n", "must be non-negative, not -3", id="native-negative"),
+    ],
+)
+def test_a_depth_pytest_refuses_is_an_error(tmp_path, filename, content, message):
+    """pytest refuses to run on each of these, so no depth can be taken from it."""
+    file = tmp_path / filename
+    file.write_text(content)
+    with pytest.raises(DiscoveryError) as raised:
+        configured_depth([tmp_path])
+    assert str(raised.value) == f"{file}: {DEPTH} {message}"
+
+
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [
+        pytest.param("pyproject.toml", b"[tool.pytest\n", id="toml-syntax"),
+        pytest.param("tox.ini", b"  a continuation line first\n", id="ini-syntax"),
+        pytest.param("pytest.ini", f"[pytest]\n{DEPTH} = 1\nx = caf\xe9\n".encode("latin-1"), id="ini-not-utf8"),
+        # Read, and refused whole by pytest.
+        pytest.param("pyproject.toml", f'[tool.pytest]\n{DEPTH} = 1\n[tool.pytest.ini_options]\ny = "2"\n'.encode(), id="both-tables"),
+        pytest.param("setup.cfg", f"[pytest]\n{DEPTH} = 1\n".encode(), id="setup.cfg-pytest-section"),
+    ],
+)
+def test_a_configuration_that_cannot_be_read_is_passed_over(tmp_path, filename, content):
+    """pytest stops on such a file before it reads a value from it, so it
+    sets no depth: the depth is the one the file found past it sets, the file
+    the root is taken from too, as if it were not there."""
+    (tmp_path / "pytest.ini").write_text(f"[pytest]\n{DEPTH} = 6\n")
+    (tmp_path / "suite").mkdir()
+    (tmp_path / "suite" / filename).write_bytes(content)
+    assert configured_depth([tmp_path / "suite"]) == 6
+    assert pytest_rootdir([tmp_path / "suite"]) == tmp_path
+
+
+def test_a_configuration_that_cannot_be_read_alone_sets_the_default(tmp_path, clean_ancestors):
+    (tmp_path / "pytest.toml").write_bytes(f"[pytest]\n{DEPTH} = 1\n[pytest\n".encode())
+    assert configured_depth([tmp_path]) == 3

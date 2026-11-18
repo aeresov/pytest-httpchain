@@ -421,6 +421,10 @@ With depth 3, these are valid:
 This would fail:
 - `../../../../file.json`
 
+The [command line](../cli.md#common-options)'s `validate`, `resolve`, `show`
+and `graph` read the same setting from the configuration file pytest would
+read; `--ref-parent-traversal-depth` overrides it.
+
 ### The root path is a containment boundary
 
 The traversal depth is not the only constraint. Every resolved reference must

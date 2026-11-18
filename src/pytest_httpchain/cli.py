@@ -22,7 +22,7 @@ from pytest_httpchain.importers import ImportResult, ImportSourceError, build_sc
 from pytest_httpchain.jsonref import ReferenceResolverError
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.schema import build_schema
-from pytest_httpchain.validation import DiagnosticCode, DiscoveryError, ValidateResult, load_scenario, load_scenario_json, validate_paths
+from pytest_httpchain.validation import DiagnosticCode, DiscoveryError, ValidateResult, configured_depth, load_scenario, load_scenario_json, validate_paths
 
 
 def _hide_flag_value_types(command: typer.core.TyperCommand | typer.core.TyperGroup, ctx: typer.Context) -> None:
@@ -105,13 +105,14 @@ class GraphDirection(StrEnum):
     LR = "LR"
 
 
-def _depth_option(value: str | int) -> int:
+def _depth_option(value: str) -> int:
     """The depth as Python's ``int()`` reads it, as pytest reads the
     ``httpchain_ref_parent_traversal_depth`` ini option and typer did up to
     0.28, with the CLI's own error. typer 0.29 converts an ``int`` through
     pydantic, which takes ``3.0`` and refuses ``３``; a parser is given the
-    word as typed (and the default, 3) on every typer, and the error it
-    raises, not being a ValueError, reaches click unchanged.
+    word as typed on every typer (never the default, None, which stands for
+    the depth pytest's configuration sets), and the error it raises, not
+    being a ValueError, reaches click unchanged.
 
     A depth below 0 is refused, as the ini option's is ("must be
     non-negative"): it counts parent directories, and with one the resolver
@@ -130,7 +131,16 @@ def _depth_option(value: str | int) -> int:
 # annotation): <int> on 0.27 and 0.28 as before, INT where 0.26 wrote INTEGER.
 _depth_option.__name__ = "int"
 
-RefParentTraversalDepth = Annotated[int, typer.Option(help="Maximum $ref parent directory traversal depth.", parser=_depth_option)]
+# None, the default, is the depth pytest's configuration sets for the paths
+# read (`configured_depth`): `validate_paths` reads it for validate's,
+# `_configured_depth` for the scenario resolve, show and graph read.
+RefParentTraversalDepth = Annotated[
+    int | None,
+    typer.Option(
+        help="Maximum $ref parent directory traversal depth (default: the httpchain_ref_parent_traversal_depth pytest's configuration sets for these paths, else 3).",
+        parser=_depth_option,
+    ),
+]
 RootPath = Annotated[Path | None, typer.Option("--root-path", help="Directory that constrains $ref resolution (default: the rootdir pytest would use).")]
 OutputFormatOption = Annotated[OutputFormat, typer.Option("--format", help="Output format: human-readable text or machine-readable JSON.")]
 
@@ -197,7 +207,7 @@ def _summary(results: list[tuple[Path, ValidateResult]]) -> str | None:
 @app.command()
 def validate(
     paths: Annotated[list[Path], typer.Argument(help="Scenario files to validate, or directories to search for them.")],
-    ref_parent_traversal_depth: RefParentTraversalDepth = 3,
+    ref_parent_traversal_depth: RefParentTraversalDepth = None,
     root_path: RootPath = None,
     output_format: OutputFormatOption = OutputFormat.text,
     deep: Annotated[bool, typer.Option("--deep", help="Run deep checks: resolve user-function imports/signatures and referenced files. Imports user modules.")] = False,
@@ -273,10 +283,23 @@ def schema() -> None:
     typer.echo(json.dumps(build_schema(), indent=2, default=str))
 
 
+def _configured_depth(depth: int | None, path: Path) -> int:
+    """``--ref-parent-traversal-depth`` when given, else the depth pytest's
+    configuration sets for a run on ``path`` (`configured_depth`): a value
+    there pytest would refuse exits 1, as `validate` exits on it."""
+    if depth is not None:
+        return depth
+    try:
+        return configured_depth([path])
+    except DiscoveryError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+
 @app.command()
 def resolve(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to resolve.")],
-    ref_parent_traversal_depth: RefParentTraversalDepth = 3,
+    ref_parent_traversal_depth: RefParentTraversalDepth = None,
     root_path: RootPath = None,
 ) -> None:
     """Resolve $ref/$include/$merge and print the merged scenario JSON to stdout.
@@ -284,10 +307,11 @@ def resolve(
     The output is strict JSON: the comments and trailing commas a scenario or
     an included file may hold are not in it.
     """
+    depth = _configured_depth(ref_parent_traversal_depth, scenario)
     try:
         # The loader load_scenario uses, so the printed document is what
         # collection sees.
-        data = load_scenario_json(scenario, root_path=root_path, ref_parent_traversal_depth=ref_parent_traversal_depth)
+        data = load_scenario_json(scenario, root_path=root_path, ref_parent_traversal_depth=depth)
     except (ReferenceResolverError, json.JSONDecodeError, OSError) as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(1) from e
@@ -295,8 +319,10 @@ def resolve(
     typer.echo(json.dumps(data, indent=2, default=str))
 
 
-def _load_for_inspection(path: Path, depth: int, root_path: Path | None = None) -> tuple[Scenario, dict]:
-    """Load + validate a scenario for show/graph, mapping failures to Exit(1)."""
+def _load_for_inspection(path: Path, depth: int | None, root_path: Path | None = None) -> tuple[Scenario, dict]:
+    """Load + validate a scenario for show/graph, mapping failures to Exit(1);
+    ``depth`` None is the configured depth (`_configured_depth`)."""
+    depth = _configured_depth(depth, path)
     try:
         return load_scenario(path, root_path=root_path, ref_parent_traversal_depth=depth)
     except (ReferenceResolverError, json.JSONDecodeError, OSError) as e:
@@ -351,7 +377,7 @@ def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[st
 def show(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to summarize.")],
     output_format: OutputFormatOption = OutputFormat.text,
-    ref_parent_traversal_depth: RefParentTraversalDepth = 3,
+    ref_parent_traversal_depth: RefParentTraversalDepth = None,
     root_path: RootPath = None,
 ) -> None:
     """Summarize a scenario's stages and variable data-flow."""
@@ -395,7 +421,7 @@ def _to_mermaid(flow: DataFlow, direction: str = "TD") -> str:
 def graph(
     scenario: Annotated[Path, typer.Argument(help="Scenario JSON file to graph.")],
     direction: Annotated[GraphDirection, typer.Option("--direction", help="Flowchart orientation.")] = GraphDirection.TD,
-    ref_parent_traversal_depth: RefParentTraversalDepth = 3,
+    ref_parent_traversal_depth: RefParentTraversalDepth = None,
     root_path: RootPath = None,
 ) -> None:
     """Emit a Mermaid flowchart of the stage data-flow."""

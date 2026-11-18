@@ -274,6 +274,108 @@ def test_ref_parent_traversal_depth_help_names_an_int():
     assert re.search(r"\s(<int>|INT)\s+Maximum \$ref parent", _ANSI.sub("", result.output)), result.output
 
 
+# --- the depth pytest's configuration sets, without --ref-parent-traversal-depth ---
+
+DEPTH_INI = "httpchain_ref_parent_traversal_depth"
+
+# The depth in each form pytest reads an int option in: text, a TOML integer
+# in a table that keeps TOML's types, and a TOML integer the string-based
+# table turns into text.
+DEPTH_CONFIGURATIONS = [
+    pytest.param("pytest.ini", "[pytest]\n" + DEPTH_INI + " = {}\n", id="ini-text"),
+    pytest.param("pyproject.toml", "[tool.pytest]\n" + DEPTH_INI + " = {}\n", id="toml-integer"),
+    pytest.param("pyproject.toml", "[tool.pytest.ini_options]\n" + DEPTH_INI + " = {}\n", id="pyproject-ini_options"),
+]
+
+
+@pytest.fixture
+def four_up(tmp_path) -> Path:
+    """A scenario including a file four directories up, one more than the
+    default depth allows, below the project root its test writes a
+    configuration file in."""
+    _write(tmp_path / "common.json", {"url": "https://x.test/shared"})
+    directory = tmp_path / "a" / "b" / "c" / "d"
+    directory.mkdir(parents=True)
+    return _write(directory / "test_x.http.json", {"stages": [{"name": "s", "request": {"$include": "../../../../common.json"}, "response": [{"verify": {"status": 200}}]}]})
+
+
+@pytest.mark.parametrize("command", DEPTH_COMMANDS)
+@pytest.mark.parametrize(("filename", "content"), DEPTH_CONFIGURATIONS)
+def test_every_command_reads_the_depth_the_configuration_sets(tmp_path, four_up, command, filename, content):
+    """A project that raises the depth has collection resolve an `$include`
+    four levels up, and each command resolves it too; one that lowers it
+    fails each at the depth it sets."""
+    (tmp_path / filename).write_text(content.format(4))
+    result = runner.invoke(app, [command, str(four_up)])
+    assert result.exit_code == 0, result.output
+    (tmp_path / filename).write_text(content.format(2))
+    result = runner.invoke(app, [command, str(four_up)])
+    assert result.exit_code == 1, result.output
+    assert "exceeds maximum parent traversal depth of 2" in result.output
+
+
+@pytest.mark.parametrize("command", DEPTH_COMMANDS)
+@pytest.mark.parametrize(
+    ("configured", "given", "exit_code"),
+    [
+        pytest.param("4", "3", 1, id="lower"),
+        pytest.param("2", "4", 0, id="higher"),
+        # The configuration is not read, so a value pytest would refuse there
+        # stops nothing.
+        pytest.param("-1", "4", 0, id="over-a-refused-value"),
+    ],
+)
+def test_the_option_wins_over_the_configured_depth(tmp_path, four_up, command, configured, given, exit_code):
+    (tmp_path / "pytest.ini").write_text(f"[pytest]\n{DEPTH_INI} = {configured}\n")
+    result = runner.invoke(app, [command, "--ref-parent-traversal-depth", given, str(four_up)])
+    assert result.exit_code == exit_code, result.output
+    if exit_code:
+        assert f"exceeds maximum parent traversal depth of {given}" in result.output
+
+
+@pytest.mark.parametrize("command", DEPTH_COMMANDS)
+@pytest.mark.parametrize(
+    ("filename", "content", "message"),
+    [
+        pytest.param("pytest.ini", f"[pytest]\n{DEPTH_INI} = 3.0\n", "must be an integer, not '3.0'", id="ini-text"),
+        pytest.param("pyproject.toml", f'[tool.pytest]\n{DEPTH_INI} = "4"\n', "must be an integer, not str: '4'", id="toml-text"),
+        pytest.param("pyproject.toml", f"[tool.pytest.ini_options]\n{DEPTH_INI} = true\n", "must be an integer, not 'True'", id="pyproject-ini_options-bool"),
+        pytest.param("pytest.ini", f"[pytest]\n{DEPTH_INI} = -1\n", "must be non-negative, not '-1'", id="negative"),
+    ],
+)
+def test_every_command_exits_one_on_a_configured_depth_pytest_refuses(tmp_path, four_up, command, filename, content, message):
+    """One `error:` line naming the file, before anything is read, as for a
+    configured suffix pytest refuses: pytest would not run either."""
+    (tmp_path / filename).write_text(content)
+    result = runner.invoke(app, [command, str(four_up)])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == f"error: {tmp_path / filename}: {DEPTH_INI} {message}\n"
+
+
+@pytest.mark.parametrize("command", DEPTH_COMMANDS)
+def test_every_command_passes_over_a_configuration_that_cannot_be_read(tmp_path, four_up, command):
+    """pytest stops on such a file before it reads a value from it: the depth,
+    like the root, is the one of the file found past it, so a command over a
+    file still runs on a project whose configuration is mid-edit. `validate`
+    over a directory reports the file, needing the suffix from it."""
+    (tmp_path / "pytest.ini").write_text(f"[pytest]\n{DEPTH_INI} = 4\n")
+    (tmp_path / "a" / "pyproject.toml").write_text("[tool.pytest\n")
+    result = runner.invoke(app, [command, str(four_up)])
+    assert result.exit_code == 0, result.output
+    if command == "validate":
+        result = runner.invoke(app, [command, str(four_up.parent)])
+        assert result.exit_code == 1
+        assert result.stderr.startswith(f"error: cannot read pytest configuration from {tmp_path / 'a' / 'pyproject.toml'}: ")
+
+
+@pytest.mark.parametrize("command", DEPTH_COMMANDS)
+def test_ref_parent_traversal_depth_help_names_the_configured_default(command):
+    result = runner.invoke(app, [command, "--help"])
+    assert result.exit_code == 0, result.output
+    assert _unspaced("(default: the httpchain_ref_parent_traversal_depth pytest's configuration sets for these paths, else 3)") in _unspaced(result.output)
+
+
 @pytest.mark.parametrize(
     ("args", "message"),
     [

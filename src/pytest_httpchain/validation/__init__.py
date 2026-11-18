@@ -10,12 +10,12 @@ adds the semantic checks a JSON Schema cannot express. Every finding is a
 - `validate`: the entry points tying the three together, per file and per
   command-line path
 - `discovery`: the scenario files a directory holds, found as pytest collection
-  finds them
+  finds them, and the settings pytest's configuration gives a run on them
 """
 
 from pytest_httpchain.validation.deep import check_scenario_deep
 from pytest_httpchain.validation.diagnostics import SEVERITY, Diagnostic, DiagnosticCode, ScenarioInfo, Severity, ValidateResult
-from pytest_httpchain.validation.discovery import DiscoveryError, configured_suffix, find_scenario_files
+from pytest_httpchain.validation.discovery import DiscoveryError, configured_depth, configured_suffix, find_scenario_files
 from pytest_httpchain.validation.loader import (
     is_alternatives_position,
     is_expected_value_position,
@@ -39,6 +39,7 @@ __all__ = [
     "ValidateResult",
     "check_scenario",
     "check_scenario_deep",
+    "configured_depth",
     "configured_suffix",
     "describe_scenario",
     "find_scenario_files",

@@ -21,7 +21,7 @@ Configuration options can be set in `pytest.ini` or `pyproject.toml` under `[too
 | Option | Default | Description |
 |--------|---------|-------------|
 | `httpchain_suffix` | `http` | File suffix for test discovery. Files must match `test_<name>.<suffix>.json` or `test_<name>.<suffix>.jsonc`. [`pytest-httpchain validate`](cli.md#directories) searches directories by it too |
-| `httpchain_ref_parent_traversal_depth` | `3` | Maximum parent directory traversals allowed in `$include`/`$merge`/`$ref` paths, and in a `verify.body.schema`'s JSON Schema `$ref`s to files |
+| `httpchain_ref_parent_traversal_depth` | `3` | Maximum parent directory traversals allowed in `$include`/`$merge`/`$ref` paths, and in a `verify.body.schema`'s JSON Schema `$ref`s to files. The [command line](cli.md#common-options)'s commands read it too |
 | `httpchain_max_comprehension_length` | `50000` | Maximum length for list/dict comprehensions in template expressions |
 | `httpchain_max_parallel_iterations` | `10000` | Maximum number of parallel iterations (`repeat`/`foreach`) allowed per stage |
 | `httpchain_redact_headers` | `Authorization Proxy-Authorization Cookie Set-Cookie X-API-Key API-Key X-Auth-Token` | Headers whose values reports and failure messages show as `[REDACTED]`. Case-insensitive; empty disables. See [Secrets in reports](#secrets-in-reports) |
