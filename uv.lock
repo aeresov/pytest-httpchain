@@ -1215,7 +1215,7 @@ docs = [
 requires-dist = [
     { name = "attrs", specifier = ">=22.2.0" },
     { name = "deepmerge", specifier = ">=2.0" },
-    { name = "graphql-core", specifier = ">=3.0.0" },
+    { name = "graphql-core", specifier = ">=3.2.10" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.0" },
     { name = "iniconfig", specifier = ">=1.0.1" },
     { name = "jmespath", specifier = ">=1.0.0" },

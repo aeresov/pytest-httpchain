@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Minimum `graphql-core` is now 3.2.10 (was 3.0.0), the first release that parses a description on
+  an operation, a fragment or a variable (`"Fetches the user." query User { ... }`), as every later
+  one does: below it, a query holding one failed with `Invalid GraphQL query` only where that older
+  version was installed. 3.2.10 suits the libraries a test environment may also hold (graphene,
+  graphql-relay and sgqlc require a `graphql-core` below 3.3).
+- A GraphQL `query` holds operations and fragments, at least one operation: a type-system
+  definition (`type`, `schema`, `scalar`, `directive`, an extension), alone or beside an operation,
+  and a document of fragments alone fail with `Invalid GraphQL query` when the scenario loads. A
+  server refuses both; this also keeps out the type-system syntax `graphql-core` 3.3 parses and 3.2
+  does not (`directive @a @b on FIELD`).
+
 - Refresh the lockfile for `graphql-core` 3.3.2, `typer` 0.29.1, `import-linter` 2.16, `ruff` 0.17.5,
   `ty` 0.0.102 and `mkdocs-material` 9.8.1, and follow ty 0.0.100's rule renames in the ty
   configuration and the source's `ty: ignore` comments. The `ty` dev floor is now 0.0.100, the first

@@ -168,11 +168,12 @@ NESTING_KINDS = ["selection-sets", "list-values", "object-values", "list-types",
 
 class TestGraphQLQuery:
     """One verdict whichever graphql-core is installed: these run on the
-    declared floor and on the locked version, and the parsers differ. From
-    3.3.2 ``graphql.parse`` takes a selection set that selects nothing, which
-    every version before it refused; and 3.2.14 and 3.3.2 refuse a document
+    declared floor (3.2.10) and on the locked version, and the parsers differ.
+    From 3.3.2 ``graphql.parse`` takes a selection set that selects nothing,
+    which every version before it refused; 3.2.14 and 3.3.2 refuse a document
     nested more than 200 levels deep, which older versions parse until the
-    interpreter's recursion limit."""
+    interpreter's recursion limit; and 3.3 parses type-system syntax 3.2 does
+    not, which a request's document never holds."""
 
     @pytest.mark.parametrize(
         "value",
@@ -181,10 +182,36 @@ class TestGraphQLQuery:
             "query GetUser { user { id name email } }",
             "mutation CreateUser($name: String!) { createUser(name: $name) { id } }",
             "query GetUsers($limit: Int) { users(limit: $limit) { id name } }",
+            # Descriptions on an operation, a variable or a fragment, which
+            # graphql-core parses from 3.2.10, the declared floor.
+            pytest.param('"Who is asking." query Me { me { id } }', id="operation-description"),
+            pytest.param('query User("The user to fetch." $id: ID!) { user(id: $id) { id } }', id="variable-description"),
+            pytest.param('{ me { ...Fields } } """Shared fields.""" fragment Fields on User { id }', id="fragment-description"),
         ],
     )
     def test_valid(self, value):
         assert validate(GraphQLQuery, value) == value
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            # A server executes a request's document: a type-system definition
+            # in it is refused, alone or beside an operation.
+            pytest.param("type Query { me: User }", id="type"),
+            pytest.param("schema { query: Query }", id="schema"),
+            pytest.param("scalar DateTime", id="scalar"),
+            pytest.param('extend type User @key(fields: "id")', id="type-extension"),
+            pytest.param("{ me { id } } type User { id: ID }", id="beside-an-operation"),
+            # Type-system syntax graphql-core 3.3 parses and 3.2 does not.
+            pytest.param("directive @a @b on FIELD", id="directive-on-a-directive-definition"),
+            pytest.param("directive @a on FRAGMENT_VARIABLE_DEFINITION", id="fragment-variable-location"),
+            # Fragments alone execute nothing: "Must provide an operation".
+            pytest.param("fragment Fields on User { id }", id="fragments-only"),
+        ],
+    )
+    def test_non_executable_document_is_invalid(self, value):
+        with pytest.raises(ValidationError, match="Invalid GraphQL query"):
+            validate(GraphQLQuery, value)
 
     @pytest.mark.parametrize("kind", NESTING_KINDS)
     def test_nesting_200_levels_deep_is_valid(self, kind):

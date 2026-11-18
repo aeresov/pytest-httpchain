@@ -266,13 +266,21 @@ def _graphql_children(node: Any) -> Iterator[Any]:
 
 
 def _parse_graphql_query(text: str) -> None:
-    """Parse a GraphQL document, or raise why it is not one. One grammar,
-    whichever graphql-core is installed: a selection set selects something,
-    and a document nests at most 200 levels deep.
+    """Parse a GraphQL request's document, or raise why it is not one. One
+    grammar, whichever graphql-core is installed: the document holds
+    operations and fragments, at least one operation; a selection set
+    selects something; and the document nests at most 200 levels deep.
+
+    A request is executed, so its document is what a server executes: a
+    type-system definition (``type``, ``schema``, ``directive``...) in it is
+    refused by every server ("... is not executable"), and so is a document
+    of fragments alone ("Must provide an operation"). Refusing them here
+    also keeps out the type-system syntax graphql-core 3.3 parses and 3.2
+    does not (``directive @d @e on FIELD``).
 
     A selection set with nothing in it (``{ user { } }``, ``query Q { }``)
-    is a syntax error to graphql-core 3.0.0 through 3.3.1, and to a server
-    built on any of them. From 3.3.2 ``graphql.parse`` takes it by default,
+    is a syntax error to graphql-core up to 3.3.1, and to a server built on
+    any of them. From 3.3.2 ``graphql.parse`` takes it by default,
     after a proposed change to the specification (graphql-spec pull request
     1227), so the same scenario would load or not by the version installed:
     it is refused here, from what was parsed. The parser's own switch
@@ -295,6 +303,11 @@ def _parse_graphql_query(text: str) -> None:
     frames here.
     """
     document = graphql.parse(text)
+    for definition in document.definitions:
+        if not isinstance(definition, graphql.language.OperationDefinitionNode | graphql.language.FragmentDefinitionNode):
+            raise graphql.GraphQLError(f"The {definition.kind} is not executable: a request holds operations and fragments.", definition)
+    if not any(isinstance(definition, graphql.language.OperationDefinitionNode) for definition in document.definitions):
+        raise graphql.GraphQLError("A request holds at least one operation: fragments alone execute nothing.")
     pending: list[tuple[Any, int]] = [(document, 0)]
     while pending:
         node, depth = pending.pop()
