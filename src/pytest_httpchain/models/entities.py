@@ -444,7 +444,7 @@ def validate_rendered_scenario_auth(value: Any) -> Auth:
     try:
         return _RENDERED_SCENARIO_AUTH.validate_python(value, context=RENDERED)
     except ValidationError as e:
-        raise reported(e, hide_input=True) from None
+        raise reported(e, hide_input=True, rendered=True) from None
 
 
 def validate_rendered[M: BaseModel](model: type[M], value: Any) -> M:
@@ -453,15 +453,16 @@ def validate_rendered[M: BaseModel](model: type[M], value: Any) -> M:
     what only the scenario's own text means, an escaped ``\\{{``, is not
     read in it.
 
-    Its `ValidationError` is reported as the loader reports one (`reported`):
-    a value a template rendered that a literal branch refuses (a query that
-    is no GraphQL) is not also told to hold a template. Rebuilt, it hides its
-    input as ``model`` does: the outermost validator's setting is the one
-    that counts."""
+    Its `ValidationError` is reported as rendered text (`reported`, with
+    ``rendered``): a value a template rendered that another member of its
+    union refuses (a query that is no GraphQL, a string where ``variables``
+    takes an object) is not also told to hold a template, which it was
+    rendered from. Rebuilt, it hides its input as ``model`` does: the
+    outermost validator's setting is the one that counts."""
     try:
         return model.model_validate(value, context=RENDERED)
     except ValidationError as e:
-        raise reported(e, hide_input=model.model_config.get("hide_input_in_errors", False)) from None
+        raise reported(e, hide_input=model.model_config.get("hide_input_in_errors", False), rendered=True) from None
 
 
 with _suppress_field_shadow_warning("json"):
@@ -1164,7 +1165,7 @@ def validate_rendered_expectations(declared: Mapping[str, Any], value: dict[str,
     try:
         return _RENDERED_EXPECTATIONS.validate_python(_kept_as_declared(declared, value), context=RENDERED)
     except ValidationError as e:
-        raise reported(e, hide_input=True) from None
+        raise reported(e, hide_input=True, rendered=True) from None
 
 
 class SaveStep(StrictModel):

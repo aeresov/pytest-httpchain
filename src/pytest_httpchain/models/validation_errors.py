@@ -9,9 +9,12 @@ expression ...``). Where the literal branch judged the string itself, the hint
 is noise, and it misleads: written as a template, the value escapes the check
 it failed. Shared by the loader (``HTTPCHAIN000``) and the models' rendered
 validation (`entities.validate_rendered` and its kin), whose errors the carrier
-reports as a stage's failure.
+reports as a stage's failure, and by the factory's re-validation of a
+parametrize step's rendered values: once rendered, a value's text is final,
+and the hint is never kept beside another member's error.
 """
 
+import re
 from collections.abc import Iterable
 from typing import LiteralString, cast
 
@@ -19,6 +22,7 @@ from pydantic import ValidationError
 from pydantic_core import ErrorDetails, InitErrorDetails, PydanticCustomError
 
 from pytest_httpchain.models.types import NO_TEMPLATE, validate_partial_template_str, validate_unquoted_partial_template_str
+from pytest_httpchain.templates import TEMPLATE_PATTERN
 
 # The member tags pydantic gives the template branch of a union, last in an
 # error's location, after the field's own: built from the validators' names,
@@ -28,8 +32,9 @@ _TEMPLATE_BRANCHES = frozenset(f"function-after[{validator.__name__}(), str]" fo
 # The types of error by which a union member refuses what a string says, not
 # that it is a string: a validator's ValueError, and pydantic's checks of a
 # URL's text. Any other (``dict_type``, ``list_type``, ``int_parsing``, ...)
-# refuses the input's type, where the template branch's hint helps: a string
-# there is no literal, and may have been meant as a template.
+# refuses the input's type, where the template branch's hint helps as the
+# scenario loads: a string there is no literal, and may have been meant as a
+# template.
 _VALUE_REFUSALS = frozenset({"value_error", "url_parsing", "url_scheme", "url_syntax_violation", "url_too_long"})
 
 # Where pydantic puts the error of a dict's key: after the entry's location,
@@ -39,6 +44,10 @@ _KEY = "[key]"
 # What pydantic writes before a `value_error`'s own message.
 _VALUE_ERROR = "Value error, "
 
+# The tokens rendering rewrites in a string: its templates, and the escapes
+# (``\{{`` and the text it covers) and runs of backslashes that are none.
+_TOKENS = re.compile(TEMPLATE_PATTERN)
+
 
 def _holds_no_template(error: ErrorDetails) -> bool:
     """True for a union's template branch refusing a string for holding no
@@ -47,15 +56,26 @@ def _holds_no_template(error: ErrorDetails) -> bool:
     return bool(loc) and loc[-1] in _TEMPLATE_BRANCHES and error["type"] == "value_error" and error["msg"].removeprefix(_VALUE_ERROR).startswith(NO_TEMPLATE)
 
 
-def _judges_the_value(error: ErrorDetails) -> bool:
-    """True for a union member other than a template branch refusing a value
-    of a type it takes, at the member itself: its location is the field's,
-    then the member's tag."""
+def _opens_braces(error: ErrorDetails) -> bool:
+    """True when the string refused holds a ``{{`` no escape covers (an
+    unclosed ``{{ id }``, an empty ``{{}}``): braces written to open a
+    template, which the engine does not read as one. The hint is what tells
+    the author so, where the literal branch's error seems to be about
+    something else."""
+    value = error.get("input")
+    return isinstance(value, str) and "{{" in _TOKENS.sub(lambda match: "" if match.group("escape") is not None else match.group(0), value)
+
+
+def _refused_by_a_member(error: ErrorDetails, *, rendered: bool) -> bool:
+    """True for a union member other than a template branch refusing the
+    value, at the member itself: its location is the field's, then the
+    member's tag. As the scenario loads, only a refusal of a value of a type
+    the member takes counts (`_VALUE_REFUSALS`); ``rendered``, any."""
     loc = error["loc"]
-    return bool(loc) and isinstance(loc[-1], str) and loc[-1] not in _TEMPLATE_BRANCHES and loc[-1] != _KEY and error["type"] in _VALUE_REFUSALS
+    return bool(loc) and isinstance(loc[-1], str) and loc[-1] not in _TEMPLATE_BRANCHES and loc[-1] != _KEY and (rendered or error["type"] in _VALUE_REFUSALS)
 
 
-def without_template_hints(errors: Iterable[ErrorDetails]) -> list[ErrorDetails]:
+def without_template_hints(errors: Iterable[ErrorDetails], *, rendered: bool = False) -> list[ErrorDetails]:
     """``errors`` (as `ValidationError.errors` lists them) less each template
     branch's "Must contain at least one template expression" where another
     branch of the same field refused the value itself (`_VALUE_REFUSALS`).
@@ -66,12 +86,20 @@ def without_template_hints(errors: Iterable[ErrorDetails]) -> list[ErrorDetails]
     member's, never a sibling field's (a sibling's location shares the
     field's parent, not the field). A dict entry's key error shares the
     entry's location too, and is not a member. Both errors are kept where the
-    hint helps: a literal branch that refused the input's type, and a
-    template branch with another complaint (an empty ``{{ }}``).
+    hint helps: a literal branch that refused the input's type, a template
+    branch with another complaint (an empty ``{{ }}``), and a value holding
+    braces no template reads (an unclosed ``{{ id }``).
+
+    ``rendered`` judges a value a template rendered (`entities.validate_rendered`
+    and its kin, a parametrize step's values): its text is final, so the hint
+    is never kept beside another member's error, whatever that member refused
+    (the input's type included) and whatever braces the text holds. The
+    author wrote a template there, and the hint read as if it had gone
+    missing.
     """
     errors = list(errors)
-    judged = {error["loc"][:-1] for error in errors if _judges_the_value(error)}
-    return [error for error in errors if not (_holds_no_template(error) and error["loc"][:-1] in judged)]
+    refused = {error["loc"][:-1] for error in errors if _refused_by_a_member(error, rendered=rendered)}
+    return [error for error in errors if not (_holds_no_template(error) and error["loc"][:-1] in refused and (rendered or not _opens_braces(error)))]
 
 
 def validation_error(title: str, errors: Iterable[ErrorDetails], *, hide_input: bool = False) -> ValidationError:
@@ -94,10 +122,11 @@ def validation_error(title: str, errors: Iterable[ErrorDetails], *, hide_input: 
     return ValidationError.from_exception_data(title, details, hide_input=hide_input)
 
 
-def reported(e: ValidationError, *, hide_input: bool = False) -> ValidationError:
-    """``e`` as `without_template_hints` leaves it: ``e`` itself when no
-    error goes, else rebuilt (`validation_error`) with ``hide_input``, which
-    the caller passes as the model that raised ``e`` hides its input."""
+def reported(e: ValidationError, *, hide_input: bool = False, rendered: bool = False) -> ValidationError:
+    """``e`` as `without_template_hints` leaves it (``rendered`` passed on):
+    ``e`` itself when no error goes, else rebuilt (`validation_error`) with
+    ``hide_input``, which the caller passes as the model that raised ``e``
+    hides its input."""
     errors = e.errors()
-    kept = without_template_hints(errors)
+    kept = without_template_hints(errors, rendered=rendered)
     return e if len(kept) == len(errors) else validation_error(e.title, kept, hide_input=hide_input)

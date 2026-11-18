@@ -391,13 +391,26 @@ DIAGNOSED = [
             (C.SCHEMA, f"{_GRAPHQL} -> variables -> {_TEMPLATE_BRANCH}", r": Value error, Must contain at least one template expression like '\{\{ expr \}\}', got: 'id=1'$"),
         ],
     ),
-    # ... and the template branch's complaint is another one: the value holds
-    # a template, an empty one.
+    # ... the template branch's complaint is another one: the value holds a
+    # template, an empty one ...
     (
         "literal_or_template_empty_expression.json",
         [
             (C.SCHEMA, f"{_GRAPHQL} -> query -> {_QUERY_BRANCH}", r": Value error, Invalid GraphQL query: Syntax Error: Expected Name, found '\{'\.$"),
             (C.SCHEMA, f"{_GRAPHQL} -> query -> {_TEMPLATE_BRANCH}", r": Value error, Template expression cannot be empty at position 17$"),
+        ],
+    ),
+    # ... and the value opens braces no template reads (unclosed): the hint is
+    # what says the template was not read, beside the literal's error.
+    (
+        "literal_or_template_unclosed_template.json",
+        [
+            (C.SCHEMA, f"{_GRAPHQL} -> query -> {_QUERY_BRANCH}", r": Value error, Invalid GraphQL query: Syntax Error: Expected Name, found '\{'\.$"),
+            (
+                C.SCHEMA,
+                f"{_GRAPHQL} -> query -> {_TEMPLATE_BRANCH}",
+                r": Value error, Must contain at least one template expression like '\{\{ expr \}\}', got: 'query \{ user\(id: \{\{ id \}\) \{ name \} \}'$",
+            ),
         ],
     ),
     # Sibling fields share their model's location: a literal one refuses does

@@ -6,6 +6,7 @@ Collecting and running the generated class is the integration suite's
 """
 
 import pytest
+from pydantic import ValidationError
 
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.factory import create_test_class
@@ -64,3 +65,20 @@ def test_template_rendering_a_template_fails_by_name(step, field):
     nested = "{{ '{' + '{ x }' + '}' }}"
     with pytest.raises(StageExecutionError, match=f"^parametrize {field} on stage 's' must resolve to a list, got '{{{{ x }}}}'$"):
         _parametrize_args([step], [{"vars": {"nested": nested}}])
+
+
+@pytest.mark.parametrize(
+    ("step", "loc"),
+    [
+        pytest.param({"individual": {"v": "{{ text }}"}}, ("individual", "v", "list[any]"), id="individual"),
+        pytest.param({"combinations": "{{ text }}"}, ("combinations", "list[dict[str,any]]"), id="combinations"),
+    ],
+)
+def test_template_rendering_a_string_fails_on_the_list_alone(step, loc):
+    """A step's template rendering a string where the values go: the list
+    branch's refusal alone. The template branch's "Must contain at least one
+    template expression" read as if the template the step is written as had
+    gone missing."""
+    with pytest.raises(ValidationError) as excinfo:
+        _parametrize_args([step], [{"vars": {"text": "abc"}}])
+    assert [(error["loc"], error["type"]) for error in excinfo.value.errors()] == [(loc, "list_type")]

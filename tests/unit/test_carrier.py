@@ -570,18 +570,41 @@ class TestRenderedAwayFields:
         with pytest.raises(ValidationError, match="timeout"):
             _render_declared(Request.model_validate({"url": "http://t/", "timeout": "{{ x }}"}), {"x": "slow"}, "request")
 
-    def test_rendered_literal_refused_is_not_told_to_hold_a_template(self):
-        """A query a template rendered that is no GraphQL fails on the query's
-        check alone: the template branch's "Must contain at least one template
-        expression" beside it read as if the template had gone missing."""
-        declared = Request.model_validate({"url": "http://t/", "method": "POST", "body": {"graphql": {"query": "{{ q }}"}}})
+    @pytest.mark.parametrize(
+        ("graphql", "context", "error"),
+        [
+            pytest.param(
+                {"query": "{{ q }}"},
+                {"q": "{ user { } }"},
+                [
+                    "body.graphql.graphql.query.function-after[validate_graphql_query(), str]",
+                    "  Value error, Invalid GraphQL query: Syntax Error: A selection set must not be empty. [type=value_error]",
+                ],
+                id="value-refusal",
+            ),
+            # As the scenario loads, the hint stays beside a type refusal: a
+            # string there may have been meant as a template. This one was.
+            pytest.param(
+                {"query": "{ a }", "variables": "{{ v }}"},
+                {"v": "x"},
+                [
+                    "body.graphql.graphql.variables.`function-before[convert_namespace_to_dict(), "
+                    "dict[str,json-or-python[json=any,python=tagged-union[list[...],dict[str,...],str,bool,int,float,none]]]]`",
+                    "  Input should be a valid dictionary [type=dict_type]",
+                ],
+                id="type-refusal",
+            ),
+        ],
+    )
+    def test_rendered_literal_refused_is_not_told_to_hold_a_template(self, graphql, context, error):
+        """A value a template rendered that its field's other member refuses
+        fails on that member's error alone: the template branch's "Must contain
+        at least one template expression" beside it read as if the template
+        had gone missing."""
+        declared = Request.model_validate({"url": "http://t/", "method": "POST", "body": {"graphql": graphql}})
         with pytest.raises(ValidationError) as excinfo:
-            _render_declared(declared, {"q": "{ user { } }"}, "request")
-        assert str(excinfo.value).splitlines()[:3] == [
-            "1 validation error for Request",
-            "body.graphql.graphql.query.function-after[validate_graphql_query(), str]",
-            "  Value error, Invalid GraphQL query: Syntax Error: A selection set must not be empty. [type=value_error]",
-        ]
+            _render_declared(declared, context, "request")
+        assert str(excinfo.value).splitlines()[:3] == ["1 validation error for Request", *error]
 
     @pytest.mark.parametrize(
         ("save", "context", "message"),

@@ -77,13 +77,15 @@ class TestParametrizeValuesContainTemplate:
 
 
 class TestRenderedValidationErrors:
-    """The rendered validators report a `ValidationError` as the loader does
-    (`validation_errors.reported`): a value a template rendered that a literal
-    branch refuses is not also told to hold a template, which it was rendered
-    from. Rebuilt, the error still hides its input where the validator does."""
+    """The rendered validators report a `ValidationError` as rendered text
+    (`validation_errors.reported`, ``rendered``): a value a template rendered
+    that another member of its union refuses, for what it says or for its
+    type, is not also told to hold a template, which it was rendered from.
+    Rebuilt, the error still hides its input where the validator does."""
 
     _QUERY = "function-after[validate_graphql_query(), str]"
     _REGEX = "function-after[validator(), str]"
+    _OBJECT = "function-before[convert_namespace_to_dict(), dict[str,json-or-python[json=any,python=tagged-union[list[...],dict[str,...],str,bool,int,float,none]]]]"
 
     @staticmethod
     def _refusal(validate, *args) -> ValidationError:
@@ -97,6 +99,14 @@ class TestRenderedValidationErrors:
         assert "Invalid GraphQL query: Syntax Error: A selection set must not be empty." in str(error)
         # Request hides its input: its auth and headers render credentials.
         assert "input_value" not in str(error)
+
+    def test_validate_rendered_type_refusal(self):
+        """``variables`` rendered to a string: the object branch's refusal
+        alone. As the scenario loads, the hint is kept beside it, since the
+        string may have been meant as a template; this one was one."""
+        error = self._refusal(validate_rendered, Request, {"url": "http://t/", "method": "POST", "body": {"graphql": {"query": "{ a }", "variables": "x"}}})
+        assert [(e["loc"], e["type"]) for e in error.errors()] == [(("body", "graphql", "graphql", "variables", self._OBJECT), "dict_type")]
+        assert "Must contain at least one template expression" not in str(error)
 
     def test_validate_rendered_keeps_the_input_where_the_model_shows_it(self):
         error = self._refusal(validate_rendered, GraphQL, {"query": "{ user { } }"})

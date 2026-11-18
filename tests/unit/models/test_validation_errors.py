@@ -2,9 +2,10 @@
 
 A field that takes a literal or a template refuses a value neither takes with
 one error per branch; where the literal branch judged the string itself, the
-template branch's "Must contain at least one template expression" goes.
-Errors come from real pydantic validation here, so the rule is pinned against
-the error structure pydantic produces, not one written by hand.
+template branch's "Must contain at least one template expression" goes, and
+where the value a template rendered was refused by any other member. Errors
+come from real pydantic validation here, so the rule is pinned against the
+error structure pydantic produces, not one written by hand.
 """
 
 from typing import Any
@@ -22,12 +23,14 @@ from pytest_httpchain.models.types import (
     ProxyUrlStr,
     UnquotedPartialTemplateStr,
     VariableName,
+    XMLString,
 )
 from pytest_httpchain.models.validation_errors import reported, validation_error, without_template_hints
 
 _QUERY = "function-after[validate_graphql_query(), str]"
 _NAME = "function-after[validate_graphql_name(), str]"
 _TEMPLATE = "function-after[validate_partial_template_str(), str]"
+_XML = "function-after[validator(), str]"
 _OBJECT = "function-before[convert_namespace_to_dict(), dict[str,json-or-python[json=any,python=tagged-union[list[...],dict[str,...],str,bool,int,float,none]]]]"
 
 
@@ -101,10 +104,52 @@ def _where(errors: list) -> list[tuple]:
         ),
         # A list's items are fields of their own, by index.
         pytest.param(list[GraphQLQuery | PartialTemplateStr], ["{ a }", "{ }"], [(1, _QUERY, "value_error")], id="list-item"),
+        # Braces written to open a template that the engine does not read as
+        # one (unclosed, or empty): the hint is what says it was not, beside a
+        # literal error that seems to be about something else.
+        pytest.param(
+            GraphQLQuery | PartialTemplateStr,
+            "query { user(id: {{ id }) { name } }",
+            [(_QUERY, "value_error"), (_TEMPLATE, "value_error")],
+            id="unclosed-template",
+        ),
+        pytest.param(XMLString | PartialTemplateStr, "<a>{{ x </a", [(_XML, "value_error"), (_TEMPLATE, "value_error")], id="unclosed-template-in-xml"),
+        pytest.param(GraphQLQuery | PartialTemplateStr, "{ a(x: {{}}) }", [(_QUERY, "value_error"), (_TEMPLATE, "value_error")], id="empty-braces"),
+        # An escaped `\{{` is text, no template the author meant: the literal
+        # branch judged it (as the text it renders to), alone.
+        pytest.param(GraphQLQuery | PartialTemplateStr, r"{ a(x: \{{ y) }", [(_QUERY, "value_error")], id="escaped-braces"),
     ],
 )
 def test_without_template_hints(annotation, value, kept):
     assert _where(without_template_hints(_refusal(annotation, value).errors())) == kept
+
+
+@pytest.mark.parametrize(
+    ("annotation", "value", "kept"),
+    [
+        # A value a template rendered: its text is final, so the hint, which
+        # read as if the template had gone missing, goes beside any other
+        # member's error, a type refusal included ...
+        pytest.param(NamespaceOrDict | PartialTemplateStr, "x", [(_OBJECT, "dict_type")], id="type-refusal"),
+        pytest.param(list[Any] | PartialTemplateStr, "abc", [("list[any]", "list_type")], id="list-type-refusal"),
+        pytest.param(GraphQLQuery | PartialTemplateStr, "query { user { } }", [(_QUERY, "value_error")], id="value-refusal"),
+        # ... braces a value put there included: no template the author wrote.
+        pytest.param(GraphQLQuery | PartialTemplateStr, "query { user(id: {{ id }) { name } }", [(_QUERY, "value_error")], id="unclosed-braces"),
+        # Still only another member's: a key's error is none, and sibling
+        # fields are judged each alone.
+        pytest.param(
+            dict[VariableName, NamespaceOrDict | PartialTemplateStr],
+            {"a-b": "id=1"},
+            [("a-b", "[key]", "value_error"), ("a-b", _OBJECT, "dict_type")],
+            id="key-error-is-no-member",
+        ),
+        pytest.param(_Siblings, {"template": "plain", "name": "1st"}, [("template", "value_error"), ("name", "value_error")], id="sibling-fields"),
+        # The template branch's other complaints are kept, as they are at load.
+        pytest.param(GraphQLQuery | PartialTemplateStr, "{ a(x: {{ }}) }", [(_QUERY, "value_error"), (_TEMPLATE, "value_error")], id="empty-expression"),
+    ],
+)
+def test_without_template_hints_rendered(annotation, value, kept):
+    assert _where(without_template_hints(_refusal(annotation, value).errors(), rendered=True)) == kept
 
 
 def test_the_hint_is_told_apart_by_its_words_where_its_context_is_gone():
@@ -152,6 +197,11 @@ class TestReported:
         error = _refusal(GraphQLQuery | PartialTemplateStr, "{ }")
         assert _where(reported(error).errors()) == [(_QUERY, "value_error")]
         assert reported(error).title == error.title
+
+    def test_rendered_drops_the_hint_beside_a_type_refusal(self):
+        error = _refusal(NamespaceOrDict | PartialTemplateStr, "x")
+        assert reported(error) is error
+        assert _where(reported(error, rendered=True).errors()) == [(_OBJECT, "dict_type")]
 
     def test_rebuilt_hiding_the_input_when_asked(self):
         error = _refusal(ProxyUrlStr | UnquotedPartialTemplateStr, "ftp://user:secret@proxy.test")

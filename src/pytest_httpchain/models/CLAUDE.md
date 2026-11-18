@@ -38,25 +38,33 @@ load (a pattern or group holding a template is checked once rendered), and
 `response_steps.process_save`, which checks the pattern a template rendered to
 template text, so both refuse the same groups in the same words.
 
-`without_template_hints(errors)` (`validation_errors`) — a `ValidationError`'s
-errors less each template branch's "Must contain at least one template
-expression" (`types.NO_TEMPLATE`) where another member of the same union
-refused the value itself (a `value_error`, or pydantic's check of a URL's
-text), not its type. A field that takes a literal or a template (`GraphQLQuery
-| PartialTemplateStr`, ...) otherwise reports a literal it refuses twice, and
-the hint invites templating it, which escapes the check. Keyed on pydantic's
-error structure: a template branch is told by its member tag, last in its
-location (built from `validate_partial_template_str`'s and
+`without_template_hints(errors, *, rendered=False)` (`validation_errors`) — a
+`ValidationError`'s errors less each template branch's "Must contain at least
+one template expression" (`types.NO_TEMPLATE`) where another member of the
+same union refused the value. A field that takes a literal or a template
+(`GraphQLQuery | PartialTemplateStr`, ...) otherwise reports a literal it
+refuses twice, and the hint invites templating it, which escapes the check.
+Keyed on pydantic's error structure: a template branch is told by its member
+tag, last in its location (built from `validate_partial_template_str`'s and
 `validate_unquoted_partial_template_str`'s names), so the field is the
 location before it, and another error there plus one element is a member of
 the same union, never a sibling field (whose location shares only the
-parent) and never a dict entry's `[key]`. The hint is kept beside a type
-refusal (a string where an object goes may have been meant as a template)
-and where the template branch's complaint is another (an empty `{{ }}`).
-Shared by the loader (`HTTPCHAIN000`) and the rendered validators:
-`validate_rendered`, `validate_rendered_verify`,
-`validate_rendered_scenario_auth` and `validate_rendered_expectations` raise
-their error as `reported(e, hide_input=...)` leaves it, rebuilt with
+parent) and never a dict entry's `[key]`. As the scenario loads, only a
+member that refused the value itself counts (a `value_error`, or pydantic's
+check of a URL's text), and the hint is kept where it helps: beside a type
+refusal (a string where an object goes may have been meant as a template),
+where the template branch's complaint is another (an empty `{{ }}`), and
+where the value holds a `{{` no escape covers and no template reads (an
+unclosed `{{ id }`, read off the engine's `TEMPLATE_PATTERN` tokens: an
+escaped `\{{` is text). `rendered` judges a value a template rendered: its
+text is final and the author wrote a template there, so the hint goes beside
+any other member's error, a type refusal included, whatever braces the text
+holds. The loader (`HTTPCHAIN000`) applies it as the scenario loads. The
+rendered validators, `validate_rendered`, `validate_rendered_verify`,
+`validate_rendered_scenario_auth` and `validate_rendered_expectations`, and
+the factory's re-validation of a template-form parametrize step's rendered
+values (`factory._revalidated`) raise their error as `reported(e,
+hide_input=..., rendered=True)` leaves it, rebuilt with
 `validation_error(title, errors, hide_input=...)` only when an error goes,
 hiding the input as the outermost validator does (`hide_input_in_errors`,
 which a rebuilt error does not inherit). `validation_error` also rebuilds the
