@@ -722,6 +722,20 @@ ROUND_TRIPS = [
     pytest.param(lambda: _built(method="POST", url="https://api.test/raw", content=b"raw data"), id="text-untyped"),
     pytest.param(lambda: _built(method="POST", url="https://api.test/bin", content=bytes(range(256))), id="binary-from-file"),
     pytest.param(_multipart, id="multipart"),
+    pytest.param(
+        lambda: _built(
+            **build_request_kwargs(
+                Request.model_validate(
+                    {
+                        "url": "https://api.test/graphql",
+                        "method": "POST",
+                        "body": {"graphql": {"query": "query Me { me { id } } query Users { users { id } }", "variables": {"n": 1}, "operation_name": "Users"}},
+                    }
+                )
+            )
+        ),
+        id="graphql",
+    ),
     pytest.param(lambda: _built(method="GET", url="https://api.test/me", headers={"Authorization": "Bearer tok-123"}), id="bearer"),
     pytest.param(lambda: _built(method="GET", url="https://api.test/me", headers={"Authorization": "Basic " + base64.b64encode(b"ann:pw:1").decode()}), id="basic"),
     pytest.param(lambda: _built(method="GET", url="https://api.test/me", headers={"Cookie": "session=abc; theme=dark"}), id="cookies"),

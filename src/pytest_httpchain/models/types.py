@@ -271,7 +271,9 @@ def _parse_graphql_query(text: str) -> None:
     operations and fragments, at least one operation; a selection set
     selects something; and the document nests at most 200 levels deep.
 
-    A request is executed, so its document is what a server executes: a
+    A request is executed, so its document is what a server executes, and
+    what every server refuses in one is refused here, in the server's words:
+    an anonymous operation beside another, two operations of one name, a
     type-system definition (``type``, ``schema``, ``directive``...) in it is
     refused by every server ("... is not executable"), and so is a document
     of fragments alone, which holds no operation to execute (graphql-core's
@@ -307,8 +309,18 @@ def _parse_graphql_query(text: str) -> None:
     for definition in document.definitions:
         if not isinstance(definition, graphql.language.OperationDefinitionNode | graphql.language.FragmentDefinitionNode):
             raise graphql.GraphQLError(f"The {definition.kind} is not executable: a request holds operations and fragments.", definition)
-    if not any(isinstance(definition, graphql.language.OperationDefinitionNode) for definition in document.definitions):
+    operations = [definition for definition in document.definitions if isinstance(definition, graphql.language.OperationDefinitionNode)]
+    if not operations:
         raise graphql.GraphQLError("A request holds at least one operation: fragments alone execute nothing.")
+    named: set[str] = set()
+    for operation in operations:
+        if operation.name is None:
+            if len(operations) > 1:
+                raise graphql.GraphQLError("This anonymous operation must be the only defined operation.", operation)
+        elif operation.name.value in named:
+            raise graphql.GraphQLError(f"There can be only one operation named {operation.name.value!r}.", operation)
+        else:
+            named.add(operation.name.value)
     pending: list[tuple[Any, int]] = [(document, 0)]
     while pending:
         node, depth = pending.pop()
@@ -322,6 +334,35 @@ def _parse_graphql_query(text: str) -> None:
 
 
 validate_graphql_query = create_string_validator(_parse_graphql_query, "Invalid GraphQL query")
+
+# A GraphQL name, which an operation's is (graphql-spec, Names).
+_GRAPHQL_NAME = re.compile(r"[_A-Za-z][_0-9A-Za-z]*")
+
+
+def validate_graphql_name(v: str) -> str:
+    if not _GRAPHQL_NAME.fullmatch(v):
+        raise ValueError(f"Invalid GraphQL operation name {v!r}: a name is letters, digits and underscores, not starting with a digit")
+    return v
+
+
+def check_graphql_operation(query: str, operation_name: str | None) -> None:
+    """Whether a server finds an operation to execute in ``query``, a
+    document `validate_graphql_query` passed, given ``operation_name``, as
+    GraphQL's GetOperation finds it, or a ValueError saying why it finds
+    none: a query of several operations names the one to execute, and the
+    name given is one of them.
+
+    Shared by the GraphQL body's model, which checks a literal query and
+    name at load and again once a template rendered either."""
+    operations = [definition for definition in graphql.parse(query).definitions if isinstance(definition, graphql.language.OperationDefinitionNode)]
+    names = [operation.name.value for operation in operations if operation.name is not None]
+    if operation_name is None:
+        if len(names) > 1:
+            raise ValueError(f"the query defines several operations ({', '.join(map(repr, names))}): name the one to execute in operation_name")
+    elif operation_name not in names:
+        defined = f"it defines {', '.join(map(repr, names))}" if names else "its one operation is anonymous"
+        raise ValueError(f"operation_name {operation_name!r} names no operation in the query ({defined})")
+
 
 validate_base64 = create_string_validator(lambda v: base64.b64decode(v, validate=True), "Invalid base64 encoding")
 
@@ -670,6 +711,7 @@ RegexGroupNumber = Annotated[StrictInt, Field(ge=0)]
 RegexGroupName = Annotated[str, AfterValidator(validate_regex_group_name)]
 XMLString = Annotated[str, AfterValidator(validate_xml)]
 GraphQLQuery = Annotated[str, AfterValidator(validate_graphql_query)]
+GraphQLName = Annotated[str, AfterValidator(validate_graphql_name)]
 TemplateExpression = Annotated[str, AfterValidator(validate_template_expression)]
 PartialTemplateStr = Annotated[str, AfterValidator(validate_partial_template_str)]
 # The template branch beside `BaseUrlStr` and `ProxyUrlStr`: a URL they refuse

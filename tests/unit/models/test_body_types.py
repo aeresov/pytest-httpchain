@@ -1,5 +1,6 @@
 """Unit tests for all RequestBody types."""
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -181,6 +182,62 @@ def test_json_namespace_becomes_dict():
     JSON-serialized fields turn it back into a plain dict, recursively."""
     body = JsonBody(json=SimpleNamespace(a=1, b=[SimpleNamespace(c=2)], d={"e": SimpleNamespace(f=3)}))
     assert body.json == {"a": 1, "b": [{"c": 2}], "d": {"e": {"f": 3}}}
+
+
+TWO_OPERATIONS = "query Me { me { id } } query Users { users { id } }"
+
+
+@pytest.mark.parametrize(
+    ("query", "operation_name"),
+    [
+        # One operation is the one executed, named or not.
+        pytest.param("query Me { me { id } }", None, id="one-operation"),
+        pytest.param("query Me { me { id } }", "Me", id="one-operation-named"),
+        pytest.param("{ me { ...Fields } } fragment Fields on User { id }", None, id="anonymous-operation-with-a-fragment"),
+        pytest.param(TWO_OPERATIONS, "Users", id="several-operations-one-named"),
+        # The query as it renders, its escape gone, holds the operations.
+        pytest.param('query Me { echo(text: "\\{{ x }}") } query Users { users { id } }', "Users", id="escaped-template-in-the-query"),
+        # Known once rendered: checked then.
+        pytest.param(TWO_OPERATIONS, "{{ operation }}", id="templated-name"),
+        pytest.param("{{ query }}", "Users", id="templated-query"),
+    ],
+)
+def test_graphql_operation_name_valid(query, operation_name):
+    assert GraphQL(query=query, operation_name=operation_name).operation_name == operation_name
+
+
+@pytest.mark.parametrize(
+    ("query", "operation_name", "message"),
+    [
+        # What a server answers: "Must provide operation name if query
+        # contains multiple operations.", "Unknown operation named 'Them'."
+        pytest.param(TWO_OPERATIONS, None, "the query defines several operations ('Me', 'Users'): name the one to execute in operation_name", id="several-operations-unnamed"),
+        pytest.param(TWO_OPERATIONS, "Them", "operation_name 'Them' names no operation in the query (it defines 'Me', 'Users')", id="unknown-name"),
+        pytest.param("{ me { id } }", "Me", "operation_name 'Me' names no operation in the query (its one operation is anonymous)", id="name-for-an-anonymous-operation"),
+        pytest.param(
+            'query Me { echo(text: "\\{{ x }}") } query Users { users { id } }', None, "the query defines several operations ('Me', 'Users')", id="escaped-template-in-the-query"
+        ),
+        pytest.param("query Me { me { id } }", "1st", "Invalid GraphQL operation name '1st'", id="not-a-name"),
+    ],
+)
+def test_graphql_operation_name_invalid(query, operation_name, message):
+    with pytest.raises(ValidationError, match=re.escape(message)):
+        GraphQL(query=query, operation_name=operation_name)
+
+
+@pytest.mark.parametrize(
+    ("operation_name", "message"),
+    [
+        pytest.param(None, "the query defines several operations", id="unnamed"),
+        pytest.param("Them", "operation_name 'Them' names no operation", id="unknown-name"),
+    ],
+)
+def test_graphql_operation_name_a_template_rendered_is_checked(operation_name, message):
+    """Rendered, the query and name are checked as the carrier validates
+    them (`validate_rendered`), as written ones are at load."""
+    assert validate_rendered(GraphQL, {"query": TWO_OPERATIONS, "operation_name": "Users"}).operation_name == "Users"
+    with pytest.raises(ValidationError, match=re.escape(message)):
+        validate_rendered(GraphQL, {"query": TWO_OPERATIONS, "operation_name": operation_name})
 
 
 def test_graphql_variables_namespace_becomes_dict():

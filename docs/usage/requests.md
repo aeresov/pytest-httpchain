@@ -419,19 +419,40 @@ pass through unchanged.
 }
 ```
 
+A query of several operations names the one to execute in `operation_name`,
+sent as `operationName`; with one operation it is optional, and must name it
+if given. Like the query and the variables, it may be a template.
+
+```json
+{
+    "graphql": {
+        "query": "query Me { me { id } } query Team($id: ID!) { team(id: $id) { name } }",
+        "variables": {"id": "{{ team_id }}"},
+        "operation_name": "Team"
+    }
+}
+```
+
 The query is checked as a GraphQL document when the scenario loads, and again
 once rendered when a template writes it (unless the rendered text still holds
 template syntax). A syntax error fails with `Invalid GraphQL query`, as the
-installed `graphql-core` parses the query. Three rules hold whichever
-`graphql-core` is installed: the query holds operations and fragments, at
-least one operation (a type-system definition such as `type User { ... }` is
-refused, as a server refuses it); a selection set must select something
-(`{ user { } }` fails; an empty input object or list, `search(filter: {})`, is
-a value and is fine); and a query nests at most 200 levels deep, counting
-selection sets, list and object values and list types together, as
-`graphql-core` 3.3.2 counts them. To send a document the check refuses on
-purpose, post it as a `json` body, which sends the same request:
-`{"json": {"query": "...", "variables": {...}}}`.
+installed `graphql-core` parses the query. These rules hold whichever
+`graphql-core` is installed:
+
+- the query holds operations and fragments, at least one operation: a
+  type-system definition such as `type User { ... }` is refused, as a server
+  refuses it;
+- an anonymous operation is the only one, and no two operations share a name;
+  `operation_name` names one of them, and is given when there are several, as
+  a server requires;
+- a selection set selects something: `{ user { } }` fails, while an empty
+  input object or list (`search(filter: {})`) is a value and is fine;
+- a query nests at most 200 levels deep, counting selection sets, list and
+  object values and list types together, as `graphql-core` 3.3.2 counts them.
+
+To send a document the check refuses on purpose, post it as a `json` body,
+which sends the same request:
+`{"json": {"query": "...", "variables": {...}, "operationName": "..."}}`.
 
 ## Authentication
 

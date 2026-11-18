@@ -680,7 +680,9 @@ def build_request_kwargs(
             body_content_type = "application/msgpack"
 
         case GraphQLBody(graphql=gql):
-            request_kwargs["json"] = {"query": gql.query, "variables": gql.variables}
+            # operationName only when declared: a scenario without one sends
+            # what it always has.
+            request_kwargs["json"] = {"query": gql.query, "variables": gql.variables} | ({} if gql.operation_name is None else {"operationName": gql.operation_name})
 
         case FormBody(form=data):
             encoded = _encoded_binary_form(data)

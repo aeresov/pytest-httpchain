@@ -50,6 +50,7 @@ from pytest_httpchain.models.types import (
     Base64String,
     BaseUrlStr,
     FunctionImportName,
+    GraphQLName,
     GraphQLQuery,
     HttpMethodToken,
     HttpUrlReferenceStr,
@@ -82,6 +83,7 @@ from pytest_httpchain.models.types import (
     VariableName,
     XMLString,
     as_rendered,
+    check_graphql_operation,
     convert_namespace_items_to_dict,
     convert_namespace_to_dict,
     refuse_escaped_braces,
@@ -602,6 +604,21 @@ class MultipartBody(StrictModel):
 class GraphQL(StrictModel):
     query: GraphQLQuery | PartialTemplateStr = Field(description="GraphQL query string.", examples=["query { user { id name } }", "{{ graphql_query }}"])
     variables: NamespaceOrDict | PartialTemplateStr = Field(default_factory=dict, description="GraphQL query variables.")
+    operation_name: GraphQLName | PartialTemplateStr | None = Field(
+        default=None,
+        description="The operation of the query to execute, sent as operationName: required when the query defines several, optional when it defines one.",
+        examples=["GetUser", "{{ operation }}"],
+    )
+
+    @model_validator(mode="after")
+    def _operation_is_in_the_query(self, info: ValidationInfo) -> Self:
+        """A query of several operations names the one to execute, and a
+        name names one of them, as a server requires: checked at load for a
+        literal query and name, the query's escapes rendered (`as_rendered`),
+        and once rendered when a template writes either."""
+        if not contains_template([self.query, self.operation_name]):
+            check_graphql_operation(as_rendered(self.query, info), self.operation_name)
+        return self
 
 
 class GraphQLBody(StrictModel):

@@ -28,3 +28,31 @@ def test_stage_multipart_content_type_delimits_the_parts(run_scenario):
     result = run_scenario({"stages": stages})
 
     result.assert_outcomes(passed=2)
+
+
+TWO_OPERATIONS = "query Me { me { id } } query Users { users { id } }"
+
+
+def test_graphql_operation_name_reaches_the_server(run_scenario):
+    """A graphql body's operation_name is sent as operationName, written
+    out or rendered from a template."""
+    stages = [
+        stage(
+            name,
+            "/echo/json",
+            request={"method": "POST", "body": {"graphql": {"query": TWO_OPERATIONS, "operation_name": operation_name}}},
+            response=[{"verify": {"status": 200, "jmespath": {"received.operationName": "Users", "received.query": TWO_OPERATIONS}}}],
+        )
+        for name, operation_name in [("written", "Users"), ("templated", "{{ operation }}")]
+    ]
+    result = run_scenario({"substitutions": [{"vars": {"operation": "Users"}}], "stages": stages})
+    result.assert_outcomes(passed=2)
+
+
+def test_graphql_operation_name_a_template_renders_to_no_operation_fails_the_stage(run_scenario):
+    """Checked once rendered, as a written one is at load: the stage fails
+    before anything is sent."""
+    stages = [stage("unknown", "/echo/json", request={"method": "POST", "body": {"graphql": {"query": TWO_OPERATIONS, "operation_name": "{{ operation }}"}}})]
+    result = run_scenario({"substitutions": [{"vars": {"operation": "Them"}}], "stages": stages})
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(["*operation_name 'Them' names no operation in the query (it defines 'Me', 'Users')*"])

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A `graphql` body's `operation_name` names the operation of its query to execute, sent as
+  `operationName`: required when the query defines several, where a server answers "Must provide
+  operation name if query contains multiple operations.", and optional with one. It is checked
+  with the query when the scenario loads, and once rendered when a template writes either: a name
+  that matches no operation fails, naming the ones the query defines.
+- `pytest-httpchain import har|curl` writes a recorded GraphQL request as a `graphql` body where
+  one sends it as recorded (a `query` text, a `variables` object and an `operationName` text if
+  any), so its query is checked when the scenario loads; its variables' secrets are placeholders,
+  as a `json` body's are. Any other stays a `json` body, sent as recorded, and so does GraphQL the
+  check refuses, with a note saying why.
+
 ### Changed
 
 - Minimum `graphql-core` is now 3.2.10 (was 3.0.0), the first release that parses a description on
@@ -20,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a document of fragments alone fail with `Invalid GraphQL query` when the scenario loads. A
   server refuses both; this also keeps out the type-system syntax `graphql-core` 3.3 parses and 3.2
   does not (`directive @a @b on FIELD`).
+- A GraphQL `query` with an anonymous operation beside another, or two operations of one name, fails
+  with `Invalid GraphQL query` when the scenario loads, as every server refuses it ("This anonymous
+  operation must be the only defined operation.", "There can be only one operation named 'A'.").
 
 - Refresh the lockfile for `graphql-core` 3.3.2, `typer` 0.29.1, `import-linter` 2.16, `ruff` 0.17.5,
   `ty` 0.0.102 and `mkdocs-material` 9.8.1, and follow ty 0.0.100's rule renames in the ty

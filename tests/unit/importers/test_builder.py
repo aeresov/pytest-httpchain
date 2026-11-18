@@ -787,6 +787,89 @@ def test_multipart_parts_refuse_what_is_no_form(content):
     assert multipart_parts(content, "multipart/form-data; boundary=zz") is None
 
 
+def _graphql_post(recorded: Any) -> Any:
+    """What an import of one GraphQL POST of ``recorded`` writes, sends and notes."""
+    result = build_scenario(
+        [RecordedRequest("POST", "https://x.test/graphql", headers=[("Content-Type", "application/json")], body=TextData(json.dumps(recorded)))], description="t"
+    )
+    assert _valid(result.scenario)
+    return result
+
+
+@pytest.mark.parametrize(
+    ("recorded", "graphql"),
+    [
+        pytest.param({"query": "query Me { me { id } }", "variables": {"id": 1}}, {"query": "query Me { me { id } }", "variables": {"id": 1}}, id="query-and-variables"),
+        pytest.param(
+            {"operationName": "Users", "query": "query Me { me { id } } query Users { users { id } }", "variables": {}},
+            {"query": "query Me { me { id } } query Users { users { id } }", "variables": {}, "operation_name": "Users"},
+            id="operation-name",
+        ),
+        # Written literally: a recorded {{ is escaped, and sent as recorded.
+        pytest.param({"query": 'query { echo(text: "{{x}}") }', "variables": {}}, {"query": 'query { echo(text: "\\{{x}}") }', "variables": {}}, id="braces-in-a-string"),
+    ],
+)
+def test_graphql_request_is_a_graphql_body(recorded, graphql):
+    """Its query checked as the scenario loads, it sends what was recorded,
+    the Content-Type the one a graphql body sets."""
+    result = _graphql_post(recorded)
+    request = result.scenario["stages"][0]["request"]
+    assert request["body"] == {"graphql": graphql}
+    assert "headers" not in request
+    assert result.notes == []
+    [sent] = sent_requests(result.scenario)
+    assert json.loads(sent.content) == recorded
+    assert sent.headers["content-type"] == "application/json"
+
+
+def test_graphql_request_variables_keep_their_secrets_out(monkeypatch):
+    recorded = {"query": "mutation Login($password: String!) { login(password: $password) }", "variables": {"password": "s3cret"}}
+    result = _graphql_post(recorded)
+    assert result.scenario["stages"][0]["request"]["body"]["graphql"]["variables"] == {"password": "{{ password }}"}
+    assert [placeholder.env for placeholder in result.placeholders] == ["PASSWORD"]
+    assert "s3cret" not in json.dumps(result.scenario)
+    monkeypatch.setenv("PASSWORD", "s3cret")
+    [sent] = sent_requests(result.scenario)
+    assert json.loads(sent.content) == recorded
+
+
+@pytest.mark.parametrize(
+    ("recorded", "note"),
+    [
+        # What a graphql body would not send as recorded: it sends
+        # variables always, an operationName text, and nothing else.
+        pytest.param({"query": "{ me { id } }"}, None, id="no-variables"),
+        pytest.param({"query": "{ me { id } }", "variables": None}, None, id="null-variables"),
+        pytest.param({"query": "{ me { id } }", "variables": {}, "operationName": None}, None, id="null-operation-name"),
+        pytest.param({"query": "{ me { id } }", "variables": {}, "extensions": {"persistedQuery": {"version": 1}}}, None, id="extensions"),
+        pytest.param([{"query": "{ me { id } }", "variables": {}}], None, id="batch"),
+        # No GraphQL: an API of its own may name a field query.
+        pytest.param({"query": "SELECT * FROM users", "variables": {}}, None, id="not-graphql"),
+        # GraphQL the graphql body's check refuses, as a server does.
+        pytest.param(
+            {"query": "query Me { me { id } } query Users { users { id } }", "variables": {}},
+            "the query defines several operations ('Me', 'Users'): name the one to execute in operation_name",
+            id="several-operations-unnamed",
+        ),
+        pytest.param(
+            {"query": "type User { id: ID }", "variables": {}},
+            "Invalid GraphQL query (The object_type_definition is not executable: a request holds operations and fragments.)",
+            id="type-definition",
+        ),
+    ],
+)
+def test_graphql_request_a_graphql_body_would_not_hold_is_json(recorded, note):
+    """Sent as recorded; a note says why GraphQL that is refused is no
+    graphql body."""
+    result = _graphql_post(recorded)
+    assert result.scenario["stages"][0]["request"]["body"] == {"json": recorded}
+    assert result.notes == (
+        [] if note is None else [f"Stage 'post_graphql': its GraphQL request is written as a json body, sent as recorded: as a graphql body it would not load: {note}"]
+    )
+    [sent] = sent_requests(result.scenario)
+    assert json.loads(sent.content) == recorded
+
+
 # --- client settings ---
 
 

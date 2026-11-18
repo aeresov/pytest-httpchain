@@ -290,6 +290,9 @@ def _plugin_request(body: dict[str, Any] | None, **fields: Any) -> httpx.Request
     [
         pytest.param(_plugin_request({"json": {"a": [1, "{{ b }}"]}}), id="json"),
         pytest.param(_plugin_request({"form": {"a": "1", "b": ["x", "y"]}}), id="form"),
+        pytest.param(
+            _plugin_request({"graphql": {"query": "query Me { me { id } } query Users { users { id } }", "variables": {"n": 1}, "operation_name": "Users"}}), id="graphql"
+        ),
         pytest.param(_plugin_request({"text": "hello"}, headers={"Content-Type": "text/plain"}), id="text"),
         # Bytes that are not text: base64, with "encoding" set.
         pytest.param(_plugin_request({"base64": "AAEC/w=="}), id="binary"),

@@ -187,6 +187,8 @@ class TestGraphQLQuery:
             pytest.param('"Who is asking." query Me { me { id } }', id="operation-description"),
             pytest.param('query User("The user to fetch." $id: ID!) { user(id: $id) { id } }', id="variable-description"),
             pytest.param('{ me { ...Fields } } """Shared fields.""" fragment Fields on User { id }', id="fragment-description"),
+            # A query of several operations, the body naming one to execute.
+            pytest.param("query Me { me { id } } query Users { users { id } }", id="several-named-operations"),
         ],
     )
     def test_valid(self, value):
@@ -211,6 +213,20 @@ class TestGraphQLQuery:
         ],
     )
     def test_non_executable_document_is_invalid(self, value):
+        with pytest.raises(ValidationError, match="Invalid GraphQL query"):
+            validate(GraphQLQuery, value)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            # Refused by every server, whichever operation a request names:
+            # one without a name cannot be told from another.
+            pytest.param("{ me { id } } query Users { users { id } }", id="anonymous-beside-a-named-operation"),
+            pytest.param("{ me { id } } { users { id } }", id="two-anonymous-operations"),
+            pytest.param("query Me { me { id } } query Me { users { id } }", id="two-operations-of-one-name"),
+        ],
+    )
+    def test_operations_a_server_cannot_tell_apart_are_invalid(self, value):
         with pytest.raises(ValidationError, match="Invalid GraphQL query"):
             validate(GraphQLQuery, value)
 

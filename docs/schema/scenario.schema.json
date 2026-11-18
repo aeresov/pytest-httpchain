@@ -1216,6 +1216,30 @@
               ],
               "title": "Variables",
               "description": "GraphQL query variables."
+            },
+            "operation_name": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonRef"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "examples": [
+                    "GetUser",
+                    "{{ operation }}"
+                  ]
+                }
+              ],
+              "title": "Operation Name",
+              "description": "The operation of the query to execute, sent as operationName: required when the query defines several, optional when it defines one."
             }
           },
           "required": [

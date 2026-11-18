@@ -15,7 +15,10 @@ them in the scenario dialect, one stage each, in order:
 - a body becomes the form its Content-Type names: ``json``, ``form``,
   ``multipart``, else the raw ``text`` (``base64`` or ``binary`` where the
   source gave bytes or a file); a JSON or form body a mapping would not send
-  as it was sent is ``text`` too;
+  as it was sent is ``text`` too; a JSON body that is a GraphQL request, one
+  a ``graphql`` body sends as it was sent and whose query that body's check
+  passes, is a ``graphql`` body, so the query is checked as the scenario
+  loads;
 - Basic and Bearer credentials become the ``basic`` and ``bearer`` auth
   shorthands, the scenario's ``auth`` when every request carries the same.
 
@@ -56,8 +59,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, unquote, unquote_plus, urlsplit
 
+import graphql
+from pydantic import ValidationError
+
 from pytest_httpchain.errors import HttpChainError
 from pytest_httpchain.jsonref import REF_KEYS
+from pytest_httpchain.models import GraphQLBody
 from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, Redaction
 from pytest_httpchain.templates import TEMPLATE_BUILTINS, contains_template, escape, unescape
 from pytest_httpchain.validation import ValidateResult, validate_scenario
@@ -596,6 +603,47 @@ class _Builder:
 
         return self._json(value, escape, secret)
 
+    def graphql(self, value: Any, stage: str) -> dict[str, Any] | None:
+        """A JSON body that is a GraphQL request as a ``graphql`` body, else
+        None, for a ``json`` one.
+
+        Only a body a ``graphql`` body sends as it was sent: text under
+        ``query``, an object under ``variables``, text under
+        ``operationName`` if any, and nothing else, which are what one sends
+        (``variables`` always, ``operationName`` when declared). Any other, a
+        request without ``variables`` or with a null, ``extensions``, a batch,
+        stays the ``json`` body it was, and so does one whose ``query`` is no
+        GraphQL (an API of its own may name a field so). One whose GraphQL the
+        ``graphql`` body's check refuses (several operations and no name, a
+        type definition), which a server refuses too, is sent as recorded, a
+        note saying why it is no ``graphql`` body. The variables are what a
+        ``json`` body's would be, their secrets placeholders."""
+        if not (isinstance(value, dict) and set(value) <= {"query", "variables", "operationName"}):
+            return None
+        query, variables, name = value.get("query"), value.get("variables"), value.get("operationName", "")
+        if not (isinstance(query, str) and isinstance(variables, dict) and isinstance(name, str)):
+            return None
+        try:
+            graphql.parse(query)
+        except (graphql.GraphQLError, RecursionError):
+            return None
+        body: dict[str, Any] = {"query": escape(query)}
+        if "operationName" in value:
+            body["operation_name"] = escape(name)
+        try:
+            # Checked before the variables make placeholders: a json body
+            # would make them again.
+            GraphQLBody.model_validate({"graphql": body})
+        except ValidationError as e:
+            error = e.errors()[0]
+            reason = error["msg"].removeprefix("Value error, ")
+            # The query's check says only that it is invalid: why is its cause.
+            if (cause := getattr(error.get("ctx", {}).get("error"), "__cause__", None)) is not None:
+                reason += f" ({str(cause).splitlines()[0]})"
+            self.notes.append(f"Stage {stage!r}: its GraphQL request is written as a json body, sent as recorded: as a graphql body it would not load: {reason}")
+            return None
+        return {"query": body["query"], "variables": self.json_value(variables, stage)} | ({"operation_name": body["operation_name"]} if "operation_name" in body else {})
+
     def json_text(self, text: str, value: Any, stage: str) -> str:
         """A JSON body as ``text``, for one a ``json`` body cannot hold (a
         member named ``$ref``): the text as recorded, or, with secrets in it,
@@ -708,6 +756,9 @@ class _Builder:
                     depth, reference = _json_shape(value)
                     if depth <= _MAX_JSON_DEPTH:
                         if reference is None:
+                            # A graphql body sends JSON, as a json one does.
+                            if (graphql := self.graphql(value, stage)) is not None:
+                                return {"graphql": graphql}, exact == _JSON
                             return {"json": self.json_value(value, stage)}, exact == _JSON
                         self.notes.append(
                             f"Stage {stage!r}: its JSON body is written as text: a json body could not hold its member {reference!r},"

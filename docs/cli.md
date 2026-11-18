@@ -444,6 +444,15 @@ whose content the browser did not record is sent empty, with a note.
   note lists the files the scenario reads, a relative path from the scenario's
   own directory. A JSON body
   nested over 100 levels deep is text too.
+- **GraphQL requests.** A JSON body holding exactly a `query` text, a
+  `variables` object and, if any, an `operationName` text, which is what a
+  [`graphql` body](usage/requests.md#graphql) sends, is one, so its query is
+  checked when the scenario loads; its variables' secrets are placeholders, as
+  a `json` body's are. Any other stays a `json` body, sent as recorded: one
+  without `variables` or with a `null`, with `extensions`, a batch, or one
+  whose `query` is no GraphQL. So does GraphQL the `graphql` body's check
+  refuses, which a server refuses too (several operations and no
+  `operationName`, a type definition), and the note says why.
 - **Authentication.** `Authorization: Basic` and curl's `-u` are the
   [`basic`](usage/requests.md#authentication) shorthand (`digest` with curl's
   `--digest`), `Authorization: Bearer` and `--oauth2-bearer` the `bearer` one,

@@ -101,6 +101,24 @@ def test_msgpack_body_and_binary_query_parameter():
     assert b"%00%FF" in sent.url.query
 
 
+@pytest.mark.parametrize(
+    ("graphql", "payload"),
+    [
+        # Without operation_name, what a graphql body always sent.
+        pytest.param({"query": "query Me { me { id } }"}, {"query": "query Me { me { id } }", "variables": {}}, id="no-operation-name"),
+        pytest.param(
+            {"query": "query Me { me { id } } query Users { users { id } }", "variables": {"n": 1}, "operation_name": "Users"},
+            {"query": "query Me { me { id } } query Users { users { id } }", "variables": {"n": 1}, "operationName": "Users"},
+            id="operation-name",
+        ),
+    ],
+)
+def test_graphql_body_sends_its_operation_name_as_operation_name(graphql, payload):
+    sent = _sent(Request(url="http://t/", method="POST", body={"graphql": graphql}))
+    assert sent.headers["content-type"] == "application/json"
+    assert json.loads(sent.content) == payload
+
+
 def test_form_preserves_packed_binary_field_and_ordinary_values():
     packet = {"id": 42, "b": b"\x00\xff\x80&+=%"}
     packed = msgpack.packb(packet, use_bin_type=True)
