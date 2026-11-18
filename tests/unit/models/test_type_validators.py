@@ -248,6 +248,22 @@ class TestGraphQLQuery:
         with pytest.raises(ValidationError, match=re.escape(f"Invalid GraphQL query: {reason}")):
             validate(GraphQLQuery, value)
 
+    @pytest.mark.parametrize(
+        "value",
+        [
+            # graphql-core 3.2.10 to 3.2.13's lexer runs off the text with an
+            # IndexError on these; later versions say a syntax error.
+            pytest.param('query Q { a(s: "\\', id="string-ending-in-a-backslash"),
+            pytest.param('{ a(s: "\\u1', id="cut-short-unicode-escape"),
+            # The parser's message quotes the surrogate, which pydantic
+            # cannot encode unescaped, on every version.
+            pytest.param('{ a(s: "\\\ud800") }', id="lone-surrogate-after-a-backslash"),
+        ],
+    )
+    def test_whatever_the_parser_raises_is_invalid(self, value):
+        with pytest.raises(ValidationError, match="Invalid GraphQL query"):
+            validate(GraphQLQuery, value)
+
     @pytest.mark.parametrize("kind", NESTING_KINDS)
     def test_nesting_200_levels_deep_is_valid(self, kind):
         value = _nested(kind, 200)

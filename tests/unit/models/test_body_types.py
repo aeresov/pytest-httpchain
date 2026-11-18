@@ -259,6 +259,21 @@ def test_graphql_operation_name_is_checked_once_rendered_whatever_braces_the_tex
         validate_rendered(GraphQL, {"query": _RENDERED_BRACES, "operation_name": operation_name})
 
 
+@pytest.mark.parametrize(
+    ("query", "message"),
+    [
+        pytest.param('{ echo(text: "{{ x }}") } query Users { users { id } }', "This anonymous operation must be the only defined operation.", id="anonymous-beside-another"),
+        pytest.param('query Users { echo(text: "{{ x }}") } query Users { users { id } }', "There can be only one operation named 'Users'.", id="two-of-one-name"),
+    ],
+)
+def test_graphql_operations_rendered_text_holds_are_told_apart_as_a_server_does(query, message):
+    """Rendered text the query's own check did not read, its braces an
+    escape left, is still held to the operation rules: naming one does not
+    make a server execute it."""
+    with pytest.raises(ValidationError, match=re.escape(f"Invalid GraphQL query: {message}")):
+        validate_rendered(GraphQL, {"query": query, "operation_name": "Users"})
+
+
 def test_graphql_rendered_text_that_is_no_graphql_is_not_checked_for_its_operation():
     """Text a template rendered that holds template syntax and is no
     GraphQL is taken as such, as the query field takes it, and sent as it is."""

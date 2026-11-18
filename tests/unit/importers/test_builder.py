@@ -849,6 +849,9 @@ def test_graphql_request_variables_keep_their_secrets_out(monkeypatch):
         pytest.param({"query": "type User { id: ID }", "variables": {}}, None, id="type-definition"),
         pytest.param({"query": "{ me { } }", "variables": {}}, None, id="empty-selection-set"),
         pytest.param({"query": "{ a " * 200 + "{ id }" + " }" * 200, "variables": {}}, None, id="nested-past-the-limit"),
+        # What graphql-core 3.2.10 to 3.2.13 raise IndexError on: no crash,
+        # no note.
+        pytest.param({"query": 'query Q { a(s: "\\', "variables": {}}, None, id="string-ending-in-a-backslash"),
         # GraphQL whose operations the check refuses, as every server does,
         # whatever graphql-core is installed: a note says why.
         pytest.param(
@@ -860,6 +863,12 @@ def test_graphql_request_variables_keep_their_secrets_out(monkeypatch):
             {"query": "query Me { me { id } }", "variables": {}, "operationName": "Users"},
             "operation_name 'Users' names no operation in the query (it defines 'Me')",
             id="unknown-operation-name",
+        ),
+        # No operation has a name the name grammar refuses.
+        pytest.param(
+            {"query": "query Me { me { id } }", "variables": {}, "operationName": "get-me"},
+            "Invalid GraphQL operation name 'get-me': a name is ASCII letters, digits and underscores, not starting with a digit",
+            id="no-graphql-name",
         ),
         pytest.param(
             {"query": "query Me { me { id } } query Me { users { id } }", "variables": {}},
@@ -890,6 +899,20 @@ def test_graphql_request_a_graphql_body_would_not_hold_is_json(recorded, note):
     )
     [sent] = sent_requests(result.scenario)
     assert json.loads(sent.content) == recorded
+
+
+def test_graphql_request_holding_a_lone_surrogate_is_refused_as_recorded_text_is():
+    """The query's check, whose parser quotes the surrogate in its message,
+    gets as far as the json body; writing the file refuses it, as it refuses
+    any recorded text holding one."""
+    recorded = {"query": '{ a(s: "\\\ud800") }', "variables": {}}
+    result = build_scenario(
+        [RecordedRequest("POST", "https://x.test/graphql", headers=[("Content-Type", "application/json")], body=TextData(json.dumps(recorded)))], description="t"
+    )
+    assert result.scenario["stages"][0]["request"]["body"] == {"json": recorded}
+    assert result.notes == []
+    with pytest.raises(ImportSourceError, match="a lone surrogate, which is no text"):
+        scenario_text(result.scenario)
 
 
 # --- client settings ---

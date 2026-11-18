@@ -333,6 +333,13 @@ def _parse_graphql_query(text: str) -> None:
     operations = [definition for definition in document.definitions if isinstance(definition, graphql.language.OperationDefinitionNode)]
     if not operations:
         raise graphql.GraphQLError("A request holds at least one operation: fragments alone execute nothing.")
+    _tell_operations_apart(operations)
+
+
+def _tell_operations_apart(operations: list[Any]) -> None:
+    """A `GraphQLOperationError` where a server cannot tell the operations
+    apart, whatever a request names: an anonymous one beside another, two of
+    one name (graphql's LoneAnonymousOperation and UniqueOperationNames)."""
     named: set[str] = set()
     for operation in operations:
         if operation.name is None:
@@ -342,6 +349,13 @@ def _parse_graphql_query(text: str) -> None:
             raise GraphQLOperationError(f"There can be only one operation named {operation.name.value!r}.")
         else:
             named.add(operation.name.value)
+
+
+def _printable(text: str) -> str:
+    """``text`` as an error message may hold it: a lone surrogate, which a
+    parser's message can quote from the query, escaped, as pydantic cannot
+    encode one."""
+    return text.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
 def validate_graphql_query(v: str, info: ValidationInfo) -> str:
@@ -356,9 +370,14 @@ def validate_graphql_query(v: str, info: ValidationInfo) -> str:
     except GraphQLOperationError as e:
         raise GraphQLOperationError(f"Invalid GraphQL query: {e}") from e
     except graphql.GraphQLError as e:
-        raise ValueError(f"Invalid GraphQL query: {e.message}") from e
+        raise ValueError(f"Invalid GraphQL query: {_printable(e.message)}") from e
     except RecursionError as e:
         raise ValueError("Invalid GraphQL query: Document is nested too deeply to parse.") from e
+    except Exception as e:
+        # graphql-core 3.2.10 to 3.2.13's lexer runs off the text it reads
+        # on some inputs (a string ending in a lone backslash): an
+        # IndexError, which is no GraphQL either.
+        raise ValueError("Invalid GraphQL query: the parser could not read it") from e
     return v
 
 
@@ -367,8 +386,10 @@ _GRAPHQL_NAME = re.compile(r"[_A-Za-z][_0-9A-Za-z]*")
 
 
 def validate_graphql_name(v: str) -> str:
+    """An operation's name, or a `GraphQLOperationError`: one no operation
+    can have names none, which a server refuses as it refuses any unknown."""
     if not _GRAPHQL_NAME.fullmatch(v):
-        raise ValueError(f"Invalid GraphQL operation name {v!r}: a name is ASCII letters, digits and underscores, not starting with a digit")
+        raise GraphQLOperationError(f"Invalid GraphQL operation name {v!r}: a name is ASCII letters, digits and underscores, not starting with a digit")
     return v
 
 
@@ -380,10 +401,15 @@ def check_graphql_operation(query: str, operation_name: str | None) -> None:
     name given is one of them.
 
     Shared by the GraphQL body's model, which checks a literal query and
-    name at load and again once a template rendered either."""
+    name at load and again once a template rendered either. Rendered text
+    the query's own check did not read (braces an escape left in it) is
+    held to its operation rules here too."""
     operations = [definition for definition in graphql.parse(query).definitions if isinstance(definition, graphql.language.OperationDefinitionNode)]
+    try:
+        _tell_operations_apart(operations)
+    except GraphQLOperationError as e:
+        raise GraphQLOperationError(f"Invalid GraphQL query: {e}") from e
     names = [operation.name.value for operation in operations if operation.name is not None]
-    # Anonymous ones only in rendered text no check read as a query.
     defined = ", ".join(repr(operation.name.value) if operation.name is not None else "an anonymous one" for operation in operations) or "none"
     if operation_name is None:
         if len(operations) > 1:
@@ -745,7 +771,7 @@ def parses_as_graphql(text: str) -> bool:
     """Whether graphql-core parses ``text`` at all."""
     try:
         graphql.parse(text)
-    except (graphql.GraphQLError, RecursionError):
+    except Exception:  # graphql-core 3.2.10 to 3.2.13 raise IndexError on some
         return False
     return True
 
