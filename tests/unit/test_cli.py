@@ -1355,6 +1355,17 @@ def test_import_har_reads_stdin_with_a_byte_order_mark():
     assert _imported(result)["description"] == "Imported from a HAR file"
 
 
+@pytest.mark.parametrize("argument", ["stdin", "./stdin"])
+def test_import_har_of_a_file_named_stdin_is_described_by_its_name(tmp_path, monkeypatch, argument):
+    """Only - reads standard input. A file named stdin was read as a file,
+    but described as what standard input gives, since the description asked
+    whether the source's name was "stdin"."""
+    (tmp_path / "stdin").write_bytes(HAR_EXAMPLE.read_bytes())
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["import", "har", argument])
+    assert _imported(result)["description"] == "Imported from stdin"
+
+
 @pytest.mark.parametrize("option", ["--include", "--exclude"])
 def test_import_har_refuses_a_pattern_that_is_no_regex(option):
     result = runner.invoke(app, ["import", "har", option, "(", str(HAR_EXAMPLE)])

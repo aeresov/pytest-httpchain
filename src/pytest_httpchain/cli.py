@@ -604,14 +604,16 @@ def import_har(
     """
     included, excluded = _patterns(include, "--include"), _patterns(exclude, "--exclude")
     _refuse_existing(output, force)
-    source = "stdin" if str(har) == "-" else str(har)
+    # Decided once, from the argument: a file may be named stdin.
+    from_stdin = str(har) == "-"
+    source = "stdin" if from_stdin else str(har)
     # A byte-order mark is allowed, from stdin as from a file.
-    text = _read_text(source, lambda: _read_stdin() if str(har) == "-" else har.read_bytes().decode("utf-8-sig"))
+    text = _read_text(source, lambda: _read_stdin() if from_stdin else har.read_bytes().decode("utf-8-sig"))
     try:
         requests, notes = read_har(text, source=source, keep_all=keep_all, include=included, exclude=excluded)
     except ImportSourceError as e:
         _fail(str(e))
-    result = build_scenario(requests, description=f"Imported from {'a HAR file' if source == 'stdin' else har.name}")
+    result = build_scenario(requests, description=f"Imported from {'a HAR file' if from_stdin else har.name}")
     result.notes[:0] = notes
     _emit(result, [], output)
 
