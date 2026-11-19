@@ -1,8 +1,6 @@
-import json
-
 import pytest
 
-from tests.integration.helpers import HAR_ARGS, named
+from tests.integration.helpers import HAR_ARGS, named, stage
 
 
 @pytest.mark.parametrize(
@@ -70,14 +68,10 @@ def test_always_run_template_error(run_scenario):
     result.stdout.fnmatch_lines(["*Failed to evaluate always_run template*"])
 
 
-def _run_with_marks(pytester, marks):
-    """Run the xfail(False) example with its stage marks replaced by ``marks``."""
-    pytester.copy_example("conftest.py")
-    scenario_path = pytester.copy_example("marks/test_xfail_false_condition.http.json")
-    data = json.loads(scenario_path.read_text())
-    data["stages"][0]["marks"] = [marks]
-    scenario_path.write_text(json.dumps(data))
-    return pytester.runpytest("-s")
+def _run_with_marks(run_scenario, marks):
+    """Run a stage marked ``marks`` that fails (a 400 where it expects a
+    200), then a stage the chain's abort would skip."""
+    return run_scenario({"stages": [stage("xfail_false_stage", "/bad", marks=[marks]), stage("after_inactive_xfail")]})
 
 
 @pytest.mark.parametrize(
@@ -89,12 +83,12 @@ def _run_with_marks(pytester, marks):
         pytest.param('xfail(condition="False", reason="disabled string condition")', id="kwarg-string"),
     ],
 )
-def test_inactive_xfail_aborts_chain(pytester, marks):
+def test_inactive_xfail_aborts_chain(run_scenario, marks):
     """An INACTIVE xfail — falsy condition, in either the positional or the
     condition= kwarg spelling pytest honors — means pytest reports the stage
     as a genuine failure, so the carrier must abort the chain too: an inactive
     xfail must not smuggle failures past the abort machinery."""
-    _run_with_marks(pytester, marks).assert_outcomes(failed=1, skipped=1)
+    _run_with_marks(run_scenario, marks).assert_outcomes(failed=1, skipped=1)
 
 
 @pytest.mark.parametrize(
@@ -106,7 +100,7 @@ def test_inactive_xfail_aborts_chain(pytester, marks):
         pytest.param('xfail("True", reason="active string condition")', id="string"),
     ],
 )
-def test_active_xfail_does_not_abort(pytester, marks):
+def test_active_xfail_does_not_abort(run_scenario, marks):
     """An active xfail's failure is expected and must not abort the chain
     (matching test_xfail_continues for the plain form)."""
-    _run_with_marks(pytester, marks).assert_outcomes(passed=1, xfailed=1)
+    _run_with_marks(run_scenario, marks).assert_outcomes(passed=1, xfailed=1)

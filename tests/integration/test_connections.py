@@ -608,24 +608,15 @@ def test_connection_scenarios_under_xdist(run_scenario):
 
 
 @pytest.mark.slow
-def test_failed_stage_leaves_the_connection_to_teardown(run_scenario, pytester):
+def test_failed_stage_leaves_the_connection_to_teardown(run_scenario):
     """A wait that times out fails its stage, naming what it waited for and
     what arrived; the stages after it skip, and the chain's end closes the
     connection it left open."""
-    scenario = {
-        "marks": ["usefixtures('line_json_server')"],
-        "connections": {"device": {"adapter": "line_json:LineJsonAdapter", "params": {"host": "127.0.0.1", "port": "{{ env('HTTPCHAIN_EXAMPLE_LINE_JSON_PORT') }}"}}},
-        "stages": [
-            {
-                "name": "wrong id",
-                "connection": {"name": "device", "send": {"op": "ping", "id": 1}, "expect": {"match": {"id": 2}, "timeout": 0.3}},
-                "response": [{"verify": {"jmespath": {"op": "pong"}}}],
-            },
-            {"name": "after", "connection": {"name": "device", "send": {"op": "bye"}}, "response": [{"verify": {"expressions": ["{{ true }}"]}}]},
-        ],
-    }
-    pytester.copy_example(ADAPTER)
-    result = run_scenario(scenario)
+    scenario = line_json_scenario(
+        connection_stage("wrong id", send={"op": "ping", "id": 1}, expect={"match": {"id": 2}, "timeout": 0.3}, response=[{"verify": {"jmespath": {"op": "pong"}}}]),
+        connection_stage("after", send={"op": "bye"}, response=[{"verify": {"expressions": ["{{ true }}"]}}]),
+    )
+    result = run_scenario(scenario, ADAPTER)
     result.assert_outcomes(failed=1, skipped=1)
     result.stdout.fnmatch_lines(["*Stage 'wrong id': no message on connection 'device' matched {\"id\": 2} within 0.3 s (1 message arrived after the send)*"])
     # The report's section: what was sent, the match as declared, and the
@@ -650,25 +641,21 @@ def test_failed_stage_leaves_the_connection_to_teardown(run_scenario, pytester):
     assert not _readers()
 
 
-def test_report_redacts_message_keys_and_writes_no_har(run_scenario, pytester, har_dir):
+def test_report_redacts_message_keys_and_writes_no_har(run_scenario, har_dir):
     """Under -rP a passing connection stage's report shows its exchange, a
     listed key's value as [REDACTED] in the message sent and the one taken,
     while its verify saw the real value. A connection stage adds nothing to
     the HAR output: with no HTTP stage, no file is written."""
-    scenario = {
-        "marks": ["usefixtures('line_json_server')"],
-        "connections": {"device": {"adapter": "line_json:LineJsonAdapter", "params": {"host": "127.0.0.1", "port": "{{ env('HTTPCHAIN_EXAMPLE_LINE_JSON_PORT') }}"}}},
-        "stages": [
-            {
-                "name": "login",
-                "connection": {"name": "device", "send": {"op": "login", "Token": "s3cret-tok"}, "expect": {"match": {"echo.op": "login"}, "timeout": 5}},
-                "response": [{"verify": {"jmespath": {"echo.Token": "s3cret-tok"}}}],
-            },
-            {"name": "bye", "connection": {"name": "device", "send": {"op": "bye"}, "expect": {"match": "op == 'bye'", "timeout": 5}, "close": True}},
-        ],
-    }
-    pytester.copy_example(ADAPTER)
-    result = run_scenario(scenario, args=(*HAR_ARGS, "-rP"))
+    scenario = line_json_scenario(
+        connection_stage(
+            "login",
+            send={"op": "login", "Token": "s3cret-tok"},
+            expect={"match": {"echo.op": "login"}, "timeout": 5},
+            response=[{"verify": {"jmespath": {"echo.Token": "s3cret-tok"}}}],
+        ),
+        _bye(),
+    )
+    result = run_scenario(scenario, ADAPTER, args=(*HAR_ARGS, "-rP"))
     result.assert_outcomes(passed=2)
     result.stdout.fnmatch_lines(["*- Connection Exchange -*", "Sent:", "{", '  "op": "login",', '  "Token": "[REDACTED]"', "}"], consecutive=False)
     result.stdout.fnmatch_lines(["Result: took a message", "#1 at +* s after the send", "{", '  "echo": {', '    "op": "login",', '    "Token": "[REDACTED]"'], consecutive=False)

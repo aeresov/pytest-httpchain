@@ -192,16 +192,14 @@ def test_unknown_key_fails_collection_with_code(pytester):
     result.stdout.fnmatch_lines(["*HTTPCHAIN000*headerz*Extra inputs are not permitted*"])
 
 
-def test_stages_collected_under_narrowed_python_functions(pytester):
+def test_stages_collected_under_narrowed_python_functions(pytester, run_scenario):
     """Stage methods are named "test NN - <stage>", which satisfies pytest's
     default python_functions only via its bare "test" prefix rule — the space
     defeats every glob. Without __test__ = True a narrowed (and very common)
     `python_functions = test_*` collected ZERO stages and left CI green."""
-    pytester.copy_example("conftest.py")
-    pytester.copy_example("save/test_save_jmespath.http.json")
     pytester.makeini("[pytest]\npython_functions = test_*\n")
 
-    result = pytester.runpytest("--collect-only", "-q")
+    result = run_scenario("save/test_save_jmespath.http.json", args=("--collect-only", "-q"))
 
     result.stdout.fnmatch_lines(["*test_save_jmespath*"])
     assert "no tests ran" not in result.stdout.str()

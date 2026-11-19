@@ -51,7 +51,7 @@ def connection_stage(name: str, connection: str = "device", *, response: list[An
 
 def line_json_scenario(*stages: dict[str, Any], connections: tuple[str, ...] = ("device",), **fields: Any) -> dict[str, Any]:
     """A scenario of ``stages`` whose ``connections`` each reach the
-    examples' class-scoped ``line_json_server`` through the reference adapter
+    examples' module-scoped ``line_json_server`` through the reference adapter
     (`LINE_JSON_ADAPTER`, which the run needs as an aux file)."""
     return {"marks": ["usefixtures('line_json_server')"], "connections": dict.fromkeys(connections, LINE_JSON), "stages": list(stages), **fields}
 
