@@ -54,9 +54,7 @@ from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, SHOWN_BYTES,
 from pytest_httpchain.templates import TemplatesError, contains_template
 from pytest_httpchain.userfunc import UserFunctionError, call_target, call_user_function
 from pytest_httpchain.utils import optional_as_list, path_segment, process_substitutions, schema_error_text
-from pytest_httpchain.wire_codec import MSGPACK_DECODE_ERRORS, is_msgpack_content_type, unpack_msgpack
-
-type ResponseCodec = Literal["auto", "json", "msgpack"]
+from pytest_httpchain.wire_codec import MSGPACK_DECODE_ERRORS, ResponseCodec, selected_codec, unpack_msgpack
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,9 +91,7 @@ def _http_only(what: str) -> str:
 
 
 def _selected_codec(response: httpx.Response, codec: ResponseCodec) -> Literal["json", "msgpack"]:
-    if codec == "auto":
-        return "msgpack" if is_msgpack_content_type(response.headers.get("content-type", "")) else "json"
-    return codec
+    return selected_codec(codec, response.headers.get("content-type", ""))
 
 
 def _parse_structured(response: httpx.Response, codec: ResponseCodec) -> Any:

@@ -103,6 +103,7 @@ from pytest_httpchain.utils import INTERRUPTS as _INTERRUPTS
 from pytest_httpchain.utils import describe_exception as _describe_exception
 from pytest_httpchain.utils import process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
+from pytest_httpchain.wire_codec import RESPONSE_CODEC_EXTENSION
 
 logger = logging.getLogger(__name__)
 
@@ -1662,7 +1663,7 @@ class Carrier:
         sending = time.perf_counter()
         try:
             response = cls._execute_http_request(request_kwargs)
-            response.extensions["httpchain_response_codec"] = stage.response_codec
+            response.extensions[RESPONSE_CODEC_EXTENSION] = stage.response_codec
         except StageExecutionError as e:
             e.started = started
             raise

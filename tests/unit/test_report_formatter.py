@@ -11,6 +11,7 @@ from pytest_httpchain.connections import Arrival, ConnectionExchange, Connection
 from pytest_httpchain.models import ConnectionExpect
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
 from pytest_httpchain.report_formatter import format_connection_exchange, format_curl, format_request, format_response
+from pytest_httpchain.wire_codec import RESPONSE_CODEC_EXTENSION
 from tests.unit import connections_test_helpers as helpers
 from tests.unit.helpers import BEYOND_RECURSION_LIMIT, TOO_DEEP_TO_PARSE, on_bounded_stack
 
@@ -31,7 +32,7 @@ def test_messagepack_report_shows_binary_values_readably():
     payload = msgpack.packb({"b": b"\x00\xff", "name": "device"}, use_bin_type=True)
     request = httpx.Request("POST", "https://example.com/", content=payload, headers={"content-type": "application/msgpack"})
     response = httpx.Response(200, content=payload, headers={"content-type": "application/octet-stream"})
-    response.extensions["httpchain_response_codec"] = "msgpack"
+    response.extensions[RESPONSE_CODEC_EXTENSION] = "msgpack"
     assert '"b": "<bytes: 00ff>"' in format_request(request)
     assert '"b": "<bytes: 00ff>"' in format_response(response)
 

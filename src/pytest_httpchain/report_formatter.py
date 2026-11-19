@@ -18,7 +18,7 @@ import httpx
 from pytest_httpchain.connections import LATE_WINDOW, Arrival, ConnectionExchange, count, dumped_match
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.utils import JSON_PARSE_ERRORS, request_content
-from pytest_httpchain.wire_codec import MSGPACK_DECODE_ERRORS, is_msgpack_content_type, unpack_msgpack
+from pytest_httpchain.wire_codec import MSGPACK_DECODE_ERRORS, RESPONSE_CODEC_EXTENSION, is_msgpack_content_type, selected_codec, unpack_msgpack
 
 _MAX_BODY_CHARS = 1000
 
@@ -159,8 +159,8 @@ def format_response(response: httpx.Response, redaction: Redaction = DEFAULT_RED
     body = None
     if response.content:
         content_type = response.headers.get("Content-Type", "")
-        codec = response.extensions.get("httpchain_response_codec", "auto")
-        if codec == "msgpack" or (codec == "auto" and is_msgpack_content_type(content_type)):
+        codec = response.extensions.get(RESPONSE_CODEC_EXTENSION, "auto")
+        if selected_codec(codec, content_type) == "msgpack":
             try:
                 body = _format_encoded(_PRETTY_MSGPACK, unpack_msgpack(response.content))
             except MSGPACK_DECODE_ERRORS:
