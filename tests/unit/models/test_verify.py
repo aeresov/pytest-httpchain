@@ -227,6 +227,17 @@ class TestVerifyJmespath:
         assert Verify(jmespath={"x": SimpleNamespace(gt=0)}).jmespath["x"] == JMESPathMatcher(gt=0)
         assert Verify(jmespath={"x": {"eq": SimpleNamespace(page=1, tags=[SimpleNamespace(a=1)])}}).jmespath["x"].eq == {"page": 1, "tags": [{"a": 1}]}
 
+    @pytest.mark.parametrize("operand", ["eq", "ne", "contains", "not_contains"])
+    def test_matcher_takes_a_namespace_holding_bytes_as_its_object(self, operand):
+        """An operand may hold bytes at any depth, a namespace's as an
+        object's. The matcher converted a namespace only after its bytes
+        fallback had refused it, so on its own it took ``{"a": b"x"}`` and
+        refused that object as a namespace, which a connection message and a
+        value expectation take. (Under ``verify.jmespath`` the expectation
+        converts a namespace first, so no scenario met it.)"""
+        assert getattr(JMESPathMatcher(**{operand: SimpleNamespace(a=b"x")}), operand) == {"a": b"x"}
+        assert JMESPathMatcher(eq=SimpleNamespace(a=[b"x", SimpleNamespace(b=b"y")])).eq == {"a": [b"x", {"b": b"y"}]}
+
     def test_literal_object_hints_at_eq(self):
         """An object meant for equality is a matcher with unknown keys: refused
         loudly, pointing at eq, not with pydantic's "extra inputs"."""

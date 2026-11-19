@@ -901,9 +901,15 @@ def _allow_nested_bytes(value: Any, handler: ValidatorFunctionWrapHandler) -> An
             raise original from None
 
 
+# A JSON value, bytes standing for one at any depth (`_allow_nested_bytes`):
+# what a matcher compares with, a value expectation and a connection message's
+# fields hold.
+_JsonOrBytes = Annotated[JsonValue | bytes, WrapValidator(_allow_nested_bytes)]
+
 # A template over `vars` renders an object as a SimpleNamespace, which stands
-# for the object it was written as.
-_JsonOperand = Annotated[JsonValue | bytes, BeforeValidator(convert_namespace_to_dict), WrapValidator(_allow_nested_bytes)]
+# for the object it was written as: converted first, outermost, so that the
+# bytes it holds are taken as an object's are.
+_JsonOperand = Annotated[_JsonOrBytes, BeforeValidator(convert_namespace_to_dict)]
 
 
 def _operand_schema(schema: JsonDict) -> None:
@@ -1024,7 +1030,7 @@ def _declared_value(v: Any) -> Any:
 # A value compared by JSON equality: anything but an object, which is a matcher.
 # The schema says so, so an editor holds a literal object to the matcher's keys.
 _JsonEqualityValue = Annotated[
-    Annotated[JsonValue | bytes, WrapValidator(_allow_nested_bytes)],
+    _JsonOrBytes,
     WithJsonSchema({"type": ["string", "number", "boolean", "null", "array"], "description": "Equal to this JSON value (true is not 1; 1 equals 1.0)."}),
 ]
 
@@ -1389,7 +1395,7 @@ _ConnectionSeconds = Annotated[Annotated[float, Field(gt=0, allow_inf_nan=False)
 # MessagePack helpers render them). A tuple is refused, as JSON refuses it; a
 # template over `vars` renders a namespace, which stands for its object.
 ConnectionMessage = Annotated[
-    dict[str, Annotated[JsonValue | bytes, WrapValidator(_allow_nested_bytes)]],
+    dict[str, _JsonOrBytes],
     BeforeValidator(convert_namespace_to_dict),
     WithJsonSchema({"type": "object", "description": "The message, an object of JSON values; templates may render bytes in it."}),
 ]
