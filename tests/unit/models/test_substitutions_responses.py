@@ -14,6 +14,7 @@ from pytest_httpchain.models.entities import (
     JMESPathSave,
     SaveStep,
     Stage,
+    UserFunctionKwargs,
     UserFunctionName,
     VarsSubstitution,
     Verify,
@@ -113,3 +114,19 @@ def test_substitution_key_must_be_identifier(construct):
     (Wiring only: the identifier rules live in test_type_validators.py.)"""
     with pytest.raises(ValidationError, match="Invalid Python variable name"):
         construct()
+
+
+def test_function_kwargs_keys_are_keyword_argument_names():
+    """A user function's kwargs are passed as keyword arguments, never read
+    as template variables (unlike the keys above): ``type``, ``match`` and
+    ``_`` are parameter names Python allows, which an adapter's params took
+    and a function's kwargs refused as a variable's ("Python keyword is used
+    as variable name")."""
+    step = FunctionsSubstitution.model_validate({"functions": {"sign": {"name": "mod:func", "kwargs": {"type": "v3", "match": 1, "_": 2}}}})
+    assert step.functions["sign"] == UserFunctionKwargs(name=UserFunctionName("mod:func"), kwargs={"type": "v3", "match": 1, "_": 2})
+
+
+@pytest.mark.parametrize("key", ["class", "not-an-id", "2fast"])
+def test_function_kwargs_refuse_what_is_no_keyword_argument_name(key):
+    with pytest.raises(ValidationError, match=f"Invalid keyword argument name: '{key}'"):
+        UserFunctionKwargs.model_validate({"name": "mod:func", "kwargs": {key: 1}})

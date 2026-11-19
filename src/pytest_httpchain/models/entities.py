@@ -299,7 +299,9 @@ class UserFunctionName(RootModel):
 
 class UserFunctionKwargs(StrictModel):
     name: UserFunctionName
-    kwargs: dict[VariableName, Any] = Field(default_factory=dict, description="Function arguments.")
+    # Passed as keyword arguments, never read as template variables: a soft
+    # keyword (`type`, `match`, `_`) is a name a function's parameter can have.
+    kwargs: dict[KeywordArgName, Any] = Field(default_factory=dict, description="Function arguments.")
 
 
 UserFunctionCall = UserFunctionName | UserFunctionKwargs

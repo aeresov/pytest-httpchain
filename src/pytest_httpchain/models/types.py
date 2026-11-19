@@ -665,9 +665,10 @@ def validate_adapter_import_name(v: str) -> str:
 
 
 def validate_keyword_arg_name(v: str) -> str:
-    """A keyword argument's name, as a constructor's ``**params`` takes it: an
-    identifier that is not a hard keyword. Soft keywords (``type``, ``match``,
-    ``case``, ``_``) are valid parameter names, unlike template variables."""
+    """A keyword argument's name, as a user function's ``kwargs`` and an
+    adapter's ``params`` pass it: an identifier that is not a hard keyword.
+    Soft keywords (``type``, ``match``, ``case``, ``_``) are valid parameter
+    names, unlike template variables."""
     if not v.isidentifier() or keyword.iskeyword(v):
         raise ValueError(f"Invalid keyword argument name: '{v}'")
     return v
