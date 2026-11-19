@@ -3249,10 +3249,10 @@ class TestContextManagerFixtureCleanup:
         local_context = ChainMap(cls._build_stage_fixtures({"a": transaction, "b": b}))
         try:
             if raised is None:
-                cls._run_iteration(stage, local_context, {}, None, 60, cancel, 3)
+                cls._run_iteration(stage, local_context, {}, limiter=None, max_rate_limit_delay=60, cancel=cancel, idx=3)
             else:
                 with pytest.raises(raised):
-                    cls._run_iteration(stage, local_context, {}, None, 60, cancel, 3)
+                    cls._run_iteration(stage, local_context, {}, limiter=None, max_rate_limit_delay=60, cancel=cancel, idx=3)
         finally:
             client.close()
         assert cancel_on_exit == [cancelled_on_exit]
@@ -3291,9 +3291,9 @@ class TestContextManagerFixtureCleanup:
                 _wait_until(lambda: len(ended) == 9)
                 time.sleep(0.1)
 
-        def run_iteration(klass, stage, local_context, iter_vars, *args):
+        def run_iteration(klass, stage, local_context, iter_vars, **kwargs):
             try:
-                return Carrier._run_iteration.__func__(klass, stage, local_context, iter_vars, *args)
+                return Carrier._run_iteration.__func__(klass, stage, local_context, iter_vars, **kwargs)
             finally:
                 if iter_vars["i"] != 0:
                     ended.append(iter_vars["i"])

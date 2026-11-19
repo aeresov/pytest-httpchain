@@ -1280,7 +1280,9 @@ class Carrier:
                 if run is not None:
                     run.begin()
                 try:
-                    results[0] = cls._run_iteration(stage, local_context, iteration_substitutions[0], limiter, rate.max_rate_limit_delay, retry=retry, run=run)
+                    results[0] = cls._run_iteration(
+                        stage, local_context, iteration_substitutions[0], limiter=limiter, max_rate_limit_delay=rate.max_rate_limit_delay, retry=retry, run=run
+                    )
                 except _STAGE_FAILURE_EXCEPTIONS as e:
                     if run is not None and run.tolerates(e):
                         run.run_on(0, e)
@@ -1301,7 +1303,18 @@ class Carrier:
                 try:
                     with ThreadPoolExecutor(max_workers=workers) as executor:
                         for idx, iter_vars in enumerate(iteration_substitutions):
-                            future = executor.submit(cls._run_iteration, stage, local_context, iter_vars, limiter, rate.max_rate_limit_delay, cancel, idx, retry, run)
+                            future = executor.submit(
+                                cls._run_iteration,
+                                stage,
+                                local_context,
+                                iter_vars,
+                                limiter=limiter,
+                                max_rate_limit_delay=rate.max_rate_limit_delay,
+                                cancel=cancel,
+                                idx=idx,
+                                retry=retry,
+                                run=run,
+                            )
                             futures[future] = idx
 
                         try:
@@ -1454,6 +1467,7 @@ class Carrier:
         stage: Stage,
         local_context: ChainMap[str, Any],
         iter_vars: Mapping[str, Any],
+        *,
         limiter: Limiter | None = None,
         max_rate_limit_delay: float = 60,
         cancel: _PoolCancel | None = None,
@@ -1491,7 +1505,7 @@ class Carrier:
         token = _ITERATION_CONTEXT_MANAGERS.set(entered)
         try:
             try:
-                result = cls._execute_attempts(stage, local_context, iter_vars, retry, limiter, max_rate_limit_delay, cancel)
+                result = cls._execute_attempts(stage, local_context, iter_vars, retry=retry, limiter=limiter, max_rate_limit_delay=max_rate_limit_delay, cancel=cancel)
             except BaseException as e:
                 if cancel is not None and not (run is not None and run.tolerates(e)):
                     cancel.claim(idx)
@@ -1531,6 +1545,7 @@ class Carrier:
         stage: Stage,
         local_context: ChainMap[str, Any],
         iter_vars: Mapping[str, Any],
+        *,
         retry: RetryPolicy,
         limiter: Limiter | None = None,
         max_rate_limit_delay: float = 60,
@@ -1564,7 +1579,9 @@ class Carrier:
         attempt = 1
         while True:
             try:
-                result = cls._execute_single_iteration(stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel, exchange_seconds=spent)
+                result = cls._execute_single_iteration(
+                    stage, local_context, iter_vars, limiter=limiter, max_rate_limit_delay=max_rate_limit_delay, cancel=cancel, exchange_seconds=spent
+                )
             except _STAGE_FAILURE_EXCEPTIONS as e:
                 failure = e
             except (pytest.skip.Exception, pytest.fail.Exception) as e:
@@ -1596,6 +1613,7 @@ class Carrier:
         stage: Stage,
         local_context: ChainMap[str, Any],
         iter_vars: Mapping[str, Any],
+        *,
         limiter: Limiter | None = None,
         max_rate_limit_delay: float = 60,
         cancel: threading.Event | None = None,
@@ -1861,7 +1879,8 @@ class Carrier:
         connection would outlive it; the plugin gives each item's fixture
         scopes (``fixture_scopes``), and without them nothing is checked.
         """
-        context = cls._connection_params_context if cls._connection_params_context is not None else stage_start_context(cls.global_context, {})
+        context = cls._connection_params_context
+        assert context is not None, "execute_stage sets a connection stage's params context before its attempts"
         scenario_fixtures = frozenset(cls.scenario.fixtures) if cls.scenario is not None else frozenset()
         read = extract_template_variables(config.params, defined=DefinedNames(scenario_fixtures, scenario_fixtures)) & scenario_fixtures
         if narrow := sorted(fixture for fixture in read if cls.fixture_scopes.get(fixture) == "function"):
