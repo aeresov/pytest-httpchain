@@ -130,6 +130,12 @@ select = [
     "UP", # pyupgrade
     "PT", # flake8-pytest-style
     "TID252", # flake8-tidy-imports: ban relative imports
+    "RUF100", # a `noqa` that suppresses nothing, or names no enabled rule
+    "PGH", # pygrep-hooks: blanket `noqa` and `type: ignore`, misused mock assertions
+    "PLE", # pylint errors
+    "EXE", # a shebang and the file's executable bit agree
+    "PIE", # flake8-pie: unnecessary code
+    "FURB", # refurb: older idioms with a modern spelling
 ]
 ignore = []
 

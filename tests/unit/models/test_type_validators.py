@@ -809,7 +809,7 @@ class TestVarsNamespace:
             pytest.param(_dict_cycle, id="dict-that-contains-itself"),
             # Met again, but not inside itself: written again, as the C reprs do.
             pytest.param(_shared, id="shared-not-a-cycle"),
-            pytest.param(lambda ns: ns(**{"a": b"x", "f": 1.5, "n": None, "t": True, "s": "it's"}), id="scalars"),
+            pytest.param(lambda ns: ns(a=b"x", f=1.5, n=None, t=True, s="it's"), id="scalars"),
         ],
     )
     def test_repr_writes_the_c_repr_s_text(self, build):

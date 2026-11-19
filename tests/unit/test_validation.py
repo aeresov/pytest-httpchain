@@ -1852,7 +1852,7 @@ class TestDiagnosticRegistry:
         assert set(SEVERITY) == set(DiagnosticCode)
 
     def test_docs_table_matches_registry(self):
-        documented = dict(re.findall(r"^\| `(HTTPCHAIN\d{3})` \| (\w+) \|", DOCS_PAGE.read_text(), re.M))
+        documented = dict(re.findall(r"^\| `(HTTPCHAIN\d{3})` \| (\w+) \|", DOCS_PAGE.read_text(), re.MULTILINE))
         assert documented == {str(code): SEVERITY[code] for code in DiagnosticCode}
 
     def test_docs_mention_only_known_codes(self):
