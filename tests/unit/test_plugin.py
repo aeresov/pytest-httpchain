@@ -29,6 +29,7 @@ from pytest_httpchain.plugin import (
     _register_connection_finalizers,
     _regroup_carrier_items,
     _sections_will_be_shown,
+    _shown_exchange_suffix,
     _warn_on_params_varying_across_stages,
     pytest_collect_file,
     pytest_collection_modifyitems,
@@ -646,6 +647,43 @@ def _hop(status: int, **headers: str) -> httpx.Response:
 def test_earlier_hops_label(history, label):
     """The report shows the last response httpx got, and says what came before it."""
     assert _earlier_hops(history) == label
+
+
+def _shown(*, iterations: int = 1, failing: bool = False, attempt: tuple[int, int] | None = None, history: list[httpx.Response] | None = None) -> SimpleNamespace:
+    """A carrier class's record of the exchange its report sections show; a
+    response only where a ``history`` is given."""
+    response = None if history is None else httpx.Response(200, history=history)
+    return SimpleNamespace(last_iterations_attempted=iterations, last_shown_exchange_is_failed=failing, last_shown_attempt=attempt, last_response=response)
+
+
+@pytest.mark.parametrize(
+    ("carrier_class", "failed", "suffix"),
+    [
+        pytest.param(_shown(), False, "", id="only-exchange"),
+        pytest.param(_shown(), True, "", id="only-exchange-failed"),
+        pytest.param(_shown(history=[]), False, "", id="response-first-hop"),
+        # A parallel stage shows one exchange of many, and says which.
+        pytest.param(_shown(iterations=9), False, " (last of 9 parallel iterations)", id="parallel-passed"),
+        pytest.param(_shown(iterations=9, failing=True), True, " (failing of 9 parallel iterations)", id="parallel-failing"),
+        # A failure that recorded no request shows the last completed
+        # iteration, which is not the failing one.
+        pytest.param(_shown(iterations=3), True, " (last completed of 3 parallel iterations)", id="parallel-last-completed"),
+        # The failing exchange is named so whatever the outcome: an expected
+        # failure's report is not failed.
+        pytest.param(_shown(iterations=4, failing=True), False, " (failing of 4 parallel iterations)", id="parallel-failing-xfail"),
+        # A retried stage shows its last attempt.
+        pytest.param(_shown(attempt=(3, 5)), True, " (attempt 3 of 5)", id="retried"),
+        pytest.param(_shown(iterations=2, failing=True, attempt=(3, 3)), True, " (failing of 2 parallel iterations, attempt 3 of 3)", id="parallel-retried"),
+        # The response shown is the final hop's.
+        pytest.param(_shown(history=[_hop(302, Location="/b")]), False, " (after 1 redirect)", id="redirected"),
+        pytest.param(
+            _shown(attempt=(2, 2), history=[_hop(302, Location="/b"), _hop(401)]), True, " (attempt 2 of 2) (after 1 redirect and 1 auth exchange)", id="retried-redirected"
+        ),
+    ],
+)
+def test_shown_exchange_suffix(carrier_class, failed, suffix):
+    """What the report section titles add to say which exchange they show."""
+    assert _shown_exchange_suffix(carrier_class, failed) == suffix
 
 
 class TestReportSectionsBuiltOnlyWhenShown:

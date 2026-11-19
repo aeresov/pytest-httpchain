@@ -834,6 +834,38 @@ def _earlier_hops(history: list[httpx.Response]) -> str:
     return f" (after {' and '.join(hops)})" if hops else ""
 
 
+def _shown_exchange_suffix(carrier_class: type[Carrier], failed: bool) -> str:
+    """What the titles of a stage's exchange sections add to say which
+    exchange they show, nothing for a stage's only one: which of a parallel
+    stage's iterations, which attempt of a retried stage, and the responses
+    httpx got before the one shown (`_earlier_hops`). ``failed`` is the
+    report's outcome."""
+    # A parallel stage runs many exchanges but shows one; say so rather
+    # than presenting it as the stage's only exchange. A failure that
+    # never recorded a request (template error, rate-limit timeout)
+    # shows the last COMPLETED iteration, which must not be labeled as
+    # the failing one. Likewise a retried stage shows its last attempt,
+    # the others being in the HAR output.
+    details: list[str] = []
+    if carrier_class.last_iterations_attempted > 1:
+        if carrier_class.last_shown_exchange_is_failed:
+            shown = "failing"
+        elif failed:
+            shown = "last completed"
+        else:
+            shown = "last"
+        details.append(f"{shown} of {carrier_class.last_iterations_attempted} parallel iterations")
+    if (attempt := carrier_class.last_shown_attempt) is not None:
+        details.append(f"attempt {attempt[0]} of {attempt[1]}")
+    suffix = f" ({', '.join(details)})" if details else ""
+
+    # The shown request is the final hop's, which may differ from what
+    # the stage authored; the full chain is in the HAR output.
+    if carrier_class.last_response is not None:
+        suffix += _earlier_hops(carrier_class.last_response.history)
+    return suffix
+
+
 def _format_section[T](what: str, formatter: Callable[[T], str], exchange: T) -> str:
     """A report section body. Reporting must never break the report, so a
     formatter failure becomes the section's text."""
@@ -860,31 +892,8 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
             report.outcome = "failed"
             del report.wasxfail
 
-        # A parallel stage runs many exchanges but shows one; say so rather
-        # than presenting it as the stage's only exchange. A failure that
-        # never recorded a request (template error, rate-limit timeout)
-        # shows the last COMPLETED iteration, which must not be labeled as
-        # the failing one. Likewise a retried stage shows its last attempt,
-        # the others being in the HAR output.
-        details: list[str] = []
-        if carrier_class.last_iterations_attempted > 1:
-            if carrier_class.last_shown_exchange_is_failed:
-                shown = "failing"
-            elif report.failed:
-                shown = "last completed"
-            else:
-                shown = "last"
-            details.append(f"{shown} of {carrier_class.last_iterations_attempted} parallel iterations")
-        if (attempt := carrier_class.last_shown_attempt) is not None:
-            details.append(f"attempt {attempt[0]} of {attempt[1]}")
-        suffix = f" ({', '.join(details)})" if details else ""
-
-        # The shown request is the final hop's, which may differ from what
-        # the stage authored; the full chain is in the HAR output.
-        if carrier_class.last_response is not None:
-            suffix += _earlier_hops(carrier_class.last_response.history)
-
         if _sections_will_be_shown(item.config, report):
+            suffix = _shown_exchange_suffix(carrier_class, report.failed)
             redaction = item.config.stash[_REDACTION]
             # A parallel stage's stats first: the one exchange below is one of many.
             if (stats := carrier_class.last_parallel_stats) is not None:
