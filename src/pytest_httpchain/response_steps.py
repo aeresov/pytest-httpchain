@@ -979,9 +979,15 @@ def _verify_body_schema(schema: Any, body: _StructuredBody, scenario_dir: Path |
         # target is meta-checked then, and named, as `validate --deep` names it.
         failures.add(f"Cannot validate against {body_schema.where}: {e}", cause=e, retryable=False)
     except Exception as e:
-        # What validating against a referenced schema raises that neither its
-        # meta-check nor its `$id`s account for: the meta-check ran out of the
-        # stack a deep validation left it.
+        # Whatever else validating raises. It gets here three ways: a
+        # reference's target whose meta-check ran out of the stack a deep
+        # validation left it (`body_schema._raise_if_invalid`), so what its
+        # keyword raised is raised as it is; a keyword crashing on a value its
+        # meta-schema allows, in a referenced document or in the selected
+        # schema itself (`multipleOf` on an integer too large for a float, an
+        # OverflowError, with no reference involved); or a defect of the
+        # plugin's own, in the reference handling validation goes through. The
+        # message speaks to the first.
         failures.add(f"Cannot validate against {body_schema.where}, a schema it references is not valid: {schema_error_text(e)}", cause=e, retryable=False)
 
 
