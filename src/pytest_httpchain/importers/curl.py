@@ -42,6 +42,7 @@ import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import quote_plus, urlsplit
 
 from pytest_httpchain.importers.builder import FileData, ImportSourceError, Part, PartsData, RecordedBody, RecordedRequest, TextData, parse_cookie_header
@@ -230,6 +231,18 @@ class ShellCommand:
     stdin: Stdin | None = None
 
 
+class _HereDocument(NamedTuple):
+    """A here-document whose body follows its line: the command reading it
+    (None for another descriptor's), the delimiter, whether leading tabs
+    are stripped (``<<-``), and whether it is expanded (an unquoted
+    delimiter)."""
+
+    command: ShellCommand | None
+    delimiter: str
+    strip_tabs: bool
+    expanded: bool
+
+
 class _ShellReader:
     """`split_commands`' one pass over the text (see the module docstring)."""
 
@@ -239,10 +252,8 @@ class _ShellReader:
         self.pipelines: list[list[ShellCommand]] = []
         self.pipeline: list[ShellCommand] = []
         self.expansions: list[str] = []
-        # Here-documents whose body follows the line: the command reading it
-        # (None for another descriptor's), the delimiter, whether leading
-        # tabs are stripped (<<-), whether it is expanded (an unquoted delimiter).
-        self.heredocs: list[tuple[ShellCommand | None, str, bool, bool]] = []
+        # The here-documents whose body follows the line.
+        self.heredocs: list[_HereDocument] = []
         # After a `|`, a line break continues the pipeline.
         self.piped = False
         self._command(0)
@@ -251,9 +262,10 @@ class _ShellReader:
         self.command = ShellCommand()
         self.pieces: list[str] = []
         # Where the word being read goes: the command's words, or the word
-        # of the redirection being read (its operator and where it starts).
+        # of the redirection being read (its descriptor's digits, its
+        # operator and where it starts).
         self.target = self.pieces
-        self.redirection: tuple[str, int] | None = None
+        self.redirection: tuple[str, str, int] | None = None
         self.start = start
         self.word_start = 0  # index in `pieces` where the word being read began
         self.word_text_start = start  # and in the text
@@ -270,7 +282,7 @@ class _ShellReader:
     def _finish_redirection(self, end: int) -> None:
         if self.redirection is None:
             return
-        operator, begin = self.redirection
+        descriptor, operator, begin = self.redirection
         word = "".join(self.target)
         self.redirection = None
         self.target = self.pieces
@@ -283,14 +295,13 @@ class _ShellReader:
             value = "".join(shlex.split(word, posix=True))
         except ValueError as e:
             raise ImportSourceError(f"Cannot read the redirection {written!r}: {e}") from None
-        descriptor, op = operator[: len(operator) - len(operator.lstrip("0123456789"))], operator.lstrip("0123456789")
         reads_stdin = descriptor in ("", "0")
-        if reads_stdin and op == "<":
+        if reads_stdin and operator == "<":
             self.command.stdin = Stdin(f"the redirection {written}", path=value)
-        elif reads_stdin and op == "<<<":
+        elif reads_stdin and operator == "<<<":
             self.command.stdin = Stdin("the here-string", text=value + "\n")
-        elif op in ("<<", "<<-"):
-            self.heredocs.append((self.command if reads_stdin else None, value, op == "<<-", not any(quote in word for quote in "'\"\\")))
+        elif operator in ("<<", "<<-"):
+            self.heredocs.append(_HereDocument(self.command if reads_stdin else None, value, operator == "<<-", not any(quote in word for quote in "'\"\\")))
             if not reads_stdin:
                 self.command.redirections.append(written)
         else:
@@ -433,7 +444,7 @@ class _ShellReader:
                 assert operator is not None
                 # A word after it is a word of its own.
                 self.pieces.append(" ")
-                self.redirection = (descriptor + operator.group(), begin)
+                self.redirection = (descriptor, operator.group(), begin)
                 self.target = []
                 self.at_word_start = True
                 i = operator.end()
@@ -889,7 +900,7 @@ def _globbed(url: str, warnings: list[str]) -> list[str]:
     i, n = 0, len(url)
     while i < n:
         c = url[i]
-        if c == "\\" and url[i + 1 : i + 2] in ("{", "[", "}", "]") and i + 1 < n:
+        if c == "\\" and url[i + 1 : i + 2] in ("{", "[", "}", "]"):
             literal.append(url[i + 1])
             i += 2
         elif c == "[" and (match := _UNGLOBBED_BRACKETS.match(url, i)) is not None:
@@ -1081,6 +1092,8 @@ def _requests(options: _Options, warnings: list[str], data_dir: Path | None, sou
         name, colon, password = options.user.partition(":")
         user = (name, password if colon else None)
 
+    # The -G data and the --url-query, which curl adds to every URL's query.
+    extra = "&".join(piece for piece in [query, *options.query] if piece)
     urls = [url for word in options.urls for url in ([word] if options.globoff else _globbed(word, warnings))]
     requests = []
     for written in urls:
@@ -1100,7 +1113,6 @@ def _requests(options: _Options, warnings: list[str], data_dir: Path | None, sou
             warnings.append(f"Imported {written!r} as the URL {url!r}, as curl reads a word that is no option: if it is no URL, remove it")
         # curl sends no fragment, and adds -G data and --url-query to the query.
         url = url.partition("#")[0]
-        extra = "&".join(piece for piece in [query, *options.query] if piece)
         if extra:
             url += ("&" if split.query else "?" if not url.endswith("?") else "") + extra
         requests.append(
