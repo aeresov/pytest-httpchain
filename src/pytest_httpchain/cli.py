@@ -39,11 +39,13 @@ def _hide_flag_value_types(command: typer.core.TyperCommand | typer.core.TyperGr
     metavar (an error names an option by its names), so a command whose help
     was drawn parses as it did before.
 
-    Delete this, the classes below and `_Typer`, making the apps plain
-    ``typer.Typer`` again (_OwnOptionsFirst then derives from
-    typer.core.TyperCommand), once no typer the ``typer>=`` requirement admits
-    lists a type for a flag; the CLI's test of every command's help goes red
-    on one that does.
+    Delete this, `_Command.get_help`, and `_Group` with `_Typer.__init__`,
+    which makes it every app's group, once no typer the ``typer>=``
+    requirement admits lists a type for a flag: the CLI's tests of every
+    command's help (``test_help_lists_a_value_type_for_every_option_but_a_flag``,
+    ``test_help_without_a_command_lists_no_value_type_for_a_flag``) go red on
+    one that does. `_Command` and `_Typer` stay while `_Command.parse_args`
+    does.
     """
     for param in command.get_params(ctx):
         if getattr(param, "is_flag", False) and param.metavar is None:
@@ -51,9 +53,17 @@ def _hide_flag_value_types(command: typer.core.TyperCommand | typer.core.TyperGr
 
 
 # The classes every command and group of this CLI is made with, for the help
-# they draw. typer.Context is the context typer makes; the base names the
-# click Context typer vendors privately.
+# they draw and the words a command refuses a value in. typer.Context is the
+# context typer makes; the base names the click Context typer vendors
+# privately.
 class _Command(typer.core.TyperCommand):
+    """A command with two workarounds of typer 0.29's, each with its own
+    removal note: `get_help` lists no value type beside a flag
+    (`_hide_flag_value_types`), and `parse_args` drops the "Value error, "
+    pydantic puts before a refused value. Delete this class and `_Typer`,
+    making the apps plain ``typer.Typer`` again (`_OwnOptionsFirst` then
+    derives from typer.core.TyperCommand), only once both are gone."""
+
     def get_help(self, ctx: typer.Context) -> str:  # ty: ignore[incompatible-method-override]
         _hide_flag_value_types(self, ctx)
         return super().get_help(ctx)
@@ -65,7 +75,12 @@ class _Command(typer.core.TyperCommand):
         ``--format xml`` was "Value error, 'xml' is not one of 'text',
         'json'.", where typer up to 0.28 says the check's words alone, as
         click does. The CLI's options that take a value are all on its
-        commands."""
+        commands.
+
+        Delete this once no typer the ``typer>=`` requirement admits puts
+        "Value error, " there, whatever it lists beside a flag:
+        ``test_choice_options_refuse_any_other_value`` goes red on one that
+        does."""
         try:
             return super().parse_args(ctx, args)
         except typer.BadParameter as e:
@@ -74,6 +89,9 @@ class _Command(typer.core.TyperCommand):
 
 
 class _Group(typer.core.TyperGroup):
+    """A group whose help lists no value type beside a flag: it goes with
+    `_hide_flag_value_types` (see there)."""
+
     def get_help(self, ctx: typer.Context) -> str:  # ty: ignore[incompatible-method-override]
         _hide_flag_value_types(self, ctx)
         return super().get_help(ctx)
@@ -83,7 +101,8 @@ class _Typer(typer.Typer):
     """An app whose group and commands are made with the classes above unless
     a ``cls=`` says otherwise: typer has no setting for an app's default
     classes, and a command made with typer's own would list `<bool>` again on
-    typer 0.29."""
+    typer 0.29, and refuse a value in pydantic's words. Its `__init__` goes
+    with `_Group`, and the class itself with `_Command` (see there)."""
 
     def __init__(self, *, cls: type[typer.core.TyperGroup] | None = _Group, **kwargs) -> None:
         super().__init__(cls=cls, **kwargs)
