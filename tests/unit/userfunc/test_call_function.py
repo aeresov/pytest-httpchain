@@ -30,3 +30,11 @@ def test_user_function_error_propagates_unwrapped():
     not be double-wrapped in another "Error calling function"."""
     with pytest.raises(UserFunctionError, match="^custom error$"):
         call_function("userfunc_test_helpers:raises_user_error")
+
+
+def test_pytest_exit_propagates_unwrapped():
+    """pytest.exit()'s Exit is an Exception, which the call took for the
+    function's failure: a verify, save or auth function meaning to stop the
+    run failed its stage, and the session went on."""
+    with pytest.raises(pytest.exit.Exception, match="^stop$"):
+        call_function("pytest:exit", "stop")

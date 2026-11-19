@@ -1,8 +1,9 @@
-"""errors.py: which stage failures a stage's ``retry`` may retry by default."""
+"""errors.py: which stage failures a stage's ``retry`` may retry by default,
+and which exceptions user code raises stop the run."""
 
 import pytest
 
-from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
+from pytest_httpchain.errors import INTERRUPTS, RequestError, SaveError, StageExecutionError, VerificationError
 
 
 @pytest.mark.parametrize(
@@ -30,3 +31,7 @@ def test_raise_site_overrides_the_default(error, retryable):
 def test_first_attempt_by_default():
     error = VerificationError("failed")
     assert (error.attempt, error.earlier_exchanges) == (1, ())
+
+
+def test_interrupts_are_what_stops_a_run():
+    assert INTERRUPTS == (KeyboardInterrupt, SystemExit, pytest.exit.Exception)

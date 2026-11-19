@@ -879,6 +879,9 @@ class Carrier:
                 cls._client_kwargs = build_client_kwargs(resolved_client, resolved_ssl, resolved_auth, cls.scenario_dir, declared_auth=scenario.auth)
                 cls._client_config = resolved_client
                 cls.client = httpx.Client(**cls._client_kwargs)
+            except _INTERRUPTS:
+                # A user function's pytest.exit() stops the run: no failure.
+                raise
             except Exception as e:
                 cls._init_failed = str(e)
                 raise StageExecutionError(f"Failed to initialize scenario: {e}") from e
@@ -1433,6 +1436,8 @@ class Carrier:
         The catch-all is deliberate: ``request()`` runs user auth code and httpx
         raises non-HTTPError types, and anything escaping raw would bypass the
         chain-abort machinery. The assert sits inside the try for the same reason.
+        An interrupt that auth code raised (`INTERRUPTS`) is no failure: it
+        stops the run.
         """
         try:
             assert cls.client is not None, "_ensure_initialized() builds cls.client before any request"
@@ -1443,6 +1448,8 @@ class Carrier:
             raise _request_error("HTTP connection error", e, cls.redaction) from e
         except httpx.HTTPError as e:
             raise _request_error("HTTP request failed", e, cls.redaction) from e
+        except _INTERRUPTS:
+            raise
         except Exception as e:
             raise _request_error("Unexpected error during HTTP request", e, cls.redaction) from e
 

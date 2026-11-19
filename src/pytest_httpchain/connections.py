@@ -428,6 +428,8 @@ class Session:
         """``send()`` ``message``; what it returned, if anything, checked as a message."""
         try:
             returned = self.adapter.send(message)
+        except _INTERRUPTS:
+            raise
         except Exception as e:
             raise adapter_error(self.name, "send()", e) from e
         if returned is None:
@@ -889,6 +891,8 @@ class Connections:
             raise StageExecutionError(f"Connection '{name}': {e}", retryable=False) from e
         try:
             adapter = adapter_class(**params)
+        except _INTERRUPTS:
+            raise
         except Exception as e:
             raise adapter_error(name, f"{adapter_name}(**params)", e) from e
         try:
@@ -906,7 +910,7 @@ class Connections:
                 logger.error("Closing connection '%s' after its connect() failed raised: %s", name, describe_exception(close_error))
             if isinstance(e, MessageValueError):
                 raise RequestError(f"Connection '{name}': {e}", retryable=False) from e
-            if isinstance(e, Exception):
+            if isinstance(e, Exception) and not isinstance(e, _INTERRUPTS):
                 raise adapter_error(name, "connect()", e) from e
             raise
         return session, result

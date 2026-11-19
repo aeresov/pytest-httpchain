@@ -100,7 +100,7 @@ src/pytest_httpchain/
 ├── har_writer.py              # HAR file export for HTTP request/response logging
 ├── redaction.py               # Redaction: the one set of credential-hiding rules (headers, cookies, URL query, connection message keys) shared by reports, HAR, header verify, request-error messages and connection-stage messages, and the failure-line display forms its message search relies on (shown_bytes, cut)
 ├── constants.py               # ConfigOptions enum for pytest.ini settings, the scenario file-name grammar (suffix + extensions, shared by collection and `validate`) + the shared user-function name grammar
-├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response, and whether a stage's retry may retry it) + subclasses RequestError, SaveError, VerificationError
+├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response, and whether a stage's retry may retry it) + subclasses RequestError, SaveError, VerificationError, and INTERRUPTS: what user code raises that stops the run, never taken for a failure (pytest.exit()'s is an Exception)
 ├── userfunc.py                # Dynamic function import/invocation, incl. the model-aware call_user_function dispatch, and connection adapter class import (import_adapter)
 ├── wire_codec.py              # MessagePack pack/unpack (MSGPACK_DECODE_ERRORS), and which codec reads a response body (selected_codec, ResponseCodec), with the extension key (RESPONSE_CODEC_EXTENSION) under which the carrier hands a stage's response_codec to the report
 ├── models/                    # Pydantic models (Scenario, Stage, Request, etc.)

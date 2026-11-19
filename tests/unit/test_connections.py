@@ -1192,6 +1192,27 @@ class TestOpenAndCloseGuards:
         assert peer.closes == 1
         assert registry.session("dev") is None
 
+    @pytest.mark.parametrize("call", ["init", "connect"])
+    def test_pytest_exit_while_opening_propagates(self, registry, call):
+        """pytest.exit()'s Exit is an Exception, which building or connecting
+        the adapter took for its failure (`adapter_error`): a RequestError
+        failed one stage where the adapter meant to stop the run."""
+        stop = pytest.exit.Exception(f"{call} says stop")
+        helpers.peer("exits", **{f"{call}_error": stop})
+        with pytest.raises(pytest.exit.Exception) as excinfo:
+            _open(registry, "exits")
+        assert excinfo.value is stop
+        assert registry.session("dev") is None
+
+    def test_pytest_exit_from_send_propagates(self, registry):
+        """As from the adapter's other calls (above), and its send() alike."""
+        stop = pytest.exit.Exception("send says stop")
+        helpers.peer("exits", send_error=stop)
+        session, _ = _open(registry, "exits")
+        with pytest.raises(pytest.exit.Exception) as excinfo:
+            session.send({})
+        assert excinfo.value is stop
+
     def test_close_interrupt_propagates_the_reader_stopped(self, registry, caplog):
         helpers.peer("interrupted close", close_error=KeyboardInterrupt())
         session, _ = _open(registry, "interrupted close")

@@ -5,7 +5,7 @@ import pytest_httpchain.templates.substitution as substitution_module
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsNamespace, VarsSubstitution
 from pytest_httpchain.templates import TemplatesError
-from pytest_httpchain.utils import INTERRUPTS, describe_exception, exception_text, make_marker, path_segment, process_substitutions, request_content, xdist_group_names
+from pytest_httpchain.utils import describe_exception, exception_text, make_marker, path_segment, process_substitutions, request_content, xdist_group_names
 
 # The functions these tests import live in a module of their own; see its
 # docstring for why they are not defined here.
@@ -230,7 +230,3 @@ def test_exception_text(error, text):
     """An exception's text, a placeholder where its str() raises: the
     message `describe_exception` shows, and a closed connection's detail."""
     assert exception_text(error) == text
-
-
-def test_interrupts_are_what_stops_a_run():
-    assert INTERRUPTS == (KeyboardInterrupt, SystemExit, pytest.exit.Exception)

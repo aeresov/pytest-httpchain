@@ -621,6 +621,15 @@ class TestAuth:
         with pytest.raises(UserFunctionError, match=re.escape(f"{self.RENDERED_NAME}, and calling it failed: ")):
             build_auth(UserFunctionName("httpx:BasicAuth"), UserFunctionName("{{ fn }}"))
 
+    @pytest.mark.parametrize("declared", ["pytest:exit", "{{ fn }}"], ids=["named-in-the-file", "named-by-a-template"])
+    def test_auth_function_calling_pytest_exit_stops_the_run(self, declared):
+        """pytest.exit()'s Exit is an Exception, which calling the function
+        took for its failure: "Failed to configure authentication" failed a
+        stage, or the scenario's initialization, where the run was to stop."""
+        auth = UserFunctionKwargs.model_validate({"name": "pytest:exit", "kwargs": {"reason": "stop"}})
+        with pytest.raises(pytest.exit.Exception, match="^stop$"):
+            build_auth(auth, UserFunctionKwargs.model_validate({"name": declared, "kwargs": {"reason": "stop"}}))
+
 
 class TestClientKwargs:
     def test_defaults(self):

@@ -988,6 +988,15 @@ def test_transport_errors_become_request_errors(error, message):
         cls._execute_http_request({"method": "GET", "url": "http://t/"})
 
 
+def test_auth_flow_calling_pytest_exit_stops_the_run():
+    """pytest.exit()'s Exit is an Exception: one a user auth flow raised,
+    which httpx runs inside request(), was taken by the catch-all for an
+    "Unexpected error during HTTP request", failing one stage where the run
+    was to stop."""
+    with _answered() as cls, pytest.raises(pytest.exit.Exception, match="^stop$"):
+        cls._execute_http_request({"method": "GET", "url": "http://t/", "auth": lambda request: pytest.exit("stop")})
+
+
 @pytest.mark.parametrize(
     ("redaction", "quoted"),
     [(DEFAULT_REDACTION, "b'[REDACTED]'"), (NO_REDACTION, "b'Bearer tok\\n'")],
@@ -1032,6 +1041,18 @@ def test_initialization_failure_is_sticky(monkeypatch):
         with pytest.raises(StageExecutionError, match="Failed to initialize scenario: token service unreachable"):
             cls._ensure_initialized()
     assert len(calls) == 1
+
+
+def test_initialization_calling_pytest_exit_stops_the_run():
+    """pytest.exit()'s Exit is an Exception: one a scenario substitution's
+    function raised was taken for a failure to initialize, which every stage
+    of the scenario then failed with, where the run was to stop. Nothing is
+    left sticky either."""
+    scenario = Scenario.model_validate({"substitutions": [{"functions": {"stop": "pytest:exit"}}, {"vars": {"x": "{{ stop('stop') }}"}}]})
+    cls = _make_carrier_subclass(scenario=scenario, _initialized=False)
+    with pytest.raises(pytest.exit.Exception, match="^stop$"):
+        cls._ensure_initialized()
+    assert (cls._init_failed, cls._initialized) == (None, False)
 
 
 class TestSkipIf:

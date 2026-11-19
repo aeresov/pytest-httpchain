@@ -77,6 +77,18 @@ def test_stage_failure_message_is_not_duplicated(run_scenario):
     assert failures.count("During handling of the above exception") == 0
 
 
+@pytest.mark.slow  # pytest.exit() must end the child pytest process, not this one
+def test_verify_function_calling_pytest_exit_ends_the_session(run_scenario):
+    """pytest.exit() raises an Exception, which the call's catch-all took for
+    the function's failure: the stage failed, the next skipped, and the run
+    went on. It ends the session now, with pytest's interrupt exit status."""
+    scenario = {"stages": [stage("stops", response=[{"verify": {"user_functions": ["verify:verify_stops_the_run"]}}]), stage("after")]}
+    result = run_scenario(scenario, "verify.py", subprocess=True)
+    assert result.ret == pytest.ExitCode.INTERRUPTED
+    result.stdout.fnmatch_lines(["*! _pytest.outcomes.Exit: stop !*"])
+    result.assert_outcomes()
+
+
 def test_failure_report_lists_every_failed_check_and_a_curl_command(run_scenario):
     """One run shows everything wrong with the response, a template that
     fails to render among it, and a command that sends the request again: its

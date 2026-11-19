@@ -23,6 +23,7 @@ from simpleeval import (
     OperatorNotDefined,
 )
 
+from pytest_httpchain.errors import INTERRUPTS
 from pytest_httpchain.templates.exceptions import TemplatesError
 from pytest_httpchain.templates.expressions import contains_escape, extract_template_expression, find_templates, render_text
 from pytest_httpchain.templates.functions import HELPER_FUNCTIONS
@@ -374,7 +375,9 @@ class _UncalledBuiltin(Exception):
 
 
 def _eval_expr(evaluator: _Evaluator, expr: str, *, as_text: bool = False) -> Any:
-    """Evaluate one expression; every failure becomes a `TemplatesError`.
+    """Evaluate one expression; every failure becomes a `TemplatesError`. An
+    interrupt (`errors.INTERRUPTS`, pytest.exit()'s included) is none, and
+    propagates as it is.
 
     ``as_text`` returns the value's ``str()`` for interpolation. That runs in
     here because it can raise too — an int past Python's digit limit, an object
@@ -422,6 +425,9 @@ def _eval_expr(evaluator: _Evaluator, expr: str, *, as_text: bool = False) -> An
         raise TemplatesError(f"Expression too complex '{display}': {e}") from e
     except InvalidExpression as e:
         raise TemplatesError(f"Invalid expression '{display}': {e}") from e
+    except INTERRUPTS:
+        # A context callable's pytest.exit() stops the run: no failure.
+        raise
     except Exception as e:
         # A context callable can raise anything, and everything out of here must
         # be a TemplatesError. Naming the type is what makes the message useful,

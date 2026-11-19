@@ -20,7 +20,7 @@ from urllib.parse import unquote_plus, urlencode
 
 import httpx
 
-from pytest_httpchain.errors import RequestError, StageExecutionError
+from pytest_httpchain.errors import INTERRUPTS, RequestError, StageExecutionError
 from pytest_httpchain.models import (
     Auth,
     Base64Body,
@@ -269,6 +269,8 @@ def _call_named_by_template(auth: UserFunctionName | UserFunctionKwargs) -> Any:
         raise UserFunctionError(f"""{_RENDERED_NAME} that does not import: {e}; a built-in scheme is an object, such as {{"bearer": "<token>"}}""") from None
     try:
         return func(**kwargs)
+    except INTERRUPTS:
+        raise
     except Exception as e:
         raise UserFunctionError(f"{_RENDERED_NAME}, and calling it failed: {e}") from e
 

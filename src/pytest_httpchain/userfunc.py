@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from pytest_httpchain.constants import USER_FUNCTION_NAME_PATTERN, parse_user_function_name
-from pytest_httpchain.errors import HttpChainError
+from pytest_httpchain.errors import INTERRUPTS, HttpChainError
 from pytest_httpchain.models import UserFunctionCall, UserFunctionKwargs, UserFunctionName
 
 
@@ -87,13 +87,16 @@ def import_adapter(name: str) -> type:
 
 
 def call_function(name: str, /, *args, **kwargs) -> Any:
-    """Import and call a user function."""
+    """Import and call a user function. An interrupt it raises (`INTERRUPTS`,
+    pytest.exit()'s included) is no failure: it propagates as it is."""
     func = import_function(name)
 
     try:
         return func(*args, **kwargs)
     except UserFunctionError:
         # Already curated: propagate rather than double-wrap.
+        raise
+    except INTERRUPTS:
         raise
     except Exception as e:
         raise UserFunctionError(f"Error calling function '{name}': {e}") from e

@@ -1,4 +1,5 @@
 import httpx
+import pytest
 
 
 def verify_has_id(response: httpx.Response) -> bool:
@@ -31,3 +32,8 @@ def verify_returns_non_bool(response: httpx.Response):
 def verify_raises(response: httpx.Response) -> bool:
     """A verify function that raises; must surface as a clean verification failure."""
     raise ValueError("boom in verify function")
+
+
+def verify_stops_the_run(response: httpx.Response) -> bool:
+    """A verify function that ends the whole run: pytest.exit() is no failure."""
+    pytest.exit("stop")

@@ -4,8 +4,8 @@ resolution, scenario-relative paths, the location paths messages print, a
 header check's optional value as a list (`optional_as_list`), a request's
 body as the reports capture it (`request_content`), what parsing JSON raises
 on bad input (`JSON_PARSE_ERRORS`), and, for an exception user code raised,
-whether it stops the run (`INTERRUPTS`) and how it is described
-(`exception_text`, `describe_exception`).
+whether it stops the run (`INTERRUPTS`, re-exported from errors) and how it
+is described (`exception_text`, `describe_exception`).
 
 ``process_substitutions`` raises ``StageExecutionError`` even when called at
 collection time (the collection caller re-wraps it into a ``CollectError``)
@@ -23,6 +23,9 @@ from typing import Any
 import httpx
 import pytest
 
+# Re-exported: the carrier, connections and the plugin import it from here,
+# beside `describe_exception`.
+from pytest_httpchain.errors import INTERRUPTS as INTERRUPTS
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, Substitution, VarsSubstitution
 from pytest_httpchain.templates import needs_rendering, walk, walker
@@ -184,12 +187,6 @@ def process_substitutions(
                 raise RuntimeError(f"Unhandled substitution type: {type(step).__name__}")
 
     return result
-
-
-# Raised by user code a call runs, these stop the run: never taken for a
-# failure. pytest.exit()'s is an Exception, so an `except Exception` must let
-# these through first.
-INTERRUPTS = (KeyboardInterrupt, SystemExit, pytest.exit.Exception)
 
 
 def exception_text(e: BaseException) -> str:

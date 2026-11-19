@@ -406,6 +406,18 @@ class TestWalkErrorMessages:
             walk("{{ boom() }}", {"boom": boom})
         assert isinstance(exc_info.value.__cause__, CustomBoom)
 
+    @pytest.mark.parametrize("template", ["{{ stop() }}", "x {{ stop() }}"], ids=["whole-string", "interpolated"])
+    def test_context_callable_calling_pytest_exit_stops_the_run(self, template):
+        """pytest.exit()'s Exit is an Exception, which that wrapping took for
+        the callable's failure: a stage failed where the run was to stop. An
+        interrupt (`errors.INTERRUPTS`) propagates as it is."""
+
+        def stop():
+            pytest.exit("stop")
+
+        with pytest.raises(pytest.exit.Exception, match="^stop$"):
+            walk(template, {"stop": stop})
+
     @pytest.mark.parametrize(
         ("template", "context", "expected_match"),
         [
