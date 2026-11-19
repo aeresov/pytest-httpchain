@@ -650,9 +650,9 @@ def build_request_kwargs(
             except UserFunctionError as e:
                 raise RequestError(f"Failed to configure authentication: {e}") from e
 
-    # The Content-Type a form body is encoded for, and the parts of a
-    # multipart one (see below).
-    body_content_type: str | None = None
+    # The Content-Type of a body that keeps its own, unless the stage declares
+    # one (see below), and the parts of a multipart one.
+    own_type: str | None = None
     multipart_parts: list[_Part] | None = None
 
     match request_model.body:
@@ -675,9 +675,7 @@ def build_request_kwargs(
                 request_kwargs["content"] = pack_msgpack(data)
             except (TypeError, ValueError, OverflowError, RecursionError) as e:
                 raise RequestError(f"Cannot encode MessagePack body: {e}") from e
-            if not _declares_content_type((*client.headers, *request_model.headers)):
-                request_kwargs["headers"] = {**request_model.headers, "Content-Type": "application/msgpack"}
-            body_content_type = "application/msgpack"
+            own_type = "application/msgpack"
 
         case GraphQLBody(graphql=gql):
             # operationName only when declared: a scenario without one sends
@@ -690,10 +688,10 @@ def build_request_kwargs(
                 request_kwargs["data"] = data
             else:
                 request_kwargs["content"] = encoded
-                if not _declares_content_type(request_model.headers):
-                    request_kwargs["headers"] = {**request_model.headers, "Content-Type": "application/x-www-form-urlencoded"}
-            if data:
-                body_content_type = "application/x-www-form-urlencoded"
+            if data and (encoded is not None or _declares_content_type(client.headers)):
+                # httpx labels a urlencoded form itself where nothing declares
+                # a type, but only one it encodes (data=), not bytes encoded here.
+                own_type = "application/x-www-form-urlencoded"
 
         case XmlBody(xml=data) | TextBody(text=data):
             request_kwargs["content"] = data
@@ -723,12 +721,12 @@ def build_request_kwargs(
         # httpx gives `content=` no type, and the boundary is this body's.
         request_kwargs["content"], request_kwargs["headers"] = _multipart_content(multipart_parts, request_model.headers)
 
-    if body_content_type is not None and _declares_content_type(client.headers) and not _declares_content_type(request_model.headers):
+    if own_type and not _declares_content_type(request_model.headers):
         # httpx gives a body's own Content-Type only to a request that has
         # none, and a client header counts: a scenario-wide
         # `Content-Type: application/json` labelled every form body JSON. A
         # body encoded one way keeps its type, as a multipart one does (see
         # above); a stage's own header still wins.
-        request_kwargs["headers"] = {**request_model.headers, "Content-Type": body_content_type}
+        request_kwargs["headers"] = {**request_model.headers, "Content-Type": own_type}
 
     return request_kwargs
