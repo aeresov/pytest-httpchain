@@ -34,7 +34,7 @@ from pytest_httpchain.errors import RequestError, StageExecutionError, Verificat
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.userfunc import UserFunctionError, import_adapter
 from pytest_httpchain.utils import INTERRUPTS as _INTERRUPTS
-from pytest_httpchain.utils import describe_exception
+from pytest_httpchain.utils import describe_exception, exception_text
 
 logger = logging.getLogger(__name__)
 
@@ -241,11 +241,7 @@ class ReaderEnd:
         """The message of an ``expect: {"closed": true}`` that saw this end."""
         if self.error is None:
             return {"error": None, "detail": None}
-        try:
-            detail = str(self.error)
-        except Exception:
-            detail = "<exception str() failed>"
-        return {"error": type(self.error).__name__, "detail": detail}
+        return {"error": type(self.error).__name__, "detail": exception_text(self.error)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -572,12 +568,11 @@ class Session:
         cleanup, self._cleanup = self._cleanup, None
         return cleanup() if cleanup is not None else []
 
-    def shutdown(self, budget: float | None = None) -> tuple[str | None, list[str]]:
-        """Stop the reader, ``close()`` the adapter and wait up to ``budget``
-        seconds (`JOIN_BUDGET`) for the reader to end: the adapter's close
+    def shutdown(self) -> tuple[str | None, list[str]]:
+        """Stop the reader, ``close()`` the adapter and wait up to
+        `JOIN_BUDGET` seconds for the reader to end: the adapter's close
         error, if any, and resource exit errors. An interrupt propagates once
         resources have been released too."""
-        budget = JOIN_BUDGET if budget is None else budget
         self._stop.set()
         error = None
         interrupt: BaseException | None = None
@@ -588,7 +583,7 @@ class Session:
         except BaseException as e:
             error = describe_exception(e)
         try:
-            self._thread.join(budget)
+            self._thread.join(JOIN_BUDGET)
         finally:
             cleanup_errors = self.cleanup()
         if interrupt is not None:

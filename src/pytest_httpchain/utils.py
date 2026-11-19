@@ -220,13 +220,19 @@ def process_substitutions(
 INTERRUPTS = (KeyboardInterrupt, SystemExit, pytest.exit.Exception)
 
 
-def describe_exception(e: BaseException) -> str:
-    """``Type: message`` for an exception user code raised (a fixture's
-    context manager, a connection adapter), whose ``__str__`` may raise in
-    turn: formatting it must not abandon what is still to be done. One
-    without a message is its type alone."""
+def exception_text(e: BaseException) -> str:
+    """``str(e)`` for an exception user code raised (a fixture's context
+    manager, a connection adapter), whose ``__str__`` may raise in turn: a
+    placeholder then, as formatting it must not abandon what is still to be
+    done."""
     try:
-        text = str(e)
+        return str(e)
     except Exception:
-        text = "<exception str() failed>"
+        return "<exception str() failed>"
+
+
+def describe_exception(e: BaseException) -> str:
+    """``Type: message`` for an exception user code raised, its message
+    `exception_text`'s. One without a message is its type alone."""
+    text = exception_text(e)
     return f"{type(e).__name__}: {text}" if text else type(e).__name__
