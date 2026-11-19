@@ -41,17 +41,13 @@ from tests.unit import connections_test_helpers as helpers
 ADAPTER = "tests.unit.connections_test_helpers:FakeAdapter"
 
 
-def _readers() -> list[str]:
-    return [thread.name for thread in threading.enumerate() if thread.name.startswith("httpchain-connection-")]
-
-
 @pytest.fixture
 def registry() -> Iterator[Connections]:
     """A chain's registry, every session in it ended once the test is done."""
     chain = Connections()
     yield chain
     chain.close_all()
-    assert not _readers(), "a test left a reader running"
+    assert not helpers.readers(), "a test left a reader running"
 
 
 @pytest.fixture
@@ -77,6 +73,18 @@ def _wait_for(condition, timeout: float = 2.0) -> None:
 def _queued(session, count: int) -> None:
     """Wait until the reader has appended ``count`` messages in all."""
     _wait_for(lambda: session.mark() >= count)
+
+
+@pytest.fixture
+def stuck_adapter(registry: Connections) -> Iterator[str]:
+    """The import path of `connections_test_helpers.StuckAdapter`, whose
+    readers stay stuck until the test is done: then they are released, and
+    waited for to end. It requests `registry` so that pytest tears it down
+    first: the registry's teardown asserts that no reader is left running."""
+    helpers.STUCK_RELEASE.clear()
+    yield "tests.unit.connections_test_helpers:StuckAdapter"
+    helpers.STUCK_RELEASE.set()
+    _wait_for(lambda: not helpers.readers())
 
 
 def _is(expected: dict[str, Any]):
@@ -165,7 +173,7 @@ class TestOpen:
         assert registry.is_open("dev")
         assert not registry.never_opened("dev")
         assert session.generation == 1
-        assert _readers() == ["httpchain-connection-UnitScenario-dev-1"]
+        assert helpers.readers() == ["httpchain-connection-UnitScenario-dev-1"]
         assert all(thread.daemon for thread in threading.enumerate() if thread.name.startswith("httpchain-connection-"))
 
     def test_reader_starts_in_an_empty_context(self, registry):
@@ -186,7 +194,7 @@ class TestOpen:
         assert peer.closes == 1
         assert registry.never_opened("dev")
         assert registry.session("dev") is None
-        assert not _readers()
+        assert not helpers.readers()
 
     def test_close_failing_after_a_failed_connect_is_logged(self, registry, caplog):
         helpers.peer("both", connect_error=OSError("down"), close_error=RuntimeError("cannot close"))
@@ -231,7 +239,7 @@ class TestOpen:
         assert peer.adapters[0].closed
         assert not first.reader_alive
         assert second.mark() == 0, "nothing queued on the old session survives a reopen"
-        assert _readers() == ["httpchain-connection-UnitScenario-dev-2"]
+        assert helpers.readers() == ["httpchain-connection-UnitScenario-dev-2"]
 
     def test_failed_reopen_leaves_the_connection_failed(self, registry):
         peer = helpers.peer("flaky")
@@ -241,20 +249,15 @@ class TestOpen:
             _open(registry, "flaky")
         assert registry.not_open("dev") == "failed: ConnectionResetError: reset"
 
-    def test_stuck_reader_bars_reopening(self, registry, monkeypatch, caplog):
+    def test_stuck_reader_bars_reopening(self, registry, stuck_adapter, monkeypatch, caplog):
         monkeypatch.setattr(connections_module, "JOIN_BUDGET", 0.05)
         helpers.peer("stuck")
-        helpers.STUCK_RELEASE.clear()
-        try:
-            _open(registry, "stuck", adapter="tests.unit.connections_test_helpers:StuckAdapter")
-            with pytest.raises(RequestError, match="the previous reader for 'dev' did not stop") as excinfo:
-                _open(registry, "stuck")
-            assert not excinfo.value.retryable
-            with pytest.raises(RequestError, match="cannot be opened again in this chain"):
-                _open(registry, "stuck")
-        finally:
-            helpers.STUCK_RELEASE.set()
-        _wait_for(lambda: not _readers())
+        _open(registry, "stuck", adapter=stuck_adapter)
+        with pytest.raises(RequestError, match="the previous reader for 'dev' did not stop") as excinfo:
+            _open(registry, "stuck")
+        assert not excinfo.value.retryable
+        with pytest.raises(RequestError, match="cannot be opened again in this chain"):
+            _open(registry, "stuck")
 
 
 class TestCloseAndState:
@@ -263,7 +266,7 @@ class TestCloseAndState:
         _open(registry, "close")
         assert registry.close("dev", "bye") is None
         assert peer.closes == 1
-        assert not _readers()
+        assert not helpers.readers()
         assert registry.not_open("dev") == "closed by stage 'bye'"
         assert not registry.is_open("dev")
         assert not registry.never_opened("dev")
@@ -958,7 +961,7 @@ class TestCloseAll:
         with caplog.at_level(logging.DEBUG, logger="pytest_httpchain.connections"):
             chain.close_all()
         assert not caplog.records
-        assert not _readers()
+        assert not helpers.readers()
 
     @pytest.mark.parametrize("ending", ["close", "reopen"])
     def test_a_stage_ending_a_session_logs_the_failure_no_stage_saw(self, caplog, ending):
@@ -977,7 +980,7 @@ class TestCloseAll:
                 _open(chain, "dropped")
         assert "Connection 'dev' (open 1) failed and no stage saw it: ValueError: bad frame" in caplog.text
         chain.close_all()
-        assert not _readers()
+        assert not helpers.readers()
 
     def test_a_failure_a_stage_saw_is_not_logged_at_its_close(self, caplog):
         peer = helpers.peer("observed")
@@ -1010,23 +1013,18 @@ class TestCloseAll:
             chain.close_all()
         assert "Closing connection 'dev' at the end of the chain failed: RuntimeError: busy" in caplog.text
 
-    def test_stuck_readers_share_one_deadline(self, monkeypatch, caplog):
+    def test_stuck_readers_share_one_deadline(self, stuck_adapter, monkeypatch, caplog):
         monkeypatch.setattr(connections_module, "TEARDOWN_BUDGET", 0.3)
-        helpers.STUCK_RELEASE.clear()
         sessions = []
-        try:
-            for name in ("one", "two", "three"):
-                chain = Connections()
-                helpers.peer(name)
-                sessions.append(chain.open(name, "tests.unit.connections_test_helpers:StuckAdapter", {"peer": name}, 1, 10, "Unit")[0])
-            started = time.monotonic()
-            with caplog.at_level(logging.ERROR, logger="pytest_httpchain.connections"):
-                close_all(sessions)
-            assert time.monotonic() - started < 0.8, "one shared deadline, not one per reader"
-            assert caplog.text.count("did not stop within 0.3s of the chain's end") == 3
-        finally:
-            helpers.STUCK_RELEASE.set()
-        _wait_for(lambda: not _readers())
+        for name in ("one", "two", "three"):
+            chain = Connections()
+            helpers.peer(name)
+            sessions.append(chain.open(name, stuck_adapter, {"peer": name}, 1, 10, "Unit")[0])
+        started = time.monotonic()
+        with caplog.at_level(logging.ERROR, logger="pytest_httpchain.connections"):
+            close_all(sessions)
+        assert time.monotonic() - started < 0.8, "one shared deadline, not one per reader"
+        assert caplog.text.count("did not stop within 0.3s of the chain's end") == 3
 
     def test_interrupt_is_raised_once_every_connection_is_closed(self):
         first, second, third = helpers.peer("first", close_error=KeyboardInterrupt()), helpers.peer("second", close_error=SystemExit()), helpers.peer("third")
@@ -1037,7 +1035,7 @@ class TestCloseAll:
         with pytest.raises(KeyboardInterrupt):
             close_all(sessions)
         assert (first.closes, second.closes, third.closes) == (1, 1, 1)
-        _wait_for(lambda: not _readers())
+        _wait_for(lambda: not helpers.readers())
 
     @pytest.mark.parametrize("interrupted", ["join", "cleanup"])
     def test_interrupt_still_releases_every_sessions_resources(self, monkeypatch, interrupted):
@@ -1071,7 +1069,7 @@ class TestCloseAll:
             close_all(sessions)
         assert released == ["first", "second"]
         assert sessions[0].cleanup() == []
-        _wait_for(lambda: not _readers())
+        _wait_for(lambda: not helpers.readers())
 
 
 def test_reader_end_describes_itself():
@@ -1203,7 +1201,7 @@ class TestOpenAndCloseGuards:
             registry.close("dev", "bye")
         assert released == ["lease"]
         assert "lease release failed" in caplog.text
-        _wait_for(lambda: not _readers())
+        _wait_for(lambda: not helpers.readers())
         assert registry.not_open("dev") == "closed by stage 'bye'"
 
     def test_closing_twice_does_nothing_the_second_time(self, registry):
@@ -1213,17 +1211,12 @@ class TestOpenAndCloseGuards:
         assert registry.close("dev", "again") is None
         assert registry.not_open("dev") == "closed by stage 'again'"
 
-    def test_close_with_a_stuck_reader_bars_reopening(self, registry, monkeypatch, caplog):
+    def test_close_with_a_stuck_reader_bars_reopening(self, registry, stuck_adapter, monkeypatch, caplog):
         monkeypatch.setattr(connections_module, "JOIN_BUDGET", 0.1)
-        helpers.STUCK_RELEASE.clear()
         helpers.peer("stuck on close")
-        try:
-            registry.open("dev", "tests.unit.connections_test_helpers:StuckAdapter", {"peer": "stuck on close"}, 1, 10, "Unit")
-            with caplog.at_level(logging.ERROR, logger="pytest_httpchain.connections"):
-                assert registry.close("dev", "bye") is None
-            assert "The reader of connection 'dev' did not stop within 0.1s of close()" in caplog.text
-            with pytest.raises(RequestError, match="the previous reader for 'dev' did not stop, so it cannot be opened again"):
-                _open(registry, "stuck on close")
-        finally:
-            helpers.STUCK_RELEASE.set()
-        _wait_for(lambda: not _readers())
+        registry.open("dev", stuck_adapter, {"peer": "stuck on close"}, 1, 10, "Unit")
+        with caplog.at_level(logging.ERROR, logger="pytest_httpchain.connections"):
+            assert registry.close("dev", "bye") is None
+        assert "The reader of connection 'dev' did not stop within 0.1s of close()" in caplog.text
+        with pytest.raises(RequestError, match="the previous reader for 'dev' did not stop, so it cannot be opened again"):
+            _open(registry, "stuck on close")

@@ -68,6 +68,7 @@ from pytest_httpchain.stage_settings import NO_RETRY, rate_settings
 from pytest_httpchain.templates import TemplatesError, walk
 from pytest_httpchain.utils import process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
+from tests.unit.connections_test_helpers import readers
 from tests.unit.models.helpers import make_stage
 
 
@@ -3426,7 +3427,7 @@ class TestConnectionStages:
                     carrier.aborted = True
         finally:
             carrier.teardown_class()
-        assert not [thread.name for thread in threading.enumerate() if thread.name.startswith("httpchain-connection-")]
+        assert not readers()
         return outcomes
 
     def test_open_send_expect_and_the_response_steps(self):

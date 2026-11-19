@@ -86,6 +86,13 @@ def peer(name: str, **settings: Any) -> Peer:
     return created
 
 
+def readers() -> list[str]:
+    """The names of the connection reader threads running now, as
+    `connections.Connections.open` names them:
+    ``httpchain-connection-<label>-<name>-<generation>``."""
+    return [thread.name for thread in threading.enumerate() if thread.name.startswith("httpchain-connection-")]
+
+
 class FakeAdapter:
     """An adapter whose other side is a `Peer`, in the same process."""
 
