@@ -176,7 +176,19 @@ def _fixture_diagnostics(scenario: Scenario, scopes: list[StageScopes], vars_sav
         )
 
 
-def _builtin_fallback(names: set[str], *, fails: str = "fails the stage") -> str:
+# What the runtime's refusal of a template that renders to a call-only
+# built-in fails (`_builtin_fallback`, HTTPCHAIN035): the stage, or, where a
+# template resolves outside any stage, scenario initialization or the
+# scenario's collection.
+_FAILS_SCENARIO_INIT = "crashes scenario initialization"
+_FAILS_COLLECTION = "fails the scenario's collection"
+_FAILS_STAGE = "fails the stage"
+# The failures before any stage runs, which fail every stage with them: an
+# invalid expression there is an error (HTTPCHAIN038), not a warning (037).
+_FAILS_BEFORE_ANY_STAGE = (_FAILS_SCENARIO_INIT, _FAILS_COLLECTION)
+
+
+def _builtin_fallback(names: set[str], *, fails: str = _FAILS_STAGE) -> str:
     """What an out-of-scope read of a built-in's name gets instead: the
     built-in function. Appended to the reference messages, where "undefined"
     alone would be a mystery for a name the template can evaluate.
@@ -199,14 +211,6 @@ def _builtin_fallback(names: set[str], *, fails: str = "fails the stage") -> str
         else:
             notes.append(f"where no definition of {refused} is in scope, the names are the template built-in functions, not values, and a template that renders to one {fails}")
     return "".join(f"; {note}" for note in notes)
-
-
-# What the runtime's refusal of a template that renders to a call-only
-# built-in fails, where a template resolves outside any stage
-# (`_builtin_fallback`, HTTPCHAIN035).
-_FAILS_SCENARIO_INIT = "crashes scenario initialization"
-_FAILS_COLLECTION = "fails the scenario's collection"
-_FAILS_STAGE = "fails the stage"
 
 
 def _fails_opening(connection: str) -> str:
@@ -652,7 +656,7 @@ def _invalid_expression_diagnostics(scenario: Scenario, test_data: dict[str, Any
     runtime's: Python's own often ends in a ``?``.
     """
     for subtree, where, location, fails in _rendered_template_fields(scenario, test_data):
-        code = DiagnosticCode.SCENARIO_INVALID_EXPRESSION if fails in (_FAILS_SCENARIO_INIT, _FAILS_COLLECTION) else DiagnosticCode.INVALID_EXPRESSION
+        code = DiagnosticCode.SCENARIO_INVALID_EXPRESSION if fails in _FAILS_BEFORE_ANY_STAGE else DiagnosticCode.INVALID_EXPRESSION
         for template, reason in extract_invalid_expressions(subtree).items():
             yield diag(code, f"{where} has an invalid expression '{template}', and rendering it {fails}: {reason}", location=location)
 
