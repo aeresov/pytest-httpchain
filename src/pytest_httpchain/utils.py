@@ -5,7 +5,7 @@ header check's optional value as a list (`optional_as_list`), a request's
 body as the reports capture it (`request_content`), what parsing JSON raises
 on bad input (`JSON_PARSE_ERRORS`), and, for an exception user code raised,
 whether it stops the run (`INTERRUPTS`) and how it is described
-(`describe_exception`).
+(`exception_text`, `describe_exception`).
 
 ``process_substitutions`` raises ``StageExecutionError`` even when called at
 collection time (the collection caller re-wraps it into a ``CollectError``)

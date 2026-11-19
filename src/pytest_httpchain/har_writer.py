@@ -20,7 +20,7 @@ import httpx
 # `Exchange` (a request, its response or None, and when it went on the wire)
 # is the one errors defines, where a failure carries those it saw; the name is
 # importable from here too, as what the HAR export writes.
-from pytest_httpchain.errors import Exchange
+from pytest_httpchain.errors import Exchange as Exchange  # re-exported: the carrier imports it from here
 from pytest_httpchain.redaction import NO_REDACTION, Redaction
 from pytest_httpchain.utils import request_content
 
