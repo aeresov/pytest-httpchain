@@ -31,7 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alone: pull request builds no longer cancel each other or a pending build of `main`. The release
   builds (`publish.yml`, `tombstones.yml`) run without the uv cache, which main-branch runs fill;
   every `actions/checkout` sets `persist-credentials: false`; and every job that runs steps has a
-  `timeout-minutes`.
+  `timeout-minutes`. Every action is pinned to a full commit SHA, its release named in a `# vX.Y.Z`
+  comment that Dependabot updates with it (`pypa/gh-action-pypi-publish` followed its `release/v1`
+  branch); every `astral-sh/setup-uv` step pins uv (`version: "0.13.9"`), which is bumped by hand
+  with uv's releases; and each Dependabot ecosystem gives a release a 7-day cooldown before a
+  version update proposes it (security updates are not delayed). The Codecov upload moved from the
+  test matrix, whose every leg held `id-token: write`, into a `coverage` job ("Upload coverage")
+  that alone holds it: the ubuntu-latest/3.13 leg hands it `coverage.xml` as an artifact, and it
+  uploads once every test leg has passed.
 - Architecture: the carrier's render guard moved into `rendering.py` and a stage's parallel and
   retry settings into `stage_settings.py`, both new; `Carrier.execute_stage` is split into its
   plan, settle and connection-finish phases; `wire_codec` chooses the codec that reads a response;
@@ -39,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `utils` no longer does. A connection's session class is public as `connections.Session` (it was
   `_Session`). Import-linter layers updated accordingly. No behavior changes beyond the Fixed
   entries.
+
+### Removed
+
+- `connections.OPTIONAL_ADAPTER_METHODS`, which nothing read: `validate --deep` checks an adapter
+  against `connections.ADAPTER_METHODS` alone, and an adapter's `debug_info()` stays optional.
 
 ### Fixed
 
@@ -101,6 +113,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not render is no longer one of the step's failures either, so a user function's
   `pytest.skip()` or `pytest.fail()` in that step now skips or fails it as written, where it was
   listed among them. A `status` or `headers` there still fails before any user function runs.
+- Ten numeric settings no longer read `true` as `1`: `client.timeout`, `max_redirects`,
+  `max_connections` and `max_keepalive_connections`, `request.timeout`, a parallel stage's `repeat`,
+  `max_concurrency`, `calls_per_sec` and `max_rate_limit_delay`, and a connection's `inbox_limit`.
+  Written so, or rendered from a template, `"repeat": true` ran one iteration and passed,
+  `"timeout": true` waited a second, and `"max_connections": "{{ flag }}"` opened one connection at
+  a time. Written, the scenario now fails validation (`HTTPCHAIN000`, in `validate` and at
+  collection) as `Value error, A parallel setting is a number or a template, got true`, and likewise
+  `A client setting ...`, `A request timeout ...` and, for `inbox_limit`, which takes no template,
+  `A connection setting is a number, got true`. Rendered, the same message fails the stage before
+  its request is sent, or for `client` the scenario's initialization. `false`, read as `0`, was
+  refused already (`Input should be greater than 0`, beside the template branch's `Input should be a
+  valid string`) and now reads `... got false`. The retry, threshold and connection timeout settings
+  refused both already.
+- `client.timeout` and `request.timeout` refuse infinity, which a template can render and text reads
+  as (`"inf"`, `"Infinity"`, `"1e999"`). httpx cannot wait forever, and the first request the
+  timeout applied to failed with `Unexpected error during HTTP request: timestamp out of range for
+  platform time_t`. Written, the scenario now fails validation (`HTTPCHAIN000`); rendered, the stage
+  fails before its request is sent, or for `client.timeout` the scenario's initialization. Either
+  way the report reads `Input should be a finite number`, beside the template branch's own error
+  (`Input should be a valid string` for a rendered value, `Must be a complete template expression
+  like '{{ expr }}', got: 'inf'` for text written in the file). NaN and `-inf`, refused already as
+  `Input should be greater than 0`, now read `Input should be a finite number`, as the retry,
+  threshold and connection settings word it.
+- `validate --deep` puts its `--syspath` directories at the front of `sys.path` in the order given,
+  and the current directory right after them, as pytest orders its `pythonpath` entries ahead of the
+  current directory under `python -m pytest`. The current directory came first and the `--syspath`
+  directories followed in reverse order, so where two of them held a module of the same name,
+  `--deep` checked another copy than a test run imports: with `--syspath a --syspath b` it checked
+  `b`'s, and a module in the current directory hid a `--syspath` directory's. Each directory is
+  still added once, one already on `sys.path` stays where it is, and `sys.path` is restored
+  afterwards.
 
 ## [0.21.1] - 2026-11-19
 
