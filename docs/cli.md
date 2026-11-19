@@ -37,7 +37,11 @@ reference that collection resolves. A file that root does not hold, as when one
 run names the files of two projects (a pre-commit hook in a monorepo), is held
 to the root pytest gives it alone, its own project's. A configuration file that
 cannot be read, or that pytest would refuse, is passed over here as one without
-pytest configuration is; pytest itself would stop on it.
+pytest configuration is; pytest itself would stop on it. A file pytest reads
+after the configuration file in its directory (see [Directories](#directories)),
+and stops on as well, is not read for the root: pytest has found the
+configuration file, and its rootdir, before it reads that file, so the root
+stays there.
 
 The default depth is the `httpchain_ref_parent_traversal_depth` that same file
 sets, read as pytest reads it: text in an ini file or under
@@ -50,7 +54,9 @@ refuse, one that is not an integer or is below 0, stops the command with an
 `error:` line naming the file before anything is checked, as it stops pytest. A
 depth given on the command line is used as given, for every file, and no file is
 read for it. A configuration file pytest could not read sets no depth, and
-neither does one past it, which pytest never reaches: the depth is `3`.
+neither does one past it, which pytest never reaches, nor the configuration file
+when pytest stops on a file it reads after it in its directory: the depth is
+`3`.
 
 ## `validate`
 
@@ -125,6 +131,18 @@ for pytest (`validate` reads neither `-o` nor `PYTEST_ADDOPTS`). A configuration
 file pytest could not read, or a suffix it would refuse, stops `validate` with
 an `error:` line before anything is checked. Files you name need no suffix, so
 that happens only when a path is a directory.
+
+Each file is read as pytest reads it, on the way to the configuration file and
+beside it: having found the configuration file, pytest also reads every file
+that comes after it in its order (`pytest.toml`, `.pytest.toml`, `pytest.ini`,
+`.pytest.ini`, `pyproject.toml`, `tox.ini`, `setup.cfg`) in the same directory,
+to warn that it ignores the ones holding pytest configuration, and stops on one
+it cannot read or refuses, such as a `pyproject.toml` with a TOML syntax error
+beside a `pytest.ini`. So does `validate`, naming that file. From pytest 9.2.0
+on, pytest refuses a `pytest.toml` or `.pytest.toml` holding options outside any
+table and no `[pytest]` table ("pytest configuration must be under a [pytest]
+table"), and so does `validate`, in the same words; with an earlier pytest, such
+a file is the configuration file and sets nothing, for `validate` too.
 
 The report is sorted by path, whatever order the paths are given in, so it does
 not change with the order a shell or `find` lists them in. Paths are compared

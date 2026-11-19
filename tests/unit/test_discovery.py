@@ -1,8 +1,9 @@
 """Unit tests for validation/discovery.py: the files a directory given to
 `validate` stands for (`find_scenario_files`), the suffix they are named by
 when `--suffix` is not given (`configured_suffix`), and the depth references
-are held to when `--ref-parent-traversal-depth` is not (`configured_depth`).
-That they agree with a real pytest run is pinned in
+are held to when `--ref-parent-traversal-depth` is not (`configured_depth`),
+both read from the configuration files the installed pytest reads, as it reads
+them. That they agree with a real pytest run is pinned in
 tests/integration/test_validate_directories.py."""
 
 import errno
@@ -15,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from pytest_httpchain.validation import DiscoveryError, configured_depth, configured_suffix, find_scenario_files
+from pytest_httpchain.validation import DiscoveryError, configured_depth, configured_suffix, discovery, find_scenario_files
 from pytest_httpchain.validation.discovery import pytest_rootdir
 
 symlinks = pytest.mark.skipif(sys.platform == "win32", reason="creating a symlink takes a privilege a Windows runner may not have")
@@ -407,8 +408,13 @@ def test_configuration_pytest_stops_on_is_an_error(tmp_path, filename, content, 
     file.write_bytes(content)
     with pytest.raises(DiscoveryError) as raised:
         configured_suffix([tmp_path])
-    expected = message.format(file=file)
-    assert str(raised.value).startswith(expected) if expected.endswith(": ") else str(raised.value) == expected
+    _assert_says(raised.value, message.format(file=file))
+
+
+def _assert_says(error: DiscoveryError, expected: str) -> None:
+    """``expected`` whole, or only its start when it ends in ``": "``, the
+    parser's own words after it varying by version."""
+    assert str(error).startswith(expected) if expected.endswith(": ") else str(error) == expected
 
 
 # --- configured_depth ---
@@ -551,3 +557,221 @@ def test_a_configuration_that_cannot_be_read_sets_the_default(tmp_path, filename
 def test_a_configuration_that_cannot_be_read_alone_sets_the_default(tmp_path, clean_ancestors):
     (tmp_path / "pytest.toml").write_bytes(f"[pytest]\n{DEPTH} = 1\n[pytest\n".encode())
     assert configured_depth([tmp_path]) == 3
+
+
+# --- the files pytest reads beside its configuration file ---
+
+# A file pytest stops on, with what `configured_suffix` says about it (its
+# start, when the parser's words follow), each after pytest.ini in pytest's
+# order. Having found its configuration file, pytest reads each file after it
+# in the same directory, to name the ones it ignores, and stops on one it
+# cannot read or refuses, as it stops on the configuration file.
+BESIDE_PYTEST_STOPS_ON = [
+    pytest.param("pyproject.toml", b"[tool.pytest\n", "cannot read pytest configuration from {file}: ", id="toml-syntax"),
+    pytest.param("tox.ini", b"  a continuation line first\n", "cannot read pytest configuration from {file}: ", id="ini-syntax"),
+    pytest.param(
+        "pyproject.toml",
+        b'[tool.pytest]\nx = 1\n[tool.pytest.ini_options]\ny = "2"\n',
+        "{file}: cannot use both [tool.pytest] and [tool.pytest.ini_options]",
+        id="both-tables",
+    ),
+    pytest.param(
+        "setup.cfg",
+        b"[pytest]\nhttpchain_suffix = api\n",
+        "{file}: [pytest] section in setup.cfg files is no longer supported, change to [tool:pytest] instead.",
+        id="setup.cfg-pytest-section",
+    ),
+]
+
+
+@pytest.mark.parametrize(("filename", "content", "message"), BESIDE_PYTEST_STOPS_ON)
+@pytest.mark.parametrize("depth", ["4", "-1"], ids=["sets-a-depth", "sets-a-refused-depth"])
+def test_a_file_pytest_stops_on_beside_the_configuration(tmp_path, filename, content, message, depth):
+    """The suffix, which a directory needs, is refused naming the file
+    pytest stops on, as an unreadable configuration file is. No depth
+    applies: pytest stops before it applies the one the configuration file
+    sets, or refuses it. The root stays the configuration file's directory,
+    which pytest has found when it reads the file beside it: not the one of
+    a configuration file past it."""
+    (tmp_path / "pytest.ini").write_text("[pytest]\nhttpchain_suffix = outer\n")
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "pytest.ini").write_text(f"[pytest]\nhttpchain_suffix = api\n{DEPTH} = {depth}\n")
+    file = suite / filename
+    file.write_bytes(content)
+    with pytest.raises(DiscoveryError) as raised:
+        configured_suffix([suite])
+    _assert_says(raised.value, message.format(file=file))
+    assert configured_depth([suite]) == 3
+    assert pytest_rootdir([suite]) == suite
+
+
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [
+        # Holding no pytest configuration.
+        pytest.param("pyproject.toml", '[project]\nname = "api"\n', id="pyproject.toml"),
+        pytest.param("tox.ini", "[tox]\nenvlist = py313\n", id="tox.ini"),
+        pytest.param("setup.cfg", "[metadata]\nname = api\n", id="setup.cfg"),
+        # Holding some, which pytest ignores (with a warning), a value it
+        # would refuse included.
+        pytest.param("pyproject.toml", f'[tool.pytest]\nhttpchain_suffix = "other"\n{DEPTH} = 6\n', id="pyproject.toml-configured"),
+        pytest.param("setup.cfg", f"[tool:pytest]\nhttpchain_suffix = a.b\n{DEPTH} = -1\n", id="setup.cfg-configured"),
+    ],
+)
+def test_a_readable_file_beside_the_configuration_changes_nothing(tmp_path, filename, content):
+    (tmp_path / "pytest.ini").write_text(f"[pytest]\nhttpchain_suffix = api\n{DEPTH} = 4\n")
+    (tmp_path / filename).write_text(content)
+    assert configured_suffix([tmp_path]) == "api"
+    assert configured_depth([tmp_path]) == 4
+    assert pytest_rootdir([tmp_path]) == tmp_path
+
+
+@pytest.mark.parametrize(
+    ("filename", "content", "message"),
+    # A setup.cfg comes last in pytest's order: no configuration file is after it.
+    [param for param in BESIDE_PYTEST_STOPS_ON if param.values[0] != "setup.cfg"],
+)
+def test_a_file_pytest_stops_on_before_the_configuration_is_met_on_the_way(tmp_path, filename, content, message):
+    """Before the configuration file in pytest's order, the file is not one
+    read beside it: pytest meets it on the way, and stops there without
+    finding the configuration file, as it did before it read any file beside
+    one. Refused for the suffix, no depth, and passed over for the root."""
+    (tmp_path / filename).write_bytes(content)
+    (tmp_path / "setup.cfg").write_text(f"[tool:pytest]\nhttpchain_suffix = api\n{DEPTH} = 4\n")
+    with pytest.raises(DiscoveryError) as raised:
+        configured_suffix([tmp_path])
+    _assert_says(raised.value, message.format(file=tmp_path / filename))
+    assert configured_depth([tmp_path]) == 3
+    assert pytest_rootdir([tmp_path]) == tmp_path
+
+
+def test_each_file_is_read_once_in_pytests_order(tmp_path, monkeypatch):
+    """One before the configuration file is read on the way to it, passed
+    over for holding no pytest configuration, and not again beside it; the
+    one after it is read beside it. For the root alone, the file after it is
+    not read at all (see `pytest_rootdir`)."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "api"\n')
+    (tmp_path / "tox.ini").write_text("[pytest]\nhttpchain_suffix = api\n")
+    (tmp_path / "setup.cfg").write_text("[metadata]\nname = api\n")
+    read = []
+    real_read_config = discovery._read_config
+
+    def read_config(file):
+        read.append(file.name)
+        return real_read_config(file)
+
+    monkeypatch.setattr(discovery, "_read_config", read_config)
+    assert configured_suffix([tmp_path]) == "api"
+    assert read == ["pyproject.toml", "tox.ini", "setup.cfg"]
+    read.clear()
+    assert pytest_rootdir([tmp_path]) == tmp_path
+    assert read == ["pyproject.toml", "tox.ini"]
+
+
+@pytest.mark.parametrize(("filename", "content", "message"), BESIDE_PYTEST_STOPS_ON)
+@pytest.mark.parametrize("where", ["above", "below"])
+def test_a_file_pytest_stops_on_in_another_directory_is_not_read(tmp_path, filename, content, message, where):
+    """Only the configuration file's own directory: pytest reads no file
+    above it once it has found it, nor one below where its search starts."""
+    suite = tmp_path / "suite"
+    (suite / "sub").mkdir(parents=True)
+    (suite / "pytest.ini").write_text(f"[pytest]\nhttpchain_suffix = api\n{DEPTH} = 4\n")
+    (tmp_path / filename if where == "above" else suite / "sub" / filename).write_bytes(content)
+    assert configured_suffix([suite]) == "api"
+    assert configured_depth([suite]) == 4
+    assert pytest_rootdir([suite]) == suite
+
+
+# --- a pytest.toml's options outside any table ---
+
+# pytest 9.2.0 is the first release that refuses a pytest.toml (or a
+# .pytest.toml) holding options outside any table and no [pytest] table;
+# before it, such a file is the configuration file, setting nothing.
+REFUSING = ["9.2.0", "9.3.1", "10.0.0"]
+ACCEPTING = ["9.0.0", "9.1.1"]
+
+
+def _install(monkeypatch, version: str) -> None:
+    """Have discovery read ``version`` as the installed pytest's."""
+    monkeypatch.setattr(pytest, "version_tuple", tuple(int(part) for part in version.split(".")))
+
+
+TOP_LEVEL_OPTIONS = [
+    pytest.param("pytest.toml", f'httpchain_suffix = "api"\n{DEPTH} = 4\n', f"httpchain_suffix, {DEPTH}", id="pytest.toml"),
+    pytest.param(".pytest.toml", 'httpchain_suffix = "api"\n', "httpchain_suffix", id=".pytest.toml"),
+    # Named in the file's order; an array of tables is no table, and a
+    # table is no option.
+    pytest.param("pytest.toml", "b = 1\n[tool.x]\ny = 2\n[[a]]\nz = 3\n", "b, a", id="array-of-tables"),
+]
+
+
+@pytest.mark.parametrize("version", REFUSING)
+@pytest.mark.parametrize(("filename", "content", "options"), TOP_LEVEL_OPTIONS)
+def test_top_level_options_where_pytest_refuses_them(tmp_path, monkeypatch, version, filename, content, options):
+    """Refused in pytest's words, as a configuration file pytest refuses
+    is: no suffix, no depth, and passed over for the root."""
+    _install(monkeypatch, version)
+    (tmp_path / "pytest.ini").write_text("[pytest]\nhttpchain_suffix = outer\n")
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    file = suite / filename
+    file.write_text(content)
+    with pytest.raises(DiscoveryError) as raised:
+        configured_suffix([suite])
+    assert str(raised.value) == f"{file}: pytest configuration must be under a [pytest] table (found top-level options: {options})"
+    assert configured_depth([suite]) == 3
+    assert pytest_rootdir([suite]) == tmp_path
+
+
+@pytest.mark.parametrize("version", ACCEPTING)
+@pytest.mark.parametrize(("filename", "content", "options"), TOP_LEVEL_OPTIONS)
+def test_top_level_options_where_pytest_takes_the_file_as_empty(tmp_path, monkeypatch, version, filename, content, options):
+    """The configuration file, setting nothing: not the suffix or the depth
+    written outside the [pytest] table, nor those of a file past it."""
+    _install(monkeypatch, version)
+    (tmp_path / "pytest.ini").write_text(f"[pytest]\nhttpchain_suffix = outer\n{DEPTH} = 6\n")
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / filename).write_text(content)
+    assert configured_suffix([suite]) == "http"
+    assert configured_depth([suite]) == 3
+    assert pytest_rootdir([suite]) == suite
+
+
+@pytest.mark.parametrize("version", [*REFUSING, *ACCEPTING])
+def test_top_level_options_in_a_dot_pytest_toml_beside_the_configuration(tmp_path, monkeypatch, version):
+    """pytest reads a .pytest.toml beside its pytest.toml, as any file after
+    its configuration file in its directory, and stops on it where it
+    refuses its top-level options, as it would on the pytest.toml."""
+    _install(monkeypatch, version)
+    (tmp_path / "pytest.toml").write_text(f'[pytest]\nhttpchain_suffix = "api"\n{DEPTH} = 4\n')
+    file = tmp_path / ".pytest.toml"
+    file.write_text("a = 1\n")
+    if version in REFUSING:
+        with pytest.raises(DiscoveryError) as raised:
+            configured_suffix([tmp_path])
+        assert str(raised.value) == f"{file}: pytest configuration must be under a [pytest] table (found top-level options: a)"
+        assert configured_depth([tmp_path]) == 3
+    else:
+        assert configured_suffix([tmp_path]) == "api"
+        assert configured_depth([tmp_path]) == 4
+    assert pytest_rootdir([tmp_path]) == tmp_path
+
+
+@pytest.mark.parametrize("version", [*REFUSING, *ACCEPTING])
+@pytest.mark.parametrize(
+    ("content", "suffix"),
+    [
+        # No option outside a table.
+        pytest.param("", "http", id="empty"),
+        pytest.param("[tool.x]\na = 1\n", "http", id="tables-only"),
+        # Beside a [pytest] table, an option outside it is not looked at.
+        pytest.param('a = 1\n[pytest]\nhttpchain_suffix = "api"\n', "api", id="beside-the-pytest-table"),
+    ],
+)
+def test_a_pytest_toml_every_release_takes(tmp_path, monkeypatch, version, content, suffix):
+    _install(monkeypatch, version)
+    (tmp_path / "pytest.toml").write_text(content)
+    assert configured_suffix([tmp_path]) == suffix
+    assert pytest_rootdir([tmp_path]) == tmp_path

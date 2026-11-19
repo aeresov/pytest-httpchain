@@ -355,16 +355,27 @@ def test_every_command_exits_one_on_a_configured_depth_pytest_refuses(tmp_path, 
 
 @pytest.mark.parametrize("command", DEPTH_COMMANDS)
 @pytest.mark.parametrize("past", ["4", "-1"], ids=["past-sets-a-depth", "past-sets-a-refused-depth"])
-def test_every_command_takes_the_default_depth_over_a_configuration_that_cannot_be_read(tmp_path, four_up, command, past):
-    """pytest stops on such a file before it reads a value, from it or from
-    the file past it: no depth applies but the default, so a command over a
-    file still runs on a project whose configuration is mid-edit, holding
-    references to 3 levels, as before the depth was read. The file past it
-    is not read for the depth: neither its depth nor its refusal counts.
-    `validate` over a directory reports the file pytest stops on, needing
-    the suffix from it."""
+@pytest.mark.parametrize(
+    "broken",
+    [
+        # Nearer the scenario: pytest stops on it before it reaches the
+        # pytest.ini past it.
+        pytest.param("a/pyproject.toml", id="nearer"),
+        # Beside the pytest.ini, after it in pytest's order: pytest finds the
+        # pytest.ini, then stops on the file it reads beside it.
+        pytest.param("pyproject.toml", id="beside"),
+    ],
+)
+def test_every_command_takes_the_default_depth_over_a_configuration_that_cannot_be_read(tmp_path, four_up, command, past, broken):
+    """pytest stops on such a file before it applies a value, from it, from
+    the file past it or from the one it found before it: no depth applies
+    but the default, so a command over a file still runs on a project whose
+    configuration is mid-edit, holding references to 3 levels, as before the
+    depth was read. The pytest.ini is not read for the depth: neither its
+    depth nor its refusal counts. `validate` over a directory reports the
+    file pytest stops on, needing the suffix from it."""
     (tmp_path / "pytest.ini").write_text(f"[pytest]\n{DEPTH_INI} = {past}\n")
-    (tmp_path / "a" / "pyproject.toml").write_text("[tool.pytest\n")
+    (tmp_path / broken).write_text("[tool.pytest\n")
     result = runner.invoke(app, [command, str(four_up)])
     assert result.exit_code == 1, result.output
     assert "exceeds maximum parent traversal depth of 3" in result.output
@@ -373,7 +384,8 @@ def test_every_command_takes_the_default_depth_over_a_configuration_that_cannot_
     if command == "validate":
         result = runner.invoke(app, [command, str(four_up.parent)])
         assert result.exit_code == 1
-        assert result.stderr.startswith(f"error: cannot read pytest configuration from {tmp_path / 'a' / 'pyproject.toml'}: ")
+        assert result.stdout == ""
+        assert result.stderr.startswith(f"error: cannot read pytest configuration from {tmp_path / broken}: ")
 
 
 @pytest.mark.parametrize("command", DEPTH_COMMANDS)
