@@ -56,9 +56,10 @@ def test_value_it_cannot_encode_is_refused_by_its_type():
 def test_map_key_that_is_not_text_is_refused():
     """``strict_map_key``: a body's map whose key is not text is refused,
     one of the same map keyed by text taken. The refusal's message is
-    msgpack's own, so only its type is pinned."""
+    msgpack's own, and its C extension and pure-Python fallback word it
+    differently, so only the words both share are matched."""
     assert unpack_msgpack(msgpack.packb({"1": "one"})) == {"1": "one"}
-    with pytest.raises(ValueError):  # noqa: PT011
+    with pytest.raises(ValueError, match="is not allowed for map key"):
         unpack_msgpack(msgpack.packb({1: "one"}))
 
 

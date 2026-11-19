@@ -86,11 +86,16 @@ def peer(name: str, **settings: Any) -> Peer:
     return created
 
 
-def readers() -> list[str]:
-    """The names of the connection reader threads running now, as
-    `connections.Connections.open` names them:
+def reader_threads() -> list[threading.Thread]:
+    """The connection reader threads running now, told apart by the name
+    `connections.Connections.open` gives them:
     ``httpchain-connection-<label>-<name>-<generation>``."""
-    return [thread.name for thread in threading.enumerate() if thread.name.startswith("httpchain-connection-")]
+    return [thread for thread in threading.enumerate() if thread.name.startswith("httpchain-connection-")]
+
+
+def readers() -> list[str]:
+    """The names of the connection reader threads running now (`reader_threads`)."""
+    return [thread.name for thread in reader_threads()]
 
 
 class FakeAdapter:
@@ -167,8 +172,8 @@ class MinimalAdapter(FakeAdapter):
     debug_info = None
 
 
-# Released by a test once it is done with a `StuckAdapter`, so its reader
-# thread does end.
+# Released by the `stuck_adapter` fixture (test_connections.py) once its test
+# is done with a `StuckAdapter`, so the reader thread does end.
 STUCK_RELEASE = threading.Event()
 
 

@@ -174,7 +174,7 @@ class TestOpen:
         assert not registry.never_opened("dev")
         assert session.generation == 1
         assert helpers.readers() == ["httpchain-connection-UnitScenario-dev-1"]
-        assert all(thread.daemon for thread in threading.enumerate() if thread.name.startswith("httpchain-connection-"))
+        assert all(thread.daemon for thread in helpers.reader_threads())
 
     def test_reader_starts_in_an_empty_context(self, registry):
         peer = helpers.peer("context")
