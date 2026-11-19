@@ -230,8 +230,8 @@ class RenderOutcome:
 
 
 # How `process_verify` gets the values its checks run on: ``render(values)``
-# takes the step's values, each where it is declared, in the order their
-# checks run (`_declared_values`), and gives back, by where, what each
+# takes the step's values its checks read, each where it is declared, in the
+# order their checks run (`_declared_values`), and gives back, by where, what each
 # rendered to: the value with its templates rendered, or a `RenderFailure`. A
 # value whose rendering raised a pytest outcome is a `RenderOutcome`, and the
 # values after it are left out: the rendering ends there.
@@ -289,7 +289,8 @@ def process_verify(
 
     ``response`` is the HTTP response, or a connection stage's message
     (`MessageSubject`), which jmespath and body.schema read as it is: a
-    status, a header or a body text check on one fails, once per field.
+    status, a header or a body text check on one fails, once per field, and
+    its values are not rendered, as nothing reads them.
 
     A header check's message shows the header's value through ``redaction``, as
     the report does, and so does an exact-match expected value: it is a whole
@@ -305,9 +306,9 @@ def process_verify(
     """
     failures = _Failures()
     body = _StructuredBody(response, failures, codec)
-    step = _RenderedStep(verify_model, render)
     message = response if isinstance(response, MessageSubject) else None
     http = response if isinstance(response, httpx.Response) else None
+    step = _RenderedStep(verify_model, render, http=http is not None)
     headers = http.headers if http is not None else httpx.Headers()
 
     def end_step(outcome: BaseException, raised_by: str, where: VerifyWhere) -> NoReturn:
@@ -487,15 +488,22 @@ def _template_at(where: VerifyWhere) -> str:
     return f"The template at 'verify{''.join(map(path_segment, where))}'"
 
 
-def _declared_values(verify_model: Verify) -> Iterator[tuple[VerifyWhere, Any]]:
+def _declared_values(verify_model: Verify, *, http: bool = True) -> Iterator[tuple[VerifyWhere, Any]]:
     """Each value of a verify step that is rendered (`_RenderedStep`), where
     it is declared, in the order `process_verify` runs their checks: a
-    header's expectation and a jmespath entry's whole, a list item by item."""
+    header's expectation and a jmespath entry's whole, a list item by item.
+
+    Without ``http``, on a connection stage's message, the values of the
+    checks only an HTTP response has (status, headers and the body's text
+    checks) are left out: those checks fail there as they are (`_http_only`),
+    reading none of them. Rendered, a pytest outcome raised in one ended the
+    rendering at a value no check reaches, and the next check found its own
+    value missing."""
     if verify_model.description is not None:
         yield ("description",), verify_model.description
-    if verify_model.status is not None:
+    if http and verify_model.status is not None:
         yield ("status",), verify_model.status
-    for name, expected in verify_model.headers.items():
+    for name, expected in verify_model.headers.items() if http else ():
         yield ("headers", name), expected
     for expression, expected in verify_model.jmespath.items():
         yield ("jmespath", expression), expected
@@ -505,7 +513,7 @@ def _declared_values(verify_model: Verify) -> Iterator[tuple[VerifyWhere, Any]]:
         yield ("user_functions", i), function
     if verify_model.body.schema is not None:
         yield ("body", "schema"), verify_model.body.schema
-    for field in ResponseBody.TEXT_CHECKS:
+    for field in ResponseBody.TEXT_CHECKS if http else ():
         for i, operand in enumerate(getattr(verify_model.body, field)):
             yield ("body", field, i), operand
 
@@ -527,8 +535,8 @@ class _RenderedStep:
 
     __slots__ = ("_values",)
 
-    def __init__(self, verify_model: Verify, render: VerifyRender | None) -> None:
-        declared = list(_declared_values(verify_model))
+    def __init__(self, verify_model: Verify, render: VerifyRender | None, *, http: bool = True) -> None:
+        declared = list(_declared_values(verify_model, http=http))
         if render is None:
             self._values: dict[VerifyWhere, Any] = dict(declared)
         else:

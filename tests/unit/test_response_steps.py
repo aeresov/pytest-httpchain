@@ -1786,6 +1786,26 @@ class TestMessageSubject:
         )
         assert not excinfo.value.retryable
 
+    @pytest.mark.parametrize("where", [("status",), ("headers", "X-A"), ("body", "contains", 0)], ids=["status", "headers", "body-contains"])
+    @pytest.mark.parametrize("raise_it", [lambda: pytest.skip("skipped"), lambda: pytest.fail("failed")], ids=["skip", "fail"])
+    def test_http_only_values_are_not_rendered(self, where, raise_it):
+        """Their checks fail as they are, reading no value. Rendered, a pytest
+        outcome a template raised in one ended the rendering at a value no
+        check reads, and the next check found its own value missing: a bare
+        KeyError, through the direct API (collection refuses such a step,
+        HTTPCHAIN041)."""
+        verify = Verify.model_validate({"status": 200, "headers": {"X-A": "1"}, "jmespath": {"type": "ack"}, "body": {"contains": ["a"]}})
+        asked: list = []
+        with pytest.raises(VerificationError) as excinfo:
+            process_verify(verify, self.MESSAGE, render=_renderer({where: _outcome(raise_it)}, asked))
+        assert asked == [[("jmespath", "type")]]
+        assert str(excinfo.value) == (
+            "3 verification checks failed:\n"
+            "  1. verify.status checks an HTTP response, and a connection stage has a message instead\n"
+            "  2. verify.headers checks an HTTP response, and a connection stage has a message instead\n"
+            "  3. verify.body.contains checks an HTTP response, and a connection stage has a message instead"
+        )
+
     def test_regex_save_fails_on_a_message(self):
         with pytest.raises(SaveError, match="save.regex reads an HTTP response body's text") as excinfo:
             process_save(RegexSave(regex={"a": "(.)"}), self.MESSAGE, ChainMap())
