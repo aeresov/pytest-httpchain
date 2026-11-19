@@ -216,40 +216,42 @@ root_package = "pytest_httpchain"
 
 # Exhaustive vertical layering: every top-level module must appear in exactly one
 # layer; a new module fails lint-imports until it is placed. Modules on the same
-# layer (separated by ":") are additionally kept mutually independent.
+# layer (separated by "|") are additionally kept mutually independent: neither
+# may import the other, which ":" would allow.
 [[tool.importlinter.contracts]]
 name = "package layering"
 type = "layers"
 containers = ["pytest_httpchain"]
 exhaustive = true
 layers = [
-    "plugin : cli",
+    "plugin | cli",
     "factory",
     # importers is the cli's `import` command, beside carrier and independent
     # of it: it builds on validation, templates and redaction, and nothing on
     # a lower layer, the domain packages included, may import it.
-    "carrier : dataflow : schema : importers",
+    "carrier | dataflow | schema | importers",
     # rendering is the carrier's guard over what a template renders into a
     # declared model; it builds on response_steps' render types, and only
     # the carrier uses it.
     "rendering",
-    "validation : har_writer : report_formatter : request_builder : response_steps : parallel_stats : stage_settings",
+    "validation | har_writer | report_formatter | request_builder | response_steps | parallel_stats | stage_settings",
     # connections is the connection stages' sessions and readers, below
     # response_steps, which judges a message: the carrier injects the match.
     "connections",
     "body_schema",
     # scoping reads stage marks with utils.make_marker (scoping.SkipCause).
     "scoping",
-    "utils : redaction",
+    "utils | redaction",
     "userfunc",
     "models",
-    "templates : jsonref",
+    "templates | jsonref",
     "wire_codec",
-    "errors : constants : warnings",
+    "errors | constants | warnings",
 ]
 
-# Horizontal refinement the layers contract cannot express: models sits above the
-# domain trio and may import templates/userfunc, but must never import jsonref.
+# Horizontal refinement the layers contract cannot express: models sits above
+# templates and jsonref and may import templates, but must never import jsonref.
+# (userfunc sits above models: it imports models, never the other way round.)
 [[tool.importlinter.contracts]]
 name = "models does not import jsonref"
 type = "forbidden"

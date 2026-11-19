@@ -21,7 +21,8 @@ class UserFunctionError(HttpChainError):
 
 
 # Re-exported: the grammar lives in constants, shared with the models' validator,
-# so neither module has to sit below the other.
+# which sits below this module (userfunc imports models) and so cannot import it
+# from here.
 NAME_PATTERN = USER_FUNCTION_NAME_PATTERN
 
 
