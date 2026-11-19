@@ -61,9 +61,13 @@ def as_rendered(value: str, info: ValidationInfo) -> str:
     return value if info.context is RENDERED else unescape(value)
 
 
-def create_string_validator(validation_func: Callable[[str], Any], error_message: str) -> Callable[[str, ValidationInfo], str]:
+def create_string_validator(validation_func: Callable[[str], Any], error_message: str, *, name: str) -> Callable[[str, ValidationInfo], str]:
     """Factory for a literal's validator: ``validation_func`` judges the text
-    the literal is used as (`as_rendered`), and the value is kept as written."""
+    the literal is used as (`as_rendered`), and the value is kept as written.
+
+    The validator is called ``name``, the name it is bound to: pydantic tags
+    a union's member by its validator's name in an error's location
+    (``function-after[validate_xml(), str]``), which names the check."""
 
     def validator(v: str, info: ValidationInfo) -> str:
         try:
@@ -72,6 +76,7 @@ def create_string_validator(validation_func: Callable[[str], Any], error_message
             raise ValueError(error_message) from e
         return v
 
+    validator.__name__ = validator.__qualname__ = name
     return validator
 
 
@@ -184,7 +189,7 @@ def validate_schema_file_ref(value: Any, handler: ValidatorFunctionWrapHandler) 
     return v
 
 
-validate_jmespath_expression = create_string_validator(jmespath.compile, "Invalid JMESPath expression")
+validate_jmespath_expression = create_string_validator(jmespath.compile, "Invalid JMESPath expression", name="validate_jmespath_expression")
 
 
 def validate_jmespath_key(v: str) -> str:
@@ -204,7 +209,7 @@ def validate_jmespath_key(v: str) -> str:
     return v
 
 
-validate_regex_pattern = create_string_validator(re.compile, "Invalid regular expression")
+validate_regex_pattern = create_string_validator(re.compile, "Invalid regular expression", name="validate_regex_pattern")
 
 
 def validate_regex_group_name(v: str) -> str:
@@ -237,7 +242,7 @@ def regex_group(pattern: re.Pattern[str], group: int | str | None) -> int | str:
     return group
 
 
-validate_xml = create_string_validator(xml.etree.ElementTree.fromstring, "Invalid XML")
+validate_xml = create_string_validator(xml.etree.ElementTree.fromstring, "Invalid XML", name="validate_xml")
 
 
 class GraphQLOperationError(ValueError):
@@ -593,7 +598,7 @@ def check_templated_graphql_operation(query: str, operation_name: str | None) ->
     _check_operation(stand_in.operations, operation_name)
 
 
-validate_base64 = create_string_validator(lambda v: base64.b64decode(v, validate=True), "Invalid base64 encoding")
+validate_base64 = create_string_validator(lambda v: base64.b64decode(v, validate=True), "Invalid base64 encoding", name="validate_base64")
 
 
 def validate_template_expression(v: str) -> str:

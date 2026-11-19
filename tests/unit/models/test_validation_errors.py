@@ -26,7 +26,7 @@ from pytest_httpchain.models.types import (
     XMLString,
 )
 from pytest_httpchain.models.validation_errors import reported, validation_error, without_template_hints
-from tests.unit.models.helpers import GRAPHQL_NAME_TAG, GRAPHQL_QUERY_TAG, OBJECT_TAG, STRING_CHECK_TAG, TEMPLATE_TAG
+from tests.unit.models.helpers import GRAPHQL_NAME_TAG, GRAPHQL_QUERY_TAG, OBJECT_TAG, TEMPLATE_TAG, XML_TAG
 
 
 class _Siblings(BaseModel):
@@ -108,7 +108,7 @@ def _where(errors: list) -> list[tuple]:
             [(GRAPHQL_QUERY_TAG, "value_error"), (TEMPLATE_TAG, "value_error")],
             id="unclosed-template",
         ),
-        pytest.param(XMLString | PartialTemplateStr, "<a>{{ x </a", [(STRING_CHECK_TAG, "value_error"), (TEMPLATE_TAG, "value_error")], id="unclosed-template-in-xml"),
+        pytest.param(XMLString | PartialTemplateStr, "<a>{{ x </a", [(XML_TAG, "value_error"), (TEMPLATE_TAG, "value_error")], id="unclosed-template-in-xml"),
         pytest.param(GraphQLQuery | PartialTemplateStr, "{ a(x: {{}}) }", [(GRAPHQL_QUERY_TAG, "value_error"), (TEMPLATE_TAG, "value_error")], id="empty-braces"),
         # An escaped `\{{` is text, no template the author meant: the literal
         # branch judged it (as the text it renders to), alone.

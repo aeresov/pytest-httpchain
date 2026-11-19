@@ -512,6 +512,25 @@ class TestBase64String:
             validate(Base64String, value)
 
 
+@pytest.mark.parametrize(
+    ("annotated_type", "value", "tag"),
+    [
+        pytest.param(JMESPathExpression, "a[", "function-after[validate_jmespath_expression(), str]", id="jmespath"),
+        pytest.param(RegexPattern, "(", "function-after[validate_regex_pattern(), str]", id="regex"),
+        pytest.param(XMLString, "<a>", "function-after[validate_xml(), str]", id="xml"),
+        pytest.param(Base64String, "!!", "function-after[validate_base64(), str]", id="base64"),
+    ],
+)
+def test_string_check_names_itself_in_an_error_location(annotated_type, value, tag):
+    """pydantic tags a union's member by its validator's name in an error's
+    location. The checks `create_string_validator` builds were closures all
+    named ``validator``, so a refused XML body read ``... -> xml -> xml ->
+    function-after[validator(), str]``, naming no check."""
+    with pytest.raises(ValidationError) as excinfo:
+        validate(annotated_type | PartialTemplateStr, value)
+    assert excinfo.value.errors()[0]["loc"] == (tag,)
+
+
 class TestJSONSchemaInline:
     @pytest.mark.parametrize(
         "value",

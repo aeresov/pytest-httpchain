@@ -24,6 +24,8 @@ from pytest_httpchain.models.types import (
     validate_graphql_name,
     validate_graphql_query,
     validate_partial_template_str,
+    validate_regex_pattern,
+    validate_xml,
 )
 
 
@@ -45,9 +47,10 @@ FUNCTION_NAME_TAG = after_tag(validate_function_import_name)
 # what follows the name is how pydantic renders its dict of JSON values.
 OBJECT_TAG = f"function-before[{convert_namespace_to_dict.__name__}(), dict[str,json-or-python[json=any,python=tagged-union[list[...],dict[str,...],str,bool,int,float,none]]]]"
 
-# A member `types.create_string_validator` builds (`XMLString`, a regex): its
-# validator is a closure named `validator`, which cannot be imported to name it.
-STRING_CHECK_TAG = "function-after[validator(), str]"
+# Members `types.create_string_validator` builds (`XMLString`, `RegexPattern`),
+# each validator named as the name it is bound to.
+XML_TAG = after_tag(validate_xml)
+REGEX_TAG = after_tag(validate_regex_pattern)
 
 
 def assert_error_types(exc_info: pytest.ExceptionInfo[ValidationError], *expected_types: str, at: str | None = None) -> None:

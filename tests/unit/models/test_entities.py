@@ -26,7 +26,7 @@ from pytest_httpchain.models.entities import (
     validate_rendered_scenario_auth,
     validate_rendered_verify,
 )
-from tests.unit.models.helpers import FUNCTION_NAME_TAG, GRAPHQL_QUERY_TAG, OBJECT_TAG, STRING_CHECK_TAG
+from tests.unit.models.helpers import FUNCTION_NAME_TAG, GRAPHQL_QUERY_TAG, OBJECT_TAG, REGEX_TAG
 
 
 class TestParametrizeValuesContainTemplate:
@@ -119,7 +119,7 @@ class TestRenderedValidationErrors:
         declared = Verify.model_validate({"headers": {"Location": {"matches": "{{ p }}"}}})
         error = self._refusal(validate_rendered_verify, declared, {"headers": {"Location": {"matches": "("}}})
         # The header's own union refused the object's type, as a string: kept.
-        assert [e["loc"][-2:] for e in error.errors()] == [("Location", "str"), ("matches", STRING_CHECK_TAG)]
+        assert [e["loc"][-2:] for e in error.errors()] == [("Location", "str"), ("matches", REGEX_TAG)]
 
     def test_validate_rendered_scenario_auth(self):
         error = self._refusal(validate_rendered_scenario_auth, {"name": "nocolon"})
@@ -129,7 +129,7 @@ class TestRenderedValidationErrors:
     def test_validate_rendered_expectations(self):
         declared = {"name": JMESPathMatcher.model_validate({"matches": "{{ p }}"})}
         error = self._refusal(validate_rendered_expectations, declared, {"name": {"matches": "("}})
-        assert [e["loc"][-2:] for e in error.errors()] == [("matches", STRING_CHECK_TAG)]
+        assert [e["loc"][-2:] for e in error.errors()] == [("matches", REGEX_TAG)]
         assert "input_value" not in str(error)
 
 

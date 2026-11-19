@@ -20,7 +20,7 @@ from pytest_httpchain.models import JMESPathMatcher
 from pytest_httpchain.validation import SEVERITY, DiagnosticCode, DiscoveryError, load_scenario, resolve_root_path, validate_paths, validate_scenario
 from pytest_httpchain.validation.deep import _method_problem
 from tests.unit.helpers import LOADABLE_BUT_DEEP, TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, nested, on_bounded_stack
-from tests.unit.models.helpers import GRAPHQL_NAME_TAG, GRAPHQL_QUERY_TAG, OBJECT_TAG, STRING_CHECK_TAG, TEMPLATE_TAG
+from tests.unit.models.helpers import GRAPHQL_NAME_TAG, GRAPHQL_QUERY_TAG, OBJECT_TAG, TEMPLATE_TAG, XML_TAG
 
 C = DiagnosticCode
 # A stable importable directory so `userfuncs:<name>` refs resolve under --syspath.
@@ -371,7 +371,7 @@ DIAGNOSED = [
         "literal_or_template_graphql_query.json",
         [(C.SCHEMA, f"{_GRAPHQL} -> query -> {GRAPHQL_QUERY_TAG}", r": Value error, Invalid GraphQL query: There can be only one operation named 'A'\.$")],
     ),
-    ("literal_or_template_xml_body.json", [(C.SCHEMA, f"stages -> 0 -> request -> body -> xml -> xml -> {STRING_CHECK_TAG}", r": Value error, Invalid XML$")]),
+    ("literal_or_template_xml_body.json", [(C.SCHEMA, f"stages -> 0 -> request -> body -> xml -> xml -> {XML_TAG}", r": Value error, Invalid XML$")]),
     (
         "literal_or_template_operation_name.json",
         [(C.SCHEMA, f"{_GRAPHQL} -> operation_name -> {GRAPHQL_NAME_TAG}", r": Value error, Invalid GraphQL operation name '1st': a name is")],
