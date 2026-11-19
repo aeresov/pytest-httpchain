@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from pydantic import BaseModel, ValidationError
 
 from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds
 from pytest_httpchain.carrier import Carrier, fresh_scenario_state
@@ -18,7 +17,7 @@ from pytest_httpchain.models import (
     Scenario,
     Stage,
     parametrize_values_contain_template,
-    reported,
+    validate_rendered,
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
 from pytest_httpchain.scoping import base_global_context
@@ -38,18 +37,6 @@ def _make_stage_method(stage_template: Stage) -> Callable:
         type(self).execute_stage(stage_template, kwargs)
 
     return call_execute_stage
-
-
-def _revalidated[M: BaseModel](model: type[M], value: dict[str, Any]) -> M:
-    """A template-form parametrize step validated again with its values
-    rendered. Its `ValidationError` is reported as rendered text
-    (`models.reported`): a value its template rendered that the list branch
-    refuses (a string) is not also told to hold a template, which it was
-    rendered from."""
-    try:
-        return model.model_validate(value)
-    except ValidationError as e:
-        raise reported(e, hide_input=model.model_config.get("hide_input_in_errors", False), rendered=True) from None
 
 
 def _parametrize_values(stage: Stage, field: str, value: Any) -> list[Any]:
@@ -133,13 +120,13 @@ def create_test_class(
                         declared_values = individual[param_names[0]]
                         param_values = walk(declared_values, scenario_context)
                         if isinstance(declared_values, str):
-                            revalidated = _revalidated(IndividualParameter, {"individual": {param_names[0]: param_values}, "ids": step.ids})
+                            revalidated = validate_rendered(IndividualParameter, {"individual": {param_names[0]: param_values}, "ids": step.ids})
                             param_values = _parametrize_values(stage, f"individual '{param_names[0]}'", revalidated.individual[param_names[0]])
 
                     case CombinationsParameter(combinations=combinations) if combinations:
                         resolved_combinations = walk(combinations, scenario_context)
                         if isinstance(combinations, str):
-                            revalidated_combos = _revalidated(CombinationsParameter, {"combinations": resolved_combinations, "ids": step.ids})
+                            revalidated_combos = validate_rendered(CombinationsParameter, {"combinations": resolved_combinations, "ids": step.ids})
                             resolved_combinations = _parametrize_values(stage, "combinations", revalidated_combos.combinations)
                         param_names = list(resolved_combinations[0].keys())
                         # pytest unpacks each argvalue only for several argnames:

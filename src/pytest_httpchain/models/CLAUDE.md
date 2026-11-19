@@ -60,10 +60,10 @@ escaped `\{{` is text). `rendered` judges a value a template rendered: its
 text is final and the author wrote a template there, so the hint goes beside
 any other member's error, a type refusal included, whatever braces the text
 holds. The loader (`HTTPCHAIN000`) applies it as the scenario loads. The
-rendered validators, `validate_rendered`, `validate_rendered_verify`,
-`validate_rendered_scenario_auth` and `validate_rendered_expectations`, and
-the factory's re-validation of a template-form parametrize step's rendered
-values (`factory._revalidated`) raise their error as `reported(e,
+rendered validators, `validate_rendered` (with which the factory also
+re-validates a template-form parametrize step's rendered values),
+`validate_rendered_verify`, `validate_rendered_scenario_auth` and
+`validate_rendered_expectations`, raise their error as `reported(e,
 hide_input=..., rendered=True)` leaves it, rebuilt with
 `validation_error(title, errors, hide_input=...)` only when an error goes,
 hiding the input as the outermost validator does (`hide_input_in_errors`,
