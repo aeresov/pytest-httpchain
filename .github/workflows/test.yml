@@ -148,6 +148,8 @@ jobs:
                   name: coverage-xml
                   path: coverage.xml
                   if-no-files-found: error
+                  # Read by the coverage job of the same run; a week leaves room to re-run it.
+                  retention-days: 7
 
     # Codecov's upload, in a job of its own: the OIDC token it needs is then
     # never granted to the test matrix, which runs the tests and every dev
