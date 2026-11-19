@@ -161,8 +161,11 @@ def configured_suffix(paths: Sequence[Path]) -> str:
     pytest configuration, or some, changes nothing. A ``pytest.toml`` or
     ``.pytest.toml`` holding options outside any table and no ``[pytest]``
     table is refused where the installed pytest refuses it (from 9.2.0 on,
-    `_refuses_top_level_options`); before that, it holds pytest configuration
-    that sets nothing.
+    `_reads_pytest_toml_as_9_2`); before that, it holds pytest configuration
+    that sets nothing. A key pytest reads as a table that is none (``tool =
+    1`` in a ``pyproject.toml``, a ``pytest`` value in a ``pytest.toml``,
+    which before 9.2.0 pytest reads as no table when it is falsy) is refused
+    too: pytest's loader fails on it.
 
     ``-o``/``--override-ini`` and ``PYTEST_ADDOPTS`` belong to a pytest run and
     are not read; ``validate --suffix`` stands in for them.
@@ -268,9 +271,11 @@ def pytest_rootdir(paths: Sequence[Path]) -> Path:
     default reference root is this: `validate` rejects no reference a run
     on the same paths resolves, and one run's files share one root.
 
-    A configuration file that cannot be read, which pytest stops on, is
-    passed over here, as one holding no pytest configuration is: pytest reads
-    no setting from it, so a run over files takes none from it
+    A configuration file that cannot be read, or that pytest refuses (a
+    ``pytest.toml`` holding options outside any table, from 9.2.0 on), which
+    pytest stops on, is passed over here, as one holding no pytest
+    configuration is, and the root is found past it: pytest reads no setting
+    from it, so a run over files takes none from it
     (`configured_suffix` reports it when a directory needs the suffix;
     `configured_depth` takes the default depth then).
 
@@ -390,7 +395,9 @@ def _read_config(file: Path) -> _Config | None:
     table of a ``pytest.toml`` (pytest's even without one, unless it holds
     options outside any table that the installed pytest refuses), and the
     ``[tool.pytest]`` or ``[tool.pytest.ini_options]`` table of a
-    ``pyproject.toml``."""
+    ``pyproject.toml``. Raises `DiscoveryError` for a file pytest stops on:
+    one it cannot read, or one its loader refuses or fails on, a key it reads
+    as a table being none (`_read_toml_config`)."""
     try:
         if file.suffix == ".toml":
             return _read_toml_config(file, tomllib.loads(file.read_text(encoding="utf-8")))
@@ -410,20 +417,34 @@ def _read_config(file: Path) -> _Config | None:
 
 
 def _read_toml_config(file: Path, data: dict[str, object]) -> _Config | None:
+    # Where pytest reads a key as a table and it is none (`tool = 1` in a
+    # pyproject.toml), pytest's loader fails on it, an AttributeError that
+    # stops pytest as a file it cannot read does: refused as one is.
     if file.name in ("pytest.toml", ".pytest.toml"):
-        if "pytest" not in data and _refuses_top_level_options():
-            # What pytest calls a top-level option: a key whose value is no
-            # table (an array of tables included), in the file's order.
-            options = [key for key, value in data.items() if not isinstance(value, dict)]
-            if options:
-                # pytest stops on it, in these words.
-                raise DiscoveryError(f"{file}: pytest configuration must be under a [pytest] table (found top-level options: {', '.join(options)})")
-        table = data.get("pytest")
-        return _Config(file, dict(table) if isinstance(table, dict) else {}, native=True)
-    tool = data.get("tool")
-    table = tool.get("pytest") if isinstance(tool, dict) else None
+        reads_as_9_2 = _reads_pytest_toml_as_9_2()
+        if "pytest" not in data:
+            if reads_as_9_2:
+                # What pytest calls a top-level option: a key whose value is
+                # no table (an array of tables included), in the file's order.
+                options = [key for key, value in data.items() if not isinstance(value, dict)]
+                if options:
+                    # pytest stops on it, in these words.
+                    raise DiscoveryError(f"{file}: pytest configuration must be under a [pytest] table (found top-level options: {', '.join(options)})")
+            return _Config(file, {}, native=True)
+        table = data["pytest"]
+        if not isinstance(table, dict):
+            # Before 9.2, pytest reads a falsy value (0, "", false, []) as
+            # no [pytest] table, and only a truthy one as the table.
+            if reads_as_9_2 or table:
+                raise _not_a_table(file, "pytest", table)
+            table = {}
+        return _Config(file, dict(table), native=True)
+    tool = data.get("tool", {})
+    if not isinstance(tool, dict):
+        raise _not_a_table(file, "tool", tool)
+    table = tool.get("pytest", {})
     if not isinstance(table, dict):
-        return None
+        raise _not_a_table(file, "tool.pytest", table)
     native = {key: value for key, value in table.items() if key != "ini_options"}
     ini_options = table.get("ini_options")
     if native and ini_options:
@@ -433,16 +454,24 @@ def _read_toml_config(file: Path, data: dict[str, object]) -> _Config | None:
         return _Config(file, native, native=True)
     if ini_options is None:
         return None
+    if not isinstance(ini_options, dict):
+        raise _not_a_table(file, "tool.pytest.ini_options", ini_options)
     # The string-based form: pytest turns every value but a list into text.
-    items = ini_options.items() if isinstance(ini_options, dict) else ()
-    return _Config(file, {key: value if isinstance(value, list) else str(value) for key, value in items}, native=False)
+    return _Config(file, {key: value if isinstance(value, list) else str(value) for key, value in ini_options.items()}, native=False)
 
 
-def _refuses_top_level_options() -> bool:
-    """Whether the installed pytest refuses a ``pytest.toml`` or
-    ``.pytest.toml`` that holds options outside any table and no ``[pytest]``
-    table. pytest 9.2.0 is the first release that does
-    (pytest-dev/pytest#14638); before it, such a file is the configuration
-    file, and sets nothing. Read on each call, from pytest's public version."""
+def _not_a_table(file: Path, key: str, value: object) -> DiscoveryError:
+    return DiscoveryError(f"cannot read pytest configuration from {file}: {key} must be a table, not {type(value).__name__}: {value!r}")
+
+
+def _reads_pytest_toml_as_9_2() -> bool:
+    """Whether the installed pytest reads a ``pytest.toml`` or
+    ``.pytest.toml`` as pytest 9.2.0, the first release to, does: it refuses
+    one holding options outside any table and no ``[pytest]`` table
+    (pytest-dev/pytest#14638), which before it is the configuration file and
+    sets nothing; and it reads a ``pytest`` key as the table whatever its
+    value, failing on one that is no table, where before it a falsy value is
+    no table and the file sets nothing. Read on each call, from pytest's
+    public version."""
     # The major and the minor release are numbers in every pytest version.
     return tuple(map(int, pytest.version_tuple[:2])) >= (9, 2)

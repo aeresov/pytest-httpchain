@@ -400,6 +400,18 @@ def test_files_past_the_configuration_are_not_read(tmp_path):
             "{file}: [pytest] section in setup.cfg files is no longer supported, change to [tool:pytest] instead.",
             id="setup.cfg-pytest-section",
         ),
+        # A key pytest reads as a table holding something else: its loader
+        # fails on it (an AttributeError), on every release.
+        pytest.param("pyproject.toml", b"tool = 1\n", "cannot read pytest configuration from {file}: tool must be a table, not int: 1", id="tool-not-a-table"),
+        pytest.param(
+            "pyproject.toml", b'[tool]\npytest = "a"\n', "cannot read pytest configuration from {file}: tool.pytest must be a table, not str: 'a'", id="tool.pytest-not-a-table"
+        ),
+        pytest.param(
+            "pyproject.toml",
+            b"[tool.pytest]\nini_options = 0\n",
+            "cannot read pytest configuration from {file}: tool.pytest.ini_options must be a table, not int: 0",
+            id="ini_options-not-a-table",
+        ),
     ],
 )
 def test_configuration_pytest_stops_on_is_an_error(tmp_path, filename, content, message):
@@ -581,6 +593,7 @@ BESIDE_PYTEST_STOPS_ON = [
         "{file}: [pytest] section in setup.cfg files is no longer supported, change to [tool:pytest] instead.",
         id="setup.cfg-pytest-section",
     ),
+    pytest.param("pyproject.toml", b"[tool]\npytest = 1\n", "cannot read pytest configuration from {file}: tool.pytest must be a table, not int: 1", id="not-a-table"),
 ]
 
 
@@ -617,6 +630,9 @@ def test_a_file_pytest_stops_on_beside_the_configuration(tmp_path, filename, con
         # would refuse included.
         pytest.param("pyproject.toml", f'[tool.pytest]\nhttpchain_suffix = "other"\n{DEPTH} = 6\n', id="pyproject.toml-configured"),
         pytest.param("setup.cfg", f"[tool:pytest]\nhttpchain_suffix = a.b\n{DEPTH} = -1\n", id="setup.cfg-configured"),
+        # Beside [tool.pytest]'s own options, a falsy ini_options is neither
+        # a second table pytest refuses nor one it reads as a table.
+        pytest.param("pyproject.toml", "[tool.pytest]\naddopts = []\nini_options = 0\n", id="pyproject.toml-ini_options-not-read"),
     ],
 )
 def test_a_readable_file_beside_the_configuration_changes_nothing(tmp_path, filename, content):
@@ -683,11 +699,12 @@ def test_a_file_pytest_stops_on_in_another_directory_is_not_read(tmp_path, filen
     assert pytest_rootdir([suite]) == suite
 
 
-# --- a pytest.toml's options outside any table ---
+# --- a pytest.toml's options outside any table, and its pytest key ---
 
 # pytest 9.2.0 is the first release that refuses a pytest.toml (or a
-# .pytest.toml) holding options outside any table and no [pytest] table;
-# before it, such a file is the configuration file, setting nothing.
+# .pytest.toml) holding options outside any table and no [pytest] table, or a
+# pytest key holding a falsy value; before it, such a file is the
+# configuration file, setting nothing.
 REFUSING = ["9.2.0", "9.3.1", "10.0.0"]
 ACCEPTING = ["9.0.0", "9.1.1"]
 
@@ -740,18 +757,25 @@ def test_top_level_options_where_pytest_takes_the_file_as_empty(tmp_path, monkey
 
 
 @pytest.mark.parametrize("version", [*REFUSING, *ACCEPTING])
-def test_top_level_options_in_a_dot_pytest_toml_beside_the_configuration(tmp_path, monkeypatch, version):
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        pytest.param("a = 1\n", "{file}: pytest configuration must be under a [pytest] table (found top-level options: a)", id="top-level-options"),
+        pytest.param("pytest = 0\n", "cannot read pytest configuration from {file}: pytest must be a table, not int: 0", id="falsy-pytest-key"),
+    ],
+)
+def test_a_dot_pytest_toml_beside_the_configuration(tmp_path, monkeypatch, version, content, message):
     """pytest reads a .pytest.toml beside its pytest.toml, as any file after
     its configuration file in its directory, and stops on it where it
-    refuses its top-level options, as it would on the pytest.toml."""
+    refuses it, as it would on the pytest.toml."""
     _install(monkeypatch, version)
     (tmp_path / "pytest.toml").write_text(f'[pytest]\nhttpchain_suffix = "api"\n{DEPTH} = 4\n')
     file = tmp_path / ".pytest.toml"
-    file.write_text("a = 1\n")
+    file.write_text(content)
     if version in REFUSING:
         with pytest.raises(DiscoveryError) as raised:
             configured_suffix([tmp_path])
-        assert str(raised.value) == f"{file}: pytest configuration must be under a [pytest] table (found top-level options: a)"
+        assert str(raised.value) == message.format(file=file)
         assert configured_depth([tmp_path]) == 3
     else:
         assert configured_suffix([tmp_path]) == "api"
@@ -775,3 +799,38 @@ def test_a_pytest_toml_every_release_takes(tmp_path, monkeypatch, version, conte
     (tmp_path / "pytest.toml").write_text(content)
     assert configured_suffix([tmp_path]) == suffix
     assert pytest_rootdir([tmp_path]) == tmp_path
+
+
+@pytest.mark.parametrize("version", [*REFUSING, *ACCEPTING])
+@pytest.mark.parametrize(
+    ("value", "shown", "truthy"),
+    [
+        pytest.param("1", "int: 1", True, id="int"),
+        pytest.param('"a"', "str: 'a'", True, id="str"),
+        pytest.param("0", "int: 0", False, id="zero"),
+        pytest.param("false", "bool: False", False, id="false"),
+        pytest.param("[]", "list: []", False, id="empty-array"),
+    ],
+)
+def test_a_pytest_key_that_is_no_table(tmp_path, monkeypatch, version, value, shown, truthy):
+    """pytest reads a pytest.toml's ``pytest`` key as its [pytest] table,
+    and its loader fails on one that holds something else, where it reads
+    it: from 9.2.0 on whatever it holds, before it only a truthy value, a
+    falsy one being no table. Refused then, as a file pytest cannot read
+    is: no suffix, no depth, and passed over for the root. Else the file is
+    the configuration file and sets nothing."""
+    _install(monkeypatch, version)
+    (tmp_path / "pytest.ini").write_text(f"[pytest]\nhttpchain_suffix = outer\n{DEPTH} = 6\n")
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    file = suite / "pytest.toml"
+    file.write_text(f"pytest = {value}\n")
+    if truthy or version in REFUSING:
+        with pytest.raises(DiscoveryError) as raised:
+            configured_suffix([suite])
+        assert str(raised.value) == f"cannot read pytest configuration from {file}: pytest must be a table, not {shown}"
+        assert pytest_rootdir([suite]) == tmp_path
+    else:
+        assert configured_suffix([suite]) == "http"
+        assert pytest_rootdir([suite]) == suite
+    assert configured_depth([suite]) == 3
