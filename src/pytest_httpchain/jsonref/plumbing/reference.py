@@ -54,18 +54,11 @@ def _raise_on_conflict(config: Any, path: list[Any], base: Any, nxt: Any) -> Any
     raise ReferenceResolverError(f"Merge conflict at {location}")
 
 
-# The sibling-merge policy: dicts merge recursively, lists concatenate, and any
-# other overlap must be equal.
-_SIBLING_MERGER = Merger(
-    [(list, "append"), (dict, "merge")],
-    [_raise_on_conflict],
-    [_raise_on_conflict],
-)
-
-
 def _build_atomic_aware_merger(atomic: PositionPredicate, base_path: tuple[str | int, ...]) -> Merger:
-    """Sibling merger treating the ``atomic`` positions like scalars: two lists
-    or dicts there must be equal or conflict, never concatenate or blend.
+    """The sibling-merge policy: dicts merge recursively, lists concatenate,
+    and any other overlap must be equal. The ``atomic`` positions are treated
+    like scalars: two lists or dicts there must be equal or conflict, never
+    concatenate or blend.
 
     ``base_path`` is the reference site's position, since deepmerge's ``path`` is
     relative to the merge root.
@@ -133,25 +126,25 @@ class ReferenceResolver:
     subtrees pass through verbatim, directives and all. ``atomic`` marks
     positions whose value is resolved as usual but merges with a sibling as a
     whole, like a scalar. An opaque position merges atomically too.
+
+    ``tracker`` is the cycle tracker a resolver for another document starts
+    from (`_create_child_resolver`); a resolver for a file of its own starts
+    an empty one.
     """
 
     def __init__(
         self,
-        max_parent_traversal_depth: int = 3,
-        root_path: Path | None = None,
-        opaque: PositionPredicate | None = None,
-        atomic: PositionPredicate | None = None,
+        max_parent_traversal_depth: int,
+        root_path: Path | None,
+        opaque: PositionPredicate | None,
+        atomic: PositionPredicate | None,
+        tracker: CircularDependencyTracker | None = None,
     ):
         self.max_parent_traversal_depth = max_parent_traversal_depth
-        self.tracker = CircularDependencyTracker()
+        self.tracker = tracker if tracker is not None else CircularDependencyTracker()
         self.root_path = root_path
         self.opaque = opaque
         self.atomic = atomic
-
-    def resolve_document(self, data: dict[str, Any], base_path: Path, root_path: Path) -> dict[str, Any]:
-        """Resolve every reference in a document, relative to ``base_path`` and
-        sandboxed under ``root_path``."""
-        return self._resolve_refs(data, base_path, root_data=data, root_path=root_path, doc_path=())
 
     def resolve_file(self, path: Path) -> dict[str, Any]:
         """Load a JSON file and resolve its references."""
@@ -169,7 +162,9 @@ class ReferenceResolver:
                         break
                     root_path = parent
 
-            return self.resolve_document(data, path.parent, root_path)
+            # Every reference in the document, relative to its directory and
+            # sandboxed under root_path.
+            return self._resolve_refs(data, path.parent, root_data=data, root_path=root_path, doc_path=())
 
         except _LOAD_ERRORS as e:
             raise FileLoadError(f"Failed to load JSON from {path}: {_load_error_text(e)}", path) from e
@@ -312,17 +307,12 @@ class ReferenceResolver:
 
         resolved_siblings = self._resolve_refs(siblings, current_path, root_data, root_path, doc_path)
 
-        if self.opaque is None and self.atomic is None:
-            merger = _SIBLING_MERGER
-        else:
-            merger = _build_atomic_aware_merger(self._merges_atomically, doc_path)
-        return merger.merge(referenced_data, resolved_siblings)
+        return _build_atomic_aware_merger(self._merges_atomically, doc_path).merge(referenced_data, resolved_siblings)
 
     def _merges_atomically(self, path: tuple[str | int, ...]) -> bool:
         return (self.opaque is not None and self.opaque(path)) or (self.atomic is not None and self.atomic(path))
 
     def _create_child_resolver(self, root_path: Path) -> Self:
-        """A resolver for another document, inheriting the cycle tracker."""
-        child_resolver = type(self)(self.max_parent_traversal_depth, root_path, opaque=self.opaque, atomic=self.atomic)
-        child_resolver.tracker = self.tracker.create_child_tracker()
-        return child_resolver
+        """A resolver for another document, inheriting the cycle tracker
+        (`CircularDependencyTracker.create_child_tracker`)."""
+        return type(self)(self.max_parent_traversal_depth, root_path, opaque=self.opaque, atomic=self.atomic, tracker=self.tracker.create_child_tracker())
