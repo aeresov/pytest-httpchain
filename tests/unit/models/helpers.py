@@ -1,4 +1,5 @@
-"""Shared factories for the model unit tests.
+"""Shared factories for the model unit tests, and the tags pydantic gives a
+union's members in an error's location, for every unit test that pins one.
 
 Most of these tests only need a *valid, incidental* Stage or Request as
 scaffolding while they exercise one specific field. These helpers provide that
@@ -10,12 +11,43 @@ a plugin file, not an import target)::
     from tests.unit.models.helpers import make_stage, make_request
 """
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
 from pytest_httpchain.models import Request, Stage
+from pytest_httpchain.models.types import (
+    convert_namespace_to_dict,
+    validate_function_import_name,
+    validate_graphql_name,
+    validate_graphql_query,
+    validate_partial_template_str,
+)
+
+
+def after_tag(validator: Callable[..., Any]) -> str:
+    """The tag pydantic gives a union's member that validates a string with
+    ``validator``, last in its errors' locations: built from the validator's
+    name, as `models.validation_errors` builds the template branch's."""
+    return f"function-after[{validator.__name__}(), str]"
+
+
+# The members of the unions a field taking a literal or a template is
+# (`GraphQLQuery | PartialTemplateStr`, ...), and of a user function's name.
+GRAPHQL_QUERY_TAG = after_tag(validate_graphql_query)
+GRAPHQL_NAME_TAG = after_tag(validate_graphql_name)
+TEMPLATE_TAG = after_tag(validate_partial_template_str)
+FUNCTION_NAME_TAG = after_tag(validate_function_import_name)
+
+# The member taking an object (`NamespaceOrDict`), a `vars` object included:
+# what follows the name is how pydantic renders its dict of JSON values.
+OBJECT_TAG = f"function-before[{convert_namespace_to_dict.__name__}(), dict[str,json-or-python[json=any,python=tagged-union[list[...],dict[str,...],str,bool,int,float,none]]]]"
+
+# A member `types.create_string_validator` builds (`XMLString`, a regex): its
+# validator is a closure named `validator`, which cannot be imported to name it.
+STRING_CHECK_TAG = "function-after[validator(), str]"
 
 
 def assert_error_types(exc_info: pytest.ExceptionInfo[ValidationError], *expected_types: str, at: str | None = None) -> None:

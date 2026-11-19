@@ -20,6 +20,7 @@ from pytest_httpchain.models import JMESPathMatcher
 from pytest_httpchain.validation import SEVERITY, DiagnosticCode, DiscoveryError, load_scenario, resolve_root_path, validate_paths, validate_scenario
 from pytest_httpchain.validation.deep import _method_problem
 from tests.unit.helpers import LOADABLE_BUT_DEEP, TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, nested, on_bounded_stack
+from tests.unit.models.helpers import GRAPHQL_NAME_TAG, GRAPHQL_QUERY_TAG, OBJECT_TAG, STRING_CHECK_TAG, TEMPLATE_TAG
 
 C = DiagnosticCode
 # A stable importable directory so `userfuncs:<name>` refs resolve under --syspath.
@@ -228,12 +229,10 @@ def test_clean_fixture_has_no_diagnostics(datadir, fixture):
     assert result.valid is True
 
 
-# Where a GraphQL body's fields are, and the member tags pydantic puts after a
-# field that takes a literal or a template, in a schema error's location.
+# Where a GraphQL body's fields are in a schema error's location. A field that
+# takes a literal or a template is followed there by its union member's tag
+# (`tests.unit.models.helpers`).
 _GRAPHQL = "stages -> 0 -> request -> body -> graphql -> graphql"
-_QUERY_BRANCH = "function-after[validate_graphql_query(), str]"
-_VARIABLES_BRANCH = "function-before[convert_namespace_to_dict(), dict[str,json-or-python[json=any,python=tagged-union[list[...],dict[str,...],str,bool,int,float,none]]]]"
-_TEMPLATE_BRANCH = "function-after[validate_partial_template_str(), str]"
 
 DIAGNOSED = [
     ("does_not_exist.json", [(C.FILE_NOT_FOUND, None, "File not found")]),
@@ -370,12 +369,12 @@ DIAGNOSED = [
     # invited templating the value, which escapes the check it failed.
     (
         "literal_or_template_graphql_query.json",
-        [(C.SCHEMA, f"{_GRAPHQL} -> query -> {_QUERY_BRANCH}", r": Value error, Invalid GraphQL query: There can be only one operation named 'A'\.$")],
+        [(C.SCHEMA, f"{_GRAPHQL} -> query -> {GRAPHQL_QUERY_TAG}", r": Value error, Invalid GraphQL query: There can be only one operation named 'A'\.$")],
     ),
-    ("literal_or_template_xml_body.json", [(C.SCHEMA, "stages -> 0 -> request -> body -> xml -> xml -> function-after[validator(), str]", r": Value error, Invalid XML$")]),
+    ("literal_or_template_xml_body.json", [(C.SCHEMA, f"stages -> 0 -> request -> body -> xml -> xml -> {STRING_CHECK_TAG}", r": Value error, Invalid XML$")]),
     (
         "literal_or_template_operation_name.json",
-        [(C.SCHEMA, f"{_GRAPHQL} -> operation_name -> function-after[validate_graphql_name(), str]", r": Value error, Invalid GraphQL operation name '1st': a name is")],
+        [(C.SCHEMA, f"{_GRAPHQL} -> operation_name -> {GRAPHQL_NAME_TAG}", r": Value error, Invalid GraphQL operation name '1st': a name is")],
     ),
     # pydantic's check of a URL's text refuses what the string says, as a validator does.
     (
@@ -387,8 +386,8 @@ DIAGNOSED = [
     (
         "literal_or_template_variables_string.json",
         [
-            (C.SCHEMA, f"{_GRAPHQL} -> variables -> {_VARIABLES_BRANCH}", r": Input should be a valid dictionary$"),
-            (C.SCHEMA, f"{_GRAPHQL} -> variables -> {_TEMPLATE_BRANCH}", r": Value error, Must contain at least one template expression like '\{\{ expr \}\}', got: 'id=1'$"),
+            (C.SCHEMA, f"{_GRAPHQL} -> variables -> {OBJECT_TAG}", r": Input should be a valid dictionary$"),
+            (C.SCHEMA, f"{_GRAPHQL} -> variables -> {TEMPLATE_TAG}", r": Value error, Must contain at least one template expression like '\{\{ expr \}\}', got: 'id=1'$"),
         ],
     ),
     # ... the template branch's complaint is another one: the value holds a
@@ -396,8 +395,8 @@ DIAGNOSED = [
     (
         "literal_or_template_empty_expression.json",
         [
-            (C.SCHEMA, f"{_GRAPHQL} -> query -> {_QUERY_BRANCH}", r": Value error, Invalid GraphQL query: Syntax Error: Expected Name, found '\{'\.$"),
-            (C.SCHEMA, f"{_GRAPHQL} -> query -> {_TEMPLATE_BRANCH}", r": Value error, Template expression cannot be empty at position 17$"),
+            (C.SCHEMA, f"{_GRAPHQL} -> query -> {GRAPHQL_QUERY_TAG}", r": Value error, Invalid GraphQL query: Syntax Error: Expected Name, found '\{'\.$"),
+            (C.SCHEMA, f"{_GRAPHQL} -> query -> {TEMPLATE_TAG}", r": Value error, Template expression cannot be empty at position 17$"),
         ],
     ),
     # ... and the value opens braces no template reads (unclosed): the hint is
@@ -405,10 +404,10 @@ DIAGNOSED = [
     (
         "literal_or_template_unclosed_template.json",
         [
-            (C.SCHEMA, f"{_GRAPHQL} -> query -> {_QUERY_BRANCH}", r": Value error, Invalid GraphQL query: Syntax Error: Expected Name, found '\{'\.$"),
+            (C.SCHEMA, f"{_GRAPHQL} -> query -> {GRAPHQL_QUERY_TAG}", r": Value error, Invalid GraphQL query: Syntax Error: Expected Name, found '\{'\.$"),
             (
                 C.SCHEMA,
-                f"{_GRAPHQL} -> query -> {_TEMPLATE_BRANCH}",
+                f"{_GRAPHQL} -> query -> {TEMPLATE_TAG}",
                 r": Value error, Must contain at least one template expression like '\{\{ expr \}\}', got: 'query \{ user\(id: \{\{ id \}\) \{ name \} \}'$",
             ),
         ],
@@ -418,9 +417,9 @@ DIAGNOSED = [
     (
         "literal_or_template_siblings.json",
         [
-            (C.SCHEMA, f"{_GRAPHQL} -> variables -> {_VARIABLES_BRANCH}", r": Input should be a valid dictionary$"),
-            (C.SCHEMA, f"{_GRAPHQL} -> variables -> {_TEMPLATE_BRANCH}", r": Value error, Must contain at least one template expression"),
-            (C.SCHEMA, f"{_GRAPHQL} -> operation_name -> function-after[validate_graphql_name(), str]", r": Value error, Invalid GraphQL operation name '1st'"),
+            (C.SCHEMA, f"{_GRAPHQL} -> variables -> {OBJECT_TAG}", r": Input should be a valid dictionary$"),
+            (C.SCHEMA, f"{_GRAPHQL} -> variables -> {TEMPLATE_TAG}", r": Value error, Must contain at least one template expression"),
+            (C.SCHEMA, f"{_GRAPHQL} -> operation_name -> {GRAPHQL_NAME_TAG}", r": Value error, Invalid GraphQL operation name '1st'"),
         ],
     ),
     # A relative URL has nowhere to go without client.base_url, whether all of

@@ -26,6 +26,7 @@ from pytest_httpchain.models.entities import (
     validate_rendered_scenario_auth,
     validate_rendered_verify,
 )
+from tests.unit.models.helpers import FUNCTION_NAME_TAG, GRAPHQL_QUERY_TAG, OBJECT_TAG, STRING_CHECK_TAG
 
 
 class TestParametrizeValuesContainTemplate:
@@ -88,10 +89,6 @@ class TestRenderedValidationErrors:
     type, is not also told to hold a template, which it was rendered from.
     Rebuilt, the error still hides its input where the validator does."""
 
-    _QUERY = "function-after[validate_graphql_query(), str]"
-    _REGEX = "function-after[validator(), str]"
-    _OBJECT = "function-before[convert_namespace_to_dict(), dict[str,json-or-python[json=any,python=tagged-union[list[...],dict[str,...],str,bool,int,float,none]]]]"
-
     @staticmethod
     def _refusal(validate, *args) -> ValidationError:
         with pytest.raises(ValidationError) as excinfo:
@@ -100,7 +97,7 @@ class TestRenderedValidationErrors:
 
     def test_validate_rendered(self):
         error = self._refusal(validate_rendered, Request, {"url": "http://t/", "method": "POST", "body": {"graphql": {"query": "query A { a } query A { b }"}}})
-        assert [e["loc"] for e in error.errors()] == [("body", "graphql", "graphql", "query", self._QUERY)]
+        assert [e["loc"] for e in error.errors()] == [("body", "graphql", "graphql", "query", GRAPHQL_QUERY_TAG)]
         assert "Invalid GraphQL query: There can be only one operation named 'A'." in str(error)
         # Request hides its input: its auth and headers render credentials.
         assert "input_value" not in str(error)
@@ -110,29 +107,29 @@ class TestRenderedValidationErrors:
         alone. As the scenario loads, the hint is kept beside it, since the
         string may have been meant as a template; this one was one."""
         error = self._refusal(validate_rendered, Request, {"url": "http://t/", "method": "POST", "body": {"graphql": {"query": "{ a }", "variables": "x"}}})
-        assert [(e["loc"], e["type"]) for e in error.errors()] == [(("body", "graphql", "graphql", "variables", self._OBJECT), "dict_type")]
+        assert [(e["loc"], e["type"]) for e in error.errors()] == [(("body", "graphql", "graphql", "variables", OBJECT_TAG), "dict_type")]
         assert "Must contain at least one template expression" not in str(error)
 
     def test_validate_rendered_keeps_the_input_where_the_model_shows_it(self):
         error = self._refusal(validate_rendered, GraphQL, {"query": "{ user { } }"})
-        assert [e["loc"] for e in error.errors()] == [("query", self._QUERY)]
+        assert [e["loc"] for e in error.errors()] == [("query", GRAPHQL_QUERY_TAG)]
         assert "input_value='{ user { } }'" in str(error)
 
     def test_validate_rendered_verify(self):
         declared = Verify.model_validate({"headers": {"Location": {"matches": "{{ p }}"}}})
         error = self._refusal(validate_rendered_verify, declared, {"headers": {"Location": {"matches": "("}}})
         # The header's own union refused the object's type, as a string: kept.
-        assert [e["loc"][-2:] for e in error.errors()] == [("Location", "str"), ("matches", self._REGEX)]
+        assert [e["loc"][-2:] for e in error.errors()] == [("Location", "str"), ("matches", STRING_CHECK_TAG)]
 
     def test_validate_rendered_scenario_auth(self):
         error = self._refusal(validate_rendered_scenario_auth, {"name": "nocolon"})
-        assert [e["loc"][-2:] for e in error.errors()] == [("name", "function-after[validate_function_import_name(), str]")]
+        assert [e["loc"][-2:] for e in error.errors()] == [("name", FUNCTION_NAME_TAG)]
         assert "input_value" not in str(error)
 
     def test_validate_rendered_expectations(self):
         declared = {"name": JMESPathMatcher.model_validate({"matches": "{{ p }}"})}
         error = self._refusal(validate_rendered_expectations, declared, {"name": {"matches": "("}})
-        assert [e["loc"][-2:] for e in error.errors()] == [("matches", self._REGEX)]
+        assert [e["loc"][-2:] for e in error.errors()] == [("matches", STRING_CHECK_TAG)]
         assert "input_value" not in str(error)
 
 

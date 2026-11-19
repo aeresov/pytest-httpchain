@@ -36,6 +36,7 @@ from pytest_httpchain.models import (
     Verify,
 )
 from pytest_httpchain.rendering import render_declared
+from tests.unit.models.helpers import GRAPHQL_QUERY_TAG, OBJECT_TAG
 
 
 class TestClientWiring:
@@ -284,7 +285,7 @@ class TestRenderedAwayFields:
                 {"query": "{{ q }}"},
                 {"q": "query A { a } query A { b }"},
                 [
-                    "body.graphql.graphql.query.function-after[validate_graphql_query(), str]",
+                    f"body.graphql.graphql.query.{GRAPHQL_QUERY_TAG}",
                     "  Value error, Invalid GraphQL query: There can be only one operation named 'A'. [type=value_error]",
                 ],
                 id="value-refusal",
@@ -295,8 +296,7 @@ class TestRenderedAwayFields:
                 {"query": "{ a }", "variables": "{{ v }}"},
                 {"v": "x"},
                 [
-                    "body.graphql.graphql.variables.`function-before[convert_namespace_to_dict(), "
-                    "dict[str,json-or-python[json=any,python=tagged-union[list[...],dict[str,...],str,bool,int,float,none]]]]`",
+                    f"body.graphql.graphql.variables.`{OBJECT_TAG}`",
                     "  Input should be a valid dictionary [type=dict_type]",
                 ],
                 id="type-refusal",
