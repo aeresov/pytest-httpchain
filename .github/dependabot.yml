@@ -1,6 +1,8 @@
 # Keep GitHub Actions refs, uv.lock and devcontainer features moving; grouped weekly PRs.
 version: 2
 updates:
+    # The workflows pin each action to a full commit SHA, its release named in a
+    # `# vX.Y.Z` comment; an update moves the SHA and the comment together.
     - package-ecosystem: github-actions
       directory: /
       schedule:

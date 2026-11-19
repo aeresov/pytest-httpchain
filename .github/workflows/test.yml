@@ -27,12 +27,12 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 10
         steps:
-            - uses: actions/checkout@v7
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
                   persist-credentials: false
 
             - name: Install uv
-              uses: astral-sh/setup-uv@v10.3.3
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
                   enable-cache: true
                   cache-dependency-glob: "uv.lock"
@@ -88,12 +88,12 @@ jobs:
             contents: read
             id-token: write # codecov OIDC upload
         steps:
-            - uses: actions/checkout@v7
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
                   persist-credentials: false
 
             - name: Install uv
-              uses: astral-sh/setup-uv@v10.3.3
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
                   enable-cache: true
                   cache-dependency-glob: "uv.lock"
@@ -140,7 +140,7 @@ jobs:
                   matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest' &&
                   (github.event_name == 'push' ||
                   (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
-              uses: codecov/codecov-action@v7
+              uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
               with:
                   files: ./coverage.xml
                   use_oidc: true
@@ -152,12 +152,12 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 15
         steps:
-            - uses: actions/checkout@v7
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
                   persist-credentials: false
 
             - name: Install uv
-              uses: astral-sh/setup-uv@v10.3.3
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
                   enable-cache: true
                   cache-dependency-glob: "uv.lock"
@@ -184,12 +184,12 @@ jobs:
         timeout-minutes: 20
         continue-on-error: true
         steps:
-            - uses: actions/checkout@v7
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
                   persist-credentials: false
 
             - name: Install uv
-              uses: astral-sh/setup-uv@v10.3.3
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
                   enable-cache: true
                   cache-dependency-glob: "uv.lock"
