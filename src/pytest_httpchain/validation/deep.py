@@ -43,10 +43,14 @@ def check_scenario_deep(
     """Referenced-file existence, user-function imports, call-signature
     compatibility, and connection adapters.
 
-    Imports user modules, so ``syspaths`` (and the CWD) are temporarily prepended
-    to ``sys.path`` to resolve them the way pytest would. ``ref_bounds`` is
-    what a body schema's references to files are held to, the root and the
-    parent traversal depth the scenario's own references were loaded under.
+    Imports user modules, so while the checks run, each of ``syspaths``
+    (``--syspath``), resolved, and then the current directory is inserted at
+    the front of ``sys.path``, unless it is on it already: the current
+    directory comes first, and the ``syspaths`` after it in reverse order
+    (pytest keeps its ``pythonpath`` in the order listed). ``sys.path`` is
+    restored afterwards. ``ref_bounds`` is what a body schema's references
+    to files are held to, the root and the parent traversal depth the
+    scenario's own references were loaded under.
     """
     diagnostics = list(_file_diagnostics(scenario, scenario_dir, ref_bounds))
 
