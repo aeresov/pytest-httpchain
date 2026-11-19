@@ -51,8 +51,9 @@ def test_field_round_trip(field, value):
         # Below 1, each wait would be shorter than the last.
         pytest.param({"attempts": 2, "backoff": 0.5}, "greater_than_equal", "backoff", id="backoff-shrinking"),
         pytest.param({"attempts": 2, "max_delay": -1}, "greater_than_equal", "max_delay", id="max-delay-negative"),
-        # What JSON's 1e999 and NaN read as, which the carrier refuses: at
-        # load, `validate` does too.
+        # What a template can render, or text such as "inf" reads as (a scenario
+        # file cannot hold 1e999 or NaN: the JSONC reader refuses them), which the
+        # carrier refuses: at load, `validate` does too.
         pytest.param({"attempts": 2, "delay": float("inf")}, "finite_number", "delay", id="delay-infinite"),
         pytest.param({"attempts": 2, "backoff": float("inf")}, "finite_number", "backoff", id="backoff-infinite"),
         pytest.param({"attempts": 2, "max_delay": float("inf")}, "finite_number", "max_delay", id="max-delay-infinite"),
