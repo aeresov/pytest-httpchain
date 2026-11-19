@@ -10,7 +10,7 @@ from collections import Counter
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 import typer.core
@@ -112,6 +112,12 @@ class _Typer(typer.Typer):
 
 
 app = _Typer(no_args_is_help=True)
+
+
+def _fail(message: str) -> NoReturn:
+    """End the command with exit code 1, ``message`` its ``error:`` on stderr."""
+    typer.echo(f"error: {message}", err=True)
+    raise typer.Exit(1)
 
 
 class OutputFormat(StrEnum):
@@ -254,8 +260,7 @@ def validate(
     try:
         results = validate_paths(paths, suffix=suffix, ref_parent_traversal_depth=ref_parent_traversal_depth, root_path=root_path, deep=deep, syspaths=list(syspath or []))
     except DiscoveryError as e:
-        typer.echo(f"error: {e}", err=True)
-        raise typer.Exit(1) from e
+        _fail(str(e))
 
     def passed(result: ValidateResult) -> bool:
         return result.valid and not (strict and result.warnings)
@@ -312,8 +317,13 @@ def _configured_depth(depth: int | None, path: Path) -> int:
     try:
         return configured_depth([path])
     except DiscoveryError as e:
-        typer.echo(f"error: {e}", err=True)
-        raise typer.Exit(1) from e
+        _fail(str(e))
+
+
+# What loading a scenario raises for a file that cannot be loaded: the
+# resolver's errors (a file it cannot read or parse is its `FileLoadError`),
+# and an OSError finding the default root (`resolve_root_path`).
+_LOAD_ERRORS = (ReferenceResolverError, OSError)
 
 
 @app.command()
@@ -332,9 +342,8 @@ def resolve(
         # The loader load_scenario uses, so the printed document is what
         # collection sees.
         data = load_scenario_json(scenario, root_path=root_path, ref_parent_traversal_depth=depth)
-    except (ReferenceResolverError, json.JSONDecodeError, OSError) as e:
-        typer.echo(f"error: {e}", err=True)
-        raise typer.Exit(1) from e
+    except _LOAD_ERRORS as e:
+        _fail(str(e))
 
     typer.echo(json.dumps(data, indent=2, default=str))
 
@@ -345,12 +354,10 @@ def _load_for_inspection(path: Path, depth: int | None, root_path: Path | None =
     depth = _configured_depth(depth, path)
     try:
         return load_scenario(path, root_path=root_path, ref_parent_traversal_depth=depth)
-    except (ReferenceResolverError, json.JSONDecodeError, OSError) as e:
-        typer.echo(f"error: cannot load {path}: {e}", err=True)
-        raise typer.Exit(1) from e
+    except _LOAD_ERRORS as e:
+        _fail(f"cannot load {path}: {e}")
     except ValidationError:
-        typer.echo(f"error: {path} is not a valid scenario — run `pytest-httpchain validate {path}` for details", err=True)
-        raise typer.Exit(1) from None
+        _fail(f"{path} is not a valid scenario — run `pytest-httpchain validate {path}` for details")
 
 
 def _render_show_text(path: Path, scenario: Scenario, flow: DataFlow) -> list[str]:
@@ -512,16 +519,14 @@ def _patterns(values: list[str] | None, option: str) -> list[re.Pattern[str]]:
 def _refuse_existing(output: Path | None, force: bool) -> None:
     """Checked before any work: an import never replaces a file unasked."""
     if output is not None and output.exists() and not force:
-        typer.echo(f"error: {output} exists; pass --force to overwrite it", err=True)
-        raise typer.Exit(1)
+        _fail(f"{output} exists; pass --force to overwrite it")
 
 
 def _read_text(source: str, read: Callable[[], str]) -> str:
     try:
         return read()
     except (OSError, UnicodeDecodeError) as e:
-        typer.echo(f"error: cannot read {source}: {e}", err=True)
-        raise typer.Exit(1) from None
+        _fail(f"cannot read {source}: {e}")
 
 
 def _emit(result: ImportResult, warnings: list[str], output: Path | None) -> None:
@@ -541,15 +546,13 @@ def _emit(result: ImportResult, warnings: list[str], output: Path | None) -> Non
     try:
         text = scenario_text(result.scenario)
     except ImportSourceError as e:
-        typer.echo(f"error: {e}", err=True)
-        raise typer.Exit(1) from None
+        _fail(str(e))
     checked = validate_text(text)
     for diagnostic in checked.diagnostics:
         at = f" (at {diagnostic.location})" if diagnostic.location and diagnostic.location not in diagnostic.message else ""
         typer.echo(f"{diagnostic.severity} [{diagnostic.code}]: {diagnostic.message}{at}", err=True)
     if not checked.valid:
-        typer.echo("error: the imported scenario would not pass validate, so it was not written", err=True)
-        raise typer.Exit(1)
+        _fail("the imported scenario would not pass validate, so it was not written")
     if result.placeholders:
         width = max(len(entry.env) for entry in result.placeholders)
         typer.echo("note: secrets were left out of the scenario, which reads them from these environment variables:", err=True)
@@ -564,8 +567,7 @@ def _emit(result: ImportResult, warnings: list[str], output: Path | None) -> Non
     try:
         output.write_text(text, encoding="utf-8")
     except OSError as e:
-        typer.echo(f"error: cannot write {output}: {e}", err=True)
-        raise typer.Exit(1) from None
+        _fail(f"cannot write {output}: {e}")
 
 
 @import_app.command("har")
@@ -592,8 +594,7 @@ def import_har(
     try:
         requests, notes = read_har(text, source=source, keep_all=keep_all, include=included, exclude=excluded)
     except ImportSourceError as e:
-        typer.echo(f"error: {e}", err=True)
-        raise typer.Exit(1) from None
+        _fail(str(e))
     result = build_scenario(requests, description=f"Imported from {'a HAR file' if source == 'stdin' else har.name}")
     result.notes[:0] = notes
     _emit(result, [], output)
@@ -639,8 +640,7 @@ def import_curl(
         else:
             requests, warnings = parse_curl_words(command, data_dir=Path.cwd())
     except ImportSourceError as e:
-        typer.echo(f"error: {e}", err=True)
-        raise typer.Exit(1) from None
+        _fail(str(e))
     count = len(requests)
     _emit(build_scenario(requests, description="Imported from a curl command" if count == 1 else f"Imported from {count} curl requests"), warnings, output)
 
