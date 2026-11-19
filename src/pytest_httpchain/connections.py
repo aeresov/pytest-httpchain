@@ -76,8 +76,6 @@ ADAPTER_METHODS: Mapping[str, tuple[str, ...]] = {
     "receive": ("timeout",),
     "close": (),
 }
-# And those it may have.
-OPTIONAL_ADAPTER_METHODS: Mapping[str, tuple[str, ...]] = {"debug_info": ()}
 
 # What the reader passes `receive()`: how long a stop waits for it at most.
 RECEIVE_TIMEOUT = 0.2
