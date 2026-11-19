@@ -1,5 +1,6 @@
 """Unit tests for Request model."""
 
+import math
 from functools import partial
 from http import HTTPMethod
 
@@ -256,6 +257,27 @@ def test_timeout_refuses_a_bool(validate, value):
     assert [(error["loc"], error["msg"]) for error in exc_info.value.errors()] == [
         (("timeout",), f"Value error, A request timeout is a number or a template, got {str(value).lower()}")
     ]
+
+
+@pytest.mark.parametrize(
+    ("validate", "timeout"),
+    [
+        # A scenario file cannot hold one (the JSONC reader refuses 1e999),
+        # but a template can render one, and text reads as one.
+        pytest.param(partial(validate_rendered, Request), math.inf, id="rendered"),
+        pytest.param(Request.model_validate, "inf", id="text"),
+        pytest.param(Request.model_validate, "1e999", id="text-too-large"),
+        # Refused already, as no positive number: now as infinity is.
+        pytest.param(partial(validate_rendered, Request), math.nan, id="rendered-nan"),
+    ],
+)
+def test_timeout_is_finite(validate, timeout):
+    """httpx cannot wait forever: given an infinite timeout, it failed the
+    request with an OverflowError, which the stage reported as an unexpected
+    error. Refused before anything is sent instead."""
+    with pytest.raises(ValidationError) as exc_info:
+        validate({"url": "https://example.com", "timeout": timeout})
+    assert_error_types(exc_info, "finite_number", at="timeout")
 
 
 _AUTH_FORMS = [

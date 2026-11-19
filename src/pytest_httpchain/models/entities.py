@@ -24,7 +24,6 @@ from pydantic import (
     Discriminator,
     Field,
     JsonValue,
-    PositiveFloat,
     PositiveInt,
     RootModel,
     Strict,
@@ -246,8 +245,10 @@ class SSLConfig(StrictModel):
 # The client's timeout, redirect limit and pool limits: a positive number or a
 # template, never a bool, which the number branches would take as 1
 # (`refuse_bool`): `"timeout": true` would wait a second, `"max_connections":
-# true` open one connection at a time.
-_ClientSeconds = Annotated[PositiveFloat | NumberOrTemplate, BeforeValidator(refuse_bool("A client setting"))]
+# true` open one connection at a time. The timeout is finite too: given an
+# infinite one, which text such as "inf" reads as and a template can render,
+# httpx fails the first request with an OverflowError.
+_ClientSeconds = Annotated[Annotated[float, Field(gt=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(refuse_bool("A client setting"))]
 _ClientCount = Annotated[PositiveInt | NumberOrTemplate, BeforeValidator(refuse_bool("A client setting"))]
 
 
@@ -689,9 +690,9 @@ def _omit_schema_default(schema: JsonDict) -> None:
     schema.pop("default", None)
 
 
-# A request's timeout, as the client's (`_ClientSeconds`): a positive number or
-# a template, never a bool (`refuse_bool`).
-_RequestSeconds = Annotated[PositiveFloat | NumberOrTemplate, BeforeValidator(refuse_bool("A request timeout"))]
+# A request's timeout, as the client's (`_ClientSeconds`): a positive finite
+# number or a template, never a bool (`refuse_bool`).
+_RequestSeconds = Annotated[Annotated[float, Field(gt=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(refuse_bool("A request timeout"))]
 
 
 class Request(StrictModel):
@@ -1359,8 +1360,10 @@ RETRY_ON: tuple[RetryOn, ...] = get_args(RetryOn)
 
 # A retry's attempts, seconds and backoff factor. The seconds and the factor
 # are finite, as a stage resolves them (`stage_settings.setting_number`), so
-# what it refuses the model refuses at load: JSON's 1e999 reads as inf, which
-# float takes by default. None of them takes a bool (`refuse_bool`).
+# what it refuses the model refuses, written or rendered: float takes inf by
+# default, which text such as "inf" reads as and a template can render (a
+# scenario file cannot hold 1e999: the JSONC reader refuses it). None of them
+# takes a bool (`refuse_bool`).
 _RetryAttempts = Annotated[PositiveInt | NumberOrTemplate, BeforeValidator(refuse_bool("A retry setting"))]
 _RetrySeconds = Annotated[Annotated[float, Field(ge=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(refuse_bool("A retry setting"))]
 _RetryFactor = Annotated[Annotated[float, Field(ge=1, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(refuse_bool("A retry setting"))]
