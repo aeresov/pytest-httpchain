@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Development tooling: `make lint` runs CI's Lint job gate for gate, in its order, and stops at the
+  first failure: `uv lock --check` (standing in for the job's `uv sync --locked`, which fails on a
+  stale `uv.lock` that a local `uv run` re-locks silently), `ruff format --check`, `ruff check`,
+  `ty check`, `lint-imports` and `scripts/generate_schema.py --check`. That `--check` is new: it
+  writes nothing, and exits 1 naming each schema file a plain run would write that is missing or
+  differs from what it would write, byte for byte. The Lint job's schema step runs it in place of
+  regenerating the files and `git diff --exit-code`, which wrote to the checkout and its index.
+- Lint rules: ruff gains `RUF100` (a `noqa` that suppresses nothing), `PGH` (blanket `noqa` and
+  `type: ignore`), `PLE`, `EXE`, `PIE` and `FURB`. ty refuses a bare `ty: ignore`
+  (`blanket-ignore-comment`), and everywhere but `tests/` it requires `@typing.override` on a
+  method that overrides a base class's (`missing-override-decorator`), so an override of a hook a
+  dependency renames (pytest's `Module._getobj`, simpleeval's `_eval_subscript`) fails `ty check`
+  instead of going uncalled. The import-linter layers contract separates the modules of one layer
+  with `|`, which keeps them independent: the `:` it used let them import each other, though its
+  comment said they were independent.
+- CI: the docs build runs `mkdocs build --strict`, and `mkdocs.yml` sets `validation: anchors:
+  warn`, so a link to a missing page or anchor fails it, a pull request's included; the unused
+  `pymdownx.snippets` extension is dropped. `docs.yml` groups its runs per ref, cancelling only a
+  superseded pull request build, and keeps the `pages` group, never cancelled, on its deploy job
+  alone: pull request builds no longer cancel each other or a pending build of `main`. The release
+  builds (`publish.yml`, `tombstones.yml`) run without the uv cache, which main-branch runs fill;
+  every `actions/checkout` sets `persist-credentials: false`; and every job that runs steps has a
+  `timeout-minutes`.
+- Architecture: the carrier's render guard moved into `rendering.py` and a stage's parallel and
+  retry settings into `stage_settings.py`, both new; `Carrier.execute_stage` is split into its
+  plan, settle and connection-finish phases; `wire_codec` chooses the codec that reads a response;
+  and `body_schema` reads a schema file (`read_json_schema_file`, `schema_error_text`), which
+  `utils` no longer does. A connection's session class is public as `connections.Session` (it was
+  `_Session`). Import-linter layers updated accordingly. No behavior changes beyond the Fixed
+  entries.
+
 ### Fixed
 
 - A verify, save or auth function, a function a template calls, or a connection's adapter as it is
@@ -47,11 +80,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variable's name is, although a function can take them and a connection adapter's `params` did. A
   key that is no keyword argument name (`class`, `not-an-id`) is still refused, now as `Invalid
   keyword argument name: 'class'`.
-- A JMESPath expression, a regex, an `xml` body or a `base64` body that its check refuses names the
-  check in the error's location (`HTTPCHAIN000`, in `validate` and at collection):
-  `function-after[validate_xml(), str]`, and likewise `validate_regex_pattern`,
-  `validate_jmespath_expression` and `validate_base64`, where all four read
-  `function-after[validator(), str]`.
+- A `save.jmespath` expression, a regex, an `xml` body or a `base64` value that its check refuses,
+  where the field also takes a template, names the check in the error's location (`HTTPCHAIN000`,
+  in `validate` and at collection): `function-after[validate_xml(), str]`, and likewise
+  `validate_regex_pattern`, `validate_jmespath_expression` and `validate_base64`, where all four
+  read `function-after[validator(), str]`. A regex of `verify.body`'s `matches` or `not_matches`,
+  and a JMESPath expression written as a key (`verify.jmespath`, a connection's `expect.match`),
+  are located as before, by their place alone.
 - A `body.msgpack` that MessagePack cannot encode (a set a template rendered) fails its stage as
   `Cannot encode MessagePack body: cannot encode set as MessagePack`, no longer naming the
   `msgpack_pack()` template helper, which the scenario never called. The helper's own failure still
@@ -62,9 +97,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `not_contains`, `matches` and `not_matches`), which fail there without reading them. A
   `pytest.skip()` or `pytest.fail()` a template raised in one ended the rendering, and the next
   check failed with a bare `KeyError`. Only code calling it directly met this: collection refuses
-  such a step (`HTTPCHAIN041`). As they are no longer rendered, a template in one that does not
-  render is no longer one of the step's failures either, so a user function's `pytest.skip()` or
-  `pytest.fail()` in the same step now skips or fails it as written, where it was listed among them.
+  such a step (`HTTPCHAIN041`). As they are no longer rendered, a body text check's template that
+  does not render is no longer one of the step's failures either, so a user function's
+  `pytest.skip()` or `pytest.fail()` in that step now skips or fails it as written, where it was
+  listed among them. A `status` or `headers` there still fails before any user function runs.
 
 ## [0.21.1] - 2026-11-19
 
