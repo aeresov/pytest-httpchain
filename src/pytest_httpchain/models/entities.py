@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from http import HTTPMethod, HTTPStatus
 from types import SimpleNamespace
-from typing import Annotated, Any, ClassVar, Literal, LiteralString, Self, cast, get_args
+from typing import Annotated, Any, ClassVar, Literal, Self, get_args
 
 from pydantic import (
     AfterValidator,
@@ -43,7 +43,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic.json_schema import JsonDict
-from pydantic_core import InitErrorDetails, PydanticCustomError
+from pydantic_core import ErrorDetails
 
 from pytest_httpchain.models.types import (
     RENDERED,
@@ -95,7 +95,7 @@ from pytest_httpchain.models.types import (
     validate_templated_graphql_query,
     validate_unquoted_partial_template_str,
 )
-from pytest_httpchain.models.validation_errors import reported
+from pytest_httpchain.models.validation_errors import reported, validation_error
 from pytest_httpchain.templates import contains_template
 
 
@@ -984,16 +984,8 @@ class JMESPathMatcher(StrictModel):
             if not data:
                 # Its own message says how to compare with an empty object.
                 raise
-            # Kept as they were (each type and message, in pydantic's order),
-            # with the hint as one more error at the object itself. Each is
-            # re-raised as a custom error of the same type and message, as a
-            # built-in one would need its own context back to be re-raised.
-            errors: list[InitErrorDetails] = [
-                {"type": PydanticCustomError(cast(LiteralString, error["type"]), cast(LiteralString, error["msg"])), "loc": error["loc"], "input": error["input"]}
-                for error in e.errors()
-            ]
-            hint = PydanticCustomError("jmespath_matcher", cast(LiteralString, f"An object here is a matcher; {_EQ_HINT}"))
-            raise ValidationError.from_exception_data(e.title, [*errors, {"type": hint, "loc": (), "input": data}]) from None
+            hint: ErrorDetails = {"type": "jmespath_matcher", "loc": (), "msg": f"An object here is a matcher; {_EQ_HINT}", "input": data}
+            raise validation_error(e.title, [*e.errors(), hint]) from None
 
 
 def _jmespath_expectation_tag(v: Any) -> str:
