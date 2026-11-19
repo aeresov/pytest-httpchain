@@ -14,7 +14,9 @@ wire form the report shows, no headers or query to carry a credential apart
 from the data, so the value under a listed message key, at any depth, prints
 as ``[REDACTED]`` in the Connection Exchange section and in the failure
 messages that quote a message (`Redaction.message`, `Redaction.message_text`).
-What the stage's checks and saves see is never redacted.
+What the stage's checks and saves see is never redacted. A failure line
+`Redaction.message_text` redacts shows bytes and long text as `shown_bytes` and
+`cut` write them: the forms it looks for a secret in.
 """
 
 import json
@@ -174,20 +176,20 @@ class Redaction:
         each string or bytes a listed key holds in them, at any depth, is
         replaced where the line quotes it, as JSON or ``repr()`` write a
         string (``"s3cret"``, ``'s3cret'``) and as a report writes bytes
-        (``0x`` and their hex). Only those quoted forms, as `error_text`: an
-        unquoted value could match any part of the line. A long string a
-        line shows cut (``"eyJhbGci... (322 characters)``) is replaced by the
-        start of it that is shown. A number a listed key holds is replaced
-        where it stands alone, if it is written in four characters or more
-        (a PIN, an id): a shorter one is as likely an index or a count the
-        line gives."""
+        (``0x`` and their hex, `shown_bytes`). Only those quoted forms, as
+        `error_text`: an unquoted value could match any part of the line. A
+        long string a line shows cut (``"eyJhbGci... (322 characters)``,
+        `cut`) is replaced by the start of it that is shown. A number a
+        listed key holds is replaced where it stands alone, if it is written
+        in four characters or more (a PIN, an id): a shorter one is as likely
+        an index or a count the line gives."""
         secrets = self._message_secrets(messages)
         for secret in sorted((secret for secret in secrets if isinstance(secret, str | bytes)), key=len, reverse=True):
             if isinstance(secret, str):
                 for quoted, hidden in ((json.dumps(secret, ensure_ascii=False), json.dumps(REDACTED)), (repr(secret), repr(REDACTED))):
                     text = _hide_cut(text.replace(quoted, hidden), quoted)
             else:
-                text = text.replace(f"0x{secret[:64].hex()}", REDACTED).replace(repr(secret), repr(REDACTED))
+                text = text.replace(shown_bytes(secret), REDACTED).replace(repr(secret), repr(REDACTED))
         for secret in secrets:
             if isinstance(secret, int | float) and len(written := json.dumps(secret)) >= _MIN_NUMBER_LENGTH:
                 text = re.sub(rf"(?<![\w.+-]){re.escape(written)}(?![\w.])", REDACTED, text)
@@ -231,12 +233,29 @@ class Redaction:
         return "&".join(pairs)
 
 
-# What a value shown cut ends with (`response_steps._shown`, `connections.shown_message`).
+# How many bytes of a bytes value a failure line shows (`shown_bytes`).
+SHOWN_BYTES = 64
+# What a value shown cut ends with (`cut`), where `_hide_cut` looks for the
+# start of a secret.
 _CUT_MARKER = "... ("
 # The shortest start of a quoted secret taken for it before a cut, its quote
 # included, and the shortest number hidden where it stands alone.
 _MIN_CUT_START = 4
 _MIN_NUMBER_LENGTH = 4
+
+
+def shown_bytes(value: bytes) -> str:
+    """Bytes as a failure line shows them: ``0x`` and the hex of their first
+    `SHOWN_BYTES`, the form `Redaction.message_text` hides a listed key's
+    bytes in. Whether there are more is the line's to say."""
+    return f"0x{value[:SHOWN_BYTES].hex()}"
+
+
+def cut(text: str, limit: int) -> str:
+    """``text`` as a failure line shows it: whole, or its first ``limit``
+    characters and how many it has (``"eyJhbGci... (322 characters)``), a cut
+    `_hide_cut` hides the start of a secret before."""
+    return text if len(text) <= limit else f"{text[:limit]}{_CUT_MARKER}{len(text)} characters)"
 
 
 def _hide_cut(text: str, quoted: str) -> str:

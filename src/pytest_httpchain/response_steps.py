@@ -50,7 +50,7 @@ from pytest_httpchain.models import (
     is_status_class,
     regex_group,
 )
-from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, Redaction
+from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, SHOWN_BYTES, Redaction, cut, shown_bytes
 from pytest_httpchain.templates import TemplatesError, contains_template
 from pytest_httpchain.userfunc import UserFunctionError, call_target, call_user_function
 from pytest_httpchain.utils import optional_as_list, path_segment, process_substitutions, schema_error_text
@@ -879,7 +879,9 @@ _SHOWN_MAX = 200
 
 def _shown(value: Any) -> str:
     """A value as a failure message shows it: as JSON, which the scenario is
-    written in (``"5"`` is a string, ``null`` a null), cut at `_SHOWN_MAX`.
+    written in (``"5"`` is a string, ``null`` a null), cut at `_SHOWN_MAX`
+    (`redaction.cut`), and bytes as `redaction.shown_bytes` shows them: the
+    forms `Redaction.message_text` finds a listed key's value in.
 
     JSON gets here, the body as parsed and operands validated as JSON, with
     two exceptions. A template can render an int past Python's digit limit
@@ -888,16 +890,15 @@ def _shown(value: Any) -> str:
     or ``to_array(&a)``, or names one in a type error (``length(&a)``).
     """
     if isinstance(value, bytes):
-        shown = value[:64].hex()
-        suffix = f"... ({len(value)} bytes)" if len(value) > 64 else ""
-        return f"0x{shown}{suffix}"
+        suffix = f"... ({len(value)} bytes)" if len(value) > SHOWN_BYTES else ""
+        return f"{shown_bytes(value)}{suffix}"
     try:
         text = json.dumps(value, ensure_ascii=False, default=_shown_non_json)
     except ValueError:
         return f"(a {json_type(value)} too long to show)"
     except TypeError:
         return "(not JSON: holds a JMESPath expression reference)"
-    return text if len(text) <= _SHOWN_MAX else f"{text[:_SHOWN_MAX]}... ({len(text)} characters)"
+    return cut(text, _SHOWN_MAX)
 
 
 def _shown_non_json(value: Any) -> str:
