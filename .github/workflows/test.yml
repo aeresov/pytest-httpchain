@@ -20,6 +20,8 @@ concurrency:
     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+    # The Makefile's `lint` target runs these gates in this order (with
+    # `uv lock --check` for `uv sync --locked`): change the two together.
     lint:
         name: Lint
         runs-on: ubuntu-latest

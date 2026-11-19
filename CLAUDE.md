@@ -28,9 +28,13 @@ uv run pytest -n auto
 uv run pytest tests/unit
 uv run pytest -m "not slow"
 
-# Lint — CI's Lint job runs ALL FIVE of these; run them all before pushing
-uv run ruff check .
+# Lint — `make lint` runs every gate of CI's Lint job, in its order, and stops at
+# the first failure; run it before pushing.
+make lint
+# Each gate on its own (or without make):
+uv lock --check         # uv.lock is current (CI's `uv sync --locked` fails on a stale one; a local `uv run` re-locks silently)
 uv run ruff format --check .
+uv run ruff check .
 uv run ty check         # type check (ty is a dev dependency, locked in uv.lock)
 uv run lint-imports     # import layering contracts (exhaustive: new modules fail until placed)
 # The committed JSON Schema must match the pydantic models. `--check` writes
