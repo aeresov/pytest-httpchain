@@ -587,7 +587,9 @@ class Session:
         finally:
             cleanup_errors = self.cleanup()
         if interrupt is not None:
-            for failure in ([error] if error is not None else []) + cleanup_errors:
+            # A close() that was interrupted left no error of its own (the
+            # handlers above are exclusive): the resources' are what is left.
+            for failure in cleanup_errors:
                 logger.error("Closing connection '%s' failed: %s", self.name, failure)
             raise interrupt
         return error, cleanup_errors
