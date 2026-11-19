@@ -94,13 +94,6 @@ def expectations_field(path: tuple[str | int, ...]) -> str | None:
     return found[0] if found is not None and found[1] == () else None
 
 
-def is_jmespath_expectations_position(path: tuple[str | int, ...]) -> bool:
-    """True for raw-JSON positions holding a ``verify.jmespath`` mapping, or a
-    connection's ``expect.match`` object, whose keys are JMESPath expressions
-    rather than names sent on the wire."""
-    return expectations_field(path) is not None
-
-
 def is_expected_value_position(path: tuple[str | int, ...]) -> bool:
     """True for raw-JSON positions holding what one ``verify.jmespath`` (or
     ``expect.match``) expression must be (a value it must equal, or a
@@ -135,7 +128,10 @@ def load_scenario_json(path: Path, *, root_path: Path | None = None, ref_parent_
     """Load a scenario file and ``$ref``-resolve it, unvalidated: the document
     collection, ``validate`` and ``resolve`` all see.
 
-    Raises ``ReferenceResolverError`` / ``json.JSONDecodeError`` / ``OSError``.
+    Raises ``ReferenceResolverError``, a `FileLoadError` for a file that
+    cannot be read or parsed (the ``OSError``, ``json.JSONDecodeError`` or
+    ``RecursionError`` its ``__cause__``); without ``root_path``, an
+    ``OSError`` where the root cannot be found (the current directory gone).
     """
     if root_path is None:
         root_path = resolve_root_path(path)
@@ -151,8 +147,8 @@ def load_scenario_json(path: Path, *, root_path: Path | None = None, ref_parent_
 def load_scenario(path: Path, *, root_path: Path | None = None, ref_parent_traversal_depth: int = DEFAULT_REF_PARENT_TRAVERSAL_DEPTH) -> tuple[Scenario, dict[str, Any]]:
     """Load, ``$ref``-resolve and validate a scenario file -> ``(scenario, raw_data)``.
 
-    Raises ``ReferenceResolverError`` / ``json.JSONDecodeError`` /
-    ``pydantic.ValidationError``; callers map these to user-facing errors.
+    Raises what `load_scenario_json` raises, and ``pydantic.ValidationError``;
+    callers map these to user-facing errors.
     """
     test_data = load_scenario_json(path, root_path=root_path, ref_parent_traversal_depth=ref_parent_traversal_depth)
     return Scenario.model_validate(test_data), test_data
@@ -204,8 +200,6 @@ def load_with_diagnostics(
                 diagnostics.append(diag(DiagnosticCode.PARSE_ERROR, f"Failed to parse JSON file{where}: nested too deeply ({e.__cause__})"))
             else:
                 diagnostics.append(diag(DiagnosticCode.REF_ERROR, f"JSON reference resolution error: {e}"))
-        except json.JSONDecodeError as e:
-            diagnostics.append(diag(DiagnosticCode.INVALID_JSON, f"Invalid JSON syntax: {e}"))
         except ValidationError as e:
             # A literal its field's literal branch refused is not also told to
             # hold a template (`without_template_hints`): the hint invites
