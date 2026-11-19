@@ -39,7 +39,7 @@ from pydantic import ValidationError
 from pyrate_limiter import Duration, Limiter, Rate
 
 from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds
-from pytest_httpchain.connections import ConnectionExchange, Connections, ExchangeRecord, Miss, expect_failure, not_open_failure
+from pytest_httpchain.connections import ConnectionExchange, Connections, ExchangeRecord, Miss, Session, expect_failure, not_open_failure
 from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.har_writer import Exchange
 from pytest_httpchain.models import (
@@ -411,7 +411,7 @@ def _wire_exchanges(request: httpx.Request, response: httpx.Response | None, sta
 _CONNECTION_RESERVED = {name: f"{what} (HTTPCHAIN045)" for name, what in CONNECTION_BINDINGS.items()}
 
 
-def _message_miss(match: Any, rendered: Mapping[str, Any] | None, redaction: Redaction, listed: Sequence[Any], message: dict[str, Any]) -> Miss | None:
+def _message_miss(match: str | Mapping[str, Any] | None, rendered: Mapping[str, Any] | None, redaction: Redaction, listed: Sequence[Any], message: dict[str, Any]) -> Miss | None:
     """The predicate a connection stage's wait takes (`connections.MatchPredicate`):
     `response_steps.message_matches`' verdict on ``message``.
 
@@ -1788,7 +1788,7 @@ class Carrier:
         attempt opened the connection is the connection ending under the
         stage, which a stage with ``open: true`` retries by connecting again.
         An ``expect`` takes the oldest matching message, after the stage's
-        send if it sends (`connections._Session.expect`). The response steps
+        send if it sends (`connections.Session.expect`). The response steps
         see it as ``message`` (or, without an ``expect``, what an ``open``'s
         ``connect()`` returned) and what ``send()`` returned as ``sent``.
 
@@ -1809,7 +1809,7 @@ class Carrier:
             # What the response steps see: `message`, `sent`.
             bound: dict[str, Any] = {}
             subject = NO_MESSAGE
-            session: Any = None
+            session: Session | None = None
             # A stage that would only close a connection never opened again
             # does not connect for that (`ConnectionStep.only_closes`).
             if step.open or (not step.only_closes and cls.connections.never_opened(step.name)):
@@ -1832,6 +1832,7 @@ class Carrier:
             # connection ending under the stage.
             ended_before = end is not None and not record.opened
             if end is not None and step.send is not None:
+                assert session is not None, "a step that sends has a session"
                 session.observed = True
                 if ended_before:
                     raise not_open_failure(stage.name, step.name, end.describe())
@@ -1845,6 +1846,7 @@ class Carrier:
             after: int | None = None
             since = time.monotonic()
             if step.send is not None:
+                assert session is not None, "a step that sends has a session"
                 record.sent = declared = cls._rendered_send(stage, step, iter_context)
                 # A copy: an adapter that changes the message it is given (a
                 # sequence number written into it) must not change the
@@ -1856,6 +1858,7 @@ class Carrier:
                 record.sent_return = bound[SENT_NAME] = session.send(outgoing)
 
             if step.expect is not None:
+                assert session is not None, "a step that expects has a session"
                 subject = cls._expect(stage, step, session, iter_context, bound, record, after=after, since=since, ended_before=ended_before)
                 if subject.present:
                     bound[MESSAGE_META_NAME] = subject.message
@@ -1874,7 +1877,7 @@ class Carrier:
         return IterationResult(saved_context=saved_context)
 
     @classmethod
-    def _open_connection(cls, stage: Stage, name: str, config: ConnectionConfig) -> tuple[Any, dict[str, Any] | None]:
+    def _open_connection(cls, stage: Stage, name: str, config: ConnectionConfig) -> tuple[Session, dict[str, Any] | None]:
         """Open connection ``name`` for ``stage``, its ``params`` rendered
         (`_params_context`): its session, and what ``connect()`` returned.
         Resources its templates enter belong to that session, and a failed
@@ -1939,7 +1942,7 @@ class Carrier:
         cls,
         stage: Stage,
         step: ConnectionStep,
-        session: Any,
+        session: Session,
         iter_context: ChainMap[str, Any],
         bound: Mapping[str, Any],
         record: ExchangeRecord,

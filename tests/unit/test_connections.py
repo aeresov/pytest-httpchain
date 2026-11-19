@@ -59,7 +59,7 @@ def timed_session(monkeypatch):
     """A session driven synchronously, with a clock its wait can advance."""
     clock = types.SimpleNamespace(now=100.0)
     monkeypatch.setattr(connections_module, "time", types.SimpleNamespace(monotonic=lambda: clock.now))
-    session = connections_module._Session("dev", ADAPTER, object(), 1, 2, "unused-reader")
+    session = connections_module.Session("dev", ADAPTER, object(), 1, 2, "unused-reader")
     return session, clock
 
 

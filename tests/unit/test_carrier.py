@@ -4034,7 +4034,7 @@ class TestConnectionStages:
         from tests.unit import connections_test_helpers as helpers
 
         monkeypatch.setattr(carrier_module, "_wait_to_retry", lambda seconds, cancel: True)
-        start = connections_module._Session.start
+        start = connections_module.Session.start
 
         def start_and_see_the_end(session):
             start(session)
@@ -4043,7 +4043,7 @@ class TestConnectionStages:
                 while session.end is None and time.monotonic() < deadline:
                     time.sleep(0.002)
 
-        monkeypatch.setattr(connections_module._Session, "start", start_and_see_the_end)
+        monkeypatch.setattr(connections_module.Session, "start", start_and_see_the_end)
         peer = helpers.peer("carrier", reply=lambda message: [{"op": "pong"}])
         peer.hangups, peer.welcome = 2, {"op": "hi"}
         carrier, scenario = self._carrier(
@@ -4057,7 +4057,7 @@ class TestConnectionStages:
         import pytest_httpchain.connections as connections_module
         from tests.unit import connections_test_helpers as helpers
 
-        start = connections_module._Session.start
+        start = connections_module.Session.start
 
         def start_and_see_the_end(session):
             start(session)
@@ -4065,7 +4065,7 @@ class TestConnectionStages:
             while session.end is None and time.monotonic() < deadline:
                 time.sleep(0.002)
 
-        monkeypatch.setattr(connections_module._Session, "start", start_and_see_the_end)
+        monkeypatch.setattr(connections_module.Session, "start", start_and_see_the_end)
         peer = helpers.peer("carrier")
         peer.hangups = 9
         carrier, scenario = self._carrier(
@@ -4152,8 +4152,8 @@ class TestConnectionStages:
 
         monkeypatch.setattr(carrier_module, "_wait_to_retry", lambda seconds, cancel: True)
         asked: list[str] = []
-        late = connections_module._Session.late
-        monkeypatch.setattr(connections_module._Session, "late", lambda session, outcome, since: asked.append(outcome.result) or late(session, outcome, since))
+        late = connections_module.Session.late
+        monkeypatch.setattr(connections_module.Session, "late", lambda session, outcome, since: asked.append(outcome.result) or late(session, outcome, since))
         peer = helpers.peer("carrier")
         carrier, scenario = self._carrier(
             [
@@ -4173,7 +4173,7 @@ class TestConnectionStages:
         import pytest_httpchain.connections as connections_module
         from tests.unit import connections_test_helpers as helpers
 
-        monkeypatch.setattr(connections_module._Session, "late", lambda *args: pytest.fail("a closed wait has no late messages"))
+        monkeypatch.setattr(connections_module.Session, "late", lambda *args: pytest.fail("a closed wait has no late messages"))
         helpers.peer("carrier")
         carrier, scenario = self._carrier([{"name": "stays", "connection": {"name": "dev", "expect": {"closed": True, "timeout": 0.02}}}])
         assert self._run(carrier, scenario) == ["failed: Stage 'stays': connection 'dev' did not close within 0.02 s"]

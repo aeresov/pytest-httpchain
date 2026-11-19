@@ -4,14 +4,14 @@ and inboxes, and the wait for a message.
 A scenario's ``connections`` name adapter classes (``module:Class``) the user
 writes: the plugin knows no protocol, only the adapter's four calls
 (`ADAPTER_METHODS`, typed as `ProtocolAdapter`). Each open makes a fresh
-`_Session`: the adapter instance, a reader thread calling ``receive()`` over and
+`Session`: the adapter instance, a reader thread calling ``receive()`` over and
 over, and a bounded inbox of what it returned, in arrival order. A chain's
 sessions live in its `Connections` registry, by name; the carrier
 (``carrier.Carrier``) runs the connection step on them and ends them with the
 chain (`close_all`).
 
 What a match means is not decided here: ``response_steps.message_matches``
-judges one message, and the carrier hands `_Session.expect` a predicate built on
+judges one message, and the carrier hands `Session.expect` a predicate built on
 it, so this module stays below ``response_steps``. Nothing it raises from the
 reader thread escapes it: the run treats warnings as errors, and an exception
 leaving a thread is reported as one.
@@ -85,7 +85,7 @@ RECEIVE_TIMEOUT = 0.2
 # (Ctrl-C) or the deadline is never further away than this.
 WAIT_SLICE = 0.1
 # How long after a timed-out `expect`'s deadline a message still counts as
-# late, in the report of the stage it failed (`_Session.late`).
+# late, in the report of the stage it failed (`Session.late`).
 LATE_WINDOW = 0.2
 # How long closing or reopening a connection waits for its reader to stop.
 JOIN_BUDGET = 2.0
@@ -280,7 +280,7 @@ ExpectResult = Literal["taken", "seen", "timeout", "absent", "closed", "ended"]
 
 @dataclass(frozen=True, slots=True)
 class ExpectOutcome:
-    """How one `_Session.expect` ended (`ExpectResult`), with what it saw:
+    """How one `Session.expect` ended (`ExpectResult`), with what it saw:
     the message it took, or that an absent one saw (``taken``); the messages
     it considered that did not match, oldest first; how long it waited; how
     many queued messages it left out as older than the stage's send
@@ -289,7 +289,7 @@ class ExpectOutcome:
     since the connection was last drained or opened, as it looks at the whole
     queue); and the reader's end, if it saw one. ``seen`` is the last message
     it looked at, and ``ended_at`` when it ended (monotonic), the deadline
-    for a timed-out or absent wait: what `_Session.late` goes by."""
+    for a timed-out or absent wait: what `Session.late` goes by."""
 
     result: ExpectResult
     waited: float
@@ -315,7 +315,7 @@ class _WaitWindow:
     dropped_late: int = 0
 
 
-class _Session:
+class Session:
     """One open of a connection: its adapter instance, its reader thread and
     its inbox. The reader appends what ``receive()`` returns, the test's
     thread takes and drains, both under one condition, which wakes a waiting
@@ -670,7 +670,7 @@ class ExchangeRecord:
 
     connection: str
     adapter: str
-    session: _Session | None = None
+    session: Session | None = None
     opened: bool = False
     connected: dict[str, Any] | None = None
     sent: dict[str, Any] | None = None
@@ -679,7 +679,7 @@ class ExchangeRecord:
     timeout: float | None = None
     mode: ExpectMode | None = None
     outcome: ExpectOutcome | None = None
-    # What the wait's arrival times are relative to (`_Session.expect`).
+    # What the wait's arrival times are relative to (`Session.expect`).
     since: float = 0.0
 
     def freeze(self, full: bool = True) -> ConnectionExchange:
@@ -719,7 +719,7 @@ class ExchangeRecord:
 
     def late(self) -> tuple[Arrival, ...]:
         """For a wait for a message that timed out: copies of the messages
-        that arrive just after its deadline (`_Session.late`), which stay
+        that arrive just after its deadline (`Session.late`), which stay
         queued; none for any other step. Asked once the stage's failure is
         final, so only that attempt waits the window out."""
         session, outcome = self.session, self.outcome
@@ -740,7 +740,7 @@ def _copied_arrival(arrival: Arrival) -> Arrival:
     return Arrival(arrival.seq, arrival.at, _copied(arrival.message), arrival.miss)
 
 
-def close_all(sessions: Iterable[_Session]) -> None:
+def close_all(sessions: Iterable[Session]) -> None:
     """End ``sessions`` at once, as a chain ends: stop every reader, then
     ``close()`` every adapter, each in its own guard, which must make a
     ``receive()`` in progress return, then wait for all the readers against one
@@ -796,7 +796,7 @@ class _Entry:
     or the failure of the open that replaced its session. ``stuck`` is a
     reader that did not stop, which bars reopening."""
 
-    session: _Session | None = None
+    session: Session | None = None
     generations: int = 0
     closed_by: str | None = None
     failure: str | None = None
@@ -805,7 +805,7 @@ class _Entry:
 
 class Connections:
     """A chain's connections, by name: each has never been opened, is open
-    (a `_Session`, whose reader may have ended since), or was closed by a
+    (a `Session`, whose reader may have ended since), or was closed by a
     stage, or failed to reopen."""
 
     def __init__(self) -> None:
@@ -817,7 +817,7 @@ class Connections:
 
     __hash__ = None
 
-    def session(self, name: str) -> _Session | None:
+    def session(self, name: str) -> Session | None:
         entry = self._entries.get(name)
         return entry.session if entry is not None else None
 
@@ -862,7 +862,7 @@ class Connections:
                 entry.failure = "\n".join(cleanup_errors)
                 raise RequestError(f"Closing connection '{name}' before reopening failed: {entry.failure}", retryable=False)
 
-    def open(self, name: str, adapter_name: str, params: Mapping[str, Any], connect_timeout: float, inbox_limit: int, label: str) -> tuple[_Session, dict[str, Any] | None]:
+    def open(self, name: str, adapter_name: str, params: Mapping[str, Any], connect_timeout: float, inbox_limit: int, label: str) -> tuple[Session, dict[str, Any] | None]:
         """Open ``name`` anew, ending its previous session first.
 
         Import the adapter, build it with ``params``, ``connect()`` it and
@@ -875,7 +875,7 @@ class Connections:
         entry = self._entries[name]
         try:
             generation = entry.generations + 1
-            opening = _Session.Opening(generation, inbox_limit, f"httpchain-connection-{label}-{name}-{generation}")
+            opening = Session.Opening(generation, inbox_limit, f"httpchain-connection-{label}-{name}-{generation}")
             session, result = self._connect(name, adapter_name, params, connect_timeout, opening)
         except BaseException as e:
             entry.failure = describe_exception(e.__cause__ if isinstance(e, RequestError) and e.__cause__ is not None else e)
@@ -884,7 +884,7 @@ class Connections:
         return session, result
 
     @staticmethod
-    def _connect(name: str, adapter_name: str, params: Mapping[str, Any], connect_timeout: float, opening: "_Session.Opening") -> tuple[_Session, dict[str, Any] | None]:
+    def _connect(name: str, adapter_name: str, params: Mapping[str, Any], connect_timeout: float, opening: "Session.Opening") -> tuple[Session, dict[str, Any] | None]:
         try:
             adapter_class = import_adapter(adapter_name)
         except UserFunctionError as e:
@@ -897,7 +897,7 @@ class Connections:
             result = adapter.connect(connect_timeout)
             if result is not None:
                 result = checked_message(result, "connect()")
-            session = _Session(name, adapter_name, adapter, *opening)
+            session = Session(name, adapter_name, adapter, *opening)
             session.start()
         except BaseException as e:
             try:
