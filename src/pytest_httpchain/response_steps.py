@@ -684,22 +684,16 @@ class _StructuredBody:
         self._value: Any = _UNPARSED
 
     def parsed(self, check: str) -> Any:
-        """The body as JSON, or `_UNPARSABLE`. The first time, a body that is
-        not JSON is recorded as a failure saying ``check`` (``"check
+        """The body as `_response_data` reads it, or `_UNPARSABLE`. The first
+        time, a body it cannot read, or a message the stage did not take, is
+        recorded as the failure it raises, saying ``check`` (``"check
         verify.jmespath"``) cannot be done on it."""
-        if self._value is _UNPARSED and isinstance(self._response, MessageSubject):
-            if self._response.present:
-                self._value = self._response.message
-            else:
-                self._value = _UNPARSABLE
-                self._failures.add(_no_message(check), retryable=False)
         if self._value is _UNPARSED:
-            assert isinstance(self._response, httpx.Response), "a message is never parsed"
             try:
-                self._value = _parse_structured(self._response, self._codec)
-            except MSGPACK_DECODE_ERRORS as e:
+                self._value = _response_data(self._response, VerificationError, check, self._codec)
+            except VerificationError as e:
                 self._value = _UNPARSABLE
-                self._failures.add(_parse_failure(e, _selected_codec(self._response, self._codec), check), cause=e)
+                self._failures.add(str(e), cause=e.__cause__, retryable=e.retryable)
         return self._value
 
 
