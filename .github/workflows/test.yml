@@ -34,6 +34,10 @@ jobs:
             - name: Install uv
               uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
+                  # uv itself is pinned, as uv's GitHub Actions guide recommends,
+                  # to one version in every setup-uv step. Dependabot does not
+                  # bump this input, so it is bumped by hand with uv's releases.
+                  version: "0.13.9"
                   enable-cache: true
                   cache-dependency-glob: "uv.lock"
 
@@ -94,6 +98,7 @@ jobs:
             - name: Install uv
               uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
+                  version: "0.13.9"
                   enable-cache: true
                   cache-dependency-glob: "uv.lock"
 
@@ -193,6 +198,7 @@ jobs:
             - name: Install uv
               uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
+                  version: "0.13.9"
                   enable-cache: true
                   cache-dependency-glob: "uv.lock"
 
@@ -225,6 +231,7 @@ jobs:
             - name: Install uv
               uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
+                  version: "0.13.9"
                   enable-cache: true
                   cache-dependency-glob: "uv.lock"
 
