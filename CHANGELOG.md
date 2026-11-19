@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `validate`, `resolve`, `show` and `graph` read the configuration files pytest reads beside the
+  one it takes its settings from. Having found that file, pytest also reads every file after it in
+  its order (`pytest.toml`, `.pytest.toml`, `pytest.ini`, `.pytest.ini`, `pyproject.toml`,
+  `tox.ini`, `setup.cfg`) in the same directory, to warn that it ignores them, and stops on one it
+  cannot read or refuses: a TOML or ini syntax error, a `setup.cfg` `[pytest]` section, or a
+  `pyproject.toml` using both `[tool.pytest]` and `[tool.pytest.ini_options]`. Before, such a file
+  was not read: `validate` on a directory took its `httpchain_suffix`, and every command its
+  `httpchain_ref_parent_traversal_depth`, from the configuration file beside it. Now `validate` on a
+  directory stops with an `error:` line naming the file, as pytest stops. Every command over files
+  takes the depth 3, as it does for a configuration file pytest cannot read. The default reference
+  root stays the configuration file's directory. A file there that pytest reads and goes on from,
+  with or without pytest configuration, changes nothing. Files before the configuration file in
+  that order, or in another directory, are not read beside it.
+- A key pytest reads as a table but that holds something else makes pytest fail with an internal
+  error. Such keys are `tool`, `tool.pytest`, or `tool.pytest.ini_options` in a `pyproject.toml`
+  (`tool = 1`), or `pytest` in a `pytest.toml` or `.pytest.toml` (`pytest = 1`). The CLI took such
+  a file as holding no pytest configuration, or empty configuration. Now it refuses the file as one
+  pytest cannot read, both on the way to the configuration file and beside it: `cannot read pytest
+  configuration from <file>: tool must be a table, not int: 1`. `validate` on a directory stops on
+  it, and the depth is 3. Like an unreadable configuration file, a `pytest.toml` refused this way is
+  passed over for the default reference root (see the next entry).
+- With pytest 9.2.0 or later installed beside the CLI, a `pytest.toml` or `.pytest.toml` holding
+  options outside any table and no `[pytest]` table is refused, as pytest 9.2.0 refuses it, in
+  pytest's words: `<file>: pytest configuration must be under a [pytest] table (found top-level
+  options: addopts)`. So is one whose `pytest` key holds `0`, `false`, `""` or `[]`, which pytest
+  9.2.0 also fails on. Before, the CLI took either file as the configuration file, setting nothing,
+  whatever pytest was installed; it still does with pytest 9.0 and 9.1, which read them the same
+  way. A refused file stops `validate` on a directory with an `error:` line and sets no depth (the
+  depth is 3). Like an unreadable configuration file, it is also passed over for the default
+  reference root. Commands over files then take the root from the next configuration file found
+  past it (beside it or above), or else as pytest determines a root without one (a `setup.py`'s
+  directory, or the common ancestor of the current directory and the paths). So a scenario whose
+  reference climbs to that `pytest.toml`'s directory can now report `HTTPCHAIN012` outside the
+  reference root. Fix the file (pytest 9.2 refuses it too), or pass `--root-path`.
+
 ## [0.21.0] - 2026-11-18
 
 ### Changed
