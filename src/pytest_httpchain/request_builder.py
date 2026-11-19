@@ -585,6 +585,136 @@ def _declares_content_type(headers: Iterable[str]) -> bool:
     return any(name.lower() == "content-type" for name in headers)
 
 
+def _request_url(request_model: Request, client: ClientConfig, redaction: Redaction) -> str:
+    """The URL a request is sent to: the stage's, ``client.params`` and its
+    own params merged into its query (`_merge_query`). A message quoting it
+    shows it through ``redaction``, as the report does."""
+    url = request_model.url
+    if client.base_url is None and is_relative_url(url):
+        # Sent anyway, httpx would fail it as missing its protocol, which does
+        # not say where the URL was meant to come from.
+        raise RequestError(f"Request URL {redaction.url(url)!r} is relative, but the scenario sets no client.base_url to resolve it against")
+    if not (request_model.params or client.params):
+        return url
+    # httpx's params= *replaces* the URL's own query, so `/items?page=2`
+    # with params {"limit": 10} went out as `/items?limit=10`. Merged into
+    # the URL instead, which moves parsing — and its InvalidURL — here
+    # from client.request. httpx.URL has already normalized the query to
+    # what it would send without params, so the kept segments match that.
+    try:
+        parsed = httpx.URL(url)
+        query = _merge_query(parsed.query.decode("ascii"), request_model.params, client.params)
+        return str(parsed.copy_with(query=query.encode("ascii") if query else None))
+    except httpx.InvalidURL as e:
+        raise RequestError(f"Invalid request URL: {e}") from e
+
+
+def _auth_kwargs(auth: RequestAuth | None, declared_auth: RequestAuth | None) -> dict[str, Any]:
+    """The request's ``auth=``, if the stage sets one: a mapping, as leaving
+    the argument out and passing None mean different things to httpx."""
+    match auth:
+        case None:
+            # Left out: httpx applies the client's, the scenario's auth.
+            return {}
+        case False:
+            # httpx takes None as "no auth for this request", where leaving
+            # the argument out (its USE_CLIENT_DEFAULT) takes the client's. A
+            # URL's userinfo still applies, as it does on a client without one.
+            return {"auth": None}
+        case auth:
+            try:
+                return {"auth": build_auth(auth, declared_auth)}
+            except UserFunctionError as e:
+                raise RequestError(f"Failed to configure authentication: {e}") from e
+
+
+def _body_kwargs(request_model: Request, client: ClientConfig, scenario_dir: Path | None) -> dict[str, Any]:
+    """The arguments that send the stage's body (``content=``, ``json=`` or
+    ``data=``), and ``headers=`` where the body has a say in their
+    Content-Type. A file it names is read relative to ``scenario_dir``."""
+    body_kwargs: dict[str, Any] = {}
+    # The Content-Type of a body that keeps its own, unless the stage declares
+    # one (see below), and the parts of a multipart one.
+    own_type: str | None = None
+    multipart_parts: list[_Part] | None = None
+
+    match request_model.body:
+        case None:
+            pass
+
+        case JsonBody(json=None):
+            # httpx reads json=None as "no body", so a declared null — literal,
+            # or a template that rendered to None — went out exactly like an
+            # undeclared body. Sent as the JSON document it is instead.
+            body_kwargs["content"] = b"null"
+            if not _declares_content_type((*client.headers, *request_model.headers)):
+                body_kwargs["headers"] = {**request_model.headers, "Content-Type": "application/json"}
+
+        case JsonBody(json=data):
+            body_kwargs["json"] = data
+
+        case MsgpackBody(msgpack=data):
+            try:
+                body_kwargs["content"] = pack_msgpack(data)
+            except (TypeError, ValueError, OverflowError, RecursionError) as e:
+                raise RequestError(f"Cannot encode MessagePack body: {e}") from e
+            own_type = "application/msgpack"
+
+        case GraphQLBody(graphql=gql):
+            # operationName only when declared: a scenario without one sends
+            # what it always has.
+            body_kwargs["json"] = {"query": gql.query, "variables": gql.variables} | ({} if gql.operation_name is None else {"operationName": gql.operation_name})
+
+        case FormBody(form=data):
+            encoded = _encoded_binary_form(data)
+            if encoded is None:
+                body_kwargs["data"] = data
+            else:
+                body_kwargs["content"] = encoded
+            if data and (encoded is not None or _declares_content_type(client.headers)):
+                # httpx labels a urlencoded form itself where nothing declares
+                # a type, but only one it encodes (data=), not bytes encoded here.
+                own_type = "application/x-www-form-urlencoded"
+
+        case XmlBody(xml=data) | TextBody(text=data):
+            body_kwargs["content"] = data
+
+        case Base64Body(base64=encoded_data):
+            body_kwargs["content"] = _b64decode(encoded_data, "The base64 body")
+
+        case BinaryBody(binary=file_path):
+            path = resolve_scenario_path(scenario_dir, file_path)
+            body_kwargs["content"] = _read_file(path, file_path, "Binary file not found", "Cannot read binary file")
+
+        case BytesBody(bytes=data):
+            if not isinstance(data, bytes):
+                raise RequestError("The bytes body must resolve to bytes")
+            body_kwargs["content"] = data
+
+        case FilesBody(files=files):
+            multipart_parts = list(_file_parts(files, scenario_dir))
+
+        case MultipartBody(multipart=multipart):
+            multipart_parts = [*_field_parts(multipart.fields), *_file_parts(multipart.files, scenario_dir)]
+
+        case _:
+            raise RuntimeError(f"Unhandled request body type: {type(request_model.body).__name__}")
+
+    if multipart_parts is not None:
+        # httpx gives `content=` no type, and the boundary is this body's.
+        body_kwargs["content"], body_kwargs["headers"] = _multipart_content(multipart_parts, request_model.headers)
+
+    if own_type and not _declares_content_type(request_model.headers):
+        # httpx gives a body's own Content-Type only to a request that has
+        # none, and a client header counts: a scenario-wide
+        # `Content-Type: application/json` labelled every form body JSON. A
+        # body encoded one way keeps its type, as a multipart one does (see
+        # above); a stage's own header still wins.
+        body_kwargs["headers"] = {**request_model.headers, "Content-Type": own_type}
+
+    return body_kwargs
+
+
 def build_request_kwargs(
     request_model: Request,
     scenario_dir: Path | None = None,
@@ -600,33 +730,17 @@ def build_request_kwargs(
     ``follow_redirects``, so the request carries a timeout or a redirect
     setting only where the stage declared one (``model_fields_set``, which a
     value from ``$include``/``$merge`` is in): the model's defaults would
-    override the client's. ``client.params`` is merged here (`_merge_query`).
+    override the client's. ``client.params`` is merged here (`_request_url`).
     A message quoting the URL shows it through ``redaction``, as the report
     does. ``declared_auth`` is the stage's ``auth`` as written (`build_auth`).
+
+    Built in this order, which decides the failure when several apply: the
+    URL, then the auth (a user function runs), then the body (files are read).
     """
     client = client if client is not None else _DEFAULT_CLIENT
-    url = request_model.url
-    if client.base_url is None and is_relative_url(url):
-        # Sent anyway, httpx would fail it as missing its protocol, which does
-        # not say where the URL was meant to come from.
-        raise RequestError(f"Request URL {redaction.url(url)!r} is relative, but the scenario sets no client.base_url to resolve it against")
-
-    if request_model.params or client.params:
-        # httpx's params= *replaces* the URL's own query, so `/items?page=2`
-        # with params {"limit": 10} went out as `/items?limit=10`. Merged into
-        # the URL instead, which moves parsing — and its InvalidURL — here
-        # from client.request. httpx.URL has already normalized the query to
-        # what it would send without params, so the kept segments match that.
-        try:
-            parsed = httpx.URL(url)
-            query = _merge_query(parsed.query.decode("ascii"), request_model.params, client.params)
-            url = str(parsed.copy_with(query=query.encode("ascii") if query else None))
-        except httpx.InvalidURL as e:
-            raise RequestError(f"Invalid request URL: {e}") from e
-
     request_kwargs: dict[str, Any] = {
         "method": request_model.method,
-        "url": url,
+        "url": _request_url(request_model, client, redaction),
         "headers": request_model.headers,
     }
     declared = request_model.model_fields_set
@@ -634,99 +748,6 @@ def build_request_kwargs(
         request_kwargs["timeout"] = request_model.timeout
     if "allow_redirects" in declared:
         request_kwargs["follow_redirects"] = request_model.allow_redirects
-
-    match request_model.auth:
-        case None:
-            # Left out: httpx applies the client's, the scenario's auth.
-            pass
-        case False:
-            # httpx takes None as "no auth for this request", where leaving
-            # the argument out (its USE_CLIENT_DEFAULT) takes the client's. A
-            # URL's userinfo still applies, as it does on a client without one.
-            request_kwargs["auth"] = None
-        case auth:
-            try:
-                request_kwargs["auth"] = build_auth(auth, declared_auth)
-            except UserFunctionError as e:
-                raise RequestError(f"Failed to configure authentication: {e}") from e
-
-    # The Content-Type of a body that keeps its own, unless the stage declares
-    # one (see below), and the parts of a multipart one.
-    own_type: str | None = None
-    multipart_parts: list[_Part] | None = None
-
-    match request_model.body:
-        case None:
-            pass
-
-        case JsonBody(json=None):
-            # httpx reads json=None as "no body", so a declared null — literal,
-            # or a template that rendered to None — went out exactly like an
-            # undeclared body. Sent as the JSON document it is instead.
-            request_kwargs["content"] = b"null"
-            if not _declares_content_type((*client.headers, *request_model.headers)):
-                request_kwargs["headers"] = {**request_model.headers, "Content-Type": "application/json"}
-
-        case JsonBody(json=data):
-            request_kwargs["json"] = data
-
-        case MsgpackBody(msgpack=data):
-            try:
-                request_kwargs["content"] = pack_msgpack(data)
-            except (TypeError, ValueError, OverflowError, RecursionError) as e:
-                raise RequestError(f"Cannot encode MessagePack body: {e}") from e
-            own_type = "application/msgpack"
-
-        case GraphQLBody(graphql=gql):
-            # operationName only when declared: a scenario without one sends
-            # what it always has.
-            request_kwargs["json"] = {"query": gql.query, "variables": gql.variables} | ({} if gql.operation_name is None else {"operationName": gql.operation_name})
-
-        case FormBody(form=data):
-            encoded = _encoded_binary_form(data)
-            if encoded is None:
-                request_kwargs["data"] = data
-            else:
-                request_kwargs["content"] = encoded
-            if data and (encoded is not None or _declares_content_type(client.headers)):
-                # httpx labels a urlencoded form itself where nothing declares
-                # a type, but only one it encodes (data=), not bytes encoded here.
-                own_type = "application/x-www-form-urlencoded"
-
-        case XmlBody(xml=data) | TextBody(text=data):
-            request_kwargs["content"] = data
-
-        case Base64Body(base64=encoded_data):
-            request_kwargs["content"] = _b64decode(encoded_data, "The base64 body")
-
-        case BinaryBody(binary=file_path):
-            path = resolve_scenario_path(scenario_dir, file_path)
-            request_kwargs["content"] = _read_file(path, file_path, "Binary file not found", "Cannot read binary file")
-
-        case BytesBody(bytes=data):
-            if not isinstance(data, bytes):
-                raise RequestError("The bytes body must resolve to bytes")
-            request_kwargs["content"] = data
-
-        case FilesBody(files=files):
-            multipart_parts = list(_file_parts(files, scenario_dir))
-
-        case MultipartBody(multipart=multipart):
-            multipart_parts = [*_field_parts(multipart.fields), *_file_parts(multipart.files, scenario_dir)]
-
-        case _:
-            raise RuntimeError(f"Unhandled request body type: {type(request_model.body).__name__}")
-
-    if multipart_parts is not None:
-        # httpx gives `content=` no type, and the boundary is this body's.
-        request_kwargs["content"], request_kwargs["headers"] = _multipart_content(multipart_parts, request_model.headers)
-
-    if own_type and not _declares_content_type(request_model.headers):
-        # httpx gives a body's own Content-Type only to a request that has
-        # none, and a client header counts: a scenario-wide
-        # `Content-Type: application/json` labelled every form body JSON. A
-        # body encoded one way keeps its type, as a multipart one does (see
-        # above); a stage's own header still wins.
-        request_kwargs["headers"] = {**request_model.headers, "Content-Type": own_type}
-
+    request_kwargs |= _auth_kwargs(request_model.auth, declared_auth)
+    request_kwargs |= _body_kwargs(request_model, client, scenario_dir)
     return request_kwargs
