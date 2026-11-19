@@ -554,6 +554,13 @@ class _Builder:
         key = password if password is not None else f"\0{user}"
         return {scheme: {"username": escape(user), "password": self.secret("api_password", key, f"the password of user {user!r}", stage)}}
 
+    def _bearer(self, token: str, stage: str) -> dict[str, Any]:
+        """The bearer shorthand, ``token`` a placeholder: made alike for an
+        Authorization header and for curl's ``--oauth2-bearer``, so that one
+        token is one variable, and an auth every request sends alike moves
+        up to the scenario."""
+        return {"bearer": self.secret("api_token", token, "the bearer token", stage)}
+
     def authorization(self, value: str, stage: str) -> tuple[dict[str, Any] | None, str | None]:
         """An Authorization header as ``(auth, header value)``: the basic or
         bearer shorthand, or for any other scheme the header kept with its
@@ -561,7 +568,7 @@ class _Builder:
         scheme, _, credentials = value.strip().partition(" ")
         credentials = credentials.strip()
         if scheme.lower() == "bearer" and credentials:
-            return {"bearer": self.secret("api_token", credentials, "the bearer token", stage)}, None
+            return self._bearer(credentials, stage), None
         if scheme.lower() == "basic" and credentials:
             try:
                 user, colon, password = base64.b64decode(credentials, validate=True).decode().partition(":")
@@ -825,7 +832,7 @@ class _Builder:
             if header is not None:
                 headers.append(("Authorization", header, False))
         elif recorded.bearer:
-            auth = {"bearer": self.secret("api_token", recorded.bearer, "the bearer token", stage)}
+            auth = self._bearer(recorded.bearer, stage)
         elif recorded.user is not None or url.username is not None:
             # A URL's user name without a password is sent with an empty one
             # (`https://<token>@host`, an API key); only -u asks for one.
