@@ -140,14 +140,39 @@ _OTHER_WITH_VALUE = frozenset(
     }
 )  # fmt: skip
 
-# The short letters of the options the importer does not map, and whether each takes a value.
-_OTHER_SHORT: dict[str, bool] = {
-    "E": True, "K": True, "C": True, "c": True, "P": True, "x": True, "U": True, "Q": True, "r": True, "Y": True, "y": True, "t": True, "z": True,
-    "T": True, "h": True, "a": False, "B": False, "j": False, "l": False, "M": False, "n": False, "p": False, "R": False, "V": False, "Z": False,
-    "1": False, "2": False, "3": False, "4": False, "6": False,
+# curl's options without a value that the importer does not map (the rest of
+# `curl --help all`'s), told apart from a word curl does not know.
+_OTHER_BOOLEAN = frozenset(
+    {
+        "anyauth", "append", "ca-native", "cert-status", "compressed-ssh", "crlf", "disable-eprt", "disable-epsv", "disallow-username-in-url",
+        "doh-cert-status", "doh-insecure", "false-start", "form-escape", "ftp-create-dirs", "ftp-pasv", "ftp-pret", "ftp-skip-pasv-ip", "ftp-ssl-ccc",
+        "ftp-ssl-control", "haproxy-protocol", "http0.9", "ignore-content-length", "ipv4", "ipv6", "junk-session-cookies", "list-only",
+        "mail-rcpt-allowfails", "manual", "metalink", "mptcp", "negotiate", "netrc", "netrc-optional", "no-alpn", "no-clobber", "no-keepalive", "no-npn",
+        "no-sessionid", "ntlm", "ntlm-wb", "parallel", "parallel-immediate", "path-as-is", "post301", "post302", "post303", "proxy-anyauth", "proxy-basic",
+        "proxy-ca-native", "proxy-digest", "proxy-http2", "proxy-insecure", "proxy-negotiate", "proxy-ntlm", "proxy-ssl-allow-beast",
+        "proxy-ssl-auto-client-cert", "proxy-tlsv1", "proxytunnel", "raw", "remote-time", "remove-on-error", "retry-all-errors", "retry-connrefused",
+        "sasl-ir", "skip-existing", "socks5-basic", "socks5-gssapi", "socks5-gssapi-nec", "ssl", "ssl-allow-beast", "ssl-auto-client-cert",
+        "ssl-no-revoke", "ssl-reqd", "ssl-revoke-best-effort", "sslv2", "sslv3", "suppress-connect-headers", "tcp-fastopen", "tcp-nodelay",
+        "tftp-no-options", "tlsv1", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3", "tr-encoding", "use-ascii", "version", "xattr",
+    }
+)  # fmt: skip
+
+# The short letters of the options the importer does not map, and the long
+# name each stands for.
+_OTHER_SHORT: dict[str, str] = {
+    "E": "cert", "K": "config", "C": "continue-at", "c": "cookie-jar", "P": "ftp-port", "x": "proxy", "U": "proxy-user", "Q": "quote", "r": "range",
+    "Y": "speed-limit", "y": "speed-time", "t": "telnet-option", "z": "time-cond", "T": "upload-file", "h": "help", "a": "append", "B": "use-ascii",
+    "j": "junk-session-cookies", "l": "list-only", "M": "manual", "n": "netrc", "p": "proxytunnel", "R": "remote-time", "V": "version", "Z": "parallel",
+    "1": "tlsv1", "2": "sslv2", "3": "sslv3", "4": "ipv4", "6": "ipv6",
 }  # fmt: skip
 
-_SHORT: dict[str, str] = {short: name for table in (_MAPPED, _IGNORED) for name, (short, _) in table.items() if short is not None}
+# Whether each curl option takes a value, by long name: what the tables above say.
+_TAKES_VALUE: dict[str, bool] = (
+    {name: takes_value for table in (_MAPPED, _IGNORED) for name, (_, takes_value) in table.items()} | dict.fromkeys(_OTHER_WITH_VALUE, True) | dict.fromkeys(_OTHER_BOOLEAN, False)
+)
+
+# The long name of each short letter curl has.
+_SHORT: dict[str, str] = {short: name for table in (_MAPPED, _IGNORED) for name, (short, _) in table.items() if short is not None} | _OTHER_SHORT
 
 # A shell expansion the text would have gone through: `$NAME`, `${...}`, `$(...)`.
 _EXPANSION = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]*\}|\()")
@@ -601,43 +626,37 @@ def _read_options(words: list[str], warnings: list[str]) -> _Options:
         i += 1
         return words[i - 1]
 
+    def take(name: str, written: str, attached: str) -> None:
+        """The option of long name ``name``, as ``written``, with its value
+        where it takes one: mapped, ignored, or named as one the importer
+        does not map."""
+        value = value_for(written, attached) if _TAKES_VALUE[name] else None
+        if name in _MAPPED:
+            _apply(options, name, value, warnings)
+        elif name not in _IGNORED:
+            unmapped.append(written)
+        elif value is not None:
+            _ignore(written, value, warnings)
+
     while i < len(words):
         word = words[i]
         i += 1
         if word.startswith("--") and len(word) > 2:
             name = word[2:]
-            if name in _MAPPED:
-                _apply(options, name, value_for(word, "") if _MAPPED[name][1] else None, warnings)
-            elif name in _IGNORED:
-                if _IGNORED[name][1]:
-                    _ignore(word, value_for(word, ""), warnings)
-            elif name in _OTHER_WITH_VALUE:
-                value_for(word, "")
-                unmapped.append(word)
-            elif name.startswith("no-") or name in _OTHER_BOOLEAN:
+            if name in _TAKES_VALUE:
+                take(name, word, "")
+            elif name.startswith("no-"):
                 unmapped.append(word)
             else:
                 unknown.append(word)
         elif word.startswith("-") and len(word) > 1:
             for j, letter in enumerate(word[1:], start=2):
                 option = f"-{letter}"
-                if (name := _SHORT.get(letter)) is not None:
-                    table = _MAPPED if name in _MAPPED else _IGNORED
-                    takes_value = table[name][1]
-                    value = value_for(option, word[j:]) if takes_value else None
-                    if name in _MAPPED:
-                        _apply(options, name, value, warnings)
-                    elif value is not None:
-                        _ignore(option, value, warnings)
-                elif letter in _OTHER_SHORT:
-                    takes_value = _OTHER_SHORT[letter]
-                    if takes_value:
-                        value_for(option, word[j:])
-                    unmapped.append(option)
-                else:
+                if (name := _SHORT.get(letter)) is None:
                     unknown.append(word if j == 2 else option)
                     break
-                if takes_value:
+                take(name, option, word[j:])
+                if _TAKES_VALUE[name]:
                     break
         else:
             options.urls.append(word)
@@ -654,24 +673,6 @@ def _ignore(option: str, value: str, warnings: list[str]) -> None:
     is the command's."""
     if option in ("-o", "--output"):
         warnings.append(f"Ignored {option} {value!r}, the file curl writes its answer to: to write the scenario to a file, give import's -o before the command")
-
-
-# curl's options without a value that the importer does not map (the rest of
-# `curl --help all`'s), told apart from a word curl does not know.
-_OTHER_BOOLEAN = frozenset(
-    {
-        "anyauth", "append", "ca-native", "cert-status", "compressed-ssh", "crlf", "disable-eprt", "disable-epsv", "disallow-username-in-url",
-        "doh-cert-status", "doh-insecure", "false-start", "form-escape", "ftp-create-dirs", "ftp-pasv", "ftp-pret", "ftp-skip-pasv-ip", "ftp-ssl-ccc",
-        "ftp-ssl-control", "haproxy-protocol", "http0.9", "ignore-content-length", "ipv4", "ipv6", "junk-session-cookies", "list-only",
-        "mail-rcpt-allowfails", "manual", "metalink", "mptcp", "negotiate", "netrc", "netrc-optional", "no-alpn", "no-clobber", "no-keepalive", "no-npn",
-        "no-sessionid", "ntlm", "ntlm-wb", "parallel", "parallel-immediate", "path-as-is", "post301", "post302", "post303", "proxy-anyauth", "proxy-basic",
-        "proxy-ca-native", "proxy-digest", "proxy-http2", "proxy-insecure", "proxy-negotiate", "proxy-ntlm", "proxy-ssl-allow-beast",
-        "proxy-ssl-auto-client-cert", "proxy-tlsv1", "proxytunnel", "raw", "remote-time", "remove-on-error", "retry-all-errors", "retry-connrefused",
-        "sasl-ir", "skip-existing", "socks5-basic", "socks5-gssapi", "socks5-gssapi-nec", "ssl", "ssl-allow-beast", "ssl-auto-client-cert",
-        "ssl-no-revoke", "ssl-reqd", "ssl-revoke-best-effort", "sslv2", "sslv3", "suppress-connect-headers", "tcp-fastopen", "tcp-nodelay",
-        "tftp-no-options", "tlsv1", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3", "tr-encoding", "use-ascii", "version", "xattr",
-    }
-)  # fmt: skip
 
 
 def _apply(options: _Options, name: str, value: str | None, warnings: list[str]) -> None:

@@ -483,6 +483,25 @@ def test_a_word_that_looks_like_no_url_is_named():
     ]
 
 
+# curl's short options (`curl --help all`), by whether they take a value, but
+# -:, its --next (see `test_one_request_per_url_and_per_next`).
+_SHORT_WITH_VALUE = "XHdFuAebmowDEKCcPxUQrYytzTh"
+_SHORT_WITHOUT_VALUE = "GILkgsSviOJf#N0qaBjlMnpRVZ12346"
+
+
+@pytest.mark.parametrize(
+    ("letter", "takes_value"),
+    [pytest.param(letter, letter in _SHORT_WITH_VALUE, id=f"-{letter}") for letter in _SHORT_WITH_VALUE + _SHORT_WITHOUT_VALUE],
+)
+def test_short_options_read_their_value_as_curl_does(letter, takes_value):
+    """Every short option of curl's is known, mapped or not, and takes the
+    word after it for its value where it has one; a flag leaves that word
+    to be read as a URL."""
+    requests, warnings = parse_curl_words(["curl", f"-{letter}", "word", "https://x.test/a"])
+    assert [request.url for request in requests] == (["https://x.test/a"] if takes_value else ["http://word", "https://x.test/a"])
+    assert not [warning for warning in warnings if warning.startswith("Ignored what is not a curl option")]
+
+
 def test_prompts_before_several_commands():
     """Each of several commands may follow a prompt; a line that is no curl
     command, after one or not, is still refused."""
