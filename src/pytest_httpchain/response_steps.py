@@ -42,6 +42,7 @@ from pytest_httpchain.models import (
     JMESPathSave,
     RegexCapture,
     RegexSave,
+    ResponseBody,
     Save,
     SubstitutionsSave,
     UserFunctionsSave,
@@ -439,7 +440,7 @@ def process_verify(
                 yield operand
 
     if http is None:
-        for field in _BODY_OPERANDS:
+        for field in ResponseBody.TEXT_CHECKS:
             if getattr(verify_model.body, field):
                 failures.add(_http_only(f"verify.body.{field}"))
     else:
@@ -461,9 +462,6 @@ def process_verify(
 # What `process_verify` has for a value whose templates did not render: its
 # failure is recorded, and its check does not run.
 _UNRENDERED = object()
-
-# The body's operand lists, in the order their checks run.
-_BODY_OPERANDS = ("contains", "not_contains", "matches", "not_matches")
 
 
 def _is_fail(outcome: BaseException) -> bool:
@@ -495,7 +493,7 @@ def _declared_values(verify_model: Verify) -> Iterator[tuple[VerifyWhere, Any]]:
         yield ("user_functions", i), function
     if verify_model.body.schema is not None:
         yield ("body", "schema"), verify_model.body.schema
-    for field in _BODY_OPERANDS:
+    for field in ResponseBody.TEXT_CHECKS:
         for i, operand in enumerate(getattr(verify_model.body, field)):
             yield ("body", field, i), operand
 

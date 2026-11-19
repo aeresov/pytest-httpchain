@@ -20,6 +20,7 @@ from pytest_httpchain.models import (
     JMESPathMatcher,
     JMESPathSave,
     RegexSave,
+    ResponseBody,
     SaveStep,
     Scenario,
     Stage,
@@ -793,7 +794,7 @@ def _http_only_fields(stage: Stage, i: int, rendered_steps: list[Any], response_
                     yield f"{where}.verify.status", f"verify.status checks an HTTP response, and a connection stage has a message instead: the step fails. {_READ_THE_MESSAGE}"
                 if verify.headers:
                     yield f"{where}.verify.headers", f"verify.headers checks an HTTP response, and a connection stage has a message instead: the step fails. {_READ_THE_MESSAGE}"
-                for field in ("contains", "not_contains", "matches", "not_matches"):
+                for field in ResponseBody.TEXT_CHECKS:
                     if getattr(verify.body, field):
                         yield (
                             f"{where}.verify.body.{field}",
@@ -1072,10 +1073,7 @@ def _is_noop_verify(verify: Verify) -> bool:
         and not verify.expressions
         and not verify.user_functions
         and body.schema is None
-        and not body.contains
-        and not body.not_contains
-        and not body.matches
-        and not body.not_matches
+        and not any(getattr(body, check) for check in ResponseBody.TEXT_CHECKS)
     )
 
 

@@ -832,6 +832,11 @@ Save = Annotated[_SaveMember, Discriminator(_create_discriminator(_SaveMember))]
 with _suppress_field_shadow_warning("schema"):
 
     class ResponseBody(StrictModel):
+        # The checks of the body's text, in the order they run and their
+        # failures are listed (`response_steps.process_verify`). A header
+        # matcher's checks are the same four, of the header's value.
+        TEXT_CHECKS: ClassVar[tuple[str, ...]] = ("contains", "not_contains", "matches", "not_matches")
+
         # A template over `vars` renders an object as a SimpleNamespace, which
         # stands for the dict it was declared as: converted all the way down, as
         # a schema is plain JSON. Ahead of the union, keeping its member tags in
@@ -866,10 +871,14 @@ class HeaderMatcher(StrictModel):
     matches: RegexPattern | PartialTemplateStr | None = Field(default=None, description="Regex the header value must match (re.search).")
     not_matches: RegexPattern | PartialTemplateStr | None = Field(default=None, description="Regex the header value must NOT match (re.search).")
 
+    # Named in error locations, as the member of `Verify.headers`' union:
+    # `function-after[at_least_one_check(), HeaderMatcher]`.
     @model_validator(mode="after")
     def at_least_one_check(self) -> Self:
-        if self.contains is None and self.not_contains is None and self.matches is None and self.not_matches is None:
-            raise ValueError("Header matcher must set at least one of: contains, not_contains, matches, not_matches")
+        # Its fields are a body's text checks (`ResponseBody.TEXT_CHECKS`),
+        # each one operand: None is a check not set.
+        if all(getattr(self, check) is None for check in ResponseBody.TEXT_CHECKS):
+            raise ValueError(f"Header matcher must set at least one of: {', '.join(ResponseBody.TEXT_CHECKS)}")
         return self
 
 

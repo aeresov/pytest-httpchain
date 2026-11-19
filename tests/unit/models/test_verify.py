@@ -155,6 +155,19 @@ class TestVerifyHeaders:
         with pytest.raises(ValidationError, match="at least one"):
             Verify(headers={"content-type": {}})
 
+    def test_empty_matcher_error_names_the_checks_and_the_validator(self):
+        """The matcher's member of the header's union is located by its
+        validator's name, so renaming the validator moves the diagnostic."""
+        with pytest.raises(ValidationError) as exc_info:
+            Verify(headers={"content-type": {"contains": None}})
+        assert [(e["loc"], e["msg"]) for e in exc_info.value.errors()] == [
+            (("headers", "content-type", "str"), "Input should be a valid string"),
+            (
+                ("headers", "content-type", "function-after[at_least_one_check(), HeaderMatcher]"),
+                "Value error, Header matcher must set at least one of: contains, not_contains, matches, not_matches",
+            ),
+        ]
+
     def test_namespace_is_the_matcher_object(self):
         """A matcher written as one template over ``vars`` (``"{{ ct }}"``)
         renders as a SimpleNamespace, which walk()'s re-validation refused as
