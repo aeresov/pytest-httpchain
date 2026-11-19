@@ -488,9 +488,10 @@ class _Builder:
         return bool(value) and self.redaction.redacts_query_param(name)
 
     def field_value(self, name: str, value: str, what: str, stage: str) -> str:
-        """A multipart field's value: a placeholder for a secret one (an
-        unset one fails the stage: a field is no null), else the value,
-        escaped."""
+        """A multipart field's value, or the text of a part sent as a file
+        (its ``content``): a placeholder for a secret one (an unset one
+        fails the stage: a field or a file's only source is no null), else
+        the text, escaped."""
         if self.is_secret_field(name, value):
             return self.secret(name, value, f"{what} {name!r}", stage)
         return escape(value)
@@ -498,17 +499,17 @@ class _Builder:
     def fields_text(self, text: str, what: str, stage: str) -> str:
         """``&``-separated fields kept as the text they were (a query left in
         the URL, a form body sent as text), escaped, with the value of each
-        field the redaction rules hide a placeholder URL-encoded as it
+        secret field (`is_secret_field`) a placeholder URL-encoded as it
         renders (``quote``, which an unset one fails: None is no text).
         The text before a placeholder is escaped ``closed``: a recorded
         ``{{`` that no ``}}`` follows would otherwise cover the placeholder,
         sent then as its text."""
         pieces: list[tuple[str, str | None]] = []
         for piece in text.split("&"):
-            raw_name, equals, raw_value = piece.partition("=")
-            name = unquote_plus(raw_name)
-            if equals and raw_value and self.redaction.redacts_query_param(name):
-                var = self.placeholder(name, unquote_plus(raw_value), f"{what} {name!r}", stage)
+            raw_name, _, raw_value = piece.partition("=")
+            name, value = unquote_plus(raw_name), unquote_plus(raw_value)
+            if self.is_secret_field(name, value):
+                var = self.placeholder(name, value, f"{what} {name!r}", stage)
                 pieces.append((raw_name + "=", "{{ quote(" + var + ") }}"))
             else:
                 pieces.append((piece, None))
@@ -707,10 +708,9 @@ class _Builder:
                     spec["base64"] = self.secret(part.name, part.base64, f"multipart part {part.name!r}, base64-encoded", stage)
                 else:
                     spec["base64"] = part.base64
-            elif self.is_secret_field(part.name, content := part.value if part.value is not None else part.content or ""):
-                spec["content"] = self.secret(part.name, content, f"multipart part {part.name!r}", stage)
             else:
-                spec["content"] = escape(content)
+                content = part.value if part.value is not None else part.content or ""
+                spec["content"] = self.field_value(part.name, content, "multipart part", stage)
             if part.filename is not None:
                 spec["filename"] = escape(part.filename)
             elif part.value is not None:
