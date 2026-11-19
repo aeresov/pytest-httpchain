@@ -44,6 +44,7 @@ from pytest_httpchain.carrier import (
     _StagePlan,
     fresh_chain_state,
     fresh_scenario_state,
+    fresh_stage_state,
 )
 from pytest_httpchain.connections import Connections
 from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
@@ -3779,7 +3780,8 @@ class TestScenarioRerunReset:
     """teardown_class must return the class to fresh_scenario_state and the
     pristine base context, so a rerun plugin's second pass actually re-executes
     the chain instead of replaying stale saves or skipping. A scenario's next
-    chain resets the same way, short of its initialization."""
+    chain resets the same way, short of its initialization, and each stage
+    resets what it reports (fresh_stage_state)."""
 
     @pytest.fixture
     def executed(self, monkeypatch):
@@ -3852,6 +3854,17 @@ class TestScenarioRerunReset:
         cls.execute_stage(stage, {})
         assert cls.client is not first_client
         assert cls.global_context["v"] == 1
+
+    def test_a_stage_that_skips_before_recording_reports_nothing(self, executed):
+        """A stage starts from fresh_stage_state, before anything can skip or
+        fail it: one that ends before it records an exchange reports none,
+        not the previous stage's, which a reset only per chain left in place."""
+        cls, _ = executed
+        assert cls.last_request is not None  # the stage before recorded its exchange
+        skipped = Stage.model_validate({"name": "skipped", "skip_if": True, "request": {"url": "http://mock/ok"}})
+        with pytest.raises(pytest.skip.Exception, match=r"^skip_if: true$"):
+            cls.execute_stage(skipped, {})
+        assert {name: getattr(cls, name) for name in fresh_stage_state()} == fresh_stage_state()
 
 
 class TestConnectionStages:

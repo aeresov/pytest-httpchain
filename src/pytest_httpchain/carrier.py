@@ -435,6 +435,30 @@ def _message_miss(match: Any, rendered: Mapping[str, Any] | None, redaction: Red
     return Miss(redaction.message_text(verdict.reason, message, *listed), verdict.error)
 
 
+def fresh_stage_state() -> dict[str, Any]:
+    """The mutable class state one stage reports, in its pristine form.
+
+    `Carrier.execute_stage` applies it before anything can fail or skip, so a
+    stage that never records an exchange reports nothing, not the previous
+    stage's: no request or response shown, no exchange for the HAR file, no
+    attempt or iteration counted, no parallel stats, no connection exchange
+    (nor the record it was taken from, nor what a connection's params render
+    against). Every chain starts from it too (`fresh_chain_state`).
+    """
+    return {
+        "last_request": None,
+        "last_response": None,
+        "last_exchanges": [],
+        "last_iterations_attempted": 0,
+        "last_shown_exchange_is_failed": False,
+        "last_shown_attempt": None,
+        "last_parallel_stats": None,
+        "last_connection_exchange": None,
+        "_connection_record": None,
+        "_connection_params_context": None,
+    }
+
+
 def fresh_chain_state() -> dict[str, Any]:
     """The mutable class state one chain of a scenario owns, in its pristine form.
 
@@ -445,19 +469,10 @@ def fresh_chain_state() -> dict[str, Any]:
     all its chains is in `fresh_scenario_state`.
     """
     return {
+        **fresh_stage_state(),
         "client": None,
         "connections": Connections(),
-        "last_connection_exchange": None,
-        "_connection_record": None,
-        "_connection_params_context": None,
         "aborted": False,
-        "last_request": None,
-        "last_response": None,
-        "last_exchanges": [],
-        "last_iterations_attempted": 0,
-        "last_shown_exchange_is_failed": False,
-        "last_shown_attempt": None,
-        "last_parallel_stats": None,
         "active_context_managers": [],
     }
 
@@ -469,7 +484,8 @@ def fresh_scenario_state() -> dict[str, Any]:
     ``factory.create_test_class`` seeds every subclass with it and
     `Carrier.teardown_class` re-applies it. It is the chain state plus the
     scenario's initialization, which its chains share. New per-scenario state
-    goes here, or in `fresh_chain_state` when each chain must start without it.
+    goes here, in `fresh_chain_state` when each chain must start without it,
+    or in `fresh_stage_state` when each stage must.
     """
     return {
         **fresh_chain_state(),
@@ -937,16 +953,7 @@ class Carrier:
         """
         # Reset before anything can fail or skip: a stage that never records an
         # exchange must report nothing, not the previous stage's.
-        cls.last_request = None
-        cls.last_response = None
-        cls.last_exchanges = []
-        cls.last_iterations_attempted = 0
-        cls.last_shown_exchange_is_failed = False
-        cls.last_shown_attempt = None
-        cls.last_parallel_stats = None
-        cls.last_connection_exchange = None
-        cls._connection_record = None
-        cls._connection_params_context = None
+        cls._apply_state(fresh_stage_state())
 
         # Ahead of the always_run machinery: a failed initialization leaves no
         # context and no client, so every stage skips.
@@ -2015,12 +2022,19 @@ class Carrier:
         return wrapped
 
     @classmethod
+    def _apply_state(cls, state: Mapping[str, Any]) -> None:
+        """Return the class's state to ``state``, a pristine one: a stage's
+        (`fresh_stage_state`), a chain's (`fresh_chain_state`) or a
+        scenario's (`fresh_scenario_state`)."""
+        for name, value in state.items():
+            setattr(cls, name, value)
+
+    @classmethod
     def teardown_class(cls) -> None:
         cls._end_chain()
         # Reset the initialization too, so a re-run of this class (e.g. a rerun
         # plugin) actually re-executes.
-        for name, value in fresh_scenario_state().items():
-            setattr(cls, name, value)
+        cls._apply_state(fresh_scenario_state())
 
     @classmethod
     def _end_chain(cls) -> None:
@@ -2053,8 +2067,7 @@ class Carrier:
         if (client := cls.client) is not None:
             guarded("Closing the HTTP client", client.close)
 
-        for name, value in fresh_chain_state().items():
-            setattr(cls, name, value)
+        cls._apply_state(fresh_chain_state())
         # maps[-1] is the pristine scenario context: saves only ever prepend layers.
         cls.global_context = base_global_context(cls.global_context.maps[-1])
         if interrupts:
