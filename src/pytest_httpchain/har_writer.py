@@ -17,12 +17,12 @@ from urllib.parse import parse_qsl, urlparse
 
 import httpx
 
+# `Exchange` (a request, its response or None, and when it went on the wire)
+# is the one errors defines, where a failure carries those it saw; the name is
+# importable from here too, as what the HAR export writes.
+from pytest_httpchain.errors import Exchange
 from pytest_httpchain.redaction import NO_REDACTION, Redaction
 from pytest_httpchain.utils import request_content
-
-# One wire exchange: the request, its response (None when none arrived), and when
-# it went on the wire (None falls back to HAR write time).
-type Exchange = tuple[httpx.Request, httpx.Response | None, datetime | None]
 
 
 @functools.cache

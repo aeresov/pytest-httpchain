@@ -62,6 +62,11 @@ def check_suffix(suffix: str) -> str:
 # when neither their option nor the configuration file pytest would read sets it.
 DEFAULT_REF_PARENT_TRAVERSAL_DEPTH = 3
 
+# The ``httpchain_max_parallel_iterations`` when the ini option is unset: the
+# default pytest registers it with, and the cap of a test class built without
+# the plugin's configuration (`factory.create_test_class`, `Carrier`).
+DEFAULT_MAX_PARALLEL_ITERATIONS = 10_000
+
 
 @functools.cache
 def scenario_file_pattern(suffix: str) -> re.Pattern[str]:

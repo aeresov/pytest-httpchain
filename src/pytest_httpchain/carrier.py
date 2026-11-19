@@ -40,6 +40,7 @@ from pyrate_limiter import Duration, Limiter, Rate
 
 from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds
 from pytest_httpchain.connections import ConnectionExchange, Connections, ExchangeRecord, Miss, Session, expect_failure, not_open_failure
+from pytest_httpchain.constants import DEFAULT_MAX_PARALLEL_ITERATIONS
 from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError, VerificationError
 from pytest_httpchain.har_writer import Exchange
 from pytest_httpchain.models import (
@@ -822,7 +823,7 @@ class Carrier:
     # `substitutions`, `skip_if`, `parallel`): exited at its end. Each
     # iteration exits its own.
     active_context_managers: ClassVar[list[_EnteredContextManager]] = []
-    max_parallel_iterations: ClassVar[int] = 10_000
+    max_parallel_iterations: ClassVar[int] = DEFAULT_MAX_PARALLEL_ITERATIONS
     _initialized: ClassVar[bool] = False
     _init_failed: ClassVar[str | None] = None
     _client_kwargs: ClassVar[dict[str, Any] | None] = None

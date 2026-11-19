@@ -21,9 +21,11 @@ class SchemaPointerError(HttpChainError):
     `SchemaFileError` is."""
 
 
-# An exchange a failure carries: the request, its response if one came, and
-# when the request went on the wire (``har_writer.Exchange``).
-type _Exchange = tuple[httpx.Request, httpx.Response | None, datetime | None]
+# One wire exchange: the request, its response (None when none arrived), and
+# when it went on the wire (None falls back to HAR write time). What a failure
+# carries (`StageExecutionError.earlier_exchanges`) and the HAR export writes
+# (`har_writer`, which re-exports the name).
+type Exchange = tuple[httpx.Request, httpx.Response | None, datetime | None]
 
 
 class StageExecutionError(HttpChainError):
@@ -61,7 +63,7 @@ class StageExecutionError(HttpChainError):
         if retryable is not None:
             self.retryable = retryable
         self.attempt = 1
-        self.earlier_exchanges: tuple[_Exchange, ...] = ()
+        self.earlier_exchanges: tuple[Exchange, ...] = ()
 
 
 class RequestError(StageExecutionError):

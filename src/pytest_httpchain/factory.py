@@ -10,6 +10,7 @@ import pytest
 
 from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds
 from pytest_httpchain.carrier import Carrier, fresh_scenario_state
+from pytest_httpchain.constants import DEFAULT_MAX_PARALLEL_ITERATIONS
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import (
     CombinationsParameter,
@@ -58,7 +59,7 @@ def _parametrize_values(stage: Stage, field: str, value: Any) -> list[Any]:
 def create_test_class(
     scenario: Scenario,
     class_name: str,
-    max_parallel_iterations: int = 10_000,
+    max_parallel_iterations: int = DEFAULT_MAX_PARALLEL_ITERATIONS,
     scenario_dir: Path | None = None,
     ref_bounds: ReferenceBounds = UNBOUNDED,
     record_all_exchanges: bool = False,
