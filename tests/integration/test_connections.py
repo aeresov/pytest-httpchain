@@ -12,6 +12,7 @@ import threading
 
 import pytest
 
+from pytest_httpchain.connections import READER_THREAD_PREFIX
 from tests.integration.helpers import HAR_ARGS, LINE_JSON_ADAPTER, connection_stage, line_json_scenario, named, stage
 
 SCENARIO = "connections/test_connection_round_trip.http.json"
@@ -20,7 +21,7 @@ ADAPTER = LINE_JSON_ADAPTER
 
 
 def _readers() -> list[str]:
-    return [thread.name for thread in threading.enumerate() if thread.name.startswith("httpchain-connection-")]
+    return [thread.name for thread in threading.enumerate() if thread.name.startswith(READER_THREAD_PREFIX)]
 
 
 def _ping(name: str, ping_id: int, connection: str = "device", **fields) -> dict:

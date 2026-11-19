@@ -31,7 +31,7 @@ from typing import Any, Literal, NamedTuple, Protocol, override
 from pydantic import BaseModel
 
 from pytest_httpchain.errors import RequestError, StageExecutionError, VerificationError
-from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
+from pytest_httpchain.redaction import DEFAULT_REDACTION, SHOWN_BYTES, Redaction, cut, shown_bytes
 from pytest_httpchain.userfunc import UserFunctionError, import_adapter
 from pytest_httpchain.utils import INTERRUPTS as _INTERRUPTS
 from pytest_httpchain.utils import describe_exception, exception_text
@@ -95,6 +95,10 @@ TEARDOWN_BUDGET = 2.0
 DEBUG_INFO_LIMIT = 4000
 # Where a message is cut in a failure line.
 _SHOWN_LIMIT = 200
+
+# The start of every connection reader thread's name (``httpchain-connection-<label>-<name>-<generation>``), by which tests find
+# the readers still running.
+READER_THREAD_PREFIX = "httpchain-connection-"
 
 
 class MessageValueError(ValueError):
@@ -177,14 +181,14 @@ def shown_message(message: Any) -> str:
 
     def default(value: Any) -> str:
         if isinstance(value, bytes):
-            return f"0x{value[:64].hex()}" + ("..." if len(value) > 64 else "")
+            return shown_bytes(value) + ("..." if len(value) > SHOWN_BYTES else "")
         return repr(value)
 
     try:
         text = json.dumps(message, ensure_ascii=False, default=default)
     except (TypeError, ValueError, RecursionError):
         text = "(a message too deep or too long to show)"
-    return text if len(text) <= _SHOWN_LIMIT else f"{text[:_SHOWN_LIMIT]}... ({len(text)} characters)"
+    return cut(text, _SHOWN_LIMIT)
 
 
 def dumped_match(match: Any) -> Any:
@@ -220,7 +224,7 @@ def debug_text(adapter: Any) -> str | None:
         return None
     if not isinstance(text, str):
         return f"<debug_info() returned {type(text).__name__}, not text>"
-    return text if len(text) <= DEBUG_INFO_LIMIT else f"{text[:DEBUG_INFO_LIMIT]}... ({len(text)} characters)"
+    return cut(text, DEBUG_INFO_LIMIT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -875,7 +879,7 @@ class Connections:
         entry = self._entries[name]
         try:
             generation = entry.generations + 1
-            opening = Session.Opening(generation, inbox_limit, f"httpchain-connection-{label}-{name}-{generation}")
+            opening = Session.Opening(generation, inbox_limit, f"{READER_THREAD_PREFIX}{label}-{name}-{generation}")
             session, result = self._connect(name, adapter_name, params, connect_timeout, opening)
         except BaseException as e:
             entry.failure = describe_exception(e.__cause__ if isinstance(e, RequestError) and e.__cause__ is not None else e)

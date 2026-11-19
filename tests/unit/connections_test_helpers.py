@@ -17,6 +17,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Any
 
+from pytest_httpchain.connections import READER_THREAD_PREFIX
 from pytest_httpchain.errors import RequestError
 
 # The peers adapters connect to, by name: a test registers its own (`peer`).
@@ -90,7 +91,7 @@ def reader_threads() -> list[threading.Thread]:
     """The connection reader threads running now, told apart by the name
     `connections.Connections.open` gives them:
     ``httpchain-connection-<label>-<name>-<generation>``."""
-    return [thread for thread in threading.enumerate() if thread.name.startswith("httpchain-connection-")]
+    return [thread for thread in threading.enumerate() if thread.name.startswith(READER_THREAD_PREFIX)]
 
 
 def readers() -> list[str]:
@@ -234,9 +235,6 @@ def saves_message(message: dict[str, Any]) -> dict[str, Any]:
 
 def not_a_class(**params: Any) -> None:
     """A function where an adapter class belongs."""
-
-
-NOT_AN_ADAPTER = 42
 
 
 class ImpatientAdapter(FakeAdapter):

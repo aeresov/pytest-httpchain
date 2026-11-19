@@ -119,7 +119,7 @@ def test_msgpack_saved_structured_value_compares_with_nested_bytes(packet, expec
     ],
 )
 def test_jmespath_save_rejects_non_json_response(response, message):
-    """In the words a verify step uses for the same body (`_JsonBody`)."""
+    """In the words a verify step uses for the same body (`_response_data`)."""
     with pytest.raises(SaveError, match=f"^Cannot extract variables, {message}: "):
         on_bounded_stack(process_save, JMESPathSave(jmespath={"value": "key"}), response, ChainMap())
 

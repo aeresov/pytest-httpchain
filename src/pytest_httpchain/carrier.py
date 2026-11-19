@@ -65,7 +65,6 @@ from pytest_httpchain.response_steps import (
     NO_MESSAGE,
     Match,
     MessageSubject,
-    ResponseCodec,
     Subject,
     message_matches,
     process_save,
@@ -104,7 +103,7 @@ from pytest_httpchain.utils import INTERRUPTS as _INTERRUPTS
 from pytest_httpchain.utils import describe_exception as _describe_exception
 from pytest_httpchain.utils import process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
-from pytest_httpchain.wire_codec import RESPONSE_CODEC_EXTENSION
+from pytest_httpchain.wire_codec import RESPONSE_CODEC_EXTENSION, ResponseCodec
 
 logger = logging.getLogger(__name__)
 

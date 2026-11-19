@@ -81,7 +81,6 @@ def _make_carrier_subclass(**attrs) -> type[Carrier]:
         **fresh_scenario_state(),
         "global_context": ChainMap(),
         "_initialized": True,
-        "max_parallel_iterations": 10_000,
     }
     defaults.update(attrs)
     return type("UnitCarrier", (Carrier,), defaults)
