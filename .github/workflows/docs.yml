@@ -45,8 +45,10 @@ jobs:
             - name: Generate JSON Schema
               run: uv run python scripts/generate_schema.py
 
+            # --strict: a warning, such as a link to a missing page or anchor,
+            # fails the build, a PR's included.
             - name: Build documentation
-              run: uv run mkdocs build
+              run: uv run mkdocs build --strict
 
             - name: Disable Jekyll
               run: touch ./site/.nojekyll

@@ -40,7 +40,6 @@ markdown_extensions:
     - pymdownx.highlight:
           anchor_linenums: true
     - pymdownx.inlinehilite
-    - pymdownx.snippets
     - pymdownx.superfences:
           custom_fences:
               - name: mermaid
@@ -83,3 +82,8 @@ extra:
 
 plugins:
     - search
+
+# A link to an anchor its page does not have is logged at INFO by default,
+# which `mkdocs build --strict` lets through; as a warning it fails the build.
+validation:
+    anchors: warn
