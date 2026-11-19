@@ -23,11 +23,14 @@ def _pack_default(value: Any) -> Any:
     # Scenario vars are namespaces so templates can use attribute access.
     if isinstance(value, SimpleNamespace):
         return vars(value)
-    raise TypeError(f"msgpack_pack() cannot encode {type(value).__name__}")
+    # Naming no caller: a body.msgpack packs it as the msgpack_pack() helper
+    # does, and the helper names itself (`templates.functions`).
+    raise TypeError(f"cannot encode {type(value).__name__} as MessagePack")
 
 
 def pack_msgpack(value: Any) -> bytes:
-    """Pack a value, keeping text and binary distinct on the wire."""
+    """Pack a value, keeping text and binary distinct on the wire. A value
+    of no type MessagePack has is a TypeError saying so."""
     return msgpack.packb(value, use_bin_type=True, default=_pack_default)
 
 

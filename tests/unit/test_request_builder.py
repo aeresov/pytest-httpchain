@@ -142,6 +142,13 @@ def test_form_preserves_packed_binary_field_and_ordinary_values():
     assert msgpack.unpackb(dict(fields())[b"packet"], raw=False) == packet
 
 
+def test_msgpack_body_that_cannot_be_encoded_names_no_helper():
+    """A template can render what MessagePack has no type for into a body:
+    the failure named msgpack_pack(), a helper the scenario never called."""
+    with pytest.raises(RequestError, match=r"^Cannot encode MessagePack body: cannot encode set as MessagePack$"):
+        build_request_kwargs(Request(url="http://t/", method="POST", body={"msgpack": {"tags": {1, 2}}}))
+
+
 def test_msgpack_body_overrides_client_content_type_but_not_stage_content_type():
     request = Request(url="http://t/", method="POST", body={"msgpack": None})
     assert _sent(request, ClientConfig(headers={"Content-Type": "application/json"})).headers["content-type"] == "application/msgpack"

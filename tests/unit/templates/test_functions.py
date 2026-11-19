@@ -149,6 +149,17 @@ def test_messagepack_and_binary_helpers_keep_bytes():
 
 
 @pytest.mark.parametrize(
+    "context",
+    [pytest.param({"x": {1, 2}}, id="set"), pytest.param({"x": SimpleNamespace(tags={1, 2})}, id="set-in-a-vars-object")],
+)
+def test_msgpack_pack_names_itself_for_what_it_cannot_encode(context):
+    """As every helper's error names the helper: the codec's own message
+    names no caller, since a body.msgpack packs the same way."""
+    with pytest.raises(TemplatesError, match=r"^TypeError in expression '\{\{ msgpack_pack\(x\) \}\}': msgpack_pack\(\) cannot encode set as MessagePack$"):
+        walk("{{ msgpack_pack(x) }}", context)
+
+
+@pytest.mark.parametrize(
     ("template", "expected"),
     [
         ("{{ b64decode_bytes('AP8') }}", b"\x00\xff"),

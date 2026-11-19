@@ -49,7 +49,9 @@ def test_vars_object_packs_as_its_dict():
 
 
 def test_value_it_cannot_encode_is_refused_by_its_type():
-    with pytest.raises(TypeError, match=r"^msgpack_pack\(\) cannot encode set$"):
+    """Naming no caller: a body.msgpack packs as the msgpack_pack() helper
+    does, and the helper names itself (test_functions.py)."""
+    with pytest.raises(TypeError, match=r"^cannot encode set as MessagePack$"):
         pack_msgpack({1, 2})
 
 
