@@ -1,4 +1,8 @@
 # Keep GitHub Actions refs, uv.lock and devcontainer features moving; grouped weekly PRs.
+# Each ecosystem's cooldown gives a release a week (Dependabot's default is 3
+# days) before an update PR adopts it, time for a compromised or broken
+# release to be found and pulled: a supply-chain safeguard. Security updates
+# are not delayed.
 version: 2
 updates:
     # The workflows pin each action to a full commit SHA, its release named in a
@@ -7,6 +11,8 @@ updates:
       directory: /
       schedule:
           interval: weekly
+      cooldown:
+          default-days: 7
       groups:
           actions:
               patterns: ["*"]
@@ -15,6 +21,8 @@ updates:
       directory: /
       schedule:
           interval: weekly
+      cooldown:
+          default-days: 7
       groups:
           dependencies:
               patterns: ["*"]
@@ -28,6 +36,8 @@ updates:
       directory: /
       schedule:
           interval: weekly
+      cooldown:
+          default-days: 7
       groups:
           devcontainers:
               patterns: ["*"]
