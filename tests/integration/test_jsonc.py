@@ -22,7 +22,7 @@ def test_json_scenario_with_comments_runs(run_scenario):
     run_scenario("jsonc/test_commented.http.json").assert_outcomes(passed=1)
 
 
-def test_json_and_jsonc_of_the_same_name_are_two_scenarios(run_scenario, pytester):
+def test_json_and_jsonc_of_the_same_name_are_two_scenarios(run_scenario, har_dir):
     """Both are named ``commented`` and both have a stage ``user``: the node
     id holds the file name, extension and all, so the two do not collide.
     Each is collected and runs, and exports its own HAR files, which a name
@@ -38,7 +38,7 @@ def test_json_and_jsonc_of_the_same_name_are_two_scenarios(run_scenario, pyteste
         ],
         consecutive=False,
     )
-    assert len(list((pytester.path / "har_out").glob("*.har"))) == 3
+    assert len(list(har_dir.glob("*.har"))) == 3
 
 
 def test_a_warning_about_one_of_the_two_says_which(run_scenario):

@@ -1,6 +1,6 @@
 import pytest
 
-from tests.integration.helpers import write_scenario
+from tests.integration.helpers import HAR_DIR, write_scenario
 
 
 @pytest.fixture
@@ -40,3 +40,10 @@ def run_scenario(pytester):
         return runner(*argv)
 
     return _run
+
+
+@pytest.fixture
+def har_dir(pytester):
+    """Where a run given ``HAR_ARGS`` writes its HAR files: ``HAR_DIR`` under
+    the pytester dir (`tests.integration.helpers`)."""
+    return pytester.path / HAR_DIR

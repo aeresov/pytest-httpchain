@@ -62,16 +62,24 @@ def write_scenario(directory: Path, scenario: dict[str, Any], name: str = "test_
     return path
 
 
-# The args that make a run write HAR files for `har_entries` to read, under
-# "har_out" relative to the pytester dir, which is the CWD of both in-process
-# and subprocess runs.
-HAR_ARGS = ("-s", "--httpchain-output-dir", "har_out")
+# Where a run given `HAR_ARGS` writes its HAR files, one per stage it ran, for
+# `har_entries` to read: relative to the pytester dir, which is the CWD of both
+# in-process and subprocess runs. The `har_dir` fixture is its path.
+HAR_DIR = "har_out"
+HAR_ARGS = ("-s", "--httpchain-output-dir", HAR_DIR)
 
 
-def har_entries(har_dir: Path) -> list[dict[str, Any]]:
-    """The entries of the one HAR file under ``har_dir`` (asserting there is one)."""
-    har_files = list(har_dir.glob("*.har"))
-    assert len(har_files) == 1, f"expected exactly one .har under {har_dir}, found {har_files}"
+def har_entries(har_dir: Path, stage: str | None = None) -> list[dict[str, Any]]:
+    """The entries of the one HAR file under ``har_dir`` (asserting there is
+    one), or with ``stage``, of the one that stage wrote.
+
+    A file is named ``<file>_<class>_test_<n>_-_<stage>[_<params>_]-<hash>.har``:
+    the stage is told by the segment after ``_-_``, which starts with its
+    name, not by the whole name, which holds the scenario file's (each file
+    of ``retry/test_retry_poll_job.http.json`` holds "poll")."""
+    har_files = [path for path in har_dir.glob("*.har") if stage is None or path.name.partition("_-_")[2].startswith(stage)]
+    which = "" if stage is None else f" of stage {stage!r}"
+    assert len(har_files) == 1, f"expected exactly one .har{which} under {har_dir}, found {har_files}"
     return json.loads(har_files[0].read_text(encoding="utf-8"))["log"]["entries"]
 
 

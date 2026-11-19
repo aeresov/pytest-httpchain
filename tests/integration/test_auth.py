@@ -136,7 +136,7 @@ def test_bearer_token_rendered_to_none_fails_the_stage(run_scenario):
     result.stdout.fnmatch_lines(["*'request.auth.bearer' was declared as \"{{ get('token') }}\" but rendered to None*"])
 
 
-def test_digest_challenge_is_reported_and_exported(run_scenario, pytester):
+def test_digest_challenge_is_reported_and_exported(run_scenario, har_dir):
     """A digest request first goes out without credentials, and httpx keeps the
     401 challenge in the response's history, where redirects go too. The
     report labels it as the auth exchange it was, not a redirect, and the HAR
@@ -146,7 +146,7 @@ def test_digest_challenge_is_reported_and_exported(run_scenario, pytester):
 
     result.assert_outcomes(failed=1)
     result.stdout.fnmatch_lines(["*HTTP Request (after 1 auth exchange)*", "authorization: [[]REDACTED]"])
-    challenge, answer = har_entries(pytester.path / "har_out")
+    challenge, answer = har_entries(har_dir)
     assert challenge["response"]["status"] == 401
     assert "authorization" not in {header["name"].lower() for header in challenge["request"]["headers"]}
     assert answer["response"]["status"] == 200

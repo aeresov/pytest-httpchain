@@ -41,7 +41,7 @@ def test_marks(run_scenario, scenario, outcomes):
     run_scenario(f"marks/test_{scenario}.http.json").assert_outcomes(**outcomes)
 
 
-def test_skip_if_reports_its_template_and_records_nothing(run_scenario, pytester):
+def test_skip_if_reports_its_template_and_records_nothing(run_scenario, har_dir):
     """The skip's reason is the template as declared, and a skipped stage
     sent no request: only the stages that ran leave a HAR file."""
     result = run_scenario("marks/test_skip_if.http.json", args=("-rs", *HAR_ARGS))
@@ -54,7 +54,7 @@ def test_skip_if_reports_its_template_and_records_nothing(run_scenario, pytester
         ]
     )
     # Named <file>_<class>_test_<n>_-_<stage>[_<params>_]-<hash>.har.
-    har_files = sorted(path.name for path in (pytester.path / "har_out").glob("*.har"))
+    har_files = sorted(path.name for path in har_dir.glob("*.har"))
     assert [name.split("_-_", 1)[1].rsplit("-", 1)[0] for name in har_files] == ["sees_no_save", "saves_once", "per_env_dev_"], har_files
 
 

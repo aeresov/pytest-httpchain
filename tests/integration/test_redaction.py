@@ -121,13 +121,13 @@ def test_set_cookie_mismatch_message_hides_the_values(run_scenario):
         ("har_redact_on", ("-o", "httpchain_har_redact=true"), True),
     ),
 )
-def test_har_is_redacted_only_when_enabled(run_scenario, pytester, name, args, redacted):
+def test_har_is_redacted_only_when_enabled(run_scenario, har_dir, name, args, redacted):
     result = run_scenario({"stages": [stage(name, "/scoped-cookies", request=_CREDENTIALED)]}, args=(*HAR_ARGS, "-rA", *args))
 
     result.assert_outcomes(passed=1)
     # The report is redacted either way.
     assert "s3cret" not in result.stdout.str()
-    [entry] = har_entries(pytester.path / "har_out")
+    [entry] = har_entries(har_dir)
     har_text = json.dumps(entry)
     har_request, har_response = entry["request"], entry["response"]
     headers = {h["name"]: h["value"] for h in har_request["headers"]}
@@ -145,7 +145,7 @@ def test_har_is_redacted_only_when_enabled(run_scenario, pytester, name, args, r
         assert [c["value"] for c in har_response["cookies"]] == ["root", "admin"]
 
 
-def test_followed_redirect_is_redacted_in_report_and_har(run_scenario, pytester):
+def test_followed_redirect_is_redacted_in_report_and_har(run_scenario, har_dir):
     """The report shows the final hop's request, and the HAR every hop, each
     Location in its redirectURL: the credential is redacted in all of them."""
     request = {"method": "POST", "params": {"to": "/ok?token=s3cret-hop"}}
@@ -154,6 +154,6 @@ def test_followed_redirect_is_redacted_in_report_and_har(run_scenario, pytester)
 
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(["*HTTP Request (after 1 redirect)*", "GET http://*/ok?token=[[]REDACTED]"])
-    hop, follow_up = har_entries(pytester.path / "har_out")
+    hop, follow_up = har_entries(har_dir)
     assert hop["response"]["redirectURL"] == "/ok?token=[REDACTED]"
     assert follow_up["request"]["url"].endswith("/ok?token=[REDACTED]")

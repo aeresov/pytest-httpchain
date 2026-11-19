@@ -14,11 +14,6 @@ import pytest
 from tests.integration.helpers import HAR_ARGS, har_entries, named, stage
 
 
-@pytest.fixture
-def har_dir(pytester):
-    return pytester.path / "har_out"
-
-
 def test_har_file_written_per_stage(run_scenario, har_dir):
     result = run_scenario("verify/test_verify_status.http.json", args=HAR_ARGS)
 

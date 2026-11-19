@@ -7,12 +7,11 @@ cancellation) are pinned in tests/unit/test_carrier.py.
 """
 
 import json
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-from tests.integration.helpers import HAR_ARGS
+from tests.integration.helpers import HAR_ARGS, har_entries
 
 POLL_JOB = "retry/test_retry_poll_job.http.json"
 
@@ -45,12 +44,6 @@ def _poll_jobs(polls: list[int], attempts: int, *, parallel: bool = True) -> dic
     }
 
 
-def _stage_har(har_dir: Path, stage_name: str) -> list[dict[str, Any]]:
-    """The entries of the HAR file of the stage named ``stage_name``."""
-    [path] = [path for path in har_dir.glob("*.har") if stage_name in path.name]
-    return json.loads(path.read_text(encoding="utf-8"))["log"]["entries"]
-
-
 def _polled(entries: list[dict[str, Any]]) -> list[int]:
     """How many polls the job had had, by each HAR entry's response."""
     return [json.loads(entry["response"]["content"]["text"])["polled"] for entry in entries]
@@ -69,17 +62,17 @@ def test_report_shows_the_last_attempt(run_scenario):
     result.stdout.fnmatch_lines(["*HTTP Request (attempt 3 of 5)*", "*HTTP Response (attempt 3 of 5)*"])
 
 
-def test_har_records_every_attempt(run_scenario, pytester):
+def test_har_records_every_attempt(run_scenario, har_dir):
     """Every attempt went on the wire, so each is an entry of the stage's HAR,
     in order, and the uuid4() in its header was drawn anew for each."""
     run_scenario(POLL_JOB, args=HAR_ARGS).assert_outcomes(passed=3)
-    entries = _stage_har(pytester.path / "har_out", "wait_for_job")
+    entries = har_entries(har_dir, stage="wait_for_job")
     assert [json.loads(entry["response"]["content"]["text"])["status"] for entry in entries] == ["pending", "pending", "done"]
     attempt_ids = {header["value"] for entry in entries for header in entry["request"]["headers"] if header["name"].lower() == "x-attempt-id"}
     assert len(attempt_ids) == 3
 
 
-def test_last_attempt_failing_fails_the_stage(run_scenario, pytester):
+def test_last_attempt_failing_fails_the_stage(run_scenario, har_dir):
     """The job needs more polls than the stage has attempts: the stage fails
     with the last attempt's failure, counting the attempts, and the report
     shows that attempt. The HAR has all three."""
@@ -91,16 +84,16 @@ def test_last_attempt_failing_fails_the_stage(run_scenario, pytester):
             "*HTTP Response (attempt 3 of 3)*",
         ]
     )
-    assert _polled(_stage_har(pytester.path / "har_out", "poll")) == [1, 2, 3]
+    assert _polled(har_entries(har_dir, stage="poll")) == [1, 2, 3]
 
 
-def test_parallel_iterations_retry_each_on_its_own(run_scenario, pytester):
+def test_parallel_iterations_retry_each_on_its_own(run_scenario, har_dir):
     """Each iteration polls its own job until it is done, done after 1, 2
     and 3 polls: the stage passes with every iteration making the attempts
     its job needs. The HAR has them all, iteration by iteration in index
     order, and each iteration's attempts in the order they were made."""
     run_scenario(_poll_jobs([1, 2, 3], attempts=3), args=HAR_ARGS).assert_outcomes(passed=2)
-    assert _polled(_stage_har(pytester.path / "har_out", "poll")) == [1, 1, 2, 1, 2, 3]
+    assert _polled(har_entries(har_dir, stage="poll")) == [1, 1, 2, 1, 2, 3]
 
 
 def test_parallel_iteration_out_of_attempts_fails_the_stage(run_scenario):

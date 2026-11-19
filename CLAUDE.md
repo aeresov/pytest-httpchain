@@ -156,9 +156,10 @@ run_scenario({"stages": [stage("s", "/headers", request={"timeout": 0.2})]})  # 
 
 `tests/integration/helpers.py` holds the rest: `stage()` builds a stage against
 the example `server` fixture (GET, expect 200) so an inline scenario spells out
-only what its test is about; `har_entries()` reads the one HAR file a run
-wrote (`HAR_ARGS` makes it write one); `named()` builds parametrize rows whose
-first value is the test id.
+only what its test is about; `HAR_ARGS` makes a run write one HAR file per
+executed stage, under the `har_dir` fixture's directory, and `har_entries()`
+reads a run's one file, or with `stage=` that stage's; `named()` builds
+parametrize rows whose first value is the test id.
 Scenarios that differ only in expected outcome share one parametrized test
 (`test_verify_passes`, `test_save_fails_cleanly`, ...) with the rationale as a
 comment on the row.

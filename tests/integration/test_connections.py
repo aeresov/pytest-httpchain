@@ -650,7 +650,7 @@ def test_failed_stage_leaves_the_connection_to_teardown(run_scenario, pytester):
     assert not _readers()
 
 
-def test_report_redacts_message_keys_and_writes_no_har(run_scenario, pytester):
+def test_report_redacts_message_keys_and_writes_no_har(run_scenario, pytester, har_dir):
     """Under -rP a passing connection stage's report shows its exchange, a
     listed key's value as [REDACTED] in the message sent and the one taken,
     while its verify saw the real value. A connection stage adds nothing to
@@ -673,7 +673,7 @@ def test_report_redacts_message_keys_and_writes_no_har(run_scenario, pytester):
     result.stdout.fnmatch_lines(["*- Connection Exchange -*", "Sent:", "{", '  "op": "login",', '  "Token": "[REDACTED]"', "}"], consecutive=False)
     result.stdout.fnmatch_lines(["Result: took a message", "#1 at +* s after the send", "{", '  "echo": {', '    "op": "login",', '    "Token": "[REDACTED]"'], consecutive=False)
     assert "s3cret-tok" not in result.stdout.str()
-    assert not list(pytester.path.glob("har_out/*.har"))
+    assert not list(har_dir.glob("*.har"))
     assert not _readers()
 
 

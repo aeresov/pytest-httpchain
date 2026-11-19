@@ -120,7 +120,7 @@ def test_builtin_called_where_a_stage_defines_its_own_warns_and_runs(run_scenari
     result.stdout.fnmatch_lines(["*HTTPCHAIN036] Scenario-level 'substitutions' uses the function timestamp(), but the scenario's own definition of 'timestamp'*"])
 
 
-def test_escaped_braces_reach_the_server_literally(run_scenario, pytester):
+def test_escaped_braces_reach_the_server_literally(run_scenario, har_dir):
     """`\\{{` sends a literal `{{`, in a JSON body and a header alike, and
     `\\\\{{ x }}` a backslash, then x's value. A value that holds braces or
     an escape, saved from the response, is sent on as it is: rendering reads
@@ -157,7 +157,7 @@ def test_escaped_braces_reach_the_server_literally(run_scenario, pytester):
     )
     result.assert_outcomes(passed=2, warnings=0)
     # A HAR file per stage, named in stage order.
-    [sent_body], [sent_headers] = (json.loads(har.read_text(encoding="utf-8"))["log"]["entries"] for har in sorted((pytester.path / "har_out").glob("*.har")))
+    [sent_body], [sent_headers] = (json.loads(har.read_text(encoding="utf-8"))["log"]["entries"] for har in sorted(har_dir.glob("*.har")))
     assert json.loads(sent_body["request"]["postData"]["text"]) == {
         "greeting": "Hello {{name}}",
         "doubled": "\\you",
