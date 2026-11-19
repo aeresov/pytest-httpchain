@@ -111,6 +111,25 @@ def _parse_failure(error: Exception, codec: Literal["json", "msgpack"], purpose:
     return f"Cannot {purpose}, response is not valid {label}: {str(error) or type(error).__name__}"
 
 
+# What evaluating a JMESPath expression, compiled at validation, raises on
+# what it reads. jmespath's own errors (JMESPathError is a ValueError): a
+# function given the wrong type, `length(id)` on a number, or an unknown
+# function or wrong argument count, found only when it is called. And
+# Python's, from what jmespath hands its functions unchecked: ceil() on
+# 1e400, which json reads as inf (OverflowError), or on NaN (ValueError);
+# contains() on a string, looking for a number (TypeError). Another response
+# or message may hold what the expression needs.
+_JMESPATH_EVALUATION_ERRORS = (ValueError, ArithmeticError, TypeError)
+
+# What ``re`` raises for a pattern it cannot compile: re.error, and
+# OverflowError or RecursionError for a repeat count or a nesting too big. A
+# pattern can be template text a template rendered, which its field's
+# template branch takes as it is, so one that does not compile fails its
+# check, or the save, as the scenario's own: raised out of a verify step, it
+# would take the step's other failures with it.
+_REGEX_ERRORS = (re.error, OverflowError, RecursionError)
+
+
 def process_save(save_model: Save, response: Subject, context: ChainMap[str, Any], *, codec: ResponseCodec = "auto") -> dict[str, Any]:
     """Extract one save step's ``{name: value}`` contribution to the context,
     from ``response``, or a connection stage's message (`MessageSubject`)."""
@@ -122,11 +141,8 @@ def process_save(save_model: Save, response: Subject, context: ChainMap[str, Any
             for var_name, jmespath_expr in save_model.jmespath.items():
                 try:
                     step_saved[var_name] = jmespath.search(jmespath_expr, response_json)
-                except (ValueError, ArithmeticError, TypeError) as e:
-                    # What a verify.jmespath entry fails on (`_verify_jmespath`):
-                    # jmespath's own errors, and Python's from what it hands
-                    # its functions unchecked (`contains(s, n)`, `ceil()` of
-                    # inf). Another response may hold what it needs: retryable.
+                except _JMESPATH_EVALUATION_ERRORS as e:
+                    # Another response may hold what it needs: retryable.
                     raise SaveError(f"Error saving variable {var_name}: {_evaluation_error(e)}") from e
 
         case RegexSave():
@@ -181,7 +197,7 @@ def _regex_save(name: str, entry: str | RegexCapture, text: str) -> Any:
         raise SaveError(f"Error saving variable {name}: group must resolve to a group's number or name, got {group!r}", retryable=False)
     try:
         compiled = re.compile(pattern)
-    except (re.error, OverflowError, RecursionError) as e:
+    except _REGEX_ERRORS as e:
         raise SaveError(f"Error saving variable {name}: pattern must resolve to a regular expression, got {pattern!r} ({e})", retryable=False) from e
     try:
         chosen = regex_group(compiled, group)
@@ -698,16 +714,9 @@ def _verify_jmespath(expression: str, expected: Any, body: Any, failures: _Failu
     """
     try:
         actual = jmespath.search(expression, body)
-    except (ValueError, ArithmeticError, TypeError) as e:
-        # Compiled at validation, so this is evaluation against this body.
-        # jmespath's own errors (JMESPathError is a ValueError): a function
-        # given the wrong type, `length(id)` on a number, or an unknown
-        # function or wrong argument count, found only when it is called.
-        # And Python's, from what jmespath hands its functions unchecked:
-        # ceil() on 1e400, which json reads as inf (OverflowError), or on
-        # NaN (ValueError); contains() on a string, looking for a number
-        # (TypeError). One failure: no key of a matcher can be judged.
-        failures.add(f"JMESPath {expression!r} cannot be evaluated against {against}: {_evaluation_error(e)}", cause=e)
+    except _JMESPATH_EVALUATION_ERRORS as e:
+        # One failure: no key of a matcher can be judged.
+        failures.add(_cannot_evaluate(expression, against, e), cause=e)
         return
     if isinstance(expected, JMESPathMatcher):
         failures.extend(_jmespath_matcher_failures(expression, expected, actual))
@@ -756,6 +765,12 @@ def _evaluation_error(error: Exception) -> str:
     if error.function_name in _BY_FUNCTIONS and not {"array", "expref"} & set(error.expected_types):
         return f"{error.function_name}() needs its expression to give {expected} for every element, got {error.actual_type} for one"
     return f"{error.function_name}() needs {expected}, got {_shown(value)} ({error.actual_type})"
+
+
+def _cannot_evaluate(expression: str, against: str, error: Exception) -> str:
+    """Why ``expression`` cannot be evaluated against ``against`` (the
+    response body, the message), which raised ``error`` (`_evaluation_error`)."""
+    return f"JMESPath {expression!r} cannot be evaluated against {against}: {_evaluation_error(error)}"
 
 
 _ORDERINGS = {"gt": operator.gt, "ge": operator.ge, "lt": operator.lt, "le": operator.le}
@@ -817,10 +832,7 @@ def _matcher_failure(key: str, operand: Any, actual: Any) -> str | None:
                 return cannot_judge("a string")
             try:
                 found = re.search(operand, actual) is not None
-            except (re.error, OverflowError, RecursionError) as e:
-                # And one re cannot compile for a repeat count or a nesting too
-                # big: raised out of the step, it would take the step's other
-                # failures with it.
+            except _REGEX_ERRORS as e:
                 return _Unusable(f": {key} must resolve to a regular expression, got {operand!r} ({e})")
             return None if found == (key == "matches") else mismatch()
         case "type":
@@ -1029,12 +1041,10 @@ def text_matcher_failures(
     operand is not in ``text``, reveals nothing of it, and is quoted as
     written.
 
-    A pattern ``re`` refuses fails its check, in the words a `JMESPathMatcher`
-    key's does. A header matcher's can be template text a template rendered
-    (``{{ ( }}``, saved from a response), which the field's template branch
-    takes as it is: re.error, or OverflowError or RecursionError for a repeat
-    count or a nesting too big to compile. Raised out of the step, it would
-    take the step's other failures with it.
+    A pattern ``re`` refuses (`_REGEX_ERRORS`) fails its check, in the words
+    a `JMESPathMatcher` key's does. A header matcher's can be template text a
+    template rendered (``{{ ( }}``, saved from a response), which the field's
+    template branch takes as it is.
     """
     # Nothing is hidden: a header the redaction leaves alone shows as it is.
     hides = shown is not None and shown != text
@@ -1052,7 +1062,7 @@ def text_matcher_failures(
         for pattern in patterns:
             try:
                 found = re.search(pattern, text) is not None
-            except (re.error, OverflowError, RecursionError) as e:
+            except _REGEX_ERRORS as e:
                 # Quoted unless its text is in the hidden part.
                 quoted = REDACTED if hides and str(pattern) in text and str(pattern) not in shown else repr(pattern)
                 yield _Unusable(f"{subject}: {key} must resolve to a regular expression, got {quoted} ({e})")
@@ -1110,8 +1120,8 @@ def message_matches(match: str | Mapping[str, Any] | None, rendered_match: Mappi
     if isinstance(match, str):
         try:
             result = jmespath.search(match, message)
-        except (ValueError, ArithmeticError, TypeError) as e:
-            return NoMatch(f"JMESPath {match!r} cannot be evaluated against the message: {_evaluation_error(e)}", error=True)
+        except _JMESPATH_EVALUATION_ERRORS as e:
+            return NoMatch(_cannot_evaluate(match, "the message", e), error=True)
         return NoMatch(f"JMESPath {match!r} gave {_shown(result)}") if _jmespath_false(result) else MATCH
     assert rendered_match is not None, "an object match comes rendered"
     for expression, expected in rendered_match.items():
