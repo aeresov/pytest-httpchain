@@ -168,12 +168,15 @@ _OTHER_SHORT: dict[str, str] = {
 }  # fmt: skip
 
 # Whether each curl option takes a value, by long name: what the tables above say.
+# Built lowest precedence first, so that a name in two tables takes the arity of
+# the one `_read_options` dispatches it by (_MAPPED, then _IGNORED, then the rest).
 _TAKES_VALUE: dict[str, bool] = (
-    {name: takes_value for table in (_MAPPED, _IGNORED) for name, (_, takes_value) in table.items()} | dict.fromkeys(_OTHER_WITH_VALUE, True) | dict.fromkeys(_OTHER_BOOLEAN, False)
+    dict.fromkeys(_OTHER_BOOLEAN, False) | dict.fromkeys(_OTHER_WITH_VALUE, True) | {name: takes_value for table in (_IGNORED, _MAPPED) for name, (_, takes_value) in table.items()}
 )
 
-# The long name of each short letter curl has.
-_SHORT: dict[str, str] = {short: name for table in (_MAPPED, _IGNORED) for name, (short, _) in table.items() if short is not None} | _OTHER_SHORT
+# The long name of each short letter curl has, the mapped and ignored options'
+# letters winning over the others', as `_TAKES_VALUE` is built.
+_SHORT: dict[str, str] = _OTHER_SHORT | {short: name for table in (_IGNORED, _MAPPED) for name, (short, _) in table.items() if short is not None}
 
 # A shell expansion the text would have gone through: `$NAME`, `${...}`, `$(...)`.
 _EXPANSION = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]*\}|\()")
