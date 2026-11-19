@@ -806,7 +806,8 @@ def _data_file(path: str, data_dir: Path | None) -> tuple[str | None, str]:
 def _body(options: _Options, warnings: list[str], data_dir: Path | None, source: _Input) -> tuple[RecordedBody | None, str | None]:
     """The body the data options send, and the query text instead with ``-G``.
 
-    Data options are joined with ``&``, ``--json`` ones as they are. The
+    The data options are joined as curl joins them, in the order given: a
+    ``&`` before each but the first, and none before a ``--json`` one. The
     content ``-d @file`` (``--data-ascii @file``) sends is read now, from
     ``data_dir``, since curl strips its line breaks, which a body read from
     the file when the stage runs would keep. A body curl sends as the file
@@ -817,20 +818,21 @@ def _body(options: _Options, warnings: list[str], data_dir: Path | None, source:
     file as ``@file`` does, text as the data itself (without its line
     breaks for ``-d``, as curl sends it).
     """
-    pieces: list[str] = []
+    # Each piece with the option that gives it, which decides its separator.
+    pieces: list[tuple[str, str]] = []
     files: list[str] = []
     unstripped: dict[str, str] = {}
     for name, value in options.data:
         if value == "@-" and name in ("data", "data-ascii", "data-binary", "json") and source.stdin is not None:
             if (text := source.text()) is not None:
-                pieces.append(text.translate(_STRIPPED) if name in ("data", "data-ascii") else text)
+                pieces.append((name, text.translate(_STRIPPED) if name in ("data", "data-ascii") else text))
                 continue
             source.used = True
             value = f"@{source.stdin.path}"
         if name in ("data", "data-ascii") and value.startswith("@") and value != "@-":
             text, why = _data_file(value[1:], data_dir)
             if text is not None:
-                pieces.append(text)
+                pieces.append((name, text))
             else:
                 files.append(value[1:])
                 unstripped[value[1:]] = why
@@ -838,9 +840,9 @@ def _body(options: _Options, warnings: list[str], data_dir: Path | None, source:
             files.append(value[1:] if value == "@-" else _file_name(value[1:]))
         elif name == "data-urlencode":
             if (encoded := _urlencoded(value, "--data-urlencode", warnings, source)) is not None:
-                pieces.append(encoded)
+                pieces.append((name, encoded))
         else:
-            pieces.append(value)
+            pieces.append((name, value))
     if files and (pieces or len(files) > 1 or options.get):
         warnings.append(f"Left out the data read from {', '.join(files)}: add it to the scenario")
         files = []
@@ -853,7 +855,7 @@ def _body(options: _Options, warnings: list[str], data_dir: Path | None, source:
         return FileData(files[0]), None
     if not options.data:
         return None, None
-    text = ("" if all(name == "json" for name, _ in options.data) else "&").join(pieces)
+    text = "".join(("&" if k and name != "json" else "") + piece for k, (name, piece) in enumerate(pieces))
     if options.get:
         return None, text
     return TextData(text), None
@@ -1097,7 +1099,8 @@ def _requests(options: _Options, warnings: list[str], data_dir: Path | None, sou
     headers = list(options.headers)
     defaults: list[tuple[str, str]] = []
     if isinstance(body, (TextData, FileData)):
-        is_json = all(name == "json" for name, _ in options.data)
+        # curl's JSON headers, as soon as any --json gives data.
+        is_json = any(name == "json" for name, _ in options.data)
         defaults.append(("Content-Type", "application/json" if is_json else "application/x-www-form-urlencoded"))
         if is_json:
             defaults.append(("Accept", "application/json"))

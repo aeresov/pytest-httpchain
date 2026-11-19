@@ -249,6 +249,18 @@ _JSON = [("Content-Type", "application/json"), ("Accept", "application/json")]
             {"method": "POST", "url": "https://x.test/a", "headers": _JSON, "body": TextData('{"a":1}{"b":2}')},
             id="--json",
         ),
+        # Mixed, as curl sends them: no & before a --json piece, one before
+        # any other, and JSON's headers as soon as one --json gives data.
+        pytest.param(
+            "curl -d a=1 --json '{\"b\":2}' https://x.test/a",
+            {"method": "POST", "url": "https://x.test/a", "headers": _JSON, "body": TextData('a=1{"b":2}')},
+            id="-d-then---json",
+        ),
+        pytest.param(
+            "curl --json '{\"b\":2}' -d a=1 https://x.test/a",
+            {"method": "POST", "url": "https://x.test/a", "headers": _JSON, "body": TextData('{"b":2}&a=1')},
+            id="--json-then--d",
+        ),
         # A header the command gives wins over curl's own.
         pytest.param(
             "curl -H 'Content-Type: text/plain' -d hi https://x.test/a",
