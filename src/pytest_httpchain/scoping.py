@@ -802,7 +802,10 @@ class NameUnion(AbstractSet[str]):
 
 
 class Phases(NamedTuple):
-    """Every phase's names of one `StageScopes`, as its properties give them."""
+    """One name set per phase of one `StageScopes`, in resolution order: the
+    names each phase sees (`StageScopes.phases`, which the properties give as
+    frozensets), or those of them it layers over the global context
+    (`StageScopes.shadows`)."""
 
     always_run: NameUnion
     pre_iteration: NameUnion
@@ -815,8 +818,10 @@ class StageScopes:
     """Statically-known names visible to one stage, per resolution phase.
 
     Ingredients are stored separately so consumers can tell *why* a name is
-    visible; the phase properties union them in the order the runtime layers its
-    contexts, and each names its runtime twin.
+    visible; `shadows` unions them in the order the runtime layers its
+    contexts over the global context, `phases` adds the global context
+    beneath, and each phase property, a view of `phases`, names its runtime
+    twin.
 
     ``saves`` is the exception: no phase unions it, because a stage's own saves
     become visible step by step, which `response_step_templates` tracks, and
@@ -859,17 +864,17 @@ class StageScopes:
     def always_run(self) -> frozenset[str]:
         """``always_run`` and the stage's own substitutions as they resolve.
         Twin: `stage_start_context`."""
-        return self.scenario_substitutions | self.earlier_saves | self.scenario_fixtures | self.stage_fixtures | self.parametrize_params
+        return frozenset(self.phases().always_run)
 
     @property
     def pre_iteration(self) -> frozenset[str]:
         """``skip_if``, the ``parallel`` config and the ``retry`` config. Twin: `with_stage_substitutions`."""
-        return self.always_run | self.stage_substitutions
+        return frozenset(self.phases().pre_iteration)
 
     @property
     def request(self) -> frozenset[str]:
         """Request templates, per iteration. Twin: `iteration_context`."""
-        return self.pre_iteration | self.foreach_params
+        return frozenset(self.phases().request)
 
     @property
     def response(self) -> frozenset[str]:
@@ -878,7 +883,7 @@ class StageScopes:
         resolve strictly in order, so each additionally sees PRIOR steps' saves
         (see `response_step_templates`, whose runtime twin is `with_saves`).
         Twin: `response_step_context`, or a connection stage's `connection_step_context`."""
-        return self.request | self.response_names
+        return frozenset(self.phases().response)
 
     @property
     def connection_params(self) -> NameUnion:
@@ -887,33 +892,35 @@ class StageScopes:
         earlier saves, never the stage's own fixtures, parameters or
         substitutions, which the connection outlives. Twin:
         `carrier.Carrier._params_context`."""
-        return NameUnion(self.scenario_substitutions, self.earlier_saves, self.scenario_fixtures)
+        return self._global_context() | self.scenario_fixtures
 
-    def phases(self) -> Phases:
-        """Every phase's names as the properties give them, as `NameUnion`s
-        of the ingredients, not copies: for a check that asks for all of them
-        of every stage (see `NameUnion` for why)."""
-        always_run = NameUnion(self.scenario_substitutions, self.earlier_saves, self.scenario_fixtures, self.stage_fixtures, self.parametrize_params)
+    def shadows(self) -> Phases:
+        """Every phase's names layered ABOVE the global context (the scenario
+        substitutions and the earlier saves), behind which a same-named
+        earlier save is unreadable: the fixtures and parametrize parameters,
+        then the stage's substitutions, then the ``foreach`` parameters, then
+        the names the stage's kind layers over its response steps
+        (`response_names`). Each substitution step's shadows are
+        ``always_run``'s, to which prior steps' names add cumulatively (see
+        `substitution_step_templates`); each response step's, ``response``'s
+        and the prior steps' saves (`response_step_templates`)."""
+        always_run = NameUnion(self.scenario_fixtures, self.stage_fixtures, self.parametrize_params)
         pre_iteration = always_run | self.stage_substitutions
         request = pre_iteration | self.foreach_params
         return Phases(always_run, pre_iteration, request, request | self.response_names)
 
-    # Shadow sets: names layered ABOVE the global context in each phase, behind
-    # which a same-named earlier save is unreadable.
+    def phases(self) -> Phases:
+        """Every phase's names, the global context under each of `shadows`,
+        as `NameUnion`s of the ingredients, not copies: for a check that asks
+        for all of them of every stage (see `NameUnion` for why)."""
+        global_context = self._global_context()
+        return Phases._make(global_context | layers for layers in self.shadows())
 
-    @property
-    def always_run_shadows(self) -> frozenset[str]:
-        """Also the base shadows of each substitution step, to which prior steps'
-        names add cumulatively (see `substitution_step_templates`)."""
-        return self.scenario_fixtures | self.stage_fixtures | self.parametrize_params
-
-    @property
-    def pre_iteration_shadows(self) -> frozenset[str]:
-        return self.always_run_shadows | self.stage_substitutions
-
-    @property
-    def request_shadows(self) -> frozenset[str]:
-        return self.pre_iteration_shadows | self.foreach_params
+    def _global_context(self) -> NameUnion:
+        """The names every phase layers its own over: the scenario
+        substitutions and the earlier saves. Twin: `base_global_context`, with
+        each passed stage's saves layered over it by `with_saves`."""
+        return NameUnion(self.scenario_substitutions, self.earlier_saves)
 
 
 def response_meta_names(stage: Stage) -> frozenset[str]:

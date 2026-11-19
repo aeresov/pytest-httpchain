@@ -4,6 +4,7 @@ Reads the same per-stage scopes as the validator, but produces a graph instead
 of diagnostics: what each stage saves, what it consumes, and the edges between.
 """
 
+from collections.abc import Set as AbstractSet
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -24,7 +25,7 @@ from pytest_httpchain.scoping import (
 )
 
 
-def _consumed(refs: set[str], earlier_saves: frozenset[str], shadows: frozenset[str]) -> set[str]:
+def _consumed(refs: set[str], earlier_saves: frozenset[str], shadows: AbstractSet[str]) -> set[str]:
     """The subset of ``refs`` that reads an earlier stage's save: saved earlier
     and not masked by the phase's shadow set."""
     return {name for name in refs if name in earlier_saves and name not in shadows}
@@ -107,8 +108,8 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     """Build the stage data-flow graph for a validated scenario.
 
     A stage consumes a variable when one of its templates references a name an
-    earlier stage saved and its own phase does not shadow — pre-response phases
-    judged against the shadow sets `StageScopes` defines, response steps in
+    earlier stage saved and its own phase does not shadow — each phase judged
+    against its shadow set (`scoping.StageScopes.shadows`), response steps in
     order with the stage's own accumulated saves added as they land.
     ``parametrize`` values are excluded: they resolve against scenario scope,
     never saved values.
@@ -150,30 +151,30 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
 
     for i, stage in enumerate(scenario.stages):
         scope = scopes[i]
+        shadows = scope.shadows()
         raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
         consumes: set[str] = set()
 
         for templates, prior_sub_names in substitution_step_templates(raw.get("substitutions")):
-            consumes |= _consumed(extract_template_variables(templates, defined=defined), scope.earlier_saves, scope.always_run_shadows | prior_sub_names)
+            consumes |= _consumed(extract_template_variables(templates, defined=defined), scope.earlier_saves, shadows.always_run | prior_sub_names)
 
-        consumes |= _consumed(extract_template_variables(raw.get("skip_if"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
-        consumes |= _consumed(extract_template_variables(raw.get("parallel"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
-        consumes |= _consumed(extract_template_variables(raw.get("retry"), defined=defined), scope.earlier_saves, scope.pre_iteration_shadows)
-        consumes |= _consumed(extract_template_variables(raw.get("request"), defined=defined), scope.earlier_saves, scope.request_shadows)
+        consumes |= _consumed(extract_template_variables(raw.get("skip_if"), defined=defined), scope.earlier_saves, shadows.pre_iteration)
+        consumes |= _consumed(extract_template_variables(raw.get("parallel"), defined=defined), scope.earlier_saves, shadows.pre_iteration)
+        consumes |= _consumed(extract_template_variables(raw.get("retry"), defined=defined), scope.earlier_saves, shadows.pre_iteration)
+        consumes |= _consumed(extract_template_variables(raw.get("request"), defined=defined), scope.earlier_saves, shadows.request)
         if stage.connection is not None:
             send, after_send = connection_step_templates(raw.get("connection"))
             sent = frozenset({SENT_NAME}) if stage.connection.send is not None else frozenset()
-            consumes |= _consumed(extract_template_variables(send, defined=defined), scope.earlier_saves, scope.request_shadows)
-            consumes |= _consumed(extract_template_variables(after_send, defined=defined), scope.earlier_saves, scope.request_shadows | sent)
+            consumes |= _consumed(extract_template_variables(send, defined=defined), scope.earlier_saves, shadows.request)
+            consumes |= _consumed(extract_template_variables(after_send, defined=defined), scope.earlier_saves, shadows.request | sent)
         consumes |= _consumed(extract_template_variables(opened_params.get(i), defined=defined), scope.earlier_saves, scope.scenario_fixtures)
         # The same order-aware iterator the validator uses also sees prior
         # entries inside a substitutions-save step. Those entries resolve in
         # sequence, and only their rendered values can consume an earlier save.
         for templates, own_saves in response_step_templates(stage, raw.get("response")):
-            step_refs = extract_template_variables(templates, defined=defined) - scope.response_names
-            consumes |= _consumed(step_refs, scope.earlier_saves, scope.request_shadows | own_saves)
-        consumes |= _consumed(extract_template_variables(raw.get("always_run"), defined=defined), scope.earlier_saves, scope.always_run_shadows)
+            consumes |= _consumed(extract_template_variables(templates, defined=defined), scope.earlier_saves, shadows.response | own_saves)
+        consumes |= _consumed(extract_template_variables(raw.get("always_run"), defined=defined), scope.earlier_saves, shadows.always_run)
 
         by_producer: dict[int, list[str]] = {}
         for name in consumes:

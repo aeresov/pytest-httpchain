@@ -116,6 +116,21 @@ class TestStageScopes:
             # Nothing skippable: the scope is its own when_skipped.
             assert scope.when_skipped is scope
 
+    def test_shadows_are_the_phases_above_the_global_context(self):
+        """`shadows` gives each phase's names without the scenario
+        substitutions and the earlier saves, which a phase's own names are
+        layered over (a same-named earlier save is unreadable behind them);
+        `phases` is the two together."""
+        scopes = stage_scopes(make_scenario())
+        shadows = scopes[0].shadows()
+        assert set(shadows.always_run) == {"sfix", "f1", "p1"}
+        assert set(shadows.pre_iteration) == {"sfix", "f1", "p1", "sub1"}
+        assert set(shadows.request) == {"sfix", "f1", "p1", "sub1", "item"}
+        assert set(shadows.response) == {"sfix", "f1", "p1", "sub1", "item", "response"}
+        for scope in scopes:
+            global_context = scope.scenario_substitutions | scope.earlier_saves
+            assert [set(phase) for phase in scope.phases()] == [global_context | set(shadow) for shadow in scope.shadows()]
+
     def test_name_union(self):
         """Membership asks each part; ``|`` adds one, uncopied; any other set
         operation gives a frozenset."""
