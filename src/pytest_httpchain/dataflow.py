@@ -11,17 +11,14 @@ from pydantic import BaseModel
 
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.scoping import (
-    SENT_NAME,
     connection_lifecycles,
     connection_rendered_fields,
-    connection_step_templates,
     defined_names,
     extract_template_variables,
     raw_stages,
-    response_step_templates,
     stage_scopes,
+    stage_templates,
     substitution_names,
-    substitution_step_templates,
 )
 
 
@@ -107,10 +104,11 @@ def _producers(writers: list[int], stages: list[StageFlow]) -> list[int]:
 def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     """Build the stage data-flow graph for a validated scenario.
 
-    A stage consumes a variable when one of its templates references a name an
-    earlier stage saved and its own phase does not shadow — each phase judged
-    against its shadow set (`scoping.StageScopes.shadows`), response steps in
-    order with the stage's own accumulated saves added as they land.
+    A stage consumes a variable when one of its templates
+    (`scoping.stage_templates`) references a name an earlier stage saved and
+    its own phase does not shadow — each phase judged against its shadow set
+    (`scoping.StageScopes.shadows`), substitution and response steps in order
+    with the names the steps before them define or save added as they land.
     ``parametrize`` values are excluded: they resolve against scenario scope,
     never saved values.
 
@@ -156,25 +154,14 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
 
         consumes: set[str] = set()
 
-        for templates, prior_sub_names in substitution_step_templates(raw.get("substitutions")):
-            consumes |= _consumed(extract_template_variables(templates, defined=defined), scope.earlier_saves, shadows.always_run | prior_sub_names)
-
-        consumes |= _consumed(extract_template_variables(raw.get("skip_if"), defined=defined), scope.earlier_saves, shadows.pre_iteration)
-        consumes |= _consumed(extract_template_variables(raw.get("parallel"), defined=defined), scope.earlier_saves, shadows.pre_iteration)
-        consumes |= _consumed(extract_template_variables(raw.get("retry"), defined=defined), scope.earlier_saves, shadows.pre_iteration)
-        consumes |= _consumed(extract_template_variables(raw.get("request"), defined=defined), scope.earlier_saves, shadows.request)
-        if stage.connection is not None:
-            send, after_send = connection_step_templates(raw.get("connection"))
-            sent = frozenset({SENT_NAME}) if stage.connection.send is not None else frozenset()
-            consumes |= _consumed(extract_template_variables(send, defined=defined), scope.earlier_saves, shadows.request)
-            consumes |= _consumed(extract_template_variables(after_send, defined=defined), scope.earlier_saves, shadows.request | sent)
+        # The templates the validator reads, each in its phase: what one
+        # sees besides the phase's names (`scoping.StageTemplate.extra`:
+        # what the steps before it define or save, or ``sent``) hides an
+        # earlier save from it, as the phase's own names do.
+        for _, phase, templates, extra in stage_templates(stage, raw):
+            if phase is not None:
+                consumes |= _consumed(extract_template_variables(templates, defined=defined), scope.earlier_saves, shadows[phase] | extra)
         consumes |= _consumed(extract_template_variables(opened_params.get(i), defined=defined), scope.earlier_saves, scope.scenario_fixtures)
-        # The same order-aware iterator the validator uses also sees prior
-        # entries inside a substitutions-save step. Those entries resolve in
-        # sequence, and only their rendered values can consume an earlier save.
-        for templates, own_saves in response_step_templates(stage, raw.get("response")):
-            consumes |= _consumed(extract_template_variables(templates, defined=defined), scope.earlier_saves, shadows.response | own_saves)
-        consumes |= _consumed(extract_template_variables(raw.get("always_run"), defined=defined), scope.earlier_saves, shadows.always_run)
 
         by_producer: dict[int, list[str]] = {}
         for name in consumes:

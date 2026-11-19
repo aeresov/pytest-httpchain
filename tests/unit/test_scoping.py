@@ -12,6 +12,7 @@ from pytest_httpchain.scoping import TEMPLATE_BUILTINS as SCOPING_BUILTINS
 from pytest_httpchain.scoping import (
     DefinedNames,
     NameUnion,
+    Phase,
     SkipCause,
     base_global_context,
     connection_bindings,
@@ -33,6 +34,7 @@ from pytest_httpchain.scoping import (
     saved_in_stage,
     stage_scopes,
     stage_start_context,
+    stage_templates,
     stats_name,
     with_saves,
     with_stage_substitutions,
@@ -799,6 +801,46 @@ def test_connection_step_templates_are_what_renders():
     assert connection_step_templates(raw) == ({"a": "{{ a }}"}, ["{{ t }}", ["{{ v }}"]])
     assert connection_step_templates({"name": "d", "expect": {"match": "{{ m }}"}}) == (None, [None])
     assert connection_step_templates(None) == (None, None)
+
+
+def test_stage_templates_are_each_field_in_its_phase_in_resolution_order():
+    """What a stage renders, field by field as the runtime renders them,
+    each with its phase and the names it sees besides the phase's: what the
+    substitution steps before it define, what the response steps before it
+    save, and ``sent`` in the expect of a stage that sends. Parametrize
+    values resolve at collection, in no phase, and their ``ids`` never
+    render."""
+    raw = {
+        "name": "s",
+        "parametrize": [{"individual": {"p": ["{{ a }}"]}, "ids": ["{{ never }}"]}],
+        "always_run": "{{ b }}",
+        "substitutions": [{"vars": {"v1": "{{ c }}"}}, {"vars": {"v2": "{{ v1 }}"}}],
+        "skip_if": "{{ d }}",
+        "retry": {"attempts": "{{ e }}"},
+        "connection": {"name": "dev", "send": {"x": "{{ f }}"}, "expect": {"match": {"k": "{{ sent.id }}"}, "timeout": 1}},
+        "response": [{"save": {"jmespath": {"s1": "a"}}}, {"verify": {"expressions": ["{{ s1 }}"]}}],
+    }
+    [stage] = Scenario.model_validate({"connections": {"dev": {"adapter": "m:A"}}, "stages": [raw]}).stages
+    templates = list(stage_templates(stage, raw))
+    assert [(template.field, template.phase, template.extra) for template in templates] == [
+        ("parametrize", None, frozenset()),
+        ("always_run", Phase.ALWAYS_RUN, frozenset()),
+        ("substitutions", Phase.ALWAYS_RUN, frozenset()),
+        ("substitutions", Phase.ALWAYS_RUN, frozenset({"v1"})),
+        ("skip_if", Phase.PRE_ITERATION, frozenset()),
+        ("parallel", Phase.PRE_ITERATION, frozenset()),
+        ("retry", Phase.PRE_ITERATION, frozenset()),
+        ("request", Phase.REQUEST, frozenset()),
+        ("connection", Phase.REQUEST, frozenset()),
+        ("connection", Phase.REQUEST, frozenset({"sent"})),
+        ("response", Phase.RESPONSE, frozenset()),
+        ("response", Phase.RESPONSE, frozenset({"s1"})),
+    ]
+    assert templates[0].templates == [{"individual": {"p": ["{{ a }}"]}}]
+    assert [template.templates for template in templates if template.field == "connection"] == [{"x": "{{ f }}"}, [1, ["{{ sent.id }}"]]]
+    # The phase indexes a scope's Phases.
+    scope = stage_scopes(Scenario.model_validate({"stages": [{"name": "h", "request": {"url": "http://x/"}}]}))[0]
+    assert [scope.phases()[phase] for phase in Phase] == list(scope.phases())
 
 
 def test_rendered_response_steps_pair_each_step():

@@ -28,7 +28,8 @@ A connection stage's response steps see, in place of ``response``, the
 or an ``open``) and what its ``send()`` returned, ``sent`` (when it sends):
 `response_meta_names`, and at runtime `connection_bindings`. Its ``send``
 renders in the request phase; its ``expect.timeout`` and the values of a
-match object with ``sent`` in scope too (`connection_step_templates`). A
+match object with ``sent`` in scope too (`connection_step_templates`). Which
+phase each template of a stage renders in is `stage_templates`'s. A
 connection's own ``params`` render when a stage opens it, against
 `StageScopes.connection_params`; which stages may open it, and which find it
 closed, is `connection_lifecycles`'s walk.
@@ -60,6 +61,7 @@ from collections import ChainMap
 from collections.abc import Iterable, Iterator, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
+from enum import IntEnum
 from typing import Any, NamedTuple
 
 import pytest
@@ -560,6 +562,15 @@ def _raw_substitution_entry_templates(entry: Any) -> Any:
     return rendered
 
 
+def _parametrize_rendered_values(raw_parametrize: Any) -> Any:
+    """The parametrize subtree minus each step's ``ids``, which pytest uses
+    verbatim for display and never renders (the same carve-out
+    ``models.parametrize_values_contain_template`` encodes)."""
+    if isinstance(raw_parametrize, list):
+        return [{k: v for k, v in entry.items() if k != "ids"} if isinstance(entry, dict) else entry for entry in raw_parametrize]
+    return raw_parametrize
+
+
 def substitution_step_templates(raw_substitutions: Any) -> Iterator[tuple[Any, frozenset[str]]]:
     """Walk raw substitution steps in resolution order, yielding
     ``(what the runtime renders of the step, names defined by PRIOR steps)``.
@@ -813,6 +824,16 @@ class Phases(NamedTuple):
     response: NameUnion
 
 
+class Phase(IntEnum):
+    """A stage's phase, as the index of its names in `Phases`: where a
+    stage template renders (`StageTemplate`)."""
+
+    ALWAYS_RUN = 0
+    PRE_ITERATION = 1
+    REQUEST = 2
+    RESPONSE = 3
+
+
 @dataclass(frozen=True, slots=True)
 class StageScopes:
     """Statically-known names visible to one stage, per resolution phase.
@@ -973,6 +994,57 @@ def stage_scopes(scenario: Scenario) -> list[StageScopes]:
         if skip_cause is None:
             unskippable_saves |= saves
     return scopes
+
+
+class StageTemplate(NamedTuple):
+    """Template text one stage renders, and where: an entry of
+    `stage_templates`."""
+
+    field: str
+    """The stage field it is in, which a finding's location names."""
+    phase: Phase | None
+    """The phase it renders in: the one whose names it sees
+    (`StageScopes.phases`), and whose shadows hide an earlier save from it
+    (`StageScopes.shadows`). None for the ``parametrize`` values, which
+    resolve at collection, against the scenario substitutions alone."""
+    templates: Any
+    """What the runtime renders of the field, or of one step of it."""
+    extra: frozenset[str]
+    """The names it sees besides its phase's: a substitution step, those
+    the steps before it define (`substitution_step_templates`); a response
+    step, those the steps before it save (`response_step_templates`); a
+    connection's ``expect``, ``sent`` when the stage sends
+    (`response_meta_names`)."""
+
+
+def stage_templates(stage: Stage, raw: Mapping[str, Any]) -> Iterator[StageTemplate]:
+    """Every template ``stage`` renders (``raw``, its JSON), in resolution
+    order, each with its phase (the table this module opens with): its
+    ``parametrize`` values, its ``always_run``, each substitution step, its
+    ``skip_if``, ``parallel`` and ``retry``, its ``request``, a connection
+    step's ``send``, then its ``expect.timeout`` and match object values
+    (`connection_step_templates`), and each response step.
+
+    Each is the part of the field the runtime renders, as every check of a
+    stage's templates reads it: parametrize values without their ``ids``; a
+    substitution step's ``vars`` values and ``functions`` import names,
+    never a function's kwargs; a substitutions-save's entries, never its
+    ``description``; never a connection step's ``name`` or a match string.
+    A substitution step and a response step (a substitutions-save's entry)
+    are entries of their own, each seeing what the ones before it define."""
+    yield StageTemplate("parametrize", None, _parametrize_rendered_values(raw.get("parametrize")), frozenset())
+    yield StageTemplate("always_run", Phase.ALWAYS_RUN, raw.get("always_run"), frozenset())
+    for templates, prior_names in substitution_step_templates(raw.get("substitutions")):
+        yield StageTemplate("substitutions", Phase.ALWAYS_RUN, templates, prior_names)
+    for field in ("skip_if", "parallel", "retry"):
+        yield StageTemplate(field, Phase.PRE_ITERATION, raw.get(field), frozenset())
+    yield StageTemplate("request", Phase.REQUEST, raw.get("request"), frozenset())
+    if stage.connection is not None:
+        send, after_send = connection_step_templates(raw.get("connection"))
+        yield StageTemplate("connection", Phase.REQUEST, send, frozenset())
+        yield StageTemplate("connection", Phase.REQUEST, after_send, response_meta_names(stage) & {SENT_NAME})
+    for templates, prior_saves in response_step_templates(stage, raw.get("response")):
+        yield StageTemplate("response", Phase.RESPONSE, templates, prior_saves)
 
 
 # --------------------------------------------------------------------------- #
