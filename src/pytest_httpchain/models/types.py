@@ -273,11 +273,20 @@ def _graphql_children(node: Any) -> Iterator[Any]:
                 yield item
 
 
-def _parse_graphql_query(text: str) -> None:
-    """Parse a GraphQL request's document, or raise why it is not one. One
-    grammar, whichever graphql-core is installed: the document holds
-    operations and fragments, at least one operation; a selection set
-    selects something; and the document nests at most 200 levels deep.
+class _NestedTooDeeply(graphql.GraphQLSyntaxError):
+    """The nesting rule's refusal, which a templated query's stand-in tells
+    from the others (`_graphql_stand_in`)."""
+
+
+def _check_graphql_document(document: Any, filler: str | None = None) -> list[Any]:
+    """A GraphQL request's parsed document held to one grammar, whichever
+    graphql-core is installed, raising the first rule it fails as a
+    `graphql.GraphQLError` or a `GraphQLOperationError`; else its
+    operations. The document holds operations and fragments, at least one
+    operation; a selection set selects something; and the document nests at
+    most 200 levels deep. A selection set holding only a field aliased
+    ``filler`` selects nothing: the empty braces a stand-in filled
+    (`_fill_empty_braces`).
 
     A request is executed, so its document is what a server executes, and
     what every server refuses in one is refused here, in the server's words:
@@ -313,19 +322,6 @@ def _parse_graphql_query(text: str) -> None:
     list, not on the call stack, so nesting the parser got through costs no
     frames here.
     """
-    _check_graphql_document(graphql.parse(text))
-
-
-class _NestedTooDeeply(graphql.GraphQLSyntaxError):
-    """The nesting rule's refusal, which a templated query's stand-in tells
-    from the others (`_graphql_stand_in`)."""
-
-
-def _check_graphql_document(document: Any, filler: str | None = None) -> list[Any]:
-    """The rules `_parse_graphql_query` holds a parsed document to, raising
-    the first it fails; else its operations. A selection set holding only a
-    field aliased ``filler`` selects nothing: the empty braces a stand-in
-    filled (`_fill_empty_braces`)."""
     # The grammar's own refusals first (what some versions' parser refuses
     # itself), the nesting before an empty selection set, then the
     # definitions, then the operations: a document failing several is refused
@@ -409,10 +405,16 @@ def _invalid_query(e: Exception) -> ValueError:
 def validate_graphql_query(v: str, info: ValidationInfo) -> str:
     """A GraphQL request's query, judged as the text it is used as
     (`as_rendered`) and kept as written, or a ValueError naming why it is
-    none (`_invalid_query`)."""
+    none (`_invalid_query`): whatever the parser raises on it, or the rule
+    of `_check_graphql_document` it fails. Anything else a rule raises is a
+    bug of the rule's, not the query's, and is not reported as one."""
     try:
-        _parse_graphql_query(as_rendered(v, info))
-    except Exception as e:
+        document = graphql.parse(as_rendered(v, info))
+    except Exception as e:  # no GraphQL, or nested past the parser's limit or Python's
+        raise _invalid_query(e) from e
+    try:
+        _check_graphql_document(document)
+    except (graphql.GraphQLError, GraphQLOperationError) as e:
         raise _invalid_query(e) from e
     return v
 
@@ -536,7 +538,7 @@ def _graphql_stand_in(query: str) -> _StandIn | None:
         operations = _check_graphql_document(document, filler=marker)
     except _NestedTooDeeply:
         return None
-    except Exception as e:
+    except (graphql.GraphQLError, GraphQLOperationError) as e:
         return _StandIn([], marker, e)
     return _StandIn(operations, marker, None)
 

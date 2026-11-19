@@ -11,11 +11,11 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Annotated, Any
 
 import jsonschema
 import pytest
-from pydantic import TypeAdapter, ValidationError
+from pydantic import AfterValidator, TypeAdapter, ValidationError
 
 from pytest_httpchain.models.types import (
     RENDERED,
@@ -39,6 +39,7 @@ from pytest_httpchain.models.types import (
     convert_namespace_to_dict,
     json_schema_validator_class,
     parse_schema_file_ref,
+    validate_templated_graphql_query,
 )
 from tests.unit.helpers import BEYOND_RECURSION_LIMIT, LOADABLE_BUT_DEEP, nested
 
@@ -343,6 +344,30 @@ class TestGraphQLQuery:
     def test_empty_selection_set_is_invalid(self, value):
         with pytest.raises(ValidationError, match="Invalid GraphQL query"):
             validate(GraphQLQuery, value)
+
+    @pytest.mark.parametrize(
+        ("annotated_type", "value"),
+        [
+            pytest.param(GraphQLQuery, "query Q { a }", id="query"),
+            # The GraphQL body's query field, which holds a templated query to
+            # the rules by its stand-in.
+            pytest.param(Annotated[GraphQLQuery | PartialTemplateStr, AfterValidator(validate_templated_graphql_query)], "query Q { {{ field }} }", id="templated-query"),
+        ],
+    )
+    def test_a_rule_that_crashes_is_not_the_query_s_error(self, monkeypatch, annotated_type, value):
+        """What the parser raises and the rules' own refusals are the query's
+        errors; anything else a rule raises is a bug of the rule's, which
+        propagates instead of reading as a query the parser could not read."""
+
+        class RuleBug(Exception):
+            pass
+
+        def crash(*args: Any) -> bool:
+            raise RuleBug
+
+        monkeypatch.setattr("pytest_httpchain.models.types._selects_nothing", crash)
+        with pytest.raises(RuleBug):
+            validate(annotated_type, value)
 
 
 class TestTemplateExpression:
