@@ -1191,7 +1191,8 @@ def validate_proxy_url(value: Any, handler: ValidatorFunctionWrapHandler) -> str
     return v
 
 
-# Passed to httpx as written; the schemas keep HttpUrl's `format: uri` hint.
+# Passed to httpx as written. The schemas keep HttpUrl's `format: uri` hint, but
+# a request URL's, which may be relative to the base URL, is `uri-reference`.
 HttpUrlReferenceStr = Annotated[
     str,
     WrapValidator(validate_http_url_reference),

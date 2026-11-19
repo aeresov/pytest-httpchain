@@ -1343,7 +1343,7 @@ ParallelConfig = Annotated[_ParallelConfigMember, Discriminator(_create_discrimi
 # The failures a stage's `retry` can make another attempt after, by the
 # response step or the request that failed (`RetryConfig.on`).
 RetryOn = Literal["verify", "save", "request"]
-RETRY_ON: tuple[RetryOn, ...] = ("verify", "save", "request")
+RETRY_ON: tuple[RetryOn, ...] = get_args(RetryOn)
 
 
 # A retry's attempts, seconds and backoff factor. The seconds and the factor
