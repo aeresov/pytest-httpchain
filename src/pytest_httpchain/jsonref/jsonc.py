@@ -9,8 +9,8 @@ and each trailing comma a space, so every character stays at its offset and a
 
 Strictly valid JSON is left as it is, so every reader goes through here with no
 opt-in: `loads_jsonc` is what the reference resolver parses a file with and what
-a body schema file is read with (``utils.read_json_schema_file``), so they agree
-on what a file may hold. What arrives over HTTP (a response body) is never
+a body schema file is read with (``body_schema.read_json_schema_file``), so they
+agree on what a file may hold. What arrives over HTTP (a response body) is never
 passed through here: it stays plain JSON, as ``json.loads`` reads it.
 """
 

@@ -9,8 +9,9 @@ class HttpChainError(Exception):
 
 class SchemaFileError(HttpChainError):
     """A referenced JSON Schema file could not be read or parsed. Raised by
-    ``utils.read_json_schema_file`` so the validator and the runtime can word
-    the failure their own way without re-deriving what counts as one."""
+    ``body_schema.read_json_schema_file`` so the validator and the runtime
+    can word the failure their own way without re-deriving what counts as
+    one."""
 
 
 class SchemaPointerError(HttpChainError):

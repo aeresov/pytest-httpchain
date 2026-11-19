@@ -32,7 +32,7 @@ import jsonschema
 import pytest
 import referencing.exceptions
 
-from pytest_httpchain.body_schema import UNBOUNDED, InvalidReferencedSchema, ReferenceBounds, SchemaFile, file_body_schema, inline_body_schema
+from pytest_httpchain.body_schema import UNBOUNDED, InvalidReferencedSchema, ReferenceBounds, SchemaFile, file_body_schema, inline_body_schema, schema_error_text
 from pytest_httpchain.errors import SaveError, SchemaFileError, SchemaPointerError, StageExecutionError, VerificationError
 from pytest_httpchain.jsonref import json_equal
 from pytest_httpchain.models import (
@@ -53,7 +53,7 @@ from pytest_httpchain.models import (
 from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, SHOWN_BYTES, Redaction, cut, shown_bytes
 from pytest_httpchain.templates import TemplatesError, contains_template
 from pytest_httpchain.userfunc import UserFunctionError, call_target, call_user_function
-from pytest_httpchain.utils import optional_as_list, path_segment, process_substitutions, schema_error_text
+from pytest_httpchain.utils import optional_as_list, path_segment, process_substitutions
 from pytest_httpchain.wire_codec import MSGPACK_DECODE_ERRORS, ResponseCodec, selected_codec, unpack_msgpack
 
 

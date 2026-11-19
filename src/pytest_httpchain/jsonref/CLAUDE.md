@@ -48,8 +48,8 @@ on it. It lives here, the lowest layer that needs it, so all three agree.
 
 `jsonc.py` is the one parser of JSON files read from disk, for this package
 (`_parse_json_rejecting_duplicates`) and for the plugin's body schema files
-(`utils.read_json_schema_file`), so every reader agrees on what a file may
-hold. `strip_jsonc` turns JSONC into strict JSON of the same length: each
+(`body_schema.read_json_schema_file`), so every reader agrees on what a file
+may hold. `strip_jsonc` turns JSONC into strict JSON of the same length: each
 comment becomes spaces (every `\r` and `\n` in it kept) and each trailing comma
 a space, so a `JSONDecodeError`'s line and column are the file's. It is one
 possessive regex scan (`_SCAN`), linear: every match is a run the scan skips

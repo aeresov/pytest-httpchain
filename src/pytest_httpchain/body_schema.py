@@ -12,7 +12,9 @@ keeps (`ReferenceBounds`).
 
 Shared by the runtime (`response_steps`), which validates with a
 `BodySchema`, and ``validate --deep``, which walks every reference one
-reaches (`BodySchema.unresolvable`), so both resolve the same way.
+reaches (`BodySchema.unresolvable`), so both resolve the same way; both read
+a schema file (`read_json_schema_file`) and word a jsonschema error
+(`schema_error_text`) through here too.
 """
 
 import collections
@@ -36,9 +38,10 @@ import referencing.jsonschema
 from jsonschema_specifications import REGISTRY as _META_SCHEMAS
 
 from pytest_httpchain.errors import SchemaFileError, SchemaPointerError
+from pytest_httpchain.jsonref import loads_jsonc
 from pytest_httpchain.models import json_schema_validator_class, parse_schema_file_ref
 from pytest_httpchain.templates import needs_rendering
-from pytest_httpchain.utils import read_json_schema_file, resolve_scenario_path, schema_error_text
+from pytest_httpchain.utils import JSON_PARSE_ERRORS, resolve_scenario_path
 
 type Dialect = type[jsonschema.protocols.Validator]
 
@@ -422,6 +425,39 @@ def follow_pointer(document: Any, pointer: tuple[str, ...]) -> Any:
 def read_schema_document(path: Path) -> Any:
     """The JSON a schema file holds, or a `SchemaFileError` (`read_json_schema_file`)."""
     return _read(path)[1]
+
+
+def read_json_schema_file(path: Path) -> Any:
+    """Parse a referenced JSON Schema file, or raise `SchemaFileError`.
+
+    The catch is the load-bearing part and must not be re-derived per reader:
+    `JSON_PARSE_ERRORS` makes a non-UTF-8 or too deeply nested schema file fail
+    cleanly instead of escaping the abort machinery as a raw traceback.
+    ``utf-8-sig`` accepts a byte-order mark, and `loads_jsonc` comments and
+    trailing commas, as the scenario loader does. The meta-check is not part of
+    it (`BodySchema.check`): the runtime and ``validate --deep`` report an
+    unparseable file and an invalid schema differently.
+    """
+    try:
+        return loads_jsonc(path.read_text(encoding="utf-8-sig"))
+    except (OSError, *JSON_PARSE_ERRORS) as e:
+        raise SchemaFileError(str(e)) from e
+
+
+def schema_error_text(e: Exception) -> str:
+    """``str(e)`` for a jsonschema error, or its bare ``message`` when that is
+    too deep to render.
+
+    jsonschema's ``__str__`` pretty-prints the failing instance in Python, a
+    few frames per level, so a body or schema a few hundred levels deep raises
+    ``RecursionError`` while the failure is being *described* — inside an
+    ``except`` clause, where no sibling clause can catch it. ``message`` is
+    rendered during validation and is always safe to read.
+    """
+    try:
+        return str(e)
+    except RecursionError:
+        return getattr(e, "message", type(e).__name__)
 
 
 class _Once:

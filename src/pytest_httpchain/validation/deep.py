@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds, SchemaFile, file_body_schema, inline_body_schema
+from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds, SchemaFile, file_body_schema, inline_body_schema, schema_error_text
 from pytest_httpchain.connections import ADAPTER_METHODS, ProtocolAdapter
 from pytest_httpchain.errors import SchemaFileError, SchemaPointerError
 from pytest_httpchain.models import (
@@ -30,7 +30,7 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.templates import contains_template, unescape
 from pytest_httpchain.userfunc import UserFunctionError, call_target, import_adapter, import_function
-from pytest_httpchain.utils import path_segment, resolve_scenario_path, schema_error_text
+from pytest_httpchain.utils import path_segment, resolve_scenario_path
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, diag
 
 

@@ -1,6 +1,11 @@
-"""Small helpers shared by the collection and runtime paths: markers,
-substitution resolution, scenario-relative paths, and the location paths
-messages print.
+"""Small helpers shared by the collection and runtime paths, the validator
+and the importers: marks and the xdist groups they declare, substitution
+resolution, scenario-relative paths, the location paths messages print, a
+header check's optional value as a list (`optional_as_list`), a request's
+body as the reports capture it (`request_content`), what parsing JSON raises
+on bad input (`JSON_PARSE_ERRORS`), and, for an exception user code raised,
+whether it stops the run (`INTERRUPTS`) and how it is described
+(`describe_exception`).
 
 ``process_substitutions`` raises ``StageExecutionError`` even when called at
 collection time (the collection caller re-wraps it into a ``CollectError``)
@@ -18,8 +23,7 @@ from typing import Any
 import httpx
 import pytest
 
-from pytest_httpchain.errors import SchemaFileError, StageExecutionError
-from pytest_httpchain.jsonref import loads_jsonc
+from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, Substitution, VarsSubstitution
 from pytest_httpchain.templates import needs_rendering, walk, walker
 from pytest_httpchain.userfunc import call_target, wrap_function
@@ -88,38 +92,6 @@ def request_content(request: httpx.Request) -> bytes | None:
         if isinstance(request.stream, httpx.ByteStream):
             return request.read()
         return None
-
-
-def read_json_schema_file(path: Path) -> Any:
-    """Parse a referenced JSON Schema file, or raise `SchemaFileError`.
-
-    The catch is the load-bearing part and must not be re-derived per caller:
-    `JSON_PARSE_ERRORS` makes a non-UTF-8 or too deeply nested schema file fail
-    cleanly instead of escaping the abort machinery as a raw traceback.
-    ``utf-8-sig`` accepts a byte-order mark, and `loads_jsonc` comments and
-    trailing commas, as the scenario loader does. The meta-check stays with the
-    callers, which report an unparseable file and an invalid schema differently.
-    """
-    try:
-        return loads_jsonc(path.read_text(encoding="utf-8-sig"))
-    except (OSError, *JSON_PARSE_ERRORS) as e:
-        raise SchemaFileError(str(e)) from e
-
-
-def schema_error_text(e: Exception) -> str:
-    """``str(e)`` for a jsonschema error, or its bare ``message`` when that is
-    too deep to render.
-
-    jsonschema's ``__str__`` pretty-prints the failing instance in Python, a
-    few frames per level, so a body or schema a few hundred levels deep raises
-    ``RecursionError`` while the failure is being *described* — inside an
-    ``except`` clause, where no sibling clause can catch it. ``message`` is
-    rendered during validation and is always safe to read.
-    """
-    try:
-        return str(e)
-    except RecursionError:
-        return getattr(e, "message", type(e).__name__)
 
 
 def make_marker(mark_str: str) -> pytest.MarkDecorator:
