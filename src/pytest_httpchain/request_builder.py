@@ -377,16 +377,25 @@ def _b64decode(text: str, what: str) -> bytes:
         raise RequestError(f"{what} is not valid base64: {e}") from e
 
 
+def _primitive_text(value: Any) -> str:
+    """A form value as httpx turns one into text (its
+    ``primitive_value_to_str``): a boolean as ``true`` or ``false``, None as
+    nothing, anything else with ``str()``, whose failure each caller words."""
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _form_text(name: str, value: str | int | float) -> str:
-    """A multipart field's value as the text its part carries, as httpx turns
-    a form value into text (its ``primitive_value_to_str``): a boolean as
-    ``true`` or ``false``, anything else with ``str()``. An int past Python's
-    digit limit has no text form, and fails the stage naming its field (see
-    `_encode_param`)."""
-    if value is True or value is False:
-        return "true" if value else "false"
+    """A multipart field's value as the text its part carries
+    (`_primitive_text`). An int past Python's digit limit has no text form,
+    and fails the stage naming its field (see `_encode_param`)."""
     try:
-        return str(value)
+        return _primitive_text(value)
     except ValueError as e:
         raise RequestError(f"Cannot convert multipart field '{name}' to text: {e}") from e
 
@@ -532,15 +541,7 @@ def _encoded_binary_form(data: Mapping[str, Any]) -> bytes | None:
         return None
 
     def scalar(value: Any) -> str | bytes:
-        if isinstance(value, bytes | bytearray):
-            return bytes(value)
-        if value is True:
-            return "true"
-        if value is False:
-            return "false"
-        if value is None:
-            return ""
-        return str(value)
+        return bytes(value) if isinstance(value, bytes | bytearray) else _primitive_text(value)
 
     try:
         return urlencode([(key, scalar(value)) for key, value in fields]).encode("ascii")
