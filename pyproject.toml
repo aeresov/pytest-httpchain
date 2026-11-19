@@ -267,7 +267,7 @@ layers = [
     # response_steps, which judges a message: the carrier injects the match.
     "connections",
     "body_schema",
-    # scoping reads stage marks with utils.make_marker (scoping.SkipCause).
+    # scoping reads stage marks with utils.parse_marker (scoping.SkipCause).
     "scoping",
     "utils | redaction",
     "userfunc",

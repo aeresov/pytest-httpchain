@@ -91,9 +91,11 @@ step did not render or called `pytest.fail()`, the stage fails with those
 failures (a `pytest.fail()` message listed among them, in its place) rather
 than being skipped or xfailed. A function a template calls is taken the same
 way, except that the templates after that one are not rendered.
-`pytest.exit()` called from any of them, or from an auth function or a
-connection's adapter, ends the whole run there, as it does from a test, instead
-of failing the stage.
+`pytest.exit()` called from any of them, from an auth function, or from a
+connection's adapter as it is built, connects or sends, ends the whole run
+there, as it does from a test, instead of failing the stage. (An adapter's
+`receive()` runs on the connection's reader thread, so there it ends that
+connection's reader only.)
 
 **Steps run in order, and a step that fails ends the stage.** The steps after
 it do not run, since they may depend on it: a `save` a later `verify` uses, a

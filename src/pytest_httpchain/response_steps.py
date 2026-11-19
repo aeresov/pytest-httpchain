@@ -230,7 +230,7 @@ class RenderOutcome:
 
 
 # How `process_verify` gets the values its checks run on: ``render(values)``
-# takes the step's values its checks read, each where it is declared, in the
+# takes the step's values that are rendered, each where it is declared, in the
 # order their checks run (`_declared_values`), and gives back, by where, what each
 # rendered to: the value with its templates rendered, or a `RenderFailure`. A
 # value whose rendering raised a pytest outcome is a `RenderOutcome`, and the
@@ -488,7 +488,7 @@ def _template_at(where: VerifyWhere) -> str:
     return f"The template at 'verify{''.join(map(path_segment, where))}'"
 
 
-def _declared_values(verify_model: Verify, *, http: bool = True) -> Iterator[tuple[VerifyWhere, Any]]:
+def _declared_values(verify_model: Verify, *, http: bool) -> Iterator[tuple[VerifyWhere, Any]]:
     """Each value of a verify step that is rendered (`_RenderedStep`), where
     it is declared, in the order `process_verify` runs their checks: a
     header's expectation and a jmespath entry's whole, a list item by item.
@@ -535,7 +535,7 @@ class _RenderedStep:
 
     __slots__ = ("_values",)
 
-    def __init__(self, verify_model: Verify, render: VerifyRender | None, *, http: bool = True) -> None:
+    def __init__(self, verify_model: Verify, render: VerifyRender | None, *, http: bool) -> None:
         declared = list(_declared_values(verify_model, http=http))
         if render is None:
             self._values: dict[VerifyWhere, Any] = dict(declared)
