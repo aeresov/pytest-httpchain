@@ -161,9 +161,6 @@ class _IterationContextManagers:
 # stage's `Carrier.active_context_managers` collects them.
 _ITERATION_CONTEXT_MANAGERS: ContextVar[_IterationContextManagers | None] = ContextVar("iteration_context_managers", default=None)
 
-# Raised by an exit, these stop the run: re-raised once every context manager
-# is exited (`utils.INTERRUPTS`).
-
 
 def _exit_context_managers(entered: list[_EnteredContextManager], errors: Iterable[str] = ()) -> list[str]:
     """Exit ``entered``, last entered first, and describe each exit that raised,
@@ -770,9 +767,11 @@ class Carrier:
     """Base class of the generated scenario test classes; runs their stages."""
 
     # Placeholders only: create_test_class() overrides every one of these per
-    # scenario (the mutable ones from `fresh_scenario_state`). This state must
-    # stay at class level — the stage methods are classmethods sharing one
-    # running context via `cls`.
+    # scenario (the mutable ones from `fresh_scenario_state`) but
+    # ``fixture_scopes`` and ``snapshot_passed_exchanges``, which the plugin
+    # sets for each item as it is set up. This state must stay at class
+    # level — the stage methods are classmethods sharing one running context
+    # via `cls`.
     scenario: ClassVar[Scenario | None] = None
     scenario_dir: ClassVar[Path | None] = None
     # What a body schema's references to files are held to: pytest's rootdir
