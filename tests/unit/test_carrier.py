@@ -21,7 +21,7 @@ import threading
 import time
 import warnings
 from collections import ChainMap
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from concurrent.futures import Future
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
@@ -84,6 +84,28 @@ def _make_carrier_subclass(**attrs) -> type[Carrier]:
     }
     defaults.update(attrs)
     return type("UnitCarrier", (Carrier,), defaults)
+
+
+@contextmanager
+def _answered(
+    respond: Callable[[httpx.Request], httpx.Response] = lambda request: httpx.Response(200),
+    *,
+    carrier: type[Carrier] | None = None,
+    client_kwargs: dict[str, Any] | None = None,
+    **attrs,
+) -> Generator[type[Carrier]]:
+    """``carrier`` (a fresh `_make_carrier_subclass` of ``attrs`` by default)
+    on a client built with ``client_kwargs`` whose every request ``respond``
+    answers, a 200 by default. Only that client is closed on exit: the class
+    is not torn down, since a test reads its ``global_context`` and
+    ``last_*`` afterwards."""
+    cls = carrier if carrier is not None else _make_carrier_subclass(**attrs)
+    client = httpx.Client(transport=httpx.MockTransport(respond), **(client_kwargs or {}))
+    cls.client = client
+    try:
+        yield cls
+    finally:
+        client.close()
 
 
 class TestSSLClientWiring:
@@ -203,14 +225,12 @@ class TestClientWiring:
     def test_templated_request_takes_the_clients_defaults(self, declared, timeout):
         client_config = ClientConfig(base_url="http://mock/v1", timeout=5, follow_redirects=False)
         sent = []
-        transport = httpx.MockTransport(lambda request: sent.append(request) or httpx.Response(302, headers={"Location": "/elsewhere"}))
-        client = httpx.Client(**build_client_kwargs(client_config, SSLConfig(), None, None), transport=transport)
-        cls = _make_carrier_subclass(client=client, _client_config=client_config)
+        client_kwargs = build_client_kwargs(client_config, SSLConfig(), None, None)
         stage = Stage.model_validate({"name": "s", "request": {"url": "{{ path }}", **declared}})
-        try:
+        with _answered(
+            lambda request: sent.append(request) or httpx.Response(302, headers={"Location": "/elsewhere"}), client_kwargs=client_kwargs, _client_config=client_config
+        ) as cls:
             result = cls._execute_single_iteration(stage, ChainMap({"path": "/users/1", "t": 60}), {})
-        finally:
-            client.close()
         # Joined to the base URL, with the client's redirect setting: not followed.
         assert [str(request.url) for request in sent] == ["http://mock/v1/users/1"]
         assert result.response.status_code == 302
@@ -276,14 +296,10 @@ class TestResolvedParallelSettings:
         stage ``parametrize``. A nested object keeps its attribute access, and
         a tuple of them is taken like a list."""
         requests: list[httpx.Request] = []
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: requests.append(request) or httpx.Response(200)))
         substitution = VarsSubstitution(vars={"combos": [{"id": 1, "owner": {"name": "a"}}, {"id": 2, "owner": {"name": "b"}}]})
-        cls = _make_carrier_subclass(client=client, global_context=ChainMap(substitution.vars))
         stage = Stage.model_validate({"name": "s", "parallel": {"foreach": [{"combinations": template}]}, "request": {"url": "http://mock/item/{{ id }}/{{ owner.name }}"}})
-        try:
+        with _answered(lambda request: requests.append(request) or httpx.Response(200), global_context=ChainMap(substitution.vars)) as cls:
             cls.execute_stage(stage, {})
-        finally:
-            client.close()
         assert sorted(str(request.url) for request in requests) == ["http://mock/item/1/a", "http://mock/item/2/b"]
 
 
@@ -314,13 +330,8 @@ class TestRenderedAwayFields:
         """A value a save step's template rendered that validation refuses is
         the step's SaveError, as a verify step's is its VerificationError,
         with pydantic's report on it as the message."""
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
-        cls = _make_carrier_subclass(client=client)
-        try:
-            with pytest.raises(StageExecutionError) as excinfo:
-                cls._execute_single_iteration(Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"save": save}]}), ChainMap(context), {})
-        finally:
-            client.close()
+        with _answered() as cls, pytest.raises(StageExecutionError) as excinfo:
+            cls._execute_single_iteration(Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"save": save}]}), ChainMap(context), {})
         assert type(excinfo.value) is SaveError
         assert re.search(message, str(excinfo.value))
         assert isinstance(excinfo.value.__cause__, ValidationError)
@@ -342,14 +353,10 @@ class TestRenderedAwayFields:
         """A `{{` in a pattern always opens a template (responses.md, Regex
         Extraction): the forms the docs give for literal braces and for a
         templated repeat count save what they say."""
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, text="<p>Hi {{ name }}: 12345, 4{ 3 }</p>")))
-        cls = _make_carrier_subclass(client=client)
-        try:
+        with _answered(lambda request: httpx.Response(200, text="<p>Hi {{ name }}: 12345, 4{ 3 }</p>")) as cls:
             result = cls._execute_single_iteration(
                 Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"save": {"regex": {"v": pattern}}}]}), ChainMap({"n": 3}), {}
             )
-        finally:
-            client.close()
         assert result.saved_context == {"v": saved}
 
     @pytest.mark.parametrize(
@@ -367,13 +374,11 @@ class TestRenderedAwayFields:
         answering 200, every one of these stages used to pass. A bad setting
         fails the stage before anything goes on the wire."""
         requests = []
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: requests.append(request) or httpx.Response(200, headers={"Location": "/items/1"})))
-        cls = _make_carrier_subclass(client=client, global_context=self.RENDERS_NONE)
-        try:
-            with pytest.raises(pytest.fail.Exception, match=re.escape(f"'{path}' was declared as")):
-                cls.execute_stage(Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, **stage}), {})
-        finally:
-            client.close()
+        with (
+            _answered(lambda request: requests.append(request) or httpx.Response(200, headers={"Location": "/items/1"}), global_context=self.RENDERS_NONE) as cls,
+            pytest.raises(pytest.fail.Exception, match=re.escape(f"'{path}' was declared as")),
+        ):
+            cls.execute_stage(Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, **stage}), {})
         assert len(requests) == sent
 
     @pytest.mark.parametrize(
@@ -401,13 +406,8 @@ class TestRenderedAwayFields:
     def test_each_step_refuses_with_its_own_error(self, stage, error, message):
         """Every render site of an iteration goes through the guard, and the
         refusal is that step's failure type."""
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
-        cls = _make_carrier_subclass(client=client)
-        try:
-            with pytest.raises(StageExecutionError) as excinfo:
-                cls._execute_single_iteration(Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, **stage}), self.RENDERS_NONE, {})
-        finally:
-            client.close()
+        with _answered() as cls, pytest.raises(StageExecutionError) as excinfo:
+            cls._execute_single_iteration(Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, **stage}), self.RENDERS_NONE, {})
         assert type(excinfo.value) is error
         assert str(excinfo.value) == message
 
@@ -529,14 +529,10 @@ class TestVerifyObjectsFromVars:
         context = self._context(schema={"type": "object", "properties": {"id": {"type": "integer"}}}, ct={"contains": "json"})
         stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"verify": verify}]})
         responses = iter([httpx.Response(200, json={"id": 1}), httpx.Response(200, text='{"id": "1"}')])
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: next(responses)))
-        cls = _make_carrier_subclass(client=client)
-        try:
+        with _answered(lambda request: next(responses)) as cls:
             cls._execute_single_iteration(stage, context, {})
             with pytest.raises(VerificationError, match=f"^{re.escape(failure)}"):
                 cls._execute_single_iteration(stage, context, {})
-        finally:
-            client.close()
 
 
 class TestVerifyRenderedValueByValue:
@@ -552,12 +548,8 @@ class TestVerifyRenderedValueByValue:
     @classmethod
     def _run(cls, verify: dict, context: dict) -> None:
         stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"verify": verify}]})
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=cls.BODY)))
-        carrier = _make_carrier_subclass(client=client)
-        try:
+        with _answered(lambda request: httpx.Response(200, json=cls.BODY)) as carrier:
             carrier._execute_single_iteration(stage, ChainMap(context), {})
-        finally:
-            client.close()
 
     @classmethod
     def _failure(cls, verify: dict, context: dict) -> StageExecutionError:
@@ -651,13 +643,8 @@ class TestVerifyRenderedValueByValue:
 
     def test_outcome_a_template_raises_ends_a_step_that_has_not_failed(self):
         stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"verify": {"expressions": ["{{ end() }}"]}}]})
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
-        carrier = _make_carrier_subclass(client=client)
-        try:
-            with pytest.raises(pytest.skip.Exception, match="^not here$"):
-                carrier._execute_single_iteration(stage, ChainMap({"end": lambda: pytest.skip("not here")}), {})
-        finally:
-            client.close()
+        with _answered() as carrier, pytest.raises(pytest.skip.Exception, match="^not here$"):
+            carrier._execute_single_iteration(stage, ChainMap({"end": lambda: pytest.skip("not here")}), {})
 
     def test_template_fail_after_a_function_skip_fails_the_stage(self):
         """As when the step rendered whole before any check, and the fail() was
@@ -805,7 +792,6 @@ class TestEscapedBraces:
         """A verify operand and a regex pattern with nothing but an escape are
         what the response is checked against and searched with, unescaped."""
         sent: list[httpx.Request] = []
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: sent.append(request) or httpx.Response(200, text="Hello {{name}}")))
         stage = Stage.model_validate(
             {
                 "name": "s",
@@ -816,11 +802,8 @@ class TestEscapedBraces:
                 ],
             }
         )
-        carrier = _make_carrier_subclass(client=client)
-        try:
+        with _answered(lambda request: sent.append(request) or httpx.Response(200, text="Hello {{name}}")) as carrier:
             result = carrier._execute_single_iteration(stage, ChainMap({}), {})
-        finally:
-            client.close()
         assert sent[0].url.params["q"] == "{{name}}"
         assert result.saved_context == {"placeholder": "name"}
 
@@ -837,13 +820,9 @@ class TestVerifyStatusRendered:
         """Run a stage verifying ``status`` once per answer in ``codes``."""
         stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": [{"verify": {"status": status}}]})
         responses = iter(httpx.Response(code) for code in codes)
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: next(responses)))
-        cls = _make_carrier_subclass(client=client)
-        try:
+        with _answered(lambda request: next(responses)) as cls:
             for _ in codes:
                 cls._execute_single_iteration(stage, context, {})
-        finally:
-            client.close()
 
     @pytest.mark.parametrize(
         ("status", "value", "passes", "message"),
@@ -899,12 +878,8 @@ class TestVerifyJmespathRendered:
     def _run(cls, response: list, context: ChainMap, body: object = BODY) -> None:
         """Run one stage against a 200 whose JSON body is ``body``."""
         stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/ok"}, "response": response})
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)))
-        carrier = _make_carrier_subclass(client=client)
-        try:
+        with _answered(lambda request: httpx.Response(200, json=body)) as carrier:
             carrier._execute_single_iteration(stage, context, {})
-        finally:
-            client.close()
 
     @pytest.mark.parametrize(
         "response",
@@ -1008,12 +983,8 @@ def test_transport_errors_become_request_errors(error, message):
     def handler(request: httpx.Request) -> httpx.Response:
         raise error
 
-    cls = _make_carrier_subclass(client=httpx.Client(transport=httpx.MockTransport(handler)))
-    try:
-        with pytest.raises(RequestError, match=f"^{message}$"):
-            cls._execute_http_request({"method": "GET", "url": "http://t/"})
-    finally:
-        cls.client.close()
+    with _answered(handler) as cls, pytest.raises(RequestError, match=f"^{message}$"):
+        cls._execute_http_request({"method": "GET", "url": "http://t/"})
 
 
 @pytest.mark.parametrize(
@@ -1030,12 +1001,8 @@ def test_request_error_quoting_a_header_value_is_redacted(redaction, quoted):
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.LocalProtocolError(f"Illegal header value {request.headers.raw[-1][1]!r}")
 
-    cls = _make_carrier_subclass(client=httpx.Client(transport=httpx.MockTransport(handler)), redaction=redaction)
-    try:
-        with pytest.raises(RequestError) as excinfo:
-            cls._execute_http_request({"method": "GET", "url": "http://t/", "headers": {"Authorization": "Bearer tok\n"}})
-    finally:
-        cls.client.close()
+    with _answered(handler, redaction=redaction) as cls, pytest.raises(RequestError) as excinfo:
+        cls._execute_http_request({"method": "GET", "url": "http://t/", "headers": {"Authorization": "Bearer tok\n"}})
     assert str(excinfo.value) == f"HTTP request failed: Illegal header value {quoted}"
     assert excinfo.value.request is not None
 
@@ -1082,13 +1049,9 @@ class TestSkipIf:
             sent.append(request)
             return httpx.Response(200, json={"v": 1})
 
-        cls = carrier if carrier is not None else _make_carrier_subclass()
-        cls.client = httpx.Client(transport=httpx.MockTransport(respond))
         stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/"}, "response": [{"save": {"jmespath": {"v": "v"}}}], **stage_fields})
-        try:
+        with _answered(respond, carrier=carrier) as cls:
             cls.execute_stage(stage, fixtures or {})
-        finally:
-            cls.client.close()
         return cls, sent
 
     @pytest.mark.parametrize(
@@ -1258,13 +1221,9 @@ class TestCollectSaves:
     ) -> type[Carrier]:
         """Run a stage fetching ``/item/{{ n }}`` in parallel from ``respond``
         (`_item` by default), on ``carrier`` (a fresh one by default)."""
-        carrier = carrier if carrier is not None else _make_carrier_subclass()
-        carrier.client = httpx.Client(transport=httpx.MockTransport(respond or cls._item))
         stage = Stage.model_validate({"name": "s", "parallel": parallel, "request": {"url": "http://mock/item/{{ n }}"}, "response": list(response)})
-        try:
+        with _answered(respond or cls._item, carrier=carrier) as carrier:
             carrier.execute_stage(stage, {})
-        finally:
-            carrier.client.close()
         return carrier
 
     @pytest.mark.parametrize(
@@ -1411,13 +1370,9 @@ class TestParallelStats:
     ) -> type[Carrier]:
         """Run a stage fetching ``/item/{{ n }}`` in parallel from ``respond``
         (every item answering by default), on ``carrier`` (a fresh one by default)."""
-        carrier = carrier if carrier is not None else _make_carrier_subclass()
-        carrier.client = httpx.Client(transport=httpx.MockTransport(respond or cls._failing()), follow_redirects=True)
         stage = Stage.model_validate({"name": "s", "parallel": parallel, "request": {"url": "http://mock/item/{{ n }}"}, "response": list(response), **stage_fields})
-        try:
+        with _answered(respond or cls._failing(), carrier=carrier, client_kwargs={"follow_redirects": True}) as carrier:
             carrier.execute_stage(stage, fixtures or {})
-        finally:
-            carrier.client.close()
         return carrier
 
     @staticmethod
@@ -1436,11 +1391,8 @@ class TestParallelStats:
         the stage before it."""
         cls = self._run(self._foreach(2))
         assert cls.last_parallel_stats is not None
-        cls.client = httpx.Client(transport=httpx.MockTransport(self._failing()))
-        try:
+        with _answered(self._failing(), carrier=cls):
             cls.execute_stage(Stage.model_validate({"name": "plain", "request": {"url": "http://mock/item/1"}}), {})
-        finally:
-            cls.client.close()
         assert cls.last_parallel_stats is None
 
     def test_duration_is_the_time_in_the_http_client(self, monkeypatch):
@@ -1915,13 +1867,9 @@ class TestRetry:
             sent.append(request)
             return respond(len(sent), request)
 
-        carrier = carrier if carrier is not None else _make_carrier_subclass()
-        carrier.client = httpx.Client(transport=httpx.MockTransport(handler))
         stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/job"}, **stage_fields})
-        try:
+        with _answered(handler, carrier=carrier) as carrier:
             carrier.execute_stage(stage, fixtures or {})
-        finally:
-            carrier.client.close()
         return carrier, sent
 
     def test_polls_until_the_response_steps_pass(self, monkeypatch):
@@ -2513,14 +2461,9 @@ class TestContextManagerFixtureCleanup:
     def _run(fixtures: dict, status: int = 200, carrier: type[Carrier] | None = None, **stage_fields) -> type[Carrier]:
         """Run one stage requesting ``/{{ a() }}/{{ b() }}`` from a mock server
         answering ``status``, on ``carrier`` (a fresh one by default); the stage verifies a 200."""
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(status)))
-        cls = carrier if carrier is not None else _make_carrier_subclass()
-        cls.client = client
         fields = {"name": "s", "request": {"url": "http://mock/{{ a() }}/{{ b() }}"}, "response": [{"verify": {"status": 200}}], **stage_fields}
-        try:
+        with _answered(lambda request: httpx.Response(status), carrier=carrier) as cls:
             cls.execute_stage(Stage.model_validate(fields), fixtures)
-        finally:
-            client.close()
         return cls
 
     def test_exited_last_first_when_the_stage_passes(self):
@@ -2591,14 +2534,9 @@ class TestContextManagerFixtureCleanup:
         class teardown, once every stage, the cleanup included, had run with
         the save committed, and its error failed nothing."""
         events: list[str] = []
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
-        cls = _make_carrier_subclass(client=client)
         stage = Stage.model_validate({"name": "s", "response": [{"save": {"substitutions": [{"vars": {"resource_id": 42}}]}}], **stage_fields})
-        try:
-            with pytest.raises(pytest.fail.Exception, match=r"^Exiting the context manager from fixture 'a' failed: RuntimeError: commit rejected$"):
-                cls.execute_stage(stage, {"a": self._resource(events, "a", RuntimeError("commit rejected"))})
-        finally:
-            client.close()
+        with _answered() as cls, pytest.raises(pytest.fail.Exception, match=r"^Exiting the context manager from fixture 'a' failed: RuntimeError: commit rejected$"):
+            cls.execute_stage(stage, {"a": self._resource(events, "a", RuntimeError("commit rejected"))})
         assert events == ["enter a", "exit a"]
         assert "resource_id" not in cls.global_context
 
@@ -2700,7 +2638,6 @@ class TestContextManagerFixtureCleanup:
         if stage_exit_error is not None:
             fixtures["s"] = self._resource(events, "s", stage_exit_error)
             stage_fields["substitutions"] = [{"vars": {"t": "{{ s() }}"}}]
-        cls.client = httpx.Client(transport=httpx.MockTransport(answer))
         stage = Stage.model_validate(
             {
                 "name": "s",
@@ -2710,10 +2647,8 @@ class TestContextManagerFixtureCleanup:
                 **stage_fields,
             }
         )
-        try:
+        with _answered(answer, carrier=cls):
             cls.execute_stage(stage, fixtures)
-        finally:
-            cls.client.close()
 
     @pytest.mark.parametrize(
         ("status", "end", "straggler_end", "message"),
@@ -2842,20 +2777,16 @@ class TestContextManagerFixtureCleanup:
                 end("given up")
             return True
 
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(status)))
-        cls = _make_carrier_subclass(client=client)
         stage = Stage.model_validate(
             {"name": "s", "request": {"url": "http://mock/{{ a() }}"}, "response": [{"verify": {"status": 200}}, {"verify": {"expressions": ["{{ b() }}"]}}]}
         )
-        local_context = ChainMap(cls._build_stage_fixtures({"a": transaction, "b": b}))
-        try:
+        with _answered(lambda request: httpx.Response(status)) as cls:
+            local_context = ChainMap(cls._build_stage_fixtures({"a": transaction, "b": b}))
             if raised is None:
                 cls._run_iteration(stage, local_context, {}, limiter=None, max_rate_limit_delay=60, cancel=cancel, idx=3)
             else:
                 with pytest.raises(raised):
                     cls._run_iteration(stage, local_context, {}, limiter=None, max_rate_limit_delay=60, cancel=cancel, idx=3)
-        finally:
-            client.close()
         assert cancel_on_exit == [cancelled_on_exit]
         assert cancel.is_set() is (raised is not None)
         # Another iteration ending now is not the first to have.
@@ -2899,7 +2830,6 @@ class TestContextManagerFixtureCleanup:
                 if iter_vars["i"] != 0:
                     ended.append(iter_vars["i"])
 
-        cls = _make_carrier_subclass(client=httpx.Client(transport=httpx.MockTransport(answer)), _run_iteration=classmethod(run_iteration))
         stage = Stage.model_validate(
             {
                 "name": "s",
@@ -2908,11 +2838,8 @@ class TestContextManagerFixtureCleanup:
                 "response": [{"verify": {"status": 200}}],
             }
         )
-        try:
-            with pytest.raises(pytest.fail.Exception) as excinfo:
-                cls.execute_stage(stage, {"rollback": rollback})
-        finally:
-            cls.client.close()
+        with _answered(answer, _run_iteration=classmethod(run_iteration)) as cls, pytest.raises(pytest.fail.Exception) as excinfo:
+            cls.execute_stage(stage, {"rollback": rollback})
         assert str(excinfo.value) == _ITERATION_0_FAILED
         assert sorted(sent) == ["/0", "/1"]
 
@@ -2950,7 +2877,6 @@ class TestContextManagerFixtureCleanup:
                 _wait_until(lambda: "exit 0" in events)
             return transaction(i)
 
-        cls = _make_carrier_subclass(client=httpx.Client(transport=httpx.MockTransport(answer)))
         stage = Stage.model_validate(
             {
                 "name": "s",
@@ -2959,11 +2885,8 @@ class TestContextManagerFixtureCleanup:
                 "response": [{"verify": {"status": 200}}],
             }
         )
-        try:
-            with pytest.raises(pytest.fail.Exception) as excinfo:
-                cls.execute_stage(stage, {"a": a})
-        finally:
-            cls.client.close()
+        with _answered(answer) as cls, pytest.raises(pytest.fail.Exception) as excinfo:
+            cls.execute_stage(stage, {"a": a})
         assert str(excinfo.value) == f"{_ITERATION_0_FAILED}\n{_ITERATION_1_EXIT_ERROR}"
         assert sent == ["/0"]
         assert events[-2:] == ["enter 1", "exit 1"]
@@ -2997,7 +2920,6 @@ class TestContextManagerFixtureCleanup:
         def per_iteration(tag):
             return lambda i: self._resource(events, f"{tag}{i}", RuntimeError(f"commit of {tag}{i} rejected"))()
 
-        cls = _make_carrier_subclass(client=httpx.Client(transport=httpx.MockTransport(answer)))
         stage = Stage.model_validate(
             {
                 "name": "s",
@@ -3009,11 +2931,8 @@ class TestContextManagerFixtureCleanup:
             }
         )
         fixtures = {"s": self._resource(events, "s", RuntimeError("commit of s rejected")), "a": per_iteration("a"), "b": per_iteration("b")}
-        try:
-            with pytest.raises(pytest.fail.Exception) as excinfo:
-                cls.execute_stage(stage, fixtures)
-        finally:
-            cls.client.close()
+        with _answered(answer) as cls, pytest.raises(pytest.fail.Exception) as excinfo:
+            cls.execute_stage(stage, fixtures)
         assert str(excinfo.value).split("\n") == [
             *message,
             "Iteration 0: Exiting the context manager from fixture 'a' failed: RuntimeError: commit of a0 rejected",
@@ -3098,15 +3017,10 @@ class TestContextManagerFixtureCleanup:
         """An ``always_run`` or ``skip_if`` template can call a factory fixture
         and still skip the stage, which commits no saves either way."""
         events: list[str] = []
-        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
-        cls = _make_carrier_subclass(client=client, aborted=aborted)
         stage = Stage.model_validate({"name": "s", "request": {"url": "http://mock/"}, **stage_fields})
-        try:
-            # Both caught, so a wrong outcome fails this test rather than skipping it.
-            with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
-                cls.execute_stage(stage, {"a": self._resource(events, "a", exit_error), "b": self._resource(events, "b")})
-        finally:
-            client.close()
+        # Both caught, so a wrong outcome fails this test rather than skipping it.
+        with _answered(aborted=aborted) as cls, pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as excinfo:
+            cls.execute_stage(stage, {"a": self._resource(events, "a", exit_error), "b": self._resource(events, "b")})
         assert excinfo.type is outcome
         assert str(excinfo.value) == (message or reason)
         entered = ["enter b", "enter a", "exit a", "exit b"] if "skip_if" in stage_fields else ["enter a", "exit a"]
