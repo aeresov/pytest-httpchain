@@ -4,7 +4,8 @@ import httpx
 import pytest
 
 # Raised by user code a call runs, these stop the run: never taken for a
-# failure. pytest.exit()'s is an Exception, so an `except Exception` must let
+# stage's failure (at collection, plugin.JsonModule.collect still reports one as
+# the file's error). pytest.exit()'s is an Exception, so an `except Exception` must let
 # these through first. Defined here, at the bottom of the layers, as the
 # domain packages that call user code (userfunc, templates) must too.
 INTERRUPTS = (KeyboardInterrupt, SystemExit, pytest.exit.Exception)

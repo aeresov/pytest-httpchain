@@ -167,8 +167,8 @@ missing-override-decorator = "error"
 # they must refuse: Optional and union results used without a narrowing check
 # (`Response | None`, `Match | None`), dicts unpacked with `**` into typed calls,
 # test doubles given attributes on the fly, and models built with invalid types
-# to assert ValidationError. The hits spread across about 20 test files; the
-# models package accounts for about a seventh of them. Relax those specific rules
+# to assert ValidationError. The hits spread across about two dozen test files,
+# the models package's a minority of them. Relax those specific rules
 # for test code only; src/ stays strict and uses pinpoint `# ty: ignore[...]`
 # comments instead.
 # unknown-argument and missing-argument fire nowhere today: they are kept for a

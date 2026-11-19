@@ -21,9 +21,9 @@ uv run pytest tests/unit/test_foo.py::test_specific -v
 # suite parallelizes cleanly. CI passes `-n auto`.
 uv run pytest -n auto
 
-# Faster feedback loop while iterating. The unit suite alone is ~5,400 tests in
+# Faster feedback loop while iterating. The unit suite alone is ~5,500 tests in
 # ~45 seconds; `-m "not slow"` then drops the subprocess-spawning and
-# sleep-bound integration tests (47 of the ~340).
+# sleep-bound integration tests (48 of the ~340).
 # Both are for iterating only — run the whole suite before pushing.
 uv run pytest tests/unit
 uv run pytest -m "not slow"
@@ -94,14 +94,15 @@ src/pytest_httpchain/
 ├── request_builder.py         # Resolved models -> httpx kwargs (build_client_kwargs, build_request_kwargs), multipart bodies encoded to bytes, and auth flows (build_auth: basic, digest, bearer, user functions)
 ├── response_steps.py          # Meaning of a single verify/save step (process_verify, process_save) on an HTTP response or a connection's message, and whether one message matches an expect (message_matches) — pure, no chain state
 ├── parallel_stats.py          # A parallel stage's stats (counts, wall time, throughput, nearest-rank latency percentiles) from how its iterations ended, the Parallel Summary report section, the stats_as object, and parallel.thresholds checks and failure message — pure; the carrier times and classifies the iterations
-├── body_schema.py             # verify.body.schema made ready to validate (BodySchema): file + JSON pointer, one referencing registry resolving $refs across the document and into local files held to the `$include` path rules (relative, traversal depth, reference root; never remote), a `$ref`'s target validated in its document's dialect, dialect choice, per-file parse and registry caches; shared by the runtime and `validate --deep`
+├── body_schema.py             # verify.body.schema made ready to validate (BodySchema): file + JSON pointer, one referencing registry resolving $refs across the document and into local files held to the `$include` path rules (relative, traversal depth, reference root; never remote), a `$ref`'s target validated in its document's dialect, dialect choice, per-file parse and registry caches, the schema file reader (read_json_schema_file) and jsonschema error text (schema_error_text) both readers use; shared by the runtime and `validate --deep`
 ├── utils.py                   # Marker construction, substitution processing, scenario-relative path resolution, location path segments, how an exception user code raised is described (shared by the carrier and connections)
 ├── report_formatter.py        # HTTP request/response (and curl) formatting for test reports, and a connection stage's Connection Exchange section
 ├── har_writer.py              # HAR file export for HTTP request/response logging
 ├── redaction.py               # Redaction: the one set of credential-hiding rules (headers, cookies, URL query, connection message keys) shared by reports, HAR, header verify, request-error messages and connection-stage messages, and the failure-line display forms its message search relies on (shown_bytes, cut)
 ├── constants.py               # ConfigOptions enum for pytest.ini settings, the scenario file-name grammar (suffix + extensions, shared by collection and `validate`) + the shared user-function name grammar
-├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response, and whether a stage's retry may retry it) + subclasses RequestError, SaveError, VerificationError, and INTERRUPTS: what user code raises that stops the run, never taken for a failure (pytest.exit()'s is an Exception)
+├── errors.py                  # HttpChainError (base) + StageExecutionError (carries request/response, and whether a stage's retry may retry it) + subclasses RequestError, SaveError, VerificationError; SchemaFileError/SchemaPointerError (raised by body_schema); Exchange, the (request, response, started) a failure carries and the HAR export writes; and INTERRUPTS: what user code raises that stops the run, never taken for a stage's failure (pytest.exit()'s is an Exception; at collection, JsonModule.collect's catch-all still reports one as the file's collection error)
 ├── userfunc.py                # Dynamic function import/invocation, incl. the model-aware call_user_function dispatch, and connection adapter class import (import_adapter)
+├── warnings.py                # Warning types, a leaf on the lowest layer: ScenarioValidationWarning (re-exported by the package) and AmbiguousReferenceWarning, which the `$ref` resolver emits and the validator reports as HTTPCHAIN026
 ├── wire_codec.py              # MessagePack pack/unpack (MSGPACK_DECODE_ERRORS), and which codec reads a response body (selected_codec, ResponseCodec), with the extension key (RESPONSE_CODEC_EXTENSION) under which the carrier hands a stage's response_codec to the report
 ├── models/                    # Pydantic models (Scenario, Stage, Request, etc.)
 ├── templates/                 # {{ expression }} substitution engine
@@ -128,7 +129,7 @@ Test scenarios are discovered by pattern: `test_<name>.http.json` or `test_<name
    - Updates global context with saved values (and a parallel stage's `stats_as` object)
    - A connection stage (`stage.connection` in place of `stage.request`) forks inside `_execute_single_iteration` to `_execute_connection_attempt`, so retry applies unchanged: it opens the connection (`connections.Connections`) on `open: true` or at the first stage naming it (unless that stage would only close it again), drains, sends, waits (`connections.Session.expect`, with a predicate built on `response_steps.message_matches`), runs the response steps on the message (`message`/`sent`), and snapshots a `ConnectionExchange` for the report; `close: true` runs after the attempts, and `_end_chain` closes every connection
 
-Per-scenario mutable class state (client, abort flag, exchange bookkeeping) is defined once in `carrier.fresh_scenario_state()`; the factory seeds each generated subclass with it and `teardown_class` re-applies it.
+Per-scenario mutable class state is defined once in `carrier`, in three nested layers: `fresh_stage_state()` (what one stage reports; `execute_stage` applies it before anything can fail or skip), `fresh_chain_state()` (adds the client, connections, abort flag and context managers; `_end_chain` applies it) and `fresh_scenario_state()` (adds the scenario's initialization). The factory seeds each generated subclass with `fresh_scenario_state()` and `teardown_class` re-applies it; new state goes in the narrowest layer that must start without it.
 
 ## Test suite conventions
 

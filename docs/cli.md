@@ -398,10 +398,11 @@ The options that shape the request are mapped as curl would send it:
 | `-m`/`--max-time` | `timeout`, the client's when every request has the same; `-m 0`, curl's no limit, which a scenario has no setting for, is ignored with a warning (the client's 30 seconds apply) |
 
 Options that change only curl's own output or connection are ignored without a
-word: `-s`, `-S`, `-v`, `-i`, `-f`, `-o`, `-O`, `-w`, `-D`, `--trace`,
+word: `-s`, `-S`, `-v`, `-i`, `-f`, `-O`, `-w`, `-D`, `--trace`,
 `--compressed` (httpx asks for and decodes compression on its own), and
 the HTTP version options (the client negotiates HTTP/2 itself, see
-[`client.http2`](usage/scenarios.md#client-configuration)). Any other option is
+[`client.http2`](usage/scenarios.md#client-configuration)); curl's `-o` is
+ignored too, with the warning described above. Any other option is
 ignored with a warning naming it, whether curl has it (`--retry`, `-x`,
 `--cacert`: its value is skipped as curl reads it; `--path-as-is`, since
 httpx collapses a path's `/../`) or not; so is what a

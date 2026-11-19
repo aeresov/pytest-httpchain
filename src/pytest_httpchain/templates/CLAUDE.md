@@ -33,16 +33,17 @@ result = walk(obj, context)
 # many values against the same context, each on its own: a call that raises
 # its TemplatesError leaves the walker as it found it. walk() pays that pass
 # once per call, and at runtime the context is a ChainMap of a layer per stage
-# and per save step — the carrier renders a verify step's values this way, one
+# and per save step — `rendering.verify_renderer` renders a verify step's values this way, one
 # failure per value. Not thread-safe (simpleeval mutates the evaluator
 # mid-eval): one walker per thread or parallel iteration, never a shared one.
 render = walker(context)
 first, second = render(obj_a), render(obj_b)
 
 # Check whether any {{ }} occurs anywhere in a nested structure
-# (str/dict/list/tuple/BaseModel/SimpleNamespace) — carrier uses this to decide
-# whether stage parametrization forces scenario substitutions to resolve at
-# collection time. An escaped \{{ is no template.
+# (str/dict/list/tuple/BaseModel/SimpleNamespace) — the factory and the validator
+# use this (`models.parametrize_values_contain_template`) to decide whether stage
+# parametrization forces scenario substitutions to resolve at collection time.
+# An escaped \{{ is no template.
 contains_template({"a": ["{{ x }}"]})  # True
 contains_template("\\{{ x }}")  # False
 
