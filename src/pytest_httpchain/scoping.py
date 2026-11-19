@@ -62,7 +62,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from enum import IntEnum
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 import pytest
 
@@ -1126,7 +1126,7 @@ class ConnectionLifecycle:
 
 # A connection's state at a point in the chain: never opened, open (by the
 # stage at the index), or closed (by the stage at the index).
-type _ConnectionState = tuple[str, int]
+type _ConnectionState = tuple[Literal["never", "open", "closed"], int]
 _NEVER_OPENED: _ConnectionState = ("never", -1)
 
 
@@ -1145,6 +1145,12 @@ def _after_connection_step(state: _ConnectionState, step: ConnectionStep, i: int
     if kind == "open":
         return ("closed", i) if step.close else ("open", at)
     return state  # never opened: nothing to close; closed: the stage fails
+
+
+def _run_stage(states: frozenset[_ConnectionState], step: ConnectionStep, i: int) -> frozenset[_ConnectionState]:
+    """The states stage ``i``'s connection ``step`` leaves, run from each
+    of ``states`` (`_after_connection_step`)."""
+    return frozenset(_after_connection_step(state, step, i) for state in states)
 
 
 def connection_lifecycles(scenario: Scenario, scopes: list[StageScopes] | None = None) -> dict[str, ConnectionLifecycle]:
@@ -1179,13 +1185,10 @@ def connection_lifecycles(scenario: Scenario, scopes: list[StageScopes] | None =
             if step is None or step.name != name or scopes[i].never_called or stage.skip_if is True:
                 continue
 
-            def run(from_states: frozenset[_ConnectionState], step: ConnectionStep = step, i: int = i) -> frozenset[_ConnectionState]:
-                return frozenset(_after_connection_step(state, step, i) for state in from_states)
-
             # Two instances are as many as can differ: the state after the
             # second is the state after the first, run again.
             instances = parametrize_instances(stage.parametrize)
-            starts = [states] if instances == 1 else [states, run(states)]
+            starts = [states] if instances == 1 else [states, _run_stage(states, step, i)]
             definite = starts if instances is not None else starts[:1]
             seen = frozenset().union(*starts)
             if step.open or (_NEVER_OPENED in seen and _opens_implicitly(step)):
@@ -1196,9 +1199,9 @@ def connection_lifecycles(scenario: Scenario, scopes: list[StageScopes] | None =
                 for start in definite:
                     if start and all(kind == "closed" for kind, _ in start):
                         not_open[i] = not_open.get(i, frozenset()) | frozenset(at for _, at in start)
-            ran = run(starts[-1])
+            ran = _run_stage(starts[-1], step, i)
             if instances is None:
-                ran |= run(starts[0])  # one instance, or more
+                ran |= _run_stage(starts[0], step, i)  # one instance, or more
             states = states | ran if scopes[i].skip_cause is not None else ran
         lifecycles[name] = ConnectionLifecycle(openers=tuple(openers), sessions=sessions, not_open=not_open)
     return lifecycles
