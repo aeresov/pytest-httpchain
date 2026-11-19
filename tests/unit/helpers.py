@@ -7,9 +7,13 @@ not an import target)::
 """
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 # Beyond what CPython's JSON decoder parses on an 8 MiB stack, by a wide margin:
 # 3.13 counts to a fixed 10,000 levels (3,000 on Windows), and 3.14 measures
@@ -62,3 +66,33 @@ def on_bounded_stack[T](fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     finally:
         threading.stack_size(previous)
     return future.result()
+
+
+class _StrictMarkersConfig:
+    """What `pytest.mark` reads of a session's config, for a session run with
+    strict markers that registers pytest's own marks only: pytest 9.0 and 9.1
+    read the ``markers`` ini lines, 9.2 ``_iter_registered_markers()``."""
+
+    MARKERS = ("skip", "skipif", "xfail", "parametrize", "usefixtures", "filterwarnings")
+
+    def getini(self, name: str) -> Any:
+        return {"markers": list(self.MARKERS), "strict_markers": True}.get(name)
+
+    def _iter_registered_markers(self) -> Iterator[SimpleNamespace]:
+        return (SimpleNamespace(name=name) for name in self.MARKERS)
+
+
+@contextmanager
+def strict_markers() -> Generator[None]:
+    """`pytest.mark` as collection under strict markers finds it: a mark the
+    session does not register fails with pytest's Failed, a BaseException.
+    The unit run's own config, and the marks it has found registered, are set
+    aside meanwhile, and put back."""
+    mark = pytest.mark
+    saved = mark._config, mark._markers
+    mark._config = _StrictMarkersConfig()  # ty: ignore[invalid-assignment]
+    mark._markers = set()
+    try:
+        yield
+    finally:
+        mark._config, mark._markers = saved

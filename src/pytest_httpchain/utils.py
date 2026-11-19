@@ -16,6 +16,7 @@ import ast
 import json
 import logging
 import re
+import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -117,6 +118,26 @@ def make_marker(mark_str: str) -> pytest.MarkDecorator:
         return getattr(pytest.mark, node.func.id)(*args, **kwargs)
 
     raise ValueError(f"unsupported marker expression: {mark_str}")
+
+
+def parse_marker(mark_str: str) -> pytest.MarkDecorator | BaseException:
+    """`make_marker`, for a check that reads a mark and reports one that does
+    not parse: the mark, or what parsing it raised, returned.
+
+    Constructing an unregistered mark emits PytestUnknownMarkWarning, which is
+    noise there, so warnings are ignored while it parses. What it raises can
+    be anything a parse raises (pytest's MarkGenerator raises AttributeError
+    for a reserved name, ``_foo``, ast.literal_eval TypeError for exotic
+    argument nodes) and, where pytest has a session's config (collection),
+    pytest's Failed, which is no Exception: for a mark the session does not
+    register under strict markers, and for a misspelt ``parametrize``
+    (``parameterize``)."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return make_marker(mark_str)
+    except (Exception, pytest.fail.Exception) as e:
+        return e
 
 
 def xdist_group_names(markers: Iterable[pytest.MarkDecorator]) -> set[str]:

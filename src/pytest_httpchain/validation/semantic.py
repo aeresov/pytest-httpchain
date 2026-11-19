@@ -5,7 +5,6 @@ Each check family is a generator of `Diagnostic`; `check_scenario` composes them
 
 import json
 import re
-import warnings
 from collections import Counter
 from collections.abc import Generator, Iterable, Iterator, Sequence
 from typing import Any
@@ -65,7 +64,7 @@ from pytest_httpchain.scoping import (
     template_references,
 )
 from pytest_httpchain.templates import CALL_ONLY_BUILTINS, TEMPLATE_BUILTINS, call_form, contains_escape, contains_template, find_templates, is_complete_template, needs_rendering
-from pytest_httpchain.utils import make_marker, optional_as_list, path_segment, xdist_group_names
+from pytest_httpchain.utils import optional_as_list, parse_marker, path_segment, xdist_group_names
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ScenarioInfo, diag
 from pytest_httpchain.validation.loader import expectations_field
 
@@ -1132,18 +1131,13 @@ def _marker_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
     def parse(marks: list[str], location: str) -> Generator[Diagnostic, None, list[tuple[str, pytest.MarkDecorator]]]:
         parsed = []
         for mark in marks:
-            try:
-                # Constructing an unregistered mark emits PytestUnknownMarkWarning,
-                # which is noise here — only parseability matters.
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    parsed.append((mark, make_marker(mark)))
-            except Exception as e:
-                # Broad on purpose: pytest's MarkGenerator raises AttributeError
-                # for reserved names ('_foo'), ast.literal_eval TypeError for
-                # exotic argument nodes — any parse failure must become a
-                # diagnostic, not a validator crash.
-                yield diag(DiagnosticCode.INVALID_MARKER, f"Invalid marker {mark!r}: {e}", location=location)
+            # Any parse failure must become a diagnostic, not a validator
+            # crash: pytest's Failed at collection included (`parse_marker`).
+            marker = parse_marker(mark)
+            if isinstance(marker, BaseException):
+                yield diag(DiagnosticCode.INVALID_MARKER, f"Invalid marker {mark!r}: {marker}", location=location)
+            else:
+                parsed.append((mark, marker))
         return parsed
 
     scenario_marks = yield from parse(scenario.marks, "marks")

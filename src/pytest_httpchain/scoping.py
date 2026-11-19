@@ -56,7 +56,6 @@ built-in (see `extract_template_variables` and `extract_builtin_stand_ins`).
 """
 
 import ast
-import warnings
 from collections import ChainMap
 from collections.abc import Iterable, Iterator, Mapping
 from collections.abc import Set as AbstractSet
@@ -87,7 +86,7 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.models.types import convert_dict_to_namespace
 from pytest_httpchain.templates import CALL_ONLY_BUILTINS, CONTEXT_HELPERS, TEMPLATE_BUILTINS, TemplatesError, find_templates, parse_expression, template_form
-from pytest_httpchain.utils import make_marker
+from pytest_httpchain.utils import parse_marker
 
 # The name under which response metadata is injected into response-step contexts.
 RESPONSE_META_NAME = "response"
@@ -709,19 +708,15 @@ _OUTCOME_MARKS = ("skip", "skipif", "xfail")
 
 def _outcome_marks(marks: Iterable[str]) -> list[tuple[str, pytest.Mark]]:
     """The ``skip``, ``skipif`` and ``xfail`` marks among ``marks``, in order,
-    each with the mark as written. A mark that does not parse is HTTPCHAIN019's
-    to report, and left out."""
+    each with the mark as written. A mark that does not parse (`parse_marker`)
+    is HTTPCHAIN019's to report, and left out."""
     parsed: list[tuple[str, pytest.Mark]] = []
     for mark_str in marks:
-        try:
-            # Constructing an unregistered mark warns; only the parse matters here.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                mark = make_marker(mark_str).mark
-        except Exception:
+        marker = parse_marker(mark_str)
+        if isinstance(marker, BaseException):
             continue
-        if mark.name in _OUTCOME_MARKS:
-            parsed.append((mark_str, mark))
+        if marker.mark.name in _OUTCOME_MARKS:
+            parsed.append((mark_str, marker.mark))
     return parsed
 
 

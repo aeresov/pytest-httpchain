@@ -6,7 +6,7 @@ import pytest
 
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.validation import DiagnosticCode, check_scenario
-from tests.unit.helpers import BEYOND_RECURSION_LIMIT, nested
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, nested, strict_markers
 
 C = DiagnosticCode
 _STAGE = {"name": "s", "request": {"url": "https://x.test/"}, "response": [{"verify": {"status": 200}}]}
@@ -792,6 +792,29 @@ def test_reserved_marker_name_is_diagnostic_not_crash():
     ValueError/SyntaxError used to be caught)."""
     diags = _check([{**_STAGE, "marks": ["_foo"]}])
     assert any(d.code == DiagnosticCode.INVALID_MARKER and d.severity == "error" for d in diags), diags
+
+
+@pytest.mark.parametrize(
+    ("mark", "refused"),
+    [
+        pytest.param("slwo", "'slwo' not found in `markers` configuration option", id="unregistered-under-strict-markers"),
+        pytest.param("parameterize('id', [1])", "Unknown 'parameterize' mark, did you mean 'parametrize'?", id="misspelt-parametrize"),
+    ],
+)
+@pytest.mark.parametrize(("where", "location"), [pytest.param("scenario", "marks", id="scenario"), pytest.param("stage", "stages[0].marks", id="stage")])
+def test_mark_pytest_refuses_at_collection_is_a_diagnostic(mark, refused, where, location):
+    """At collection `pytest.mark` reads the session's config and refuses
+    these marks with pytest's Failed, which is no Exception: it went past the
+    parse's `except Exception`, and the file failed collection with pytest's
+    uncoded message (a traceback through the validator for the misspelling),
+    its other diagnostics lost. It is HTTPCHAIN019 now, beside the others."""
+    data = {"marks": [mark], "stages": [{**_STAGE, "response": []}]} if where == "scenario" else {"stages": [{**_STAGE, "response": [], "marks": [mark]}]}
+    with strict_markers():
+        diagnostics = check_scenario(Scenario.model_validate(data), data)
+    assert [(d.code, d.location, d.message) for d in diagnostics] == [
+        (DiagnosticCode.NO_VERIFY, "stages[0]", "Stage 's' has no response validation (no verify step)"),
+        (DiagnosticCode.INVALID_MARKER, location, f"Invalid marker {mark!r}: {refused}"),
+    ]
 
 
 @pytest.mark.parametrize(

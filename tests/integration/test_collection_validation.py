@@ -192,6 +192,27 @@ def test_unknown_key_fails_collection_with_code(pytester):
     result.stdout.fnmatch_lines(["*HTTPCHAIN000*headerz*Extra inputs are not permitted*"])
 
 
+@pytest.mark.parametrize(
+    ("mark", "refused"),
+    [
+        pytest.param("slwo", "'slwo' not found in `markers` configuration option", id="unregistered-under-strict-markers"),
+        pytest.param("parameterize('id', [1])", "Unknown 'parameterize' mark, did you mean 'parametrize'?", id="misspelt-parametrize"),
+    ],
+)
+def test_mark_pytest_refuses_fails_collection_with_its_code(pytester, mark, refused):
+    """pytest refuses these marks at collection with its Failed, which is no
+    Exception and went past the validator: the file failed with pytest's own
+    message, uncoded, and lost its other diagnostics (HTTPCHAIN034 here)."""
+    _write(pytester, "test_marks.http.json", {"stages": [{**_stage("s", "/users/1"), "marks": [mark]}]})
+
+    result = pytester.runpytest("--collect-only", "--strict-markers")
+
+    assert result.ret != 0
+    output = result.stdout.str()
+    assert "  - [HTTPCHAIN034] Stage 's': request URL '/users/1' is relative" in output
+    assert f"  - [HTTPCHAIN019] Invalid marker {mark!r}: {refused}" in output
+
+
 def test_stages_collected_under_narrowed_python_functions(pytester, run_scenario):
     """Stage methods are named "test NN - <stage>", which satisfies pytest's
     default python_functions only via its bare "test" prefix rule — the space

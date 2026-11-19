@@ -44,7 +44,7 @@ from pytest_httpchain.scoping import (
     with_stage_substitutions,
 )
 from pytest_httpchain.templates import TEMPLATE_BUILTINS, TemplatesError, walk
-from tests.unit.helpers import BEYOND_RECURSION_LIMIT, nested
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, nested, strict_markers
 
 NOTHING_DEFINED = DefinedNames(names=frozenset(), callables=frozenset())
 
@@ -439,6 +439,15 @@ def test_marks_skip_cause(mark, expected):
 )
 def test_marks_skip_cause_reads_marks_in_pytests_order(marks, expected):
     assert marks_skip_cause(marks) == expected
+
+
+def test_marks_skip_cause_leaves_out_a_mark_pytest_refuses():
+    """At collection pytest refuses a mark it does not register under strict
+    markers with Failed, which is no Exception, and it escaped the reading of
+    a stage's marks. Like a mark that does not parse, it is HTTPCHAIN019's to
+    report: left out, and the marks after it still read."""
+    with strict_markers():
+        assert marks_skip_cause(["slwo", "skip"]) == SkipCause(mark="skip", never_called=True)
 
 
 @pytest.mark.parametrize(

@@ -5,7 +5,8 @@ import pytest_httpchain.templates.substitution as substitution_module
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import FunctionsSubstitution, UserFunctionKwargs, UserFunctionName, VarsNamespace, VarsSubstitution
 from pytest_httpchain.templates import TemplatesError
-from pytest_httpchain.utils import describe_exception, exception_text, make_marker, path_segment, process_substitutions, request_content, xdist_group_names
+from pytest_httpchain.utils import describe_exception, exception_text, make_marker, parse_marker, path_segment, process_substitutions, request_content, xdist_group_names
+from tests.unit.helpers import strict_markers
 
 # The functions these tests import live in a module of their own; see its
 # docstring for why they are not defined here.
@@ -152,6 +153,38 @@ def test_make_marker(mark_str, expected):
 def test_make_marker_rejects_non_literal_expressions(mark_str, error):
     with pytest.raises(error):
         make_marker(mark_str)
+
+
+@pytest.mark.parametrize(
+    ("mark_str", "raised"),
+    [
+        ("skip(", SyntaxError),
+        ("_foo", AttributeError),
+        ('xfail(**{"strict": True})', ValueError),
+    ],
+)
+def test_parse_marker_returns_what_parsing_raised(mark_str, raised):
+    assert isinstance(parse_marker(mark_str), raised)
+
+
+@pytest.mark.parametrize(
+    ("mark_str", "refused"),
+    [
+        ("slwo", "'slwo' not found in `markers` configuration option"),
+        ("parameterize('id', [1])", "Unknown 'parameterize' mark, did you mean 'parametrize'?"),
+    ],
+    ids=["unregistered-under-strict-markers", "misspelt-parametrize"],
+)
+def test_parse_marker_returns_what_pytest_refuses_a_mark_with(mark_str, refused):
+    """Where pytest has a session's config (collection) it refuses these
+    marks with Failed, which is no Exception: returned too, never raised."""
+    with strict_markers():
+        error = parse_marker(mark_str)
+        registered = parse_marker("skip(reason='x')")
+    assert isinstance(error, pytest.fail.Exception)
+    assert str(error) == refused
+    assert not isinstance(registered, BaseException)
+    assert (registered.mark.name, registered.mark.kwargs) == ("skip", {"reason": "x"})
 
 
 def test_xdist_group_names_reads_names_as_xdist_does():
