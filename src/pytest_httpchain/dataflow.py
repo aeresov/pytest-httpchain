@@ -15,9 +15,10 @@ from pytest_httpchain.scoping import (
     connection_rendered_fields,
     defined_names,
     extract_template_variables,
-    raw_stages,
+    raw_connections,
     stage_scopes,
     stage_templates,
+    stages_with_raw,
     substitution_names,
 )
 
@@ -125,17 +126,14 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     scenario's fixtures). ``connection_edges`` run from each stage that may
     have opened the session a later stage uses to that stage.
     """
-    raws = raw_stages(test_data)
     scopes = stage_scopes(scenario)
     defined = defined_names(scenario)
     lifecycles = connection_lifecycles(scenario, scopes)
-    raw_connections = test_data.get("connections")
-    if not isinstance(raw_connections, dict):
-        raw_connections = {}
+    configs = raw_connections(test_data)
     # What each stage that may open a connection renders of it.
     opened_params: dict[int, list[Any]] = {}
     for name, lifecycle in lifecycles.items():
-        rendered = [value for _, value in connection_rendered_fields(raw_connections.get(name))]
+        rendered = [value for _, value in connection_rendered_fields(configs.get(name))]
         for opener in lifecycle.openers:
             opened_params.setdefault(opener, []).extend(rendered)
 
@@ -147,10 +145,9 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
     # before it back to one that cannot skip (`_producers`).
     writers: dict[str, list[int]] = {}
 
-    for i, stage in enumerate(scenario.stages):
+    for i, (stage, raw) in enumerate(stages_with_raw(scenario, test_data)):
         scope = scopes[i]
         shadows = scope.shadows()
-        raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
         consumes: set[str] = set()
 

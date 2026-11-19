@@ -52,12 +52,13 @@ from pytest_httpchain.scoping import (
     extract_template_variables,
     extract_uncalled_builtins,
     fixture_names,
-    raw_stages,
+    raw_connections,
     rendered_response_steps,
     saved_in_response,
     saved_in_step,
     stage_scopes,
     stage_templates,
+    stages_with_raw,
     stats_name,
     substitution_names,
     substitution_step_templates,
@@ -502,11 +503,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
         for name in scope.saves:
             first_save_stage.setdefault(name, i)
 
-    # raws[i] pairs with scenario.stages[i]: both come from the same
-    # order-preserving normalization (models._normalize_stages_input).
-    raws = raw_stages(test_data)
-
-    for i, stage in enumerate(scenario.stages):
+    for i, (stage, raw) in enumerate(stages_with_raw(scenario, test_data)):
         scope = scopes[i]
         phases = scope.phases()
         # The same phases, as they are when every earlier stage that may skip
@@ -517,7 +514,6 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
         skipped_always_run = skipped.always_run
         if stage.skip_if is True:
             skipped = phases
-        raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
         # Each template is checked against its own scope, not the whole
         # stage's: its phase's names and those the steps before it define or
@@ -619,13 +615,10 @@ def _rendered_template_fields(scenario: Scenario, test_data: dict[str, Any]) -> 
         if key == "substitutions":
             subtree = [templates for templates, _ in substitution_step_templates(subtree)]
         yield subtree, f"Scenario-level '{key}'", key, _scenario_level_fails(scenario, key)
-    raw_connections = test_data.get("connections")
-    for name, raw_config in raw_connections.items() if isinstance(raw_connections, dict) else ():
+    for name, raw_config in raw_connections(test_data).items():
         for field, subtree in connection_rendered_fields(raw_config):
             yield subtree, f"Connection '{name}': {field}", f"connections.{name}.{field}", _fails_opening(name)
-    raws = raw_stages(test_data)
-    for i, stage in enumerate(scenario.stages):
-        raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
+    for i, (stage, raw) in enumerate(stages_with_raw(scenario, test_data)):
         # One entry per field, its steps' templates together, in order.
         fields: dict[str, list[Any]] = {}
         for template in stage_templates(stage, raw):
@@ -815,14 +808,12 @@ def _connection_stage_diagnostics(
     ``connect()``'s result as its message). Other steps run there; a read of
     ``message`` in one is undefined (003).
     """
-    raws = raw_stages(test_data)
     declared = sorted(scenario.connections)
-    for i, stage in enumerate(scenario.stages):
+    for i, (stage, raw) in enumerate(stages_with_raw(scenario, test_data)):
         step = stage.connection
         scope = scopes[i]
         if step is None or scope.never_called:
             continue
-        raw = raws[i] if i < len(raws) and isinstance(raws[i], dict) else {}
 
         if step.name not in scenario.connections:
             names = f"it declares {', '.join(repr(name) for name in declared)}" if declared else "it declares none"
@@ -886,8 +877,8 @@ def _connection_params_diagnostics(
     reported once, at the field, naming the opening stages where it fails.
     A connection nothing opens renders nothing.
     """
-    raw_connections = test_data.get("connections")
-    if not isinstance(raw_connections, dict):
+    configs = raw_connections(test_data)
+    if not configs:
         return
     all_saved = extract_saved_variables(scenario)
     stage_names = frozenset().union(*(scope.stage_fixtures | scope.parametrize_params | scope.stage_substitutions | scope.foreach_params for scope in scopes))
@@ -896,7 +887,7 @@ def _connection_params_diagnostics(
         if not openers:
             continue
         fails = _fails_opening(name)
-        for field, templates in connection_rendered_fields(raw_connections.get(name)):
+        for field, templates in connection_rendered_fields(configs.get(name)):
             location = f"connections.{name}.{field}"
             where = f"Connection '{name}': {field}"
             refs, stand_ins = _template_refs(templates, defined)

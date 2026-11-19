@@ -531,15 +531,24 @@ def extract_defined_variables(scenario: Scenario) -> set[str]:
     return defined_vars
 
 
-def raw_stages(test_data: dict[str, Any]) -> list[Any]:
-    """Raw (pre-validation) stage bodies in declaration order, from either the
-    list or the ``{name: stage}`` form."""
+def stages_with_raw(scenario: Scenario, test_data: Mapping[str, Any]) -> Iterator[tuple[Stage, dict[str, Any]]]:
+    """Each of the scenario's stages with its raw (pre-validation) body, or
+    ``{}`` where there is none to read. Raw stage K pairs with stage K: both
+    are in declaration order, from either the list or the ``{name: stage}``
+    form, by the same order-preserving normalization
+    (``models._normalize_stages_input``)."""
     raw = test_data.get("stages")
-    if isinstance(raw, dict):
-        return list(raw.values())
-    if isinstance(raw, list):
-        return raw
-    return []
+    raws = list(raw.values()) if isinstance(raw, dict) else raw if isinstance(raw, list) else []
+    for k, stage in enumerate(scenario.stages):
+        entry = raws[k] if k < len(raws) else None
+        yield stage, entry if isinstance(entry, dict) else {}
+
+
+def raw_connections(test_data: Mapping[str, Any]) -> dict[str, Any]:
+    """The raw (pre-validation) ``connections`` entries, by name, or ``{}``
+    where there are none to read."""
+    connections = test_data.get("connections")
+    return connections if isinstance(connections, dict) else {}
 
 
 def raw_list_entries(raw: Any) -> list[Any]:
@@ -615,6 +624,15 @@ def _raw_save_substitutions(step_raw: Any) -> Any:
     return save.get("substitutions") if isinstance(save, dict) else None
 
 
+def _paired_response_steps(stage: Stage, raw_response: Any) -> Iterator[tuple[ResponseStep, Any]]:
+    """Each of the stage's response steps with its raw entry, or None where
+    there is none: raw entry K pairs with step K (`raw_list_entries` keeps the
+    name-keyed mapping form paired correctly)."""
+    raw_steps = raw_list_entries(raw_response)
+    for k, step in enumerate(stage.response):
+        yield step, raw_steps[k] if k < len(raw_steps) else None
+
+
 def response_step_templates(stage: Stage, raw_response: Any) -> Iterator[tuple[Any, frozenset[str]]]:
     """Walk response steps in resolution order, yielding ``(what the runtime
     renders of the step, names saved by STRICTLY EARLIER steps of this stage)``.
@@ -623,8 +641,7 @@ def response_step_templates(stage: Stage, raw_response: Any) -> Iterator[tuple[A
     only once its own step has run, so a step reading a name a LATER step saves
     is a forward reference, not a hit. The raw entries carry the template text
     and the validated steps say what each saves, so the two are walked in
-    lockstep (`raw_list_entries` keeps the name-keyed mapping form paired
-    correctly).
+    lockstep (`_paired_response_steps`).
 
     A substitutions-save step yields one tuple per ENTRY rather than one for the
     step, because `response_steps.process_save` renders those entries itself,
@@ -638,9 +655,7 @@ def response_step_templates(stage: Stage, raw_response: Any) -> Iterator[tuple[A
     # than report a forward reference the runtime would satisfy.
     opaque_save_seen = False
     all_stage_saves = frozenset(saved_in_response(stage))
-    raw_steps = raw_list_entries(raw_response)
-    for k, step in enumerate(stage.response):
-        step_raw = raw_steps[k] if k < len(raw_steps) else None
+    for step, step_raw in _paired_response_steps(stage, raw_response):
         visible = prior_saves | all_stage_saves if opaque_save_seen else prior_saves
         if isinstance(step, SaveStep) and isinstance(step.save, SubstitutionsSave):
             for entry_templates, prior_entry_names in substitution_step_templates(_raw_save_substitutions(step_raw)):
@@ -656,10 +671,8 @@ def rendered_response_steps(stage: Stage, raw_response: Any) -> list[Any]:
     """What the runtime renders of each of the stage's response steps, step K
     at index K: the step, or a substitutions-save's entries, as
     `response_step_templates` reads them, for a check that names the step."""
-    raw_steps = raw_list_entries(raw_response)
     rendered: list[Any] = []
-    for k, step in enumerate(stage.response):
-        step_raw = raw_steps[k] if k < len(raw_steps) else None
+    for step, step_raw in _paired_response_steps(stage, raw_response):
         if isinstance(step, SaveStep) and isinstance(step.save, SubstitutionsSave):
             rendered.append([templates for templates, _ in substitution_step_templates(_raw_save_substitutions(step_raw))])
         else:

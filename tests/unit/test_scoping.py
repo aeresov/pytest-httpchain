@@ -28,6 +28,7 @@ from pytest_httpchain.scoping import (
     iteration_context,
     marks_skip_cause,
     parametrize_instances,
+    raw_connections,
     rendered_response_steps,
     response_step_context,
     response_step_templates,
@@ -36,6 +37,7 @@ from pytest_httpchain.scoping import (
     stage_scopes,
     stage_start_context,
     stage_templates,
+    stages_with_raw,
     stats_name,
     template_references,
     with_saves,
@@ -856,6 +858,19 @@ def test_stage_templates_are_each_field_in_its_phase_in_resolution_order():
     # The phase indexes a scope's Phases.
     scope = stage_scopes(Scenario.model_validate({"stages": [{"name": "h", "request": {"url": "http://x/"}}]}))[0]
     assert [scope.phases()[phase] for phase in Phase] == list(scope.phases())
+
+
+def test_stages_with_raw_pair_each_stage_with_its_body():
+    """In the list form and in the ``{name: stage}`` form alike; where there
+    is no body to read, each stage gets ``{}``, as the connections do."""
+    body = {"request": {"url": "http://x/"}}
+    for stages, raws in (([{"name": "a", **body}, {"name": "b", **body}], [{"name": "a", **body}, {"name": "b", **body}]), ({"a": body, "b": body}, [body, body])):
+        data = {"stages": stages}
+        scenario = Scenario.model_validate(data)
+        assert [(stage.name, raw) for stage, raw in stages_with_raw(scenario, data)] == [("a", raws[0]), ("b", raws[1])]
+        assert [raw for _, raw in stages_with_raw(scenario, {"stages": "?"})] == [{}, {}]
+    assert raw_connections({"connections": {"dev": {"adapter": "m:A"}}}) == {"dev": {"adapter": "m:A"}}
+    assert raw_connections({"connections": ["dev"]}) == raw_connections({}) == {}
 
 
 def test_rendered_response_steps_pair_each_step():
