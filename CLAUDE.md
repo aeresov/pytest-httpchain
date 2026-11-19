@@ -33,11 +33,12 @@ uv run ruff check .
 uv run ruff format --check .
 uv run ty check         # type check (ty is a dev dependency, locked in uv.lock)
 uv run lint-imports     # import layering contracts (exhaustive: new modules fail until placed)
-# Regenerate the committed JSON Schema after ANY pydantic model change. The
-# generator always exits 0, so the `git diff` is the actual gate — without it a
+# The committed JSON Schema must match the pydantic models. `--check` writes
+# nothing and exits non-zero naming each stale or missing file — without it a
 # model change passes locally and then reddens CI on a generated file you never
-# edited. Commit the regenerated files.
-uv run python scripts/generate_schema.py && git add -N docs/schema && git diff --exit-code docs/schema
+# edited. After ANY pydantic model change, regenerate it with a plain run
+# (`uv run python scripts/generate_schema.py`) and commit the regenerated files.
+uv run python scripts/generate_schema.py --check
 
 # Format
 uv run ruff format .

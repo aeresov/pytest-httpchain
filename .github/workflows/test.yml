@@ -52,13 +52,11 @@ jobs:
               run: uv run lint-imports
 
             # docs/schema/*.json is a committed generated artifact; fail if it
-            # drifted from the pydantic models (git add -N so a brand-new
-            # versioned directory after a version bump is flagged too).
+            # drifted from the pydantic models, byte for byte, or if the
+            # versioned copy a version bump adds is not committed yet. --check
+            # writes nothing and names each stale or missing file.
             - name: Check committed schema is current
-              run: |
-                  uv run python scripts/generate_schema.py
-                  git add -N docs/schema
-                  git diff --exit-code docs/schema
+              run: uv run python scripts/generate_schema.py --check
 
     test:
         name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
