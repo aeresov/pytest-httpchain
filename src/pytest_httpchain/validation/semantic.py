@@ -51,6 +51,7 @@ from pytest_httpchain.scoping import (
     extract_saved_variables,
     extract_template_variables,
     extract_uncalled_builtins,
+    fixture_names,
     raw_stages,
     rendered_response_steps,
     saved_in_response,
@@ -68,11 +69,6 @@ from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, 
 from pytest_httpchain.validation.loader import expectations_field
 
 
-def _scenario_fixtures(scenario: Scenario) -> list[str]:
-    """Every fixture name the scenario or any stage requests."""
-    return sorted({*scenario.fixtures, *(name for stage in scenario.stages for name in stage.fixtures)})
-
-
 def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagnostic]:
     """Semantic checks on an already-loaded, schema-valid scenario.
 
@@ -80,8 +76,7 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagno
     references can be read from the raw text. The composition order below is the
     reported order.
     """
-    fixtures = _scenario_fixtures(scenario)
-    vars_defined = extract_defined_variables(scenario)
+    fixtures = fixture_names(scenario)
     vars_saved = extract_saved_variables(scenario)
     scenario_sub_names = substitution_names(scenario.substitutions)
     defined = defined_names(scenario)
@@ -90,10 +85,10 @@ def check_scenario(scenario: Scenario, test_data: dict[str, Any]) -> list[Diagno
 
     return [
         *_stage_name_diagnostics(scenario),
-        *_fixture_diagnostics(scenario, vars_saved),
+        *_fixture_diagnostics(scenario, scopes, vars_saved),
         *_invalid_expression_diagnostics(scenario, test_data),
-        *_scenario_template_diagnostics(scenario, test_data, set(fixtures), scenario_sub_names, defined),
-        *_reserved_name_diagnostics(scenario, vars_defined | vars_saved | set(fixtures)),
+        *_scenario_template_diagnostics(scenario, test_data, fixtures, scenario_sub_names, defined),
+        *_reserved_name_diagnostics(scenario, defined.names),
         *_reserved_message_name_diagnostics(scenario, scopes),
         *_stats_as_diagnostics(scenario),
         *_dataflow_diagnostics(scenario, test_data, defined, scopes),
@@ -123,7 +118,7 @@ def describe_scenario(scenario: Scenario, test_data: dict[str, Any]) -> Scenario
         vars_referenced=sorted(variables | stand_ins),
         vars_saved=sorted(extract_saved_variables(scenario)),
         vars_defined=sorted(extract_defined_variables(scenario)),
-        fixtures=_scenario_fixtures(scenario),
+        fixtures=sorted(fixture_names(scenario)),
         connections=sorted(scenario.connections),
     )
 
@@ -155,7 +150,7 @@ def _stage_name_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
             )
 
 
-def _fixture_diagnostics(scenario: Scenario, vars_saved: set[str]) -> Iterator[Diagnostic]:
+def _fixture_diagnostics(scenario: Scenario, scopes: list[StageScopes], vars_saved: set[str]) -> Iterator[Diagnostic]:
     """HTTPCHAIN002/009: fixtures colliding with same-named variables, and
     scenario-level fixtures shadowing same-named saves.
 
@@ -163,7 +158,7 @@ def _fixture_diagnostics(scenario: Scenario, vars_saved: set[str]) -> Iterator[D
     one stage are not flagged.
     """
     var_conflicts: set[str] = set()
-    for scope in stage_scopes(scenario):
+    for scope in scopes:
         fixtures_in_stage = scope.scenario_fixtures | scope.stage_fixtures
         # The fixtures looked up, not the vars copied: a stage has few
         # fixtures, and a scenario may have thousands of vars.
@@ -328,7 +323,7 @@ def _scenario_template_diagnostics(scenario: Scenario, test_data: dict[str, Any]
             yield _stand_in_diagnostic(f"Scenario-level '{key}'", stand_ins, key, scope_note=note)
 
 
-def _reserved_name_diagnostics(scenario: Scenario, user_names: set[str]) -> Iterator[Diagnostic]:
+def _reserved_name_diagnostics(scenario: Scenario, user_names: frozenset[str]) -> Iterator[Diagnostic]:
     """HTTPCHAIN027 (static half): names shadowed by the reserved ``response``
     namespace inside response steps. The carrier covers dynamically-produced
     save keys this cannot see.

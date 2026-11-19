@@ -24,6 +24,7 @@ from pytest_httpchain.scoping import (
     extract_invalid_expressions,
     extract_template_variables,
     extract_uncalled_builtins,
+    fixture_names,
     iteration_context,
     marks_skip_cause,
     parametrize_instances,
@@ -628,6 +629,10 @@ def test_defined_names_cover_every_definition():
         names=frozenset({"sfix", "svar", "f1", "p1", "sub1", "item", "saved1", "saved2"}),
         callables=frozenset({"sfix", "f1"}),
     )
+
+
+def test_fixture_names_are_the_scenarios_and_every_stages():
+    assert fixture_names(make_scenario()) == {"sfix", "f1"}
 
 
 def test_defined_callables_include_every_function_substitution():

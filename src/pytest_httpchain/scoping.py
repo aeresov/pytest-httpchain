@@ -496,11 +496,16 @@ def _function_substitution_names(substitutions: Substitutions) -> set[str]:
     return {name for sub in substitutions if isinstance(sub, FunctionsSubstitution) for name in sub.functions}
 
 
+def fixture_names(scenario: Scenario) -> set[str]:
+    """Every fixture name the scenario or any stage requests."""
+    return {*scenario.fixtures, *(name for stage in scenario.stages for name in stage.fixtures)}
+
+
 def defined_names(scenario: Scenario) -> DefinedNames:
     """Every name the scenario introduces anywhere, and those that may hold a
     function. A built-in's name in a template is the user's where it is one of
     these (see `extract_template_variables` and `extract_builtin_stand_ins`)."""
-    fixtures = {*scenario.fixtures, *(name for stage in scenario.stages for name in stage.fixtures)}
+    fixtures = fixture_names(scenario)
     functions = _function_substitution_names(scenario.substitutions)
     for stage in scenario.stages:
         functions |= _function_substitution_names(stage.substitutions)
