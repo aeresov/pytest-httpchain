@@ -28,6 +28,8 @@ jobs:
         timeout-minutes: 10
         steps:
             - uses: actions/checkout@v7
+              with:
+                  persist-credentials: false
 
             - name: Install uv
               uses: astral-sh/setup-uv@v10.3.3
@@ -87,6 +89,8 @@ jobs:
             id-token: write # codecov OIDC upload
         steps:
             - uses: actions/checkout@v7
+              with:
+                  persist-credentials: false
 
             - name: Install uv
               uses: astral-sh/setup-uv@v10.3.3
@@ -149,6 +153,8 @@ jobs:
         timeout-minutes: 15
         steps:
             - uses: actions/checkout@v7
+              with:
+                  persist-credentials: false
 
             - name: Install uv
               uses: astral-sh/setup-uv@v10.3.3
@@ -179,6 +185,8 @@ jobs:
         continue-on-error: true
         steps:
             - uses: actions/checkout@v7
+              with:
+                  persist-credentials: false
 
             - name: Install uv
               uses: astral-sh/setup-uv@v10.3.3

@@ -24,15 +24,20 @@ jobs:
     build:
         name: Build distribution
         runs-on: ubuntu-latest
+        timeout-minutes: 10
         needs: test
         steps:
             - uses: actions/checkout@v7
+              with:
+                  persist-credentials: false
 
+            # No cache in the release build: it would restore what other runs
+            # saved, among them main-branch runs that execute every dev
+            # dependency and pytest from git. `uv build` starts cold instead.
             - name: Install uv
               uses: astral-sh/setup-uv@v10.3.3
               with:
-                  enable-cache: true
-                  cache-dependency-glob: "uv.lock"
+                  enable-cache: false
 
             - name: Set up Python
               run: uv python install 3.13
@@ -62,6 +67,7 @@ jobs:
     publish:
         name: Publish to PyPI
         runs-on: ubuntu-latest
+        timeout-minutes: 15
         needs: build
         environment: pypi
         permissions:
