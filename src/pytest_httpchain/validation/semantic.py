@@ -457,6 +457,29 @@ def _skippable_save_diagnostic(scenario: Scenario, scopes: list[StageScopes], i:
     )
 
 
+def _parametrize_ref_diagnostics(stage: Stage, i: int, templates: Any, scope: StageScopes, defined: DefinedNames) -> Iterator[Diagnostic]:
+    """HTTPCHAIN003/036 for stage ``i``'s parametrize values (``templates``,
+    as `scoping.stage_templates` reads them), which resolve at collection
+    against the scenario substitutions alone."""
+    refs, stand_ins = _template_refs(templates, defined)
+    for name in sorted(refs):
+        if name in scope.scenario_substitutions:
+            continue
+        yield diag(
+            DiagnosticCode.UNDEFINED_VAR,
+            f"Stage '{stage.name}': parametrize value references '{name}' — only scenario-level substitutions are in scope when values are resolved"
+            f"{_builtin_fallback({name}, fails=_FAILS_COLLECTION)}",
+            location=f"stages[{i}].parametrize",
+        )
+    if stand_ins := stand_ins - scope.scenario_substitutions:
+        yield _stand_in_diagnostic(
+            f"Stage '{stage.name}': parametrize value",
+            stand_ins,
+            f"stages[{i}].parametrize",
+            scope_note=" (values resolve against scenario-level substitutions only)",
+        )
+
+
 def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined: DefinedNames, scopes: list[StageScopes]) -> Iterator[Diagnostic]:
     """HTTPCHAIN003/004/036: order-aware data-flow analysis.
 
@@ -479,7 +502,6 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
     too, when it sends. A read of ``response`` in its response steps is
     HTTPCHAIN041's.
     """
-    all_saved = extract_saved_variables(scenario)
     first_save_stage: dict[str, int] = {}
     for i, scope in enumerate(scopes):
         for name in scope.saves:
@@ -517,33 +539,17 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
         stand_ins_by_field: dict[str, set[str]] = {}
         seen_refs: dict[str, set[str]] = {}
         for field, phase, templates, extra in stage_templates(stage, raw):
-            refs, stand_ins = _template_refs(templates, defined)
             if phase is None:
-                for name in sorted(refs):
-                    if name in scope.scenario_substitutions:
-                        continue
-                    yield diag(
-                        DiagnosticCode.UNDEFINED_VAR,
-                        f"Stage '{stage.name}': parametrize value references '{name}' — only scenario-level substitutions are in scope when values are resolved"
-                        f"{_builtin_fallback({name}, fails=_FAILS_COLLECTION)}",
-                        location=f"stages[{i}].parametrize",
-                    )
-                if stand_ins := stand_ins - scope.scenario_substitutions:
-                    yield _stand_in_diagnostic(
-                        f"Stage '{stage.name}': parametrize value",
-                        stand_ins,
-                        f"stages[{i}].parametrize",
-                        scope_note=" (values resolve against scenario-level substitutions only)",
-                    )
+                yield from _parametrize_ref_diagnostics(stage, i, templates, scope, defined)
                 continue
+            refs, stand_ins = _template_refs(templates, defined)
             if field == "always_run":
                 for name in sorted(refs):
                     if name in phases.always_run:
                         if name not in skipped_always_run:
                             yield _skippable_save_diagnostic(scenario, scopes, i, "always_run", name, f"stages[{i}].always_run")
                         continue
-                    if name in all_saved:
-                        j = first_save_stage[name]
+                    if (j := first_save_stage.get(name)) is not None:
                         if j == i:
                             saved = "as this stage's parallel.stats_as" if _only_stats(stage, name) else "in this stage's response"
                             msg = f"Stage '{stage.name}': always_run references '{name}', which is only saved {saved} — always_run is evaluated before the stage runs"
@@ -577,8 +583,7 @@ def _dataflow_diagnostics(scenario: Scenario, test_data: dict[str, Any], defined
                         f"Stage '{stage.name}': substitution references '{name}' before the substitution step that defines it — steps resolve in order{_builtin_fallback({name})}",
                         location=f"stages[{i}].substitutions",
                     )
-                elif name in all_saved:
-                    j = first_save_stage[name]
+                elif (j := first_save_stage.get(name)) is not None:
                     if j != i:
                         msg = f"Stage '{stage.name}': variable '{name}' is referenced before it is saved (saved in stage '{scenario.stages[j].name}')"
                     elif _only_stats(stage, name):
