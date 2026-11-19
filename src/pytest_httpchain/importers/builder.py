@@ -67,6 +67,7 @@ from pytest_httpchain.models import GraphQLBody
 from pytest_httpchain.models.types import GraphQLOperationError
 from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, Redaction
 from pytest_httpchain.templates import TEMPLATE_BUILTINS, contains_template, escape, unescape
+from pytest_httpchain.utils import JSON_PARSE_ERRORS
 from pytest_httpchain.validation import ValidateResult, validate_scenario
 
 
@@ -269,7 +270,7 @@ def _loads_json(text: str) -> Any:
 
     try:
         return json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=number)
-    except (ValueError, RecursionError):
+    except JSON_PARSE_ERRORS:
         return _NOT_JSON
 
 

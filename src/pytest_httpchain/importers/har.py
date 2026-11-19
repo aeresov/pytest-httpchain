@@ -38,6 +38,7 @@ from pytest_httpchain.importers.builder import (
     media_type,
     parse_cookie_header,
 )
+from pytest_httpchain.utils import JSON_PARSE_ERRORS
 
 # Browsers' resource types for what a page loads to render itself (Chrome's
 # `_resourceType`), and those the page's own code fetches.
@@ -48,15 +49,23 @@ _SCRIPT_TYPES = frozenset(
 )
 
 
+def _string(record: Any, key: str) -> str | None:
+    """A HAR record's member ``key`` where it is a string, else None (and
+    for a record that is no object)."""
+    if isinstance(record, dict) and isinstance(value := record.get(key), str):
+        return value
+    return None
+
+
 def _is_static(entry: dict[str, Any]) -> bool:
     """Whether an entry fetched an image, a stylesheet, a font or a script
     for the page to render, rather than for its code (see the module
     docstring)."""
-    resource_type = entry.get("_resourceType") if isinstance(entry.get("_resourceType"), str) else None
+    resource_type = _string(entry, "_resourceType")
     if resource_type in _FETCHED_RESOURCE_TYPES:
         return False
     content = entry.get("response", {}).get("content")
-    mime = media_type(content.get("mimeType") if isinstance(content, dict) and isinstance(content.get("mimeType"), str) else None)
+    mime = media_type(_string(content, "mimeType"))
     # Chrome writes "x-unknown" for a response without a type (a 304).
     if mime and mime != "x-unknown":
         return mime.startswith(("image/", "font/", "application/font-", "application/x-font-")) or mime in ("text/css", "application/vnd.ms-fontobject") or mime in _SCRIPT_TYPES
@@ -93,7 +102,7 @@ def _body(post_data: Any, notes: list[str], where: str) -> RecordedBody | None:
         return None
     text = post_data.get("text")
     params = post_data.get("params")
-    mime = media_type(post_data.get("mimeType") if isinstance(post_data.get("mimeType"), str) else None)
+    mime = media_type(_string(post_data, "mimeType"))
     if isinstance(text, str) and text:
         return Base64Data(text) if post_data.get("encoding") == "base64" else TextData(text)
     if isinstance(params, list) and params:
@@ -102,9 +111,9 @@ def _body(post_data: Any, notes: list[str], where: str) -> RecordedBody | None:
             for param in params:
                 if not isinstance(param, dict) or not isinstance(param.get("name"), str):
                     continue
-                value = param.get("value") if isinstance(param.get("value"), str) else None
-                filename = param.get("fileName") if isinstance(param.get("fileName"), str) else None
-                content_type = param.get("contentType") if isinstance(param.get("contentType"), str) and param.get("contentType") else None
+                value = _string(param, "value")
+                filename = _string(param, "fileName")
+                content_type = _string(param, "contentType") or None
                 if filename is None:
                     parts.append(Part(param["name"], value=value or "", content_type=content_type))
                     continue
@@ -166,7 +175,7 @@ def read_har(
     """
     try:
         har = json.loads(text)
-    except (ValueError, RecursionError) as e:
+    except JSON_PARSE_ERRORS as e:
         raise ImportSourceError(f"{source} is not a HAR file: it is not JSON ({e})") from None
     entries = har.get("log", {}).get("entries") if isinstance(har, dict) and isinstance(har.get("log"), dict) else None
     if not isinstance(entries, list):
