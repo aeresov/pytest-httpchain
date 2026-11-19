@@ -2,7 +2,9 @@
 
 What a single request or response step means lives in request_builder and
 response_steps (test_request_builder.py, test_response_steps.py); the HTTP
-round trip itself is the integration suite's.
+round trip itself is the integration suite's. The guard the carrier renders
+every declared model through (rendering.py) is pinned here, mostly through the
+stages that apply it.
 """
 
 import contextvars
@@ -32,6 +34,7 @@ from pydantic_core import PydanticCustomError
 from pyrate_limiter import Duration, Limiter, Rate
 
 import pytest_httpchain.carrier as carrier_module
+import pytest_httpchain.rendering as rendering_module
 import pytest_httpchain.templates.substitution as substitution_module
 from pytest_httpchain.carrier import (
     Carrier,
@@ -40,7 +43,6 @@ from pytest_httpchain.carrier import (
     _merged_saves,
     _parallel_int,
     _parallel_number,
-    _render_declared,
     fresh_chain_state,
     fresh_scenario_state,
 )
@@ -70,6 +72,7 @@ from pytest_httpchain.models import (
     Verify,
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION, Redaction
+from pytest_httpchain.rendering import render_declared
 from pytest_httpchain.request_builder import build_client_kwargs
 from pytest_httpchain.scoping import base_global_context
 from pytest_httpchain.templates import TemplatesError, walk
@@ -209,7 +212,7 @@ class TestClientWiring:
         """Rendering dumped every field, defaults included, so the rendered
         request declared a timeout and a redirect setting it never had, and
         they overrode the client's."""
-        rendered = _render_declared(Request.model_validate({"url": "{{ u }}", "headers": {"A": "{{ a }}"}}), {"u": "http://t/", "a": "1"}, "request")
+        rendered = render_declared(Request.model_validate({"url": "{{ u }}", "headers": {"A": "{{ a }}"}}), {"u": "http://t/", "a": "1"}, "request")
         assert rendered.model_fields_set == {"url", "headers"}
 
     @pytest.mark.parametrize(("declared", "timeout"), [({}, 5), ({"timeout": "{{ t }}"}, 60)], ids=["client-default", "stage-declared"])
@@ -383,7 +386,7 @@ class TestRenderedAwayFields:
     )
     def test_rendered_away_field_is_refused(self, where, declared, path):
         with pytest.raises(StageExecutionError) as excinfo:
-            _render_declared(declared, self.RENDERS_NONE, where)
+            render_declared(declared, self.RENDERS_NONE, where)
         assert str(excinfo.value) == f"'{path}' was declared as " + "'{{ x }}' but rendered to None, which would silently disable it"
 
     def test_rendered_away_regex_group_says_what_it_would_have_saved(self):
@@ -391,7 +394,7 @@ class TestRenderedAwayFields:
         the default group (group 1, or the whole match), so the refusal says
         that, not that the None would have disabled anything."""
         with pytest.raises(StageExecutionError) as excinfo:
-            _render_declared(RegexSave.model_validate({"regex": {"v": {"pattern": "(a)(b)", "group": "{{ x }}"}}}), self.RENDERS_NONE, "save")
+            render_declared(RegexSave.model_validate({"regex": {"v": {"pattern": "(a)(b)", "group": "{{ x }}"}}}), self.RENDERS_NONE, "save")
         assert str(excinfo.value) == "'save.regex.v.group' was declared as '{{ x }}' but rendered to None, which would silently save the default group instead"
 
     @pytest.mark.parametrize("field", ["filename", "content_type"])
@@ -401,7 +404,7 @@ class TestRenderedAwayFields:
         says that."""
         declared = Request.model_validate({"url": "http://t/", "body": {"multipart": {"files": {"f": {"content": "c", field: "{{ x }}"}}}}})
         with pytest.raises(StageExecutionError) as excinfo:
-            _render_declared(declared, self.RENDERS_NONE, "request")
+            render_declared(declared, self.RENDERS_NONE, "request")
         declared_as = f"'request.body.multipart.files.f.{field}' was declared as " + "'{{ x }}'"
         assert str(excinfo.value) == f"{declared_as} but rendered to None, which would silently send the default {field.replace('_', ' ')} instead"
 
@@ -421,7 +424,7 @@ class TestRenderedAwayFields:
         context = ChainMap({"specs": specs})
         declared = FilesBody.model_validate({"files": {"f": "{{ specs }}"}})
         with pytest.raises(StageExecutionError) as excinfo:
-            _render_declared(declared, context, "request.body")
+            render_declared(declared, context, "request.body")
         assert str(excinfo.value) == "'request.body.files.f[1].filename' was declared as '{{ specs }}' but rendered to None, which would silently send the default filename instead"
 
     def test_other_list_rendered_whole_is_not_walked(self, monkeypatch):
@@ -430,16 +433,16 @@ class TestRenderedAwayFields:
         and walking each of its items, and each list in them, doubled the time
         the body took to render."""
         calls = 0
-        walk_whole = carrier_module._rendered_whole_away
+        walk_whole = rendering_module._rendered_whole_away
 
         def counted(*args):
             nonlocal calls
             calls += 1
             return walk_whole(*args)
 
-        monkeypatch.setattr(carrier_module, "_rendered_whole_away", counted)
+        monkeypatch.setattr(rendering_module, "_rendered_whole_away", counted)
         declared = Request.model_validate({"url": "http://t/", "method": "POST", "body": {"json": "{{ big }}"}})
-        rendered = _render_declared(declared, ChainMap({"big": [[i, i + 1] for i in range(1000)]}), "request")
+        rendered = render_declared(declared, ChainMap({"big": [[i, i + 1] for i in range(1000)]}), "request")
         assert rendered.body.json[999] == [999, 1000]
         # The model's fields and the body's, but none of the list's items.
         assert calls < 50
@@ -457,7 +460,7 @@ class TestRenderedAwayFields:
         does not use (a user function, a saved object filling every key) is
         not set, as in the same object written out, and disables nothing."""
         declared = FilesBody.model_validate({"files": {"f": "{{ spec }}"}})
-        assert _render_declared(declared, ChainMap({"spec": spec}), "request.body").files["f"] == sent
+        assert render_declared(declared, ChainMap({"spec": spec}), "request.body").files["f"] == sent
 
     @pytest.mark.parametrize(
         ("where", "declared", "path"),
@@ -498,7 +501,7 @@ class TestRenderedAwayFields:
         the failure is still the guard's, naming the field and the template,
         without the "silently disable" clause that would not be true."""
         with pytest.raises(StageExecutionError) as excinfo:
-            _render_declared(declared, self.RENDERS_NONE, where)
+            render_declared(declared, self.RENDERS_NONE, where)
         assert str(excinfo.value) == f"'{path}' was declared as " + "'{{ x }}' but rendered to None"
         assert isinstance(excinfo.value.__cause__, ValidationError)
 
@@ -518,7 +521,7 @@ class TestRenderedAwayFields:
         sibling kept the matcher valid, and ``contains`` went unchecked)."""
         context = self.RENDERS_NONE.new_child({"matcher": {"contains": None, "not_contains": "error"}})
         with pytest.raises(StageExecutionError) as excinfo:
-            _render_declared(Verify.model_validate({"headers": {"Location": template}}), context, "verify")
+            render_declared(Verify.model_validate({"headers": {"Location": template}}), context, "verify")
         assert str(excinfo.value) == f"'verify.headers.Location.contains' was declared as {template!r} but rendered to None, which would silently disable it"
 
     @pytest.mark.parametrize("source", ["saved", "vars"])
@@ -530,7 +533,7 @@ class TestRenderedAwayFields:
         capture = {"pattern": "(a)(b)", "group": None}
         context = ChainMap(VarsSubstitution(vars={"capture": capture}).vars) if source == "vars" else {"capture": capture}
         with pytest.raises(StageExecutionError) as excinfo:
-            _render_declared(RegexSave.model_validate({"regex": {"v": "{{ capture }}"}}), context, "save")
+            render_declared(RegexSave.model_validate({"regex": {"v": "{{ capture }}"}}), context, "save")
         assert str(excinfo.value) == "'save.regex.v.group' was declared as '{{ capture }}' but rendered to None, which would silently save the default group instead"
 
     @pytest.mark.parametrize(
@@ -559,7 +562,7 @@ class TestRenderedAwayFields:
         pydantic's report on the rest, found by validating again with the
         declared templates back in place."""
         with pytest.raises(StageExecutionError) as excinfo:
-            _render_declared(declared, context, path.split(".")[0])
+            render_declared(declared, context, path.split(".")[0])
         refusal, report = str(excinfo.value).split("\n", 1)
         assert refusal == f"'{path}' was declared as " + "'{{ x }}' but rendered to None"
         assert {line.split(".")[0] for line in report.splitlines()[1:] if not line.startswith(" ")} == {invalid}
@@ -568,7 +571,7 @@ class TestRenderedAwayFields:
         """Only a rendered-away field is the guard's to name: any other value
         validation rejects surfaces as pydantic reports it."""
         with pytest.raises(ValidationError, match="timeout"):
-            _render_declared(Request.model_validate({"url": "http://t/", "timeout": "{{ x }}"}), {"x": "slow"}, "request")
+            render_declared(Request.model_validate({"url": "http://t/", "timeout": "{{ x }}"}), {"x": "slow"}, "request")
 
     @pytest.mark.parametrize(
         ("graphql", "context", "error"),
@@ -603,7 +606,7 @@ class TestRenderedAwayFields:
         had gone missing."""
         declared = Request.model_validate({"url": "http://t/", "method": "POST", "body": {"graphql": graphql}})
         with pytest.raises(ValidationError) as excinfo:
-            _render_declared(declared, context, "request")
+            render_declared(declared, context, "request")
         assert str(excinfo.value).splitlines()[:3] == ["1 validation error for Request", *error]
 
     @pytest.mark.parametrize(
@@ -680,7 +683,7 @@ class TestRenderedAwayFields:
         ],
     )
     def test_none_that_means_something_passes(self, declared, context):
-        _render_declared(declared, context, "model")
+        render_declared(declared, context, "model")
 
     @pytest.mark.parametrize(
         ("value", "expected"),
@@ -697,7 +700,7 @@ class TestRenderedAwayFields:
         object is a namespace, which stands for the object it was written as:
         refused, the stage failed where ``validate`` had passed it."""
         context = ChainMap(VarsSubstitution(vars={"a": value}).vars) if source == "vars" else {"a": value}
-        rendered = _render_declared(Request.model_validate({"url": "http://t/", "auth": "{{ a }}"}), context, "request")
+        rendered = render_declared(Request.model_validate({"url": "http://t/", "auth": "{{ a }}"}), context, "request")
         assert rendered.auth == expected
 
     @pytest.mark.parametrize(
@@ -721,7 +724,7 @@ class TestRenderedAwayFields:
         context = ChainMap(
             VarsSubstitution(vars={"call": {"name": "mod:fn", "kwargs": {"config": {"realm": "r"}}}, "config": {"realm": "r"}, "login": {"username": "u", "password": "p"}}).vars
         )
-        rendered = _render_declared(Request.model_validate({"url": "http://t/", "auth": auth}), context, "request")
+        rendered = render_declared(Request.model_validate({"url": "http://t/", "auth": auth}), context, "request")
         assert rendered.auth == expected
 
     @pytest.mark.parametrize(
@@ -914,7 +917,7 @@ class TestVerifyObjectsFromVars:
         (``TestRenderedAwayFields``): a key it sets to None is refused."""
         context = self._context(matcher={"contains": None, "not_contains": "error"})
         with pytest.raises(StageExecutionError) as excinfo:
-            _render_declared(Verify.model_validate({"headers": {"Location": "{{ matcher }}"}}), context, "verify")
+            render_declared(Verify.model_validate({"headers": {"Location": "{{ matcher }}"}}), context, "verify")
         assert str(excinfo.value) == "'verify.headers.Location.contains' was declared as '{{ matcher }}' but rendered to None, which would silently disable it"
 
 
@@ -1145,7 +1148,7 @@ class TestVerifyRenderedValueByValue:
                 {"type": "missing", "loc": ("status",), "input": {}},
             ],
         )
-        moved = carrier_module._relocated(error, carrier_module._relocation(("body", "matches", 0), ("body", "matches", 7)))
+        moved = rendering_module._relocated(error, rendering_module._relocation(("body", "matches", 0), ("body", "matches", 7)))
         assert str(moved) == str(error).replace("body.matches.0", "body.matches.7")
         assert [(e["type"], e["loc"], e["msg"]) for e in moved.errors()] == [
             ("value_error", ("body", "matches", 7), "Value error, Invalid regular expression"),
@@ -1157,13 +1160,13 @@ class TestVerifyRenderedValueByValue:
     def _spy_validation(monkeypatch) -> list:
         """What the renderer validates, each time it does, from now on."""
         validated = []
-        real = carrier_module.validate_rendered_verify
+        real = rendering_module.validate_rendered_verify
 
         def spy(declared, value):
             validated.append(value)
             return real(declared, value)
 
-        monkeypatch.setattr(carrier_module, "validate_rendered_verify", spy)
+        monkeypatch.setattr(rendering_module, "validate_rendered_verify", spy)
         return validated
 
     @pytest.mark.parametrize(
@@ -1199,7 +1202,7 @@ class TestEscapedBraces:
 
     def test_request_with_only_an_escape_is_rendered(self):
         declared = Request.model_validate({"url": "http://t/", "headers": {"X-T": r"\{{name}}"}, "body": {"json": {"t": r"\{{ name }}"}}})
-        rendered = _render_declared(declared, {}, "request")
+        rendered = render_declared(declared, {}, "request")
         assert (rendered.headers, rendered.body.json) == ({"X-T": "{{name}}"}, {"t": "{{ name }}"})
 
     def test_response_steps_with_only_an_escape_are_rendered(self):
@@ -1228,7 +1231,7 @@ class TestEscapedBraces:
     def test_rendered_value_holding_an_escape_is_final(self):
         """A path a template rendered is validated again as it rendered: a
         value's `\\{{` is the value's own, never unescaped."""
-        rendered = _render_declared(Request.model_validate({"url": "http://t/", "body": {"binary": "{{ path }}"}}), {"path": r"files/\{{x}}.bin"}, "request")
+        rendered = render_declared(Request.model_validate({"url": "http://t/", "body": {"binary": "{{ path }}"}}), {"path": r"files/\{{x}}.bin"}, "request")
         assert rendered.body.binary == Path(r"files/\{{x}}.bin")
 
     @pytest.mark.parametrize("context", [{}, {"name": "other"}], ids=["name-undefined", "name-defined"])
@@ -1249,7 +1252,7 @@ class TestEscapedBraces:
         holds a template's syntax, so the field's template branch takes it as
         well as the path branch, and the smart union keeps it a `str`: the
         type pinned here, which the request builder reads as a path."""
-        rendered = _render_declared(Request.model_validate({"url": "http://t/", "method": "POST", "body": body}), context, "request")
+        rendered = render_declared(Request.model_validate({"url": "http://t/", "method": "POST", "body": body}), context, "request")
         assert path_of(rendered.body) == "data/{{name}}.bin"
 
     def test_escaped_ssl_paths_render_once(self):
@@ -1257,7 +1260,7 @@ class TestEscapedBraces:
         a `cert` path whose rendered text holds braces stays a `str`, beside
         a `Path` rendered from a template."""
         declared = SSLConfig.model_validate({"verify": r"certs/\{{ca}}.pem", "cert": [r"certs/\{{c}}.pem", "{{ dir }}/k.pem"]})
-        rendered = _render_declared(declared, {"ca": "other", "c": "other", "dir": "keys"}, "ssl")
+        rendered = render_declared(declared, {"ca": "other", "c": "other", "dir": "keys"}, "ssl")
         assert (rendered.verify, rendered.cert) == (Path("certs/{{ca}}.pem"), ("certs/{{c}}.pem", Path("keys/k.pem")))
         assert isinstance(rendered.cert, tuple)
         assert [type(path) for path in (rendered.verify, *rendered.cert)] == [type(Path()), str, type(Path())]
@@ -1265,7 +1268,7 @@ class TestEscapedBraces:
     def test_graphql_query_with_only_an_escape_renders(self):
         """A literal judged as it renders loads, and renders to that text."""
         declared = Request.model_validate({"url": "http://t/", "method": "POST", "body": {"graphql": {"query": r'query { render(template: "Hello \{{name}}") }'}}})
-        assert _render_declared(declared, {}, "request").body.graphql.query == 'query { render(template: "Hello {{name}}") }'
+        assert render_declared(declared, {}, "request").body.graphql.query == 'query { render(template: "Hello {{name}}") }'
 
 
 class TestVerifyStatusRendered:
@@ -4863,8 +4866,8 @@ class TestConnectionStages:
         """A template-looking rendered operand passes model validation, then
         raises while matching: that error needs the same redaction as misses."""
         match = Verify.model_validate({"jmespath": {"user.token": {key: "{{ secret }}"}}}).jmespath
-        rendered = carrier_module._rendered_match(match, {"secret": secret}, redaction)
-        listed = carrier_module._listed_expectations(rendered, redaction)
+        rendered = rendering_module.rendered_match(match, {"secret": secret}, redaction)
+        listed = rendering_module.listed_expectations(rendered, redaction)
 
         with pytest.raises(VerificationError, match=problem) as caught:
             carrier_module._message_miss(match, rendered, redaction, listed, {"user": {"token": actual}})

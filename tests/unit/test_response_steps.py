@@ -17,7 +17,6 @@ import msgpack
 import pytest
 
 from pytest_httpchain.body_schema import ReferenceBounds
-from pytest_httpchain.carrier import _verify_renderer
 from pytest_httpchain.errors import SaveError, VerificationError
 from pytest_httpchain.models import (
     JSON_TYPE_NAMES,
@@ -33,6 +32,7 @@ from pytest_httpchain.models import (
 from pytest_httpchain.models.entities import ResponseBody
 from pytest_httpchain.models.types import convert_dict_to_namespace
 from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION
+from pytest_httpchain.rendering import verify_renderer
 from pytest_httpchain.response_steps import (
     MATCH,
     NO_MESSAGE,
@@ -96,7 +96,7 @@ def test_msgpack_mismatch_shows_nested_binary_as_hex():
 def test_msgpack_saved_structured_value_compares_with_nested_bytes(packet, expectation):
     verify = Verify.model_validate({"jmespath": {"d": expectation}})
     response = httpx.Response(200, headers={"Content-Type": "application/msgpack"}, content=msgpack.packb({"d": packet}, use_bin_type=True))
-    process_verify(verify, response, render=_verify_renderer(verify, ChainMap({"saved_packet": packet})))
+    process_verify(verify, response, render=verify_renderer(verify, ChainMap({"saved_packet": packet})))
 
     changed = msgpack.unpackb(msgpack.packb(packet, use_bin_type=True), raw=False)
     if isinstance(changed, dict):
@@ -105,7 +105,7 @@ def test_msgpack_saved_structured_value_compares_with_nested_bytes(packet, expec
         changed[0]["b"] = b"\x00\xfe"
     wrong = httpx.Response(200, headers={"Content-Type": "application/msgpack"}, content=msgpack.packb({"d": changed}, use_bin_type=True))
     with pytest.raises(VerificationError, match="doesn't match"):
-        process_verify(verify, wrong, render=_verify_renderer(verify, ChainMap({"saved_packet": packet})))
+        process_verify(verify, wrong, render=verify_renderer(verify, ChainMap({"saved_packet": packet})))
 
 
 @pytest.mark.parametrize(

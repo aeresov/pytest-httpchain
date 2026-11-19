@@ -160,7 +160,7 @@ only), so a key keeps its escape as written.
 holding only an escaped `\{{` is no template (its value is known before it
 renders: no collection-time resolution, no model typing it a template), but
 does need rendering, so every short-circuit that skips rendering (`_walk`'s
-model and namespace steps, the carrier's `_render_declared` and verify
+model and namespace steps, `rendering.render_declared` and the verify
 renderer, `utils.process_substitutions`) asks `needs_rendering`.
 
 ### Trailing `}}` in dict/set literals (gotcha)

@@ -173,7 +173,7 @@ def _regex_save(name: str, entry: str | RegexCapture, text: str) -> Any:
     """
     pattern, group, every = (entry.pattern, entry.group, entry.all) if isinstance(entry, RegexCapture) else (entry, None, False)
     # Each refusal is of what the step's templates rendered, as a value that
-    # does not validate is (`carrier._render_save`): not retryable.
+    # does not validate is (`rendering.render_save`): not retryable.
     if not isinstance(every, bool):
         raise SaveError(f"Error saving variable {name}: all must resolve to true or false, got {every!r}", retryable=False)
     if isinstance(group, str) and not group.isidentifier():

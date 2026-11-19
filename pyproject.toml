@@ -229,6 +229,10 @@ layers = [
     # of it: it builds on validation, templates and redaction, and nothing on
     # a lower layer, the domain packages included, may import it.
     "carrier : dataflow : schema : importers",
+    # rendering is the carrier's guard over what a template renders into a
+    # declared model; it builds on response_steps' render types, and only
+    # the carrier uses it.
+    "rendering",
     "validation : har_writer : report_formatter : request_builder : response_steps : parallel_stats",
     # connections is the connection stages' sessions and readers, below
     # response_steps, which judges a message: the carrier injects the match.
