@@ -105,6 +105,27 @@ class TestConnectionStep:
         with pytest.raises(ValidationError, match="A connection step sets at least one of: open, drain, send, expect, close"):
             ConnectionStep.model_validate({"name": "device", "open": False})
 
+    def test_actions_are_the_ones_set_in_the_order_taken(self):
+        """An empty message is sent all the same: set, though falsy."""
+        step = ConnectionStep.model_validate({"name": "device", "close": True, "send": {}, "drain": True, "open": False})
+        assert step.actions == ("drain", "send", "close")
+
+    @pytest.mark.parametrize(
+        ("step", "only_closes"),
+        [
+            pytest.param({"close": True}, True, id="close"),
+            # Nothing is queued to drain on a connection never opened.
+            pytest.param({"close": True, "drain": True}, True, id="drain-and-close"),
+            # It opens all the same: `only_closes` is read only without open.
+            pytest.param({"close": True, "open": True}, True, id="open-and-close"),
+            pytest.param({"close": True, "send": {}}, False, id="send-and-close"),
+            pytest.param({"close": True, "expect": {}}, False, id="expect-and-close"),
+            pytest.param({"drain": True}, False, id="drain"),
+        ],
+    )
+    def test_only_closes(self, step, only_closes):
+        assert ConnectionStep.model_validate({"name": "device", **step}).only_closes is only_closes
+
     def test_send_takes_bytes_at_any_depth(self):
         """A binary protocol carries raw fields, which templates render as bytes."""
         step = validate_rendered(ConnectionStep, {"name": "device", "send": {"raw": b"\x00\x01", "frames": [{"body": b"\xff"}]}})

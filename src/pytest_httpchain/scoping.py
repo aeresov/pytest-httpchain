@@ -1019,9 +1019,9 @@ _NEVER_OPENED: _ConnectionState = ("never", -1)
 
 def _opens_implicitly(step: ConnectionStep) -> bool:
     """Whether the runtime opens a connection never opened for the step: for
-    any but one that would only close it again (``close`` without a send or
-    an expect), which has nothing to close."""
-    return not (step.close and step.send is None and step.expect is None)
+    any but one that would only close it again (`ConnectionStep.only_closes`),
+    which has nothing to close."""
+    return not step.only_closes
 
 
 def _after_connection_step(state: _ConnectionState, step: ConnectionStep, i: int) -> _ConnectionState:

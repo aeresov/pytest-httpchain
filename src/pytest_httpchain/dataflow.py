@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from pytest_httpchain.models import ConnectionStep, Scenario
+from pytest_httpchain.models import Scenario
 from pytest_httpchain.scoping import (
     SENT_NAME,
     connection_lifecycles,
@@ -22,12 +22,6 @@ from pytest_httpchain.scoping import (
     substitution_names,
     substitution_step_templates,
 )
-
-
-def _sets(step: ConnectionStep, action: str) -> bool:
-    """Whether a connection step takes ``action`` (one of `ConnectionStep.ACTIONS`)."""
-    value = getattr(step, action)
-    return value is not None and value is not False
 
 
 def _consumed(refs: set[str], earlier_saves: frozenset[str], shadows: frozenset[str]) -> set[str]:
@@ -188,17 +182,22 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
         for producer in sorted(by_producer):
             edges.append(DataFlowEdge(producer=producer, consumer=i, vars=sorted(by_producer[producer])))
 
+        # A connection stage shows as its connection, so method and url stay
+        # text for show's JSON readers.
+        if stage.request is not None:
+            method, url = str(stage.request.method), stage.request.url
+        else:
+            assert stage.connection is not None, "a stage without a request has a connection step"
+            method, url = "CONNECTION", stage.connection.name
         stages.append(
             StageFlow(
                 index=i,
                 name=stage.name,
                 kind="connection" if stage.connection is not None else "request",
                 connection=stage.connection.name if stage.connection is not None else None,
-                actions=[action for action in ConnectionStep.ACTIONS if stage.connection is not None and _sets(stage.connection, action)],
-                # A connection stage shows as its connection, so the field
-                # stays text for show's JSON readers.
-                method=str(stage.request.method) if stage.request is not None else "CONNECTION",
-                url=stage.request.url if stage.request is not None else stage.connection.name if stage.connection is not None else "",
+                actions=list(stage.connection.actions) if stage.connection is not None else [],
+                method=method,
+                url=url,
                 fixtures=sorted(stage.fixtures),
                 marks=list(stage.marks),
                 skip_if=stage.skip_if,
@@ -212,10 +211,7 @@ def analyze_dataflow(scenario: Scenario, test_data: dict[str, Any]) -> DataFlow:
             writers.setdefault(name, []).append(i)
 
     connection_edges = [
-        ConnectionEdge(opener=opener, user=user, connection=name)
-        for name, lifecycle in lifecycles.items()
-        for user, openers in sorted(lifecycle.sessions.items())
-        for opener in sorted(openers)
+        ConnectionEdge(opener=opener, user=user, connection=name) for name, lifecycle in lifecycles.items() for user, openers in lifecycle.sessions.items() for opener in openers
     ]
     connection_edges.sort(key=lambda edge: (edge.user, edge.opener, edge.connection))
 

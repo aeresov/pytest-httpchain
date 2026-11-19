@@ -1472,9 +1472,24 @@ class ConnectionStep(StrictModel):
     expect: ConnectionExpect | None = Field(default=None, description="Wait for a message, which the response steps then check.")
     close: Literal[True, False] = Field(default=False, description="Close the connection once the stage has run, whether or not its checks pass.")
 
+    @property
+    def actions(self) -> tuple[str, ...]:
+        """The `ACTIONS` the step takes, in the order it takes them: each one
+        it sets, to anything but null or false."""
+        return tuple(action for action in self.ACTIONS if (value := getattr(self, action)) is not None and value is not False)
+
+    @property
+    def only_closes(self) -> bool:
+        """Whether the step, unless it opens its connection, would only close
+        it: ``close`` without a ``send`` or an ``expect``. On a connection
+        never opened that has nothing to do (nothing is queued to drain
+        either), so the runtime does not connect for it, and the validator's
+        walk of a connection's lifecycle agrees (`scoping.connection_lifecycles`)."""
+        return self.close and self.send is None and self.expect is None
+
     @model_validator(mode="after")
     def _does_something(self) -> Self:
-        if not (self.open or self.drain or self.close or self.send is not None or self.expect is not None):
+        if not self.actions:
             raise ValueError(f"A connection step sets at least one of: {', '.join(self.ACTIONS)}")
         return self
 
