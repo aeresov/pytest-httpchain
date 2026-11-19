@@ -958,6 +958,74 @@ def test_deep_disabled_does_not_check_imports(datadir):
     assert validate_scenario(datadir / "deep_import_missing.json").diagnostics == []
 
 
+class TestDeepSysPath:
+    """Where `validate --deep` imports a user module from: the ``--syspath``
+    directories in the order given, then the current directory, ahead of the
+    rest of ``sys.path``, as pytest puts its ``pythonpath`` entries in the
+    order listed ahead of the current directory (`check_scenario_deep`)."""
+
+    MODULE = "deep_syspath_probe"
+
+    @pytest.fixture(autouse=True)
+    def _fresh_module(self):
+        """Each test imports the module anew, from whichever directory comes
+        first, and leaves none behind."""
+        sys.modules.pop(self.MODULE, None)
+        yield
+        sys.modules.pop(self.MODULE, None)
+
+    @classmethod
+    def _module_in(cls, directory, function):
+        """``directory``, made, holding a copy of the module that defines
+        ``function`` alone and keeps the ``sys.path`` it was imported under."""
+        directory.mkdir()
+        (directory / f"{cls.MODULE}.py").write_text(f"import sys\n\nimported_under = list(sys.path)\n\n\ndef {function}(response):\n    return None\n")
+        return directory
+
+    @classmethod
+    def _deep(cls, tmp_path, syspaths, *functions):
+        """What a deep validation with ``syspaths`` finds in a verify step
+        calling ``functions`` from the module, each finding's code and
+        message; it leaves ``sys.path`` as it found it."""
+        scenario = _write(tmp_path, [_stage(response=[{"verify": {"user_functions": [f"{cls.MODULE}:{name}" for name in functions]}}])])
+        before = list(sys.path)
+        diagnostics = validate_scenario(scenario, deep=True, syspaths=syspaths).diagnostics
+        assert sys.path == before
+        return [(d.code, d.message) for d in diagnostics]
+
+    @classmethod
+    def _not_found(cls, function):
+        """The finding for a ``function`` the imported copy does not define."""
+        return (C.IMPORT_FAILED, f"Cannot import function '{cls.MODULE}:{function}': Function '{function}' not found in module '{cls.MODULE}'")
+
+    def test_directories_in_the_order_given(self, tmp_path):
+        """The first directory's module is the one imported: the function only
+        the second one's defines is not found."""
+        first = self._module_in(tmp_path / "first", "in_first")
+        second = self._module_in(tmp_path / "second", "in_second")
+        assert self._deep(tmp_path, [first, second], "in_first", "in_second") == [self._not_found("in_second")]
+
+    def test_a_directory_before_the_current_directory(self, tmp_path, monkeypatch):
+        """A module the current directory holds too is imported from the
+        directory given."""
+        given = self._module_in(tmp_path / "given", "in_given")
+        monkeypatch.chdir(self._module_in(tmp_path / "cwd", "in_cwd"))
+        assert self._deep(tmp_path, [given], "in_given", "in_cwd") == [self._not_found("in_cwd")]
+
+    def test_each_entry_once(self, tmp_path, monkeypatch):
+        """While the checks run, the directories given and then the current
+        directory, each once, are ahead of what ``sys.path`` held, and one it
+        held already stays where it was."""
+        first = self._module_in(tmp_path / "first", "in_first")
+        (held := tmp_path / "held").mkdir()
+        (cwd := tmp_path / "cwd").mkdir()
+        monkeypatch.syspath_prepend(str(held))
+        monkeypatch.chdir(cwd)
+        before = list(sys.path)
+        assert self._deep(tmp_path, [first, held, first], "in_first") == []
+        assert sys.modules[self.MODULE].imported_under == [str(first), str(cwd), *before]
+
+
 @pytest.mark.parametrize(
     ("content", "message"),
     [

@@ -43,22 +43,24 @@ def check_scenario_deep(
     """Referenced-file existence, user-function imports, call-signature
     compatibility, and connection adapters.
 
-    Imports user modules, so while the checks run, each of ``syspaths``
-    (``--syspath``), resolved, and then the current directory is inserted at
-    the front of ``sys.path``, unless it is on it already: the current
-    directory comes first, and the ``syspaths`` after it in reverse order
-    (pytest keeps its ``pythonpath`` in the order listed). ``sys.path`` is
-    restored afterwards. ``ref_bounds`` is what a body schema's references
-    to files are held to, the root and the parent traversal depth the
-    scenario's own references were loaded under.
+    Imports user modules, so while the checks run, ``syspaths``
+    (``--syspath``), resolved, in the order given, and then the current
+    directory are put at the front of ``sys.path``, each once; one on it
+    already stays where it is. That is pytest's order: its ``pythonpath``
+    entries go to the front in the order listed, ahead of the current
+    directory under ``python -m pytest``, so where two of these directories
+    hold a module of the same name, the one imported is the one a test run
+    with them as its ``pythonpath`` imports. ``sys.path`` is restored
+    afterwards. ``ref_bounds`` is what a body schema's references to files
+    are held to, the root and the parent traversal depth the scenario's own
+    references were loaded under.
     """
     diagnostics = list(_file_diagnostics(scenario, scenario_dir, ref_bounds))
 
     saved_path = list(sys.path)
     try:
-        for entry in [*(str(Path(p).resolve()) for p in (syspaths or [])), str(Path.cwd())]:
-            if entry not in sys.path:
-                sys.path.insert(0, entry)
+        entries = [*(str(Path(p).resolve()) for p in (syspaths or [])), str(Path.cwd())]
+        sys.path[:0] = [entry for entry in dict.fromkeys(entries) if entry not in sys.path]
         # Consumed inside the try: the checks import user modules, so they must
         # run while the temporary sys.path entries are in place.
         diagnostics += list(_function_diagnostics(scenario))
