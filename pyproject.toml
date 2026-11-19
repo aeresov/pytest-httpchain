@@ -151,10 +151,17 @@ python-version = "3.13"
 [tool.ty.terminal]
 error-on-warning = true
 
+[tool.ty.rules]
 # Off by default. A bare `ty: ignore` silences every rule on its line; src/ and
 # tests/ name the rule they expect instead (`ty: ignore[...]`), and this keeps it so.
-[tool.ty.rules]
 blanket-ignore-comment = "error"
+# Off by default. A method that overrides a base class's says so with
+# `@typing.override`, and invalid-explicit-override (an error by default) fails a
+# decorated method that overrides nothing: one overriding a private hook that a
+# dependency then renames (pytest's `Module._getobj`, simpleeval's
+# `_eval_subscript`) fails `ty check` instead of going uncalled. For src/ only:
+# the tests/ override below turns it off.
+missing-override-decorator = "error"
 
 # Test code uses values wider than the checker can narrow, and feeds models input
 # they must refuse: Optional and union results used without a narrowing check
@@ -176,6 +183,10 @@ missing-attribute = "ignore"
 missing-union-attribute = "ignore"
 not-subscriptable = "ignore"
 missing-argument = "ignore"
+# On for src/ in [tool.ty.rules], not here: test code subclasses freely for its
+# doubles (about 30 overriding methods in a dozen files: fake adapters and
+# transports, objects with a `__str__` or `__repr__` of their own).
+missing-override-decorator = "ignore"
 
 [tool.pytest]
 minversion = "9.0"
