@@ -168,6 +168,8 @@ def test_split_commands_keeps_each_command_as_written():
         pytest.param("curl -X", "The curl option -X needs a value", id="missing-value"),
         pytest.param("curl https://x.test/a \\", "Cannot read the curl command: No escaped character", id="trailing-backslash"),
         pytest.param("curl -sS", "The curl command has no URL", id="no-url"),
+        # A -: in a cluster ends a request with none, as curl refuses it.
+        pytest.param("curl -L: https://x.test/", "The curl command has no URL", id="no-url-before-a-clustered-next"),
         pytest.param("curl ftp://x.test/a", "The curl command's URL 'ftp://x.test/a' is not http or https", id="not-http"),
         # A command without the name curl starts with an option or a URL
         # with its scheme: anything else is some other command, whose words
@@ -321,6 +323,48 @@ def test_one_request_per_url_and_per_next():
         ("POST", "https://x.test/c", _FORM),
     ]
     assert warnings == []
+
+
+_LEFT_OUT_AFTER_NEXT = "after the -: in {}: curl starts the next request at the -: and reads no more of that word"
+
+
+@pytest.mark.parametrize(
+    ("command", "fields", "warnings"),
+    [
+        # The options before it are the first request's, those after it the next's.
+        pytest.param(
+            "curl https://x.test/a -L: -X POST https://x.test/b",
+            [{"method": "GET", "url": "https://x.test/a", "follow_redirects": True}, {"method": "POST", "url": "https://x.test/b"}],
+            [],
+            id="ends-the-request",
+        ),
+        pytest.param(
+            "curl https://x.test/a -k: https://x.test/b",
+            [{"method": "GET", "url": "https://x.test/a", "verify_tls": False}, {"method": "GET", "url": "https://x.test/b"}],
+            [],
+            id="letters-before-it",
+        ),
+        # curl reads no more of the word: these set nothing for either request.
+        pytest.param(
+            "curl https://x.test/a -:k https://x.test/b",
+            [{"method": "GET", "url": "https://x.test/a"}, {"method": "GET", "url": "https://x.test/b"}],
+            [f"Ignored 'k' {_LEFT_OUT_AFTER_NEXT.format('-:k')}"],
+            id="letters-after-it",
+        ),
+        pytest.param(
+            "curl https://x.test/a -:XPOST https://x.test/b",
+            [{"method": "GET", "url": "https://x.test/a"}, {"method": "GET", "url": "https://x.test/b"}],
+            [f"Ignored 'XPOST' {_LEFT_OUT_AFTER_NEXT.format('-:XPOST')}"],
+            id="value-after-it",
+        ),
+    ],
+)
+def test_next_in_a_cluster(command, fields, warnings):
+    """``-:`` is ``--next`` as a letter, which curl reads in a cluster too:
+    it ends the request there. It was dropped without a word, merging the
+    two requests into one group: both sent with every option of both."""
+    requests, given = parse_curl(command)
+    assert ([_fields(request) for request in requests], given) == (fields, warnings)
 
 
 @pytest.mark.parametrize(
@@ -484,7 +528,8 @@ def test_a_word_that_looks_like_no_url_is_named():
 
 
 # curl's short options (`curl --help all`), by whether they take a value, but
-# -:, its --next (see `test_one_request_per_url_and_per_next`).
+# -:, its --next (see `test_one_request_per_url_and_per_next` and
+# `test_next_in_a_cluster`).
 _SHORT_WITH_VALUE = "XHdFuAebmowDEKCcPxUQrYytzTh"
 _SHORT_WITHOUT_VALUE = "GILkgsSviOJf#N0qaBjlMnpRVZ12346"
 

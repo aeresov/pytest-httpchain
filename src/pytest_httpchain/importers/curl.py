@@ -27,7 +27,8 @@ not taken for URLs.
 
 Then the command's options are read as curl reads them (`parse_curl_words`):
 short options clustered (``-sSL``) or joined to their value (``-XPOST``),
-long ones never with ``=``. The options that shape the request are mapped
+long ones never with ``=``, and a ``--next`` (``-:``, in a cluster too)
+starting the next request. The options that shape the request are mapped
 (`_MAPPED`), those that only shape curl's own output or connection are ignored
 (`_IGNORED`; ``-o``, which may be meant as the import's own, with a warning),
 and any other is ignored with a warning naming it: a curl option the importer
@@ -624,11 +625,22 @@ def _form_part(argument: str, literal: bool, options: _Options, warnings: list[s
     return Part(name, value=value, filename=filename, content_type=content_type)
 
 
-def _read_options(words: list[str], warnings: list[str]) -> _Options:
-    """One command's options (see the module docstring)."""
+def _read_options(words: list[str], warnings: list[str]) -> tuple[_Options, list[str] | None]:
+    """One request's options (see the module docstring), and the words after
+    a ``-:`` in a cluster (``-L:``), or None where none came.
+
+    That ``-:`` is curl's ``--next`` as a letter, which ends the request: the
+    words after it are the next request's, for the caller to read as such.
+    curl reads no more of the cluster after it (``-:k`` sets ``-k`` for
+    neither request), and neither does this, with a warning naming what is
+    left out. A ``--next`` or ``-:`` that is a word of its own is split on
+    before the options are read (`_arguments_requests`).
+    """
     options = _Options()
     unmapped: list[str] = []
     unknown: list[str] = []
+    following: list[str] | None = None
+    left_out: str | None = None
     i = 0
 
     def value_for(option: str, attached: str) -> str:
@@ -652,7 +664,7 @@ def _read_options(words: list[str], warnings: list[str]) -> _Options:
         elif value is not None:
             _ignore(written, value, warnings)
 
-    while i < len(words):
+    while following is None and i < len(words):
         word = words[i]
         i += 1
         if word.startswith("--") and len(word) > 2:
@@ -669,6 +681,11 @@ def _read_options(words: list[str], warnings: list[str]) -> _Options:
                 if (name := _SHORT.get(letter)) is None:
                     unknown.append(word if j == 2 else option)
                     break
+                if name == "next":
+                    following = words[i:]
+                    if word[j:]:
+                        left_out = f"Ignored {word[j:]!r} after the -: in {word}: curl starts the next request at the -: and reads no more of that word"
+                    break
                 take(name, option, word[j:])
                 if _TAKES_VALUE[name]:
                     break
@@ -678,7 +695,9 @@ def _read_options(words: list[str], warnings: list[str]) -> _Options:
         warnings.append(f"Ignored the curl options the import does not map: {', '.join(dict.fromkeys(unmapped))}")
     if unknown:
         warnings.append(f"Ignored what is not a curl option: {', '.join(dict.fromkeys(unknown))}")
-    return options
+    if left_out is not None:
+        warnings.append(left_out)
+    return options, following
 
 
 def _ignore(option: str, value: str, warnings: list[str]) -> None:
@@ -1043,7 +1062,11 @@ def _arguments_requests(arguments: list[str], data_dir: Path | None, stdin: Stdi
         else:
             groups[-1].append(word)
     for group in groups:
-        requests += _requests(_read_options(group, warnings), warnings, data_dir, source)
+        # A -: in a cluster ends a request within the group (`_read_options`).
+        words: list[str] | None = group
+        while words is not None:
+            options, words = _read_options(words, warnings)
+            requests += _requests(options, warnings, data_dir, source)
     if stdin is not None and not source.used:
         warnings.append(f"Ignored {stdin.what}: the curl command reads no data from standard input (@-)")
     return requests, warnings
