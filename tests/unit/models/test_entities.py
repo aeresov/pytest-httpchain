@@ -5,16 +5,21 @@ Model classes themselves are covered by the sibling test modules
 covers the free functions that live alongside them.
 """
 
+from typing import Annotated, Literal
+
 import pytest
-from pydantic import ValidationError
+from pydantic import Tag, ValidationError
 
 from pytest_httpchain.models.entities import (
     CombinationsParameter,
     GraphQL,
     IndividualParameter,
     JMESPathMatcher,
+    JsonBody,
     Request,
     Verify,
+    XmlBody,
+    _create_discriminator,
     parametrize_values_contain_template,
     validate_rendered,
     validate_rendered_expectations,
@@ -129,3 +134,29 @@ class TestRenderedValidationErrors:
         error = self._refusal(validate_rendered_expectations, declared, {"name": {"matches": "("}})
         assert [e["loc"][-2:] for e in error.errors()] == [("matches", self._REGEX)]
         assert "input_value" not in str(error)
+
+
+class TestCreateDiscriminator:
+    """`_create_discriminator` tells a model instance by its class, paired
+    with its tag by the union's own `Tag` metadata, and refuses to build for
+    a member it could never tell."""
+
+    _BODIES = Annotated[JsonBody, Tag("json")] | Annotated[XmlBody, Tag("xml")]
+
+    def test_tells_an_instance_by_its_class_and_an_object_by_its_key(self):
+        discriminator = _create_discriminator(self._BODIES)
+        assert discriminator(XmlBody(xml="<a/>")) == "xml"
+        assert discriminator({"json": 1}) == "json"
+        assert discriminator(1) == "(non-object: int)"
+
+    def test_extra_tells_a_class_no_member_is(self):
+        assert _create_discriminator(self._BODIES, extra={str: "json"})("x") == "json"
+
+    def test_a_member_that_is_no_class_needs_its_value(self):
+        """``Literal[False]`` is told by identity, through ``value_to_tag``;
+        without a pair giving its tag, nothing would tell it."""
+        members = self._BODIES | Annotated[Literal[False], Tag("false")]
+        discriminator = _create_discriminator(members, value_to_tag=((False, "false"),))
+        assert (discriminator(False), discriminator(0)) == ("false", "(non-object: int)")
+        with pytest.raises(TypeError, match="^The union member tagged 'false' is no class, and no value_to_tag pair gives its tag$"):
+            _create_discriminator(members)

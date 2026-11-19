@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from http import HTTPMethod, HTTPStatus
 from types import SimpleNamespace
-from typing import Annotated, Any, ClassVar, Literal, LiteralString, Self, cast
+from typing import Annotated, Any, ClassVar, Literal, LiteralString, Self, cast, get_args
 
 from pydantic import (
     AfterValidator,
@@ -99,16 +99,32 @@ from pytest_httpchain.models.validation_errors import reported
 from pytest_httpchain.templates import contains_template
 
 
-def _create_discriminator(class_to_tag: dict[type, str], value_to_tag: tuple[tuple[object, str], ...] = ()) -> Callable[[Any], str]:
-    """Build a discriminator from a ``{model class: tag}`` mapping (keyed by
-    class, so a rename breaks statically rather than at runtime), and
-    ``(value, tag)`` pairs for a member that is one constant, told by identity
-    (``False`` is not ``0``, and not ``True`` either).
+def _create_discriminator(members: object, *, extra: Mapping[type, str] | None = None, value_to_tag: tuple[tuple[object, str], ...] = ()) -> Callable[[Any], str]:
+    """Build the discriminator of a union of ``members``, each a model tagged
+    with the key that tells it (``Annotated[JsonBody, Tag("json")]``): an
+    object is told by the tag keys it holds, and a model instance by its
+    class, which the union's own `Tag` metadata pairs with its tag, so the
+    union is the one place that writes the pair. ``extra`` pairs a class no
+    member is with a tag (``str``, an auth's ``module:function`` name), and
+    ``value_to_tag`` gives ``(value, tag)`` pairs for a member that is one
+    constant (``Literal[False]``), told by identity (``False`` is not ``0``,
+    and not ``True`` either): a member that is no class has its tag there,
+    or building the discriminator fails as the module imports, since nothing
+    would tell that member.
 
     Unrecognized input yields an invalid tag rather than raising, so pydantic
     reports a located ``union_tag_invalid`` error listing the valid tags — which
     every caller's ``except ValidationError`` already handles.
     """
+    class_to_tag = dict(extra or {})
+    constant_tags = {tag for _, tag in value_to_tag}
+    for member in get_args(members):
+        member_type, *metadata = get_args(member)
+        tag = next(item.tag for item in metadata if isinstance(item, Tag))
+        if isinstance(member_type, type):
+            class_to_tag[member_type] = tag
+        elif tag not in constant_tags:
+            raise TypeError(f"The union member tagged {tag!r} is no class, and no value_to_tag pair gives its tag")
     tag_fields = set(class_to_tag.values())
 
     def discriminator(v: Any) -> str:
@@ -337,20 +353,23 @@ class BearerAuth(StrictModel):
     )
 
 
-# A bare string is a user function's import name, and `false` the request's
-# opt-out; an object is told by its key. `true` is no form of auth, and gets
-# the tag error listing those that are.
-get_auth_discriminator = _create_discriminator(
-    {
-        str: "module:function",
-        UserFunctionName: "module:function",
-        UserFunctionKwargs: "name",
-        BasicAuth: "basic",
-        DigestAuth: "digest",
-        BearerAuth: "bearer",
-    },
-    value_to_tag=((False, "false"),),
+# The forms of auth, a scenario's and a request's; a request's also takes
+# `false`: none for this request, the scenario's included. Both unions are
+# built from these plain ones, as a discriminated union cannot take another
+# one as a member.
+_AuthMember = (
+    Annotated[UserFunctionName, Tag("module:function")]
+    | Annotated[UserFunctionKwargs, Tag("name")]
+    | Annotated[BasicAuth, Tag("basic")]
+    | Annotated[DigestAuth, Tag("digest")]
+    | Annotated[BearerAuth, Tag("bearer")]
 )
+_RequestAuthMember = _AuthMember | Annotated[Literal[False], Tag("false")]
+
+# Shared by both unions. A bare string is a user function's import name, and
+# `false` the request's opt-out; an object is told by its key. `true` is no
+# form of auth, and gets the tag error listing those that are.
+get_auth_discriminator = _create_discriminator(_RequestAuthMember, extra={str: "module:function"}, value_to_tag=((False, "false"),))
 
 
 def _auth_namespace_to_dict(v: Any) -> Any:
@@ -390,31 +409,13 @@ def _refuse_auth_string_unquoted(v: Any) -> Any:
 
 
 Auth = Annotated[
-    Annotated[
-        Annotated[UserFunctionName, Tag("module:function")]
-        | Annotated[UserFunctionKwargs, Tag("name")]
-        | Annotated[BasicAuth, Tag("basic")]
-        | Annotated[DigestAuth, Tag("digest")]
-        | Annotated[BearerAuth, Tag("bearer")],
-        Discriminator(get_auth_discriminator),
-    ],
+    Annotated[_AuthMember, Discriminator(get_auth_discriminator)],
     BeforeValidator(_auth_namespace_to_dict),
     BeforeValidator(_refuse_auth_string_unquoted),
 ]
 
-# A request's auth also takes `false`: none for this request, the scenario's
-# included. The members are Auth's, spelled out: a discriminated union cannot
-# take another one as a member.
 RequestAuth = Annotated[
-    Annotated[
-        Annotated[UserFunctionName, Tag("module:function")]
-        | Annotated[UserFunctionKwargs, Tag("name")]
-        | Annotated[BasicAuth, Tag("basic")]
-        | Annotated[DigestAuth, Tag("digest")]
-        | Annotated[BearerAuth, Tag("bearer")]
-        | Annotated[Literal[False], Tag("false")],
-        Discriminator(get_auth_discriminator),
-    ],
+    Annotated[_RequestAuthMember, Discriminator(get_auth_discriminator)],
     BeforeValidator(_auth_namespace_to_dict),
     BeforeValidator(_refuse_auth_string_unquoted),
 ]
@@ -550,15 +551,17 @@ def _refuse_null_file(v: Any) -> Any:
     return v
 
 
-# One file: a path, or an object saying more about it. A list here, a list in
-# a list, gets the tag error listing these two. Its namespace is converted
-# here as well as in `FileEntries`: a tuple a template rendered is taken as
-# the list, and `convert_namespace_to_dict` walks lists only.
+# One file: a path, or an object saying more about it. Both unions of files
+# below are built from this plain one, as a discriminated union cannot take
+# another one as a member.
+_FileMember = Annotated[SerializablePath | PartialTemplateStr, Tag("path")] | Annotated[FileSpec, Tag("object")]
+
+# One file. A list here, a list in a list, gets the tag error listing its two
+# forms. Its namespace is converted here as well as in `FileEntries`: a tuple
+# a template rendered is taken as the list, and `convert_namespace_to_dict`
+# walks lists only.
 _FileEntry = Annotated[
-    Annotated[
-        Annotated[SerializablePath | PartialTemplateStr, Tag("path")] | Annotated[FileSpec, Tag("object")],
-        Discriminator(_file_entry_tag),
-    ],
+    Annotated[_FileMember, Discriminator(_file_entry_tag)],
     BeforeValidator(convert_namespace_to_dict),
     BeforeValidator(_refuse_null_file),
 ]
@@ -568,10 +571,7 @@ _FileEntry = Annotated[
 # stands for the file object it was written as; converted ahead of the union,
 # keeping its tags in error locations.
 FileEntries = Annotated[
-    Annotated[
-        Annotated[SerializablePath | PartialTemplateStr, Tag("path")] | Annotated[FileSpec, Tag("object")] | Annotated[list[_FileEntry], Tag("list")],
-        Discriminator(_file_entry_tag),
-    ],
+    Annotated[_FileMember | Annotated[list[_FileEntry], Tag("list")], Discriminator(_file_entry_tag)],
     BeforeValidator(convert_namespace_to_dict),
     BeforeValidator(_refuse_null_file),
 ]
@@ -657,24 +657,7 @@ class GraphQLBody(StrictModel):
     graphql: GraphQL = Field(description="GraphQL query configuration.")
 
 
-get_request_body_discriminator = _create_discriminator(
-    {
-        JsonBody: "json",
-        XmlBody: "xml",
-        FormBody: "form",
-        TextBody: "text",
-        Base64Body: "base64",
-        BinaryBody: "binary",
-        BytesBody: "bytes",
-        MsgpackBody: "msgpack",
-        FilesBody: "files",
-        MultipartBody: "multipart",
-        GraphQLBody: "graphql",
-    },
-)
-
-
-RequestBody = Annotated[
+_RequestBodyMember = (
     Annotated[JsonBody, Tag("json")]
     | Annotated[XmlBody, Tag("xml")]
     | Annotated[FormBody, Tag("form")]
@@ -685,9 +668,10 @@ RequestBody = Annotated[
     | Annotated[MsgpackBody, Tag("msgpack")]
     | Annotated[FilesBody, Tag("files")]
     | Annotated[MultipartBody, Tag("multipart")]
-    | Annotated[GraphQLBody, Tag("graphql")],
-    Discriminator(get_request_body_discriminator),
-]
+    | Annotated[GraphQLBody, Tag("graphql")]
+)
+
+RequestBody = Annotated[_RequestBodyMember, Discriminator(_create_discriminator(_RequestBodyMember))]
 
 
 def _omit_schema_default(schema: JsonDict) -> None:
@@ -740,18 +724,9 @@ class FunctionsSubstitution(Descripted):
     functions: FunctionsDict = Field(description="User-defined functions.")
 
 
-get_substitution_discriminator = _create_discriminator(
-    {
-        VarsSubstitution: "vars",
-        FunctionsSubstitution: "functions",
-    },
-)
+_SubstitutionMember = Annotated[VarsSubstitution, Tag("vars")] | Annotated[FunctionsSubstitution, Tag("functions")]
 
-
-Substitution = Annotated[
-    Annotated[VarsSubstitution, Tag("vars")] | Annotated[FunctionsSubstitution, Tag("functions")],
-    Discriminator(get_substitution_discriminator),
-]
+Substitution = Annotated[_SubstitutionMember, Discriminator(_create_discriminator(_SubstitutionMember))]
 
 # Input type unions representing all accepted formats for flexible validation
 SubstitutionsInput = list[Substitution] | dict[str, Substitution | list[Substitution]]
@@ -844,23 +819,14 @@ class UserFunctionsSave(Descripted):
     user_functions: FunctionsList = Field(description="Functions to process response data.")
 
 
-get_save_discriminator = _create_discriminator(
-    {
-        JMESPathSave: "jmespath",
-        RegexSave: "regex",
-        SubstitutionsSave: "substitutions",
-        UserFunctionsSave: "user_functions",
-    },
-)
-
-
-Save = Annotated[
+_SaveMember = (
     Annotated[JMESPathSave, Tag("jmespath")]
     | Annotated[RegexSave, Tag("regex")]
     | Annotated[SubstitutionsSave, Tag("substitutions")]
-    | Annotated[UserFunctionsSave, Tag("user_functions")],
-    Discriminator(get_save_discriminator),
-]
+    | Annotated[UserFunctionsSave, Tag("user_functions")]
+)
+
+Save = Annotated[_SaveMember, Discriminator(_create_discriminator(_SaveMember))]
 
 
 with _suppress_field_shadow_warning("schema"):
@@ -1180,15 +1146,9 @@ class VerifyStep(StrictModel):
     verify: Verify = Field(description="Verify configuration.")
 
 
-get_response_step_discriminator = _create_discriminator(
-    {SaveStep: "save", VerifyStep: "verify"},
-)
+_ResponseStepMember = Annotated[SaveStep, Tag("save")] | Annotated[VerifyStep, Tag("verify")]
 
-
-ResponseStep = Annotated[
-    Annotated[SaveStep, Tag("save")] | Annotated[VerifyStep, Tag("verify")],
-    Discriminator(get_response_step_discriminator),
-]
+ResponseStep = Annotated[_ResponseStepMember, Discriminator(_create_discriminator(_ResponseStepMember))]
 
 # Input type union for Responses - accepts both list and dict formats
 ResponsesInput = list[ResponseStep] | dict[str, ResponseStep | list[ResponseStep]]
@@ -1245,15 +1205,9 @@ class CombinationsParameter(StrictModel):
         return self
 
 
-get_parameter_step_discriminator = _create_discriminator(
-    {IndividualParameter: "individual", CombinationsParameter: "combinations"},
-)
+_ParameterMember = Annotated[IndividualParameter, Tag("individual")] | Annotated[CombinationsParameter, Tag("combinations")]
 
-
-Parameter = Annotated[
-    Annotated[IndividualParameter, Tag("individual")] | Annotated[CombinationsParameter, Tag("combinations")],
-    Discriminator(get_parameter_step_discriminator),
-]
+Parameter = Annotated[_ParameterMember, Discriminator(_create_discriminator(_ParameterMember))]
 
 
 Parameters = list[Parameter]
@@ -1380,18 +1334,9 @@ class ParallelForeachConfig(ParallelConfigBase):
     )
 
 
-get_parallel_config_discriminator = _create_discriminator(
-    {
-        ParallelRepeatConfig: "repeat",
-        ParallelForeachConfig: "foreach",
-    },
-)
+_ParallelConfigMember = Annotated[ParallelRepeatConfig, Tag("repeat")] | Annotated[ParallelForeachConfig, Tag("foreach")]
 
-
-ParallelConfig = Annotated[
-    Annotated[ParallelRepeatConfig, Tag("repeat")] | Annotated[ParallelForeachConfig, Tag("foreach")],
-    Discriminator(get_parallel_config_discriminator),
-]
+ParallelConfig = Annotated[_ParallelConfigMember, Discriminator(_create_discriminator(_ParallelConfigMember))]
 
 
 # The failures a stage's `retry` can make another attempt after, by the
