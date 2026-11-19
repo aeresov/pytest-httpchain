@@ -68,7 +68,7 @@ hide_input=..., rendered=True)` leaves it, rebuilt with
 `validation_error(title, errors, hide_input=...)` only when an error goes,
 hiding the input as the outermost validator does (`hide_input_in_errors`,
 which a rebuilt error does not inherit). `validation_error` also rebuilds the
-carrier's relocated verify errors (`carrier._relocated`).
+relocated verify errors of the carrier's renderer (`rendering._relocated`).
 
 `parse_schema_file_ref(ref)` — a `verify.body.schema` file reference taken
 apart (`SchemaFileRef`): the file path and, after the first `#`, an RFC 6901
