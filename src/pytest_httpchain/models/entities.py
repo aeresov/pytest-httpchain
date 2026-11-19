@@ -1295,8 +1295,9 @@ def _refuse_bool(setting: str) -> Callable[[Any], Any]:
 
 
 # A parallel stage's limits: a success ratio from 0 to 1, and a positive
-# number of milliseconds or iterations per second, each finite, as the carrier
-# resolves them (`_threshold_limits`). None takes a bool (`_refuse_bool`).
+# number of milliseconds or iterations per second, each finite, as a stage
+# resolves them (`stage_settings.threshold_limits`). None takes a bool
+# (`_refuse_bool`).
 _SuccessRatio = Annotated[Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A threshold"))]
 _PositiveLimit = Annotated[Annotated[float, Field(gt=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A threshold"))]
 
@@ -1400,9 +1401,9 @@ RETRY_ON: tuple[RetryOn, ...] = ("verify", "save", "request")
 
 
 # A retry's attempts, seconds and backoff factor. The seconds and the factor
-# are finite, as the carrier resolves them (`_setting_number`), so what it
-# refuses the model refuses at load: JSON's 1e999 reads as inf, which float
-# takes by default. None of them takes a bool (`_refuse_bool`).
+# are finite, as a stage resolves them (`stage_settings.setting_number`), so
+# what it refuses the model refuses at load: JSON's 1e999 reads as inf, which
+# float takes by default. None of them takes a bool (`_refuse_bool`).
 _RetryAttempts = Annotated[PositiveInt | NumberOrTemplate, BeforeValidator(_refuse_bool("A retry setting"))]
 _RetrySeconds = Annotated[Annotated[float, Field(ge=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A retry setting"))]
 _RetryFactor = Annotated[Annotated[float, Field(ge=1, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A retry setting"))]

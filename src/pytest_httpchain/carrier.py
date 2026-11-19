@@ -8,9 +8,11 @@ scenarios stay isolated from each other.
 
 This module owns sequencing only. What the individual pieces mean lives next
 door: ``rendering`` (a declared model rendered against the context),
-``request_builder`` (models -> httpx arguments), ``response_steps`` (one
-verify/save step), ``scoping`` (context layering), ``connections`` (a
-connection stage's sessions, readers and waits).
+``stage_settings`` (a stage's ``parallel`` and ``retry`` blocks once
+rendered: the iteration matrix, the retry policy), ``request_builder``
+(models -> httpx arguments), ``response_steps`` (one verify/save step),
+``scoping`` (context layering), ``connections`` (a connection stage's
+sessions, readers and waits).
 """
 
 import functools
@@ -22,7 +24,7 @@ import threading
 import time
 import warnings
 from collections import ChainMap
-from collections.abc import Callable, Collection, Hashable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Hashable, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 from contextvars import ContextVar
@@ -42,15 +44,9 @@ from pytest_httpchain.errors import RequestError, SaveError, StageExecutionError
 from pytest_httpchain.har_writer import Exchange
 from pytest_httpchain.models import (
     ClientConfig,
-    CombinationsParameter,
     ConnectionConfig,
     ConnectionStep,
-    IndividualParameter,
     ParallelConfig,
-    ParallelForeachConfig,
-    ParallelRepeatConfig,
-    ParallelThresholds,
-    RetryConfig,
     SaveStep,
     Scenario,
     Stage,
@@ -90,6 +86,17 @@ from pytest_httpchain.scoping import (
     stage_start_context,
     with_saves,
     with_stage_substitutions,
+)
+from pytest_httpchain.stage_settings import (
+    NO_RETRY,
+    RetryPolicy,
+    build_iteration_substitutions,
+    parallel_flag,
+    parallel_int,
+    parallel_number,
+    retry_policy,
+    setting_number,
+    threshold_limits,
 )
 from pytest_httpchain.templates import TemplatesError, walk
 from pytest_httpchain.utils import INTERRUPTS as _INTERRUPTS
@@ -258,113 +265,6 @@ def _request_error(what: str, e: Exception, redaction: Redaction) -> RequestErro
     return RequestError(f"{what}: {text}", request=request, retryable=isinstance(e, _NETWORK_ERRORS))
 
 
-def _setting_number(setting: str, value: Any, must_be: str = "a positive number", accepts: Callable[[float], bool] = lambda number: number > 0) -> float:
-    """A walk()-resolved numeric ``parallel`` or ``retry`` setting as a float,
-    or a stage failure saying the ``setting`` ``must_be`` what ``accepts`` takes.
-
-    The numeric fields are `PositiveInt | NumberOrTemplate` and the like, and
-    walk() re-validates the config it resolves, but NumberOrTemplate accepts
-    any complete template: a template resolving to another template string
-    satisfies it and arrives here as text. A bare ``float()``/``int()`` would
-    raise ValueError, which is not a stage failure and so escapes as a plugin
-    traceback.
-    """
-    if isinstance(value, bool):
-        # float(True) is 1.0: read as it is, a bool would configure one
-        # attempt or a one-second wait. The retry model refuses one, written
-        # or rendered, so none of its settings brings one here; the parallel
-        # model reads one as 1 before it gets here. Kept so that whatever a
-        # model lets through, this never reads a bool as a number.
-        raise StageExecutionError(f"{setting} must be {must_be}, got {value!r}")
-    try:
-        number = float(value)
-    except (TypeError, ValueError, ArithmeticError):
-        raise StageExecutionError(f"{setting} must be {must_be}, got {value!r}") from None
-    if not math.isfinite(number) or not accepts(number):
-        raise StageExecutionError(f"{setting} must be {must_be}, got {value!r}")
-    return number
-
-
-def _setting_int(setting: str, value: Any) -> int:
-    """`_setting_number` for a positive whole-number setting. Truncating
-    instead would turn a resolved 0.5 into 0 — no workers, a silently disabled
-    limiter, no attempt at all.
-
-    An int is taken as it stands: `PositiveInt` has no upper bound, and routing
-    one through ``float()`` would raise OverflowError on a value the callers
-    handle perfectly well (``max_concurrency`` clamps against the iteration
-    count, and pyrate_limiter accepts any int rate).
-    """
-    if isinstance(value, int) and not isinstance(value, bool):
-        if value <= 0:
-            raise StageExecutionError(f"{setting} must be a positive whole number, got {value!r}")
-        return value
-    number = _setting_number(setting, value)
-    if not number.is_integer():
-        raise StageExecutionError(f"{setting} must be a positive whole number, got {value!r}")
-    return int(number)
-
-
-def _parallel_number(field: str, value: Any) -> float:
-    """A walk()-resolved ``parallel`` setting as a positive float, or a stage failure."""
-    return _setting_number(f"parallel.{field}", value)
-
-
-def _parallel_int(field: str, value: Any) -> int:
-    """A walk()-resolved ``parallel`` setting as a positive int, or a stage failure."""
-    return _setting_int(f"parallel.{field}", value)
-
-
-def _parallel_values(field: str, value: Any) -> list[Any]:
-    """A walk()-resolved ``parallel.foreach`` step's values, or a stage failure.
-
-    Like the numeric fields, both step kinds also accept a template string, so a
-    template resolving to another template arrives here as text: iterated, it
-    ran one iteration per character (``individual``) or escaped as a bare
-    TypeError (``combinations``).
-    """
-    if not isinstance(value, list):
-        raise StageExecutionError(f"parallel.foreach {field} must resolve to a list, got {value!r}")
-    return value
-
-
-def _parallel_flag(field: str, value: Any) -> bool:
-    """A walk()-resolved ``parallel`` switch, or a stage failure.
-
-    Its template branch accepts any complete template, so one that rendered
-    to another template arrives here as text, which is truthy: read as it is,
-    it would turn the switch on. Any other value that is not a bool the
-    model's own validation refused on re-validating what was rendered, but a
-    1 or a 0, which it took as true or false, as it does in every bool
-    setting (``client.http2``, a regex save's ``all``).
-    """
-    if not isinstance(value, bool):
-        raise StageExecutionError(f"parallel.{field} must resolve to true or false, got {value!r}")
-    return value
-
-
-def _threshold_limits(thresholds: ParallelThresholds | None) -> dict[str, float]:
-    """A walk()-resolved ``parallel.thresholds`` as the limits the stage's
-    stats are held to, by threshold, or a stage failure naming one it cannot
-    use: resolved before any request, as the rest of the ``parallel`` config
-    is, so a limit a template rendered to template text fails the stage then,
-    not once every iteration has run. None is "never declared" here:
-    `render_declared` already refused a template that rendered to None."""
-    if thresholds is None:
-        return {}
-    limits: dict[str, float] = {}
-    for name in type(thresholds).model_fields:
-        value = getattr(thresholds, name)
-        if value is None:
-            continue
-        setting = f"parallel.thresholds.{name}"
-        if name == "min_success_ratio":
-            limits[name] = _setting_number(setting, value, "a number from 0 to 1", lambda number: 0 <= number <= 1)
-        else:
-            limits[name] = _setting_number(setting, value)
-    return limits
-
-
 def _merged_saves(saved: Sequence[Mapping[str, Any]], collect: bool, declared: Iterable[str] = ()) -> dict[str, Any]:
     """What a stage whose iterations all succeeded commits, from each one's
     saves (``saved[i]`` is iteration i's): in iteration order, never in the
@@ -418,64 +318,6 @@ def _with_stats(saves: dict[str, Any], name: str, stats: ParallelStats, declared
             # reporting and the abort engage.
             raise StageExecutionError(str(promoted)) from None
     return {**saves, name: stats.saved()}
-
-
-# The error each kind a stage's ``retry.on`` names is a failure of: a verify
-# step's, a save step's, the request's.
-_RETRY_ON_ERRORS: dict[str, type[StageExecutionError]] = {"verify": VerificationError, "save": SaveError, "request": RequestError}
-
-
-@dataclass(frozen=True, slots=True)
-class _RetryPolicy:
-    """A stage's ``retry`` resolved (`_retry_policy`): how many attempts it
-    makes at most, how long it waits before each after the first, and after
-    which failures. `_NO_RETRY` is a stage's without one: one attempt."""
-
-    attempts: int = 1
-    delay: float = 1
-    backoff: float = 1
-    max_delay: float | None = None
-    on: tuple[type[StageExecutionError], ...] = ()
-
-    def retries(self, error: BaseException) -> TypeGuard[StageExecutionError]:
-        """Whether ``error`` ending an attempt makes another, if one is left:
-        a failure of a kind ``on`` names, and one another attempt may not
-        repeat (`StageExecutionError.retryable`). A template or validation
-        error is no stage failure (it is the scenario's own), nor is a pytest
-        outcome a user function raised, and neither is retried."""
-        return isinstance(error, self.on) and error.retryable
-
-    def waits(self) -> Iterator[float]:
-        """The wait before each attempt after the first, in order: ``delay``,
-        multiplied by ``backoff`` after each attempt, never more than
-        ``max_delay``. Exhausted once no attempt is left."""
-        wait = self.delay
-        for _ in range(self.attempts - 1):
-            yield wait if self.max_delay is None else min(wait, self.max_delay)
-            # Past float's range this is inf, which the cap (or the wait's
-            # own, `_wait_to_retry`) takes.
-            wait *= self.backoff
-
-
-_NO_RETRY = _RetryPolicy()
-
-
-def _retry_policy(config: RetryConfig | None) -> _RetryPolicy:
-    """A walk()-resolved ``retry`` as the policy the iterations follow, or a
-    stage failure naming a setting it cannot use. Resolved before any request,
-    as the ``parallel`` config is: a setting a template rendered to template
-    text fails the stage then, not once the first attempt has failed."""
-    if config is None:
-        return _NO_RETRY
-    return _RetryPolicy(
-        attempts=_setting_int("retry.attempts", config.attempts),
-        delay=_setting_number("retry.delay", config.delay, "a number of seconds, 0 or more", lambda number: number >= 0),
-        backoff=_setting_number("retry.backoff", config.backoff, "a number, 1 or more", lambda number: number >= 1),
-        # None is "never declared" here: `render_declared` already refused a
-        # template that rendered to None.
-        max_delay=_setting_number("retry.max_delay", config.max_delay, "a number of seconds, 0 or more", lambda number: number >= 0) if config.max_delay is not None else None,
-        on=tuple(_RETRY_ON_ERRORS[kind] for kind in ([config.on] if isinstance(config.on, str) else config.on)),
-    )
 
 
 def _wait_to_retry(seconds: float, cancel: threading.Event | None) -> bool:
@@ -1146,7 +988,7 @@ class Carrier:
                 cls._connection_params_context = cls._params_context(stage_fixtures)
 
             parallel_config: ParallelConfig | None = render_declared(stage.parallel, local_context, "parallel") if stage.parallel else None
-            iteration_substitutions = cls._build_iteration_substitutions(parallel_config, cls.max_parallel_iterations)
+            iteration_substitutions = build_iteration_substitutions(parallel_config, cls.max_parallel_iterations)
 
             total = len(iteration_substitutions)
             if total == 0:
@@ -1155,11 +997,11 @@ class Carrier:
                 raise StageExecutionError("Parallel configuration produced zero iterations; foreach/repeat must yield at least one item")
             # Before any request: a switch the stage cannot read must fail it
             # before its iterations send anything, not once they all have.
-            collect_saves = _parallel_flag("collect_saves", parallel_config.collect_saves) if parallel_config is not None else False
-            limits = _threshold_limits(parallel_config.thresholds) if parallel_config is not None else {}
+            collect_saves = parallel_flag("collect_saves", parallel_config.collect_saves) if parallel_config is not None else False
+            limits = threshold_limits(parallel_config.thresholds) if parallel_config is not None else {}
             # Against the same context as the parallel config, and before any
             # request too: a setting the stage cannot use fails it now.
-            retry = _retry_policy(render_declared(stage.retry, local_context, "retry")) if stage.retry is not None else _NO_RETRY
+            retry = retry_policy(render_declared(stage.retry, local_context, "retry")) if stage.retry is not None else NO_RETRY
 
             if parallel_config is not None:
                 run = _ParallelRun(stage.name, total, tolerate=limits.get("min_success_ratio", 1) < 1)
@@ -1279,59 +1121,6 @@ class Carrier:
         values pass through."""
         return {name: cls._wrap_factory_fixture(name, value) if callable(value) and not inspect.isclass(value) else value for name, value in fixture_kwargs.items()}
 
-    @staticmethod
-    def _build_iteration_substitutions(parallel_config: ParallelConfig | None, max_parallel_iterations: int) -> list[dict[str, Any]]:
-        """Expand a resolved parallel config into per-iteration substitutions:
-        no config -> one empty dict; ``repeat`` -> N empties; ``foreach`` -> the
-        cross-product of its steps.
-
-        The cap is checked before anything is materialized, since a runaway
-        template-driven count would otherwise OOM while building the list the cap
-        was about to reject. The cross-product order is the *reverse* of pytest's
-        stacked ``parametrize``.
-        """
-
-        def check_cap(count: int) -> None:
-            if count > max_parallel_iterations:
-                raise StageExecutionError(
-                    f"Parallel iteration count ({count}) exceeds maximum ({max_parallel_iterations}). Set 'httpchain_max_parallel_iterations' in pytest.ini to increase the limit."
-                )
-
-        iteration_substitutions: list[dict[str, Any]] = [{}]
-        match parallel_config:
-            case None:
-                pass
-            case ParallelRepeatConfig(repeat=repeat_count):
-                # int(): the field is `PositiveInt | NumberOrTemplate`, but the
-                # config arrives walk()-resolved.
-                repeat_total = _parallel_int("repeat", repeat_count)
-                check_cap(repeat_total)
-                iteration_substitutions = [{} for _ in range(repeat_total)]
-            case ParallelForeachConfig(foreach=foreach_steps):
-                # (name, values) per step — None for a `combinations` step, whose
-                # values are whole dicts. Collecting this shape first keeps the
-                # cap check ahead of the expansion.
-                steps: list[tuple[str | None, list[Any]]] = []
-                for step in foreach_steps:
-                    match step:
-                        case IndividualParameter(individual=individual):
-                            param_name = next(iter(individual))
-                            steps.append((param_name, _parallel_values(f"individual '{param_name}'", individual[param_name])))
-                        case CombinationsParameter(combinations=combinations):
-                            steps.append((None, _parallel_values("combinations", combinations)))
-                        case _:
-                            raise RuntimeError(f"Unhandled foreach step: {type(step).__name__}")
-                check_cap(math.prod(len(values) for _, values in steps))
-
-                for param_name, values in steps:
-                    additions = [{param_name: value} if param_name is not None else value for value in values]
-                    # Clause order is load-bearing: new values outer, accumulated
-                    # dicts inner. Swapping them changes the iteration order.
-                    iteration_substitutions = [{**existing, **addition} for addition in additions for existing in iteration_substitutions]
-            case _:
-                raise RuntimeError(f"Unhandled parallel config: {type(parallel_config).__name__}")
-        return iteration_substitutions
-
     @classmethod
     def _record_exchanges(cls, completed: list[IterationResult], failed: Exception | None, attempted: int, attempts: int = 1, secondary: Sequence[Exchange] = ()) -> None:
         """Record this stage's HTTP exchanges for the report and the HAR file.
@@ -1382,7 +1171,7 @@ class Carrier:
         iteration_substitutions: list[dict[str, Any]],
         parallel_config: ParallelConfig | None,
         exit_errors: list[str],
-        retry: _RetryPolicy = _NO_RETRY,
+        retry: RetryPolicy = NO_RETRY,
         secondary_exchanges: list[Exchange] | None = None,
         run: _ParallelRun | None = None,
     ) -> tuple[list[IterationResult | None], tuple[int, Exception] | None]:
@@ -1421,11 +1210,11 @@ class Carrier:
             max_rate_limit_delay: float = 60
             if parallel_config is not None and (total > 1 or retry.attempts > 1):
                 # Guarded rather than cast: the config arrives walk()-resolved,
-                # and a resolved value can still be unusable (see `_setting_number`).
+                # and a resolved value can still be unusable (see `setting_number`).
                 # None is "never declared" here: `render_declared` already
                 # refused a template that rendered to None.
-                calls_per_sec = _parallel_int("calls_per_sec", parallel_config.calls_per_sec) if parallel_config.calls_per_sec is not None else None
-                max_rate_limit_delay = _parallel_number("max_rate_limit_delay", parallel_config.max_rate_limit_delay)
+                calls_per_sec = parallel_int("calls_per_sec", parallel_config.calls_per_sec) if parallel_config.calls_per_sec is not None else None
+                max_rate_limit_delay = parallel_number("max_rate_limit_delay", parallel_config.max_rate_limit_delay)
                 limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec is not None else None
 
             if total == 1:
@@ -1440,9 +1229,9 @@ class Carrier:
                         first_error = (0, e)
             else:
                 # Only a parallel config can yield more than one iteration:
-                # `_build_iteration_substitutions(None, ...)` returns exactly one.
+                # `build_iteration_substitutions(None, ...)` returns exactly one.
                 assert parallel_config is not None, "more than one iteration implies a parallel config"
-                max_concurrency = _parallel_int("max_concurrency", parallel_config.max_concurrency)
+                max_concurrency = parallel_int("max_concurrency", parallel_config.max_concurrency)
 
                 workers = min(max_concurrency, total)
                 cancel = _PoolCancel()
@@ -1610,7 +1399,7 @@ class Carrier:
         max_rate_limit_delay: float = 60,
         cancel: _PoolCancel | None = None,
         idx: int = 0,
-        retry: _RetryPolicy = _NO_RETRY,
+        retry: RetryPolicy = NO_RETRY,
         run: _ParallelRun | None = None,
     ) -> IterationResult:
         """Execute one iteration, its every attempt (`_execute_attempts`), then
@@ -1683,13 +1472,13 @@ class Carrier:
         stage: Stage,
         local_context: ChainMap[str, Any],
         iter_vars: Mapping[str, Any],
-        retry: _RetryPolicy,
+        retry: RetryPolicy,
         limiter: Limiter | None = None,
         max_rate_limit_delay: float = 60,
         cancel: threading.Event | None = None,
     ) -> IterationResult:
         """Make an iteration's attempts: the first, and after each that fails
-        in a way ``retry`` retries (`_RetryPolicy.retries`), a wait of its
+        in a way ``retry`` retries (`RetryPolicy.retries`), a wait of its
         schedule and another, until one succeeds or none is left.
 
         Each attempt is `_execute_single_iteration` whole: it renders the
@@ -2038,7 +1827,7 @@ class Carrier:
                 connect_timeout = walk(config.connect_timeout, context)
             except (TemplatesError, ValueError) as e:
                 raise StageExecutionError(f"Stage '{stage.name}': connection '{name}' params did not render: {e}") from e
-            timeout = _setting_number(f"connections.{name}.connect_timeout", connect_timeout)
+            timeout = setting_number(f"connections.{name}.connect_timeout", connect_timeout)
             session, connected = cls.connections.open(name, config.adapter, params, timeout, config.inbox_limit, label=cls.__name__)
         except BaseException as e:
             errors = _exit_context_managers(resources.close())
@@ -2083,7 +1872,7 @@ class Carrier:
         expect = step.expect
         assert expect is not None, "only a step that expects waits"
         context = connection_step_context(iter_context, connection_bindings(**{name: bound[name] for name in (SENT_NAME,) if name in bound}))
-        timeout = _setting_number("connection.expect.timeout", walk(expect.timeout, context) if isinstance(expect.timeout, str) else expect.timeout)
+        timeout = setting_number("connection.expect.timeout", walk(expect.timeout, context) if isinstance(expect.timeout, str) else expect.timeout)
         rendered = rendered_match(expect.match, context, cls.redaction) if isinstance(expect.match, dict) else None
         mode = "closed" if expect.closed else "absent" if expect.absent else "message"
         record.match, record.timeout, record.mode = expect.match, timeout, mode

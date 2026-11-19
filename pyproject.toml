@@ -233,7 +233,7 @@ layers = [
     # declared model; it builds on response_steps' render types, and only
     # the carrier uses it.
     "rendering",
-    "validation : har_writer : report_formatter : request_builder : response_steps : parallel_stats",
+    "validation : har_writer : report_formatter : request_builder : response_steps : parallel_stats : stage_settings",
     # connections is the connection stages' sessions and readers, below
     # response_steps, which judges a message: the carrier injects the match.
     "connections",
