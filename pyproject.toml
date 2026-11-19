@@ -145,10 +145,21 @@ python-version = "3.13"
 [tool.ty.terminal]
 error-on-warning = true
 
-# Test suites (especially the models package) deliberately construct models with
-# invalid types to assert ValidationError, and access attributes on unions/mocks
-# the checker can't narrow. Relax those specific rules for test code only; src/
-# stays strict and uses pinpoint `# ty: ignore[...]` comments instead.
+# Off by default. A bare `ty: ignore` silences every rule on its line; src/ and
+# tests/ name the rule they expect instead (`ty: ignore[...]`), and this keeps it so.
+[tool.ty.rules]
+blanket-ignore-comment = "error"
+
+# Test code uses values wider than the checker can narrow, and feeds models input
+# they must refuse: Optional and union results used without a narrowing check
+# (`Response | None`, `Match | None`), dicts unpacked with `**` into typed calls,
+# test doubles given attributes on the fly, and models built with invalid types
+# to assert ValidationError. The hits spread across about 20 test files; the
+# models package accounts for about a seventh of them. Relax those specific rules
+# for test code only; src/ stays strict and uses pinpoint `# ty: ignore[...]`
+# comments instead.
+# unknown-argument and missing-argument fire nowhere today: they are kept for a
+# model built directly with an unknown or a missing field, to assert the same.
 [[tool.ty.overrides]]
 include = ["tests/**"]
 
