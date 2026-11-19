@@ -344,9 +344,7 @@ def extract_template_variables(obj: Any, *, defined: DefinedNames) -> set[str]:
     function of that name the call runs the built-in. Where the scenario
     defines such a function, `extract_builtin_stand_ins` has the call.
     """
-    names = _template_names(obj)
-    read = {name for name in names.read if name not in TEMPLATE_BUILTINS or name in defined.names}
-    return read | (names.called - TEMPLATE_BUILTINS)
+    return _referenced_variables(_template_names(obj), defined)
 
 
 def extract_builtin_stand_ins(obj: Any, *, defined: DefinedNames) -> set[str]:
@@ -370,7 +368,25 @@ def extract_builtin_stand_ins(obj: Any, *, defined: DefinedNames) -> set[str]:
     validator reports a stand-in out of scope as such (HTTPCHAIN036), never as
     an undefined name.
     """
+    return _builtin_stand_ins(_template_names(obj), defined)
+
+
+def template_references(obj: Any, *, defined: DefinedNames) -> tuple[set[str], set[str]]:
+    """``(variables, stand-ins)``: `extract_template_variables` and
+    `extract_builtin_stand_ins` of ``obj``, from one parse of its templates,
+    for a check that needs both."""
     names = _template_names(obj)
+    return _referenced_variables(names, defined), _builtin_stand_ins(names, defined)
+
+
+def _referenced_variables(names: _TemplateNames, defined: DefinedNames) -> set[str]:
+    """`extract_template_variables`, of some template text's ``names``."""
+    read = {name for name in names.read if name not in TEMPLATE_BUILTINS or name in defined.names}
+    return read | (names.called - TEMPLATE_BUILTINS)
+
+
+def _builtin_stand_ins(names: _TemplateNames, defined: DefinedNames) -> set[str]:
+    """`extract_builtin_stand_ins`, of some template text's ``names``."""
     to_users = names.to_functions | {name for receiver, name in names.to_methods if receiver in defined.callables}
     called = (names.called & defined.callables) - CONTEXT_HELPERS
     passed = (names.keys & defined.names) | (to_users & defined.callables)

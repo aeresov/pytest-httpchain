@@ -36,6 +36,7 @@ from pytest_httpchain.scoping import (
     stage_start_context,
     stage_templates,
     stats_name,
+    template_references,
     with_saves,
     with_stage_substitutions,
 )
@@ -552,6 +553,15 @@ def test_builtin_stand_ins(template, expected):
     stands in silently, which the validator reports as such (HTTPCHAIN036)
     rather than as an undefined name, since nothing fails."""
     assert extract_builtin_stand_ins(template, defined=DEFINED) == expected
+
+
+def test_template_references_are_both_from_one_parse():
+    """`template_references` is `extract_template_variables` and
+    `extract_builtin_stand_ins` together, over a structure's every template."""
+    templates = {"a": ["{{ sha256(body) + timestamp }}", "{{ sorted(rows, key=len) }}"], "b": "{{ fetch().ids(sha256) }} {{ get('x', now) }}"}
+    variables, stand_ins = template_references(templates, defined=DEFINED)
+    assert (variables, stand_ins) == (extract_template_variables(templates, defined=DEFINED), extract_builtin_stand_ins(templates, defined=DEFINED))
+    assert stand_ins == {"sha256", "len"}
 
 
 def test_runtime_resolves_builtin_names_as_the_reference_model_says():

@@ -46,7 +46,6 @@ from pytest_httpchain.scoping import (
     connection_lifecycles,
     connection_rendered_fields,
     defined_names,
-    extract_builtin_stand_ins,
     extract_defined_variables,
     extract_invalid_expressions,
     extract_saved_variables,
@@ -61,6 +60,7 @@ from pytest_httpchain.scoping import (
     stats_name,
     substitution_names,
     substitution_step_templates,
+    template_references,
 )
 from pytest_httpchain.templates import CALL_ONLY_BUILTINS, TEMPLATE_BUILTINS, call_form, contains_escape, contains_template, find_templates, is_complete_template, needs_rendering
 from pytest_httpchain.utils import make_marker, optional_as_list, path_segment, xdist_group_names
@@ -116,11 +116,11 @@ def describe_scenario(scenario: Scenario, test_data: dict[str, Any]) -> Scenario
     Separate from `check_scenario` because only the CLI wants it: pytest
     collection needs the diagnostics alone, and used to discard this as ``_``.
     """
-    defined = defined_names(scenario)
+    variables, stand_ins = template_references(test_data, defined=defined_names(scenario))
     return ScenarioInfo(
         num_stages=len(scenario.stages),
         stage_names=[stage.name for stage in scenario.stages],
-        vars_referenced=sorted(extract_template_variables(test_data, defined=defined) | extract_builtin_stand_ins(test_data, defined=defined)),
+        vars_referenced=sorted(variables | stand_ins),
         vars_saved=sorted(extract_saved_variables(scenario)),
         vars_defined=sorted(extract_defined_variables(scenario)),
         fixtures=_scenario_fixtures(scenario),
@@ -236,8 +236,8 @@ def _template_refs(templates: Any, defined: DefinedNames) -> tuple[set[str], set
     """``(references, stand-ins)`` of some template text: the names whose
     absence the undefined-name codes report, and the built-ins' names used only
     as functions, which out of scope get the built-in in their place (036)."""
-    stand_ins = extract_builtin_stand_ins(templates, defined=defined)
-    return extract_template_variables(templates, defined=defined) - stand_ins, stand_ins
+    variables, stand_ins = template_references(templates, defined=defined)
+    return variables - stand_ins, stand_ins
 
 
 def _stand_in_diagnostic(where: str, names: set[str], location: str, *, scope_note: str = "") -> Diagnostic:
