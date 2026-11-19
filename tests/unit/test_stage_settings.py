@@ -13,7 +13,16 @@ import pytest
 
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import IndividualParameter, ParallelForeachConfig, ParallelRepeatConfig, RetryConfig
-from pytest_httpchain.stage_settings import NO_RETRY, _parallel_int, _parallel_number, build_iteration_substitutions, rate_settings, retry_policy
+from pytest_httpchain.stage_settings import (
+    NO_RETRY,
+    RateSettings,
+    RetryPolicy,
+    _parallel_int,
+    _parallel_number,
+    build_iteration_substitutions,
+    rate_settings,
+    retry_policy,
+)
 
 
 class TestResolvedParallelSettings:
@@ -69,6 +78,23 @@ class TestResolvedParallelSettings:
         settings = {"repeat": 2, "max_concurrency": 2, "calls_per_sec": None, "max_rate_limit_delay": 60, field: value}
         with pytest.raises(StageExecutionError, match=field):
             rate_settings(ParallelRepeatConfig.model_construct(**settings), 2, NO_RETRY)
+
+    @pytest.mark.parametrize(
+        ("settings", "total", "attempts", "expected"),
+        [
+            # A single iteration's only attempt cannot block on a fresh
+            # bucket: nothing is read, not even values that would fail.
+            pytest.param({"calls_per_sec": "x", "max_rate_limit_delay": "x", "max_concurrency": "x"}, 1, 1, RateSettings(), id="one-iteration-one-attempt"),
+            # Retried, its attempts each take a slot, so the rate settings are
+            # read; one iteration runs inline, so max_concurrency is not.
+            pytest.param({"calls_per_sec": 5, "max_rate_limit_delay": 2, "max_concurrency": "x"}, 1, 2, RateSettings(5, 2, None), id="one-iteration-retried"),
+            # No parallel block: a retried stage has no limiter to configure.
+            pytest.param(None, 1, 3, RateSettings(), id="no-parallel-retried"),
+        ],
+    )
+    def test_rate_settings_read_only_where_they_apply(self, settings, total, attempts, expected):
+        parallel = None if settings is None else ParallelRepeatConfig.model_construct(repeat=total, **settings)
+        assert rate_settings(parallel, total, RetryPolicy(attempts=attempts)) == expected
 
 
 class TestRetryPolicy:
