@@ -64,23 +64,20 @@ def format_request(request: httpx.Request, redaction: Redaction = DEFAULT_REDACT
         body = _format_body_text(parts)
     elif content:
         if is_msgpack_content_type(content_type):
-            try:
-                body = _format_encoded(_PRETTY_MSGPACK, unpack_msgpack(content))
-            except MSGPACK_DECODE_ERRORS:
-                body = f"<Binary content: {len(content)} bytes>"
-            return _message_lines(f"{request.method} {redaction.url(request.url)}", request.headers, body, redaction)
-        try:
-            decoded = content.decode()
-        except UnicodeDecodeError:
-            body = f"<Binary content: {len(content)} bytes>"
+            body = _msgpack_body(content)
         else:
-            body = _format_body_text(decoded)
-            if "application/json" in content_type.lower():
-                try:
-                    body = _format_json(json.loads(decoded))
-                except JSON_PARSE_ERRORS:
-                    # A JSON body that fails to parse is malformed text, not binary.
-                    pass
+            try:
+                decoded = content.decode()
+            except UnicodeDecodeError:
+                body = _binary(len(content))
+            else:
+                body = _format_body_text(decoded)
+                if "application/json" in content_type.lower():
+                    try:
+                        body = _format_encoded(_PRETTY_JSON, json.loads(decoded))
+                    except JSON_PARSE_ERRORS:
+                        # A JSON body that fails to parse is malformed text, not binary.
+                        pass
 
     return _message_lines(f"{request.method} {redaction.url(request.url)}", request.headers, body, redaction)
 
@@ -150,7 +147,7 @@ def _part_text(content: bytes, start: int, end: int, room: int) -> str:
             text += decoder.decode(content[offset : min(offset + _DECODE_CHUNK, end)])[: room - len(text)]
         decoder.decode(b"", final=True)
     except UnicodeDecodeError:
-        return f"<Binary content: {end - start} bytes>"
+        return _binary(end - start)
     return text
 
 
@@ -161,37 +158,46 @@ def format_response(response: httpx.Response, redaction: Redaction = DEFAULT_RED
         content_type = response.headers.get("Content-Type", "")
         codec = response.extensions.get(RESPONSE_CODEC_EXTENSION, "auto")
         if selected_codec(codec, content_type) == "msgpack":
-            try:
-                body = _format_encoded(_PRETTY_MSGPACK, unpack_msgpack(response.content))
-            except MSGPACK_DECODE_ERRORS:
-                body = f"<Binary content: {len(response.content)} bytes>"
+            body = _msgpack_body(response.content)
         elif "application/json" in content_type.lower():
             try:
-                body = _format_json(response.json())
+                body = _format_encoded(_PRETTY_JSON, response.json())
             except JSON_PARSE_ERRORS:
                 # Undecodable or too deeply nested bodies show as text too.
                 body = _format_body_text(response.text)
         elif _is_textual_content_type(content_type):
             body = _format_body_text(response.text)
         else:
-            body = f"<Binary content: {len(response.content)} bytes>"
+            body = _binary(len(response.content))
 
     http_version = response.http_version or "HTTP/1.1"
     return _message_lines(f"{http_version} {response.status_code} {response.reason_phrase}", response.headers, body, redaction)
 
 
-def _format_json(value: Any) -> str:
-    """``value`` pretty-printed, rendering only as much as the report shows.
+def _msgpack_body(content: bytes) -> str:
+    """A MessagePack body, a request's or a response's, as pretty JSON (its
+    bytes as `_msgpack_display` shows them), or its size where it does not
+    decode."""
+    try:
+        return _format_encoded(_PRETTY_MSGPACK, unpack_msgpack(content))
+    except MSGPACK_DECODE_ERRORS:
+        return _binary(len(content))
+
+
+def _binary(size: int) -> str:
+    """What a report shows in place of a body, or a multipart part, that is not text."""
+    return f"<Binary content: {size} bytes>"
+
+
+def _format_encoded(encoder: json.JSONEncoder, value: Any) -> str:
+    """``value`` pretty-printed by ``encoder``, rendering only as much as the
+    report shows.
 
     Indentation grows with depth, so a deeply nested body renders in full to
     a size quadratic in its own (a 10 kB body 5,000 levels deep renders to
     50 MB) only to be cut to ``_MAX_BODY_CHARS``. The encoder streams, so stop
     once past the cap.
     """
-    return _format_encoded(_PRETTY_JSON, value)
-
-
-def _format_encoded(encoder: json.JSONEncoder, value: Any) -> str:
     chunks: list[str] = []
     length = 0
     for chunk in encoder.iterencode(value):
