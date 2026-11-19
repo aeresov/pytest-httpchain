@@ -16,6 +16,7 @@ from pytest_httpchain.models.entities import (
     Scenario,
     UserFunctionKwargs,
     UserFunctionName,
+    validate_rendered,
     validate_rendered_scenario_auth,
 )
 from tests.unit.models.helpers import assert_error_types, make_request
@@ -242,6 +243,19 @@ def test_timeout_must_be_positive(timeout):
     with pytest.raises(ValidationError) as exc_info:
         make_request(timeout=timeout)
     assert_error_types(exc_info, "greater_than", at="timeout")
+
+
+@pytest.mark.parametrize("validate", [Request.model_validate, partial(validate_rendered, Request)], ids=["written", "rendered"])
+@pytest.mark.parametrize("value", [True, False])
+def test_timeout_refuses_a_bool(validate, value):
+    """The number branch reads one as 1 or 0: `"timeout": true`, or a
+    template rendering true, would wait a second, and `false` was refused as
+    no positive number. Both are refused once, saying what goes there."""
+    with pytest.raises(ValidationError) as exc_info:
+        validate({"url": "https://example.com", "timeout": value})
+    assert [(error["loc"], error["msg"]) for error in exc_info.value.errors()] == [
+        (("timeout",), f"Value error, A request timeout is a number or a template, got {str(value).lower()}")
+    ]
 
 
 _AUTH_FORMS = [

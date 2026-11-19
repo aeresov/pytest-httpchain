@@ -89,6 +89,7 @@ from pytest_httpchain.models.types import (
     convert_namespace_items_to_dict,
     convert_namespace_to_dict,
     parses_as_graphql,
+    refuse_bool,
     refuse_escaped_braces,
     regex_group,
     validate_function_import_name,
@@ -242,6 +243,14 @@ class SSLConfig(StrictModel):
     )
 
 
+# The client's timeout, redirect limit and pool limits: a positive number or a
+# template, never a bool, which the number branches would take as 1
+# (`refuse_bool`): `"timeout": true` would wait a second, `"max_connections":
+# true` open one connection at a time.
+_ClientSeconds = Annotated[PositiveFloat | NumberOrTemplate, BeforeValidator(refuse_bool("A client setting"))]
+_ClientCount = Annotated[PositiveInt | NumberOrTemplate, BeforeValidator(refuse_bool("A client setting"))]
+
+
 class ClientConfig(StrictModel):
     """Settings of the HTTP client all the scenario's stages share. What a stage
     sets in its own request (url, headers, params, timeout, allow_redirects)
@@ -268,9 +277,9 @@ class ClientConfig(StrictModel):
         default_factory=dict,
         description="Query parameters sent with every request, unless its URL or request.params already sets the key.",
     )
-    timeout: PositiveFloat | NumberOrTemplate = Field(default=30.0, description="Timeout in seconds for requests that do not set request.timeout.")
+    timeout: _ClientSeconds = Field(default=30.0, description="Timeout in seconds for requests that do not set request.timeout.")
     follow_redirects: Literal[True, False] | TemplateExpressionOnly = Field(default=True, description="Whether requests that do not set request.allow_redirects follow redirects.")
-    max_redirects: PositiveInt | NumberOrTemplate = Field(default=20, description="Redirects a request follows at most before it fails.")
+    max_redirects: _ClientCount = Field(default=20, description="Redirects a request follows at most before it fails.")
     proxy: Annotated[ProxyUrlStr | UnquotedPartialTemplateStr | None, BeforeValidator(refuse_escaped_braces("proxy"))] = Field(
         default=None,
         description="Proxy for every request (http, https, socks5 or socks5h URL); replaces the proxy environment variables.",
@@ -280,11 +289,11 @@ class ClientConfig(StrictModel):
         default=True,
         description="Offer HTTP/2, used when the server negotiates it; the requests to that server then share one connection, 100 at a time at most.",
     )
-    max_connections: PositiveInt | NumberOrTemplate | None = Field(
+    max_connections: _ClientCount | None = Field(
         default=None,
         description="Connections the pool opens at most; null (the default) for no limit, which leaves parallel.max_concurrency to bound them.",
     )
-    max_keepalive_connections: PositiveInt | NumberOrTemplate | None = Field(default=20, description="Idle connections the pool keeps open for reuse at most; null for no limit.")
+    max_keepalive_connections: _ClientCount | None = Field(default=20, description="Idle connections the pool keeps open for reuse at most; null for no limit.")
 
 
 class UserFunctionName(RootModel):
@@ -680,6 +689,11 @@ def _omit_schema_default(schema: JsonDict) -> None:
     schema.pop("default", None)
 
 
+# A request's timeout, as the client's (`_ClientSeconds`): a positive number or
+# a template, never a bool (`refuse_bool`).
+_RequestSeconds = Annotated[PositiveFloat | NumberOrTemplate, BeforeValidator(refuse_bool("A request timeout"))]
+
+
 class Request(StrictModel):
     # A request is validated again once rendered, which is when its auth's
     # credentials (and any header's) carry the rendered secret: pydantic's
@@ -706,7 +720,7 @@ class Request(StrictModel):
     )
     # Their defaults stand in for the client's (request_builder sends only a
     # declared value), so the schema shows none: an editor would offer them.
-    timeout: PositiveFloat | NumberOrTemplate = Field(
+    timeout: _RequestSeconds = Field(
         default=30.0,
         description="Request timeout in seconds. Not set, client.timeout applies (30 by default).",
         json_schema_extra=_omit_schema_default,
@@ -1240,29 +1254,12 @@ def parametrize_values_contain_template(parametrize: Parameters | None) -> bool:
     return False
 
 
-def _refuse_bool(setting: str) -> Callable[[Any], Any]:
-    """A numeric ``setting`` written or rendered as true or false, refused
-    ahead of its union. The number branches take a bool as 1 (pydantic's lax
-    mode), so a retry's `"attempts": true`, or `"{{ poll }}"` rendering a
-    flag, would attempt once and turn retry off without a word, `"delay":
-    true` wait a second, and a threshold's `"min_success_ratio": true` have
-    every iteration pass. The JSON Schema's integer and number refuse a
-    boolean already."""
-
-    def refuse(v: Any) -> Any:
-        if isinstance(v, bool):
-            raise ValueError(f"{setting} is a number or a template, got {str(v).lower()}")
-        return v
-
-    return refuse
-
-
 # A parallel stage's limits: a success ratio from 0 to 1, and a positive
 # number of milliseconds or iterations per second, each finite, as a stage
 # resolves them (`stage_settings.threshold_limits`). None takes a bool
-# (`_refuse_bool`).
-_SuccessRatio = Annotated[Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A threshold"))]
-_PositiveLimit = Annotated[Annotated[float, Field(gt=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A threshold"))]
+# (`refuse_bool`).
+_SuccessRatio = Annotated[Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(refuse_bool("A threshold"))]
+_PositiveLimit = Annotated[Annotated[float, Field(gt=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(refuse_bool("A threshold"))]
 
 
 class ParallelThresholds(StrictModel):
@@ -1286,14 +1283,20 @@ class ParallelThresholds(StrictModel):
     min_rps: _PositiveLimit | None = Field(default=None, description="Passed iterations per second of the stage's wall time, at least.")
 
 
+# A parallel stage's iterations, concurrency, rate and rate-limit wait: a
+# positive whole number or a template, never a bool, which the number branch
+# would take as 1 (`refuse_bool`): `"repeat": true` would run one iteration.
+_ParallelSetting = Annotated[PositiveInt | NumberOrTemplate, BeforeValidator(refuse_bool("A parallel setting"))]
+
+
 class ParallelConfigBase(StrictModel):
     """Base configuration for parallel HTTP request execution."""
 
-    max_concurrency: PositiveInt | NumberOrTemplate = Field(
+    max_concurrency: _ParallelSetting = Field(
         default=10,
         description="Maximum number of concurrent requests.",
     )
-    calls_per_sec: PositiveInt | NumberOrTemplate | None = Field(
+    calls_per_sec: _ParallelSetting | None = Field(
         default=None,
         description=(
             "Maximum number of API calls per second, shared by this stage's concurrent iterations. "
@@ -1301,7 +1304,7 @@ class ParallelConfigBase(StrictModel):
             "and pytest-xdist workers each get their own budget."
         ),
     )
-    max_rate_limit_delay: PositiveInt | NumberOrTemplate = Field(
+    max_rate_limit_delay: _ParallelSetting = Field(
         default=60,
         description="Maximum seconds to wait when rate-limited before giving up. Defaults to 60 seconds.",
     )
@@ -1330,7 +1333,7 @@ class ParallelConfigBase(StrictModel):
 class ParallelRepeatConfig(ParallelConfigBase):
     """Execute the same request N times in parallel."""
 
-    repeat: PositiveInt | NumberOrTemplate = Field(
+    repeat: _ParallelSetting = Field(
         description="Execute the same request N times in parallel.",
     )
 
@@ -1357,10 +1360,10 @@ RETRY_ON: tuple[RetryOn, ...] = get_args(RetryOn)
 # A retry's attempts, seconds and backoff factor. The seconds and the factor
 # are finite, as a stage resolves them (`stage_settings.setting_number`), so
 # what it refuses the model refuses at load: JSON's 1e999 reads as inf, which
-# float takes by default. None of them takes a bool (`_refuse_bool`).
-_RetryAttempts = Annotated[PositiveInt | NumberOrTemplate, BeforeValidator(_refuse_bool("A retry setting"))]
-_RetrySeconds = Annotated[Annotated[float, Field(ge=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A retry setting"))]
-_RetryFactor = Annotated[Annotated[float, Field(ge=1, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A retry setting"))]
+# float takes by default. None of them takes a bool (`refuse_bool`).
+_RetryAttempts = Annotated[PositiveInt | NumberOrTemplate, BeforeValidator(refuse_bool("A retry setting"))]
+_RetrySeconds = Annotated[Annotated[float, Field(ge=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(refuse_bool("A retry setting"))]
+_RetryFactor = Annotated[Annotated[float, Field(ge=1, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(refuse_bool("A retry setting"))]
 
 
 class RetryConfig(StrictModel):
@@ -1388,9 +1391,11 @@ class RetryConfig(StrictModel):
     )
 
 
-# A connection's waits, in seconds: a positive finite number or a template,
-# never a bool, which the number branch would take as 1 (`_refuse_bool`).
-_ConnectionSeconds = Annotated[Annotated[float, Field(gt=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(_refuse_bool("A connection timeout"))]
+# A connection's waits, in seconds: a positive finite number or a template;
+# and its inbox_limit, a positive whole number, which is never rendered. None
+# takes a bool, which the number branches would take as 1 (`refuse_bool`).
+_ConnectionSeconds = Annotated[Annotated[float, Field(gt=0, allow_inf_nan=False)] | NumberOrTemplate, BeforeValidator(refuse_bool("A connection timeout"))]
+_ConnectionCount = Annotated[PositiveInt, BeforeValidator(refuse_bool("A connection setting", "a number"))]
 
 # One message a connection stage sends: an object of JSON values or bytes, at
 # any depth (a binary protocol carries raw fields; `hex_bytes()` and the
@@ -1421,7 +1426,7 @@ class ConnectionConfig(Descripted):
         examples=[{"host": "{{ device_host }}", "port": 6126}],
     )
     connect_timeout: _ConnectionSeconds = Field(default=10.0, description="Seconds, passed to the adapter's connect().")
-    inbox_limit: PositiveInt = Field(default=1000, description="Messages kept queued at most; beyond it the oldest are dropped, and counted in reports.")
+    inbox_limit: _ConnectionCount = Field(default=1000, description="Messages kept queued at most; beyond it the oldest are dropped, and counted in reports.")
 
 
 def _match_tag(v: Any) -> str:

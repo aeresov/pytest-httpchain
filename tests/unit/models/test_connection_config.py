@@ -45,6 +45,18 @@ class TestConnectionConfig:
     def test_connect_timeout_template(self):
         assert ConnectionConfig.model_validate({"adapter": "m:C", "connect_timeout": "{{ t }}"}).connect_timeout == "{{ t }}"
 
+    @pytest.mark.parametrize("value", [True, False])
+    def test_inbox_limit_refuses_a_bool(self, value):
+        """The number reads one as 1 or 0: `"inbox_limit": true` would keep
+        one message and drop the rest, and `false` was refused as no positive
+        number. It takes no template, so the refusal says only a number goes
+        there."""
+        with pytest.raises(ValidationError) as exc_info:
+            ConnectionConfig.model_validate({"adapter": "m:C", "inbox_limit": value})
+        assert [(error["loc"], error["msg"]) for error in exc_info.value.errors()] == [
+            (("inbox_limit",), f"Value error, A connection setting is a number, got {str(value).lower()}")
+        ]
+
     def test_scenario_names_connections_as_identifiers(self):
         with pytest.raises(ValidationError, match="Invalid Python variable name"):
             Scenario.model_validate({"connections": {"speaker-1": {"adapter": "m:C"}}})

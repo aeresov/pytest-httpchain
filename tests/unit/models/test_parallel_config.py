@@ -1,5 +1,7 @@
 """Unit tests for ParallelConfig models."""
 
+from functools import partial
+
 import pytest
 from pydantic import ValidationError
 
@@ -10,6 +12,7 @@ from pytest_httpchain.models.entities import (
     ParallelRepeatConfig,
     ParallelThresholds,
     Stage,
+    validate_rendered,
 )
 from tests.unit.models.helpers import assert_error_types, stage_dict
 
@@ -48,6 +51,21 @@ def test_counts_must_be_positive(kwargs, field):
     with pytest.raises(ValidationError) as exc_info:
         ParallelRepeatConfig(**kwargs)
     assert_error_types(exc_info, "greater_than", at=field)
+
+
+@pytest.mark.parametrize("field", ["repeat", "max_concurrency", "calls_per_sec", "max_rate_limit_delay"])
+@pytest.mark.parametrize("validate", [ParallelRepeatConfig.model_validate, partial(validate_rendered, ParallelRepeatConfig)], ids=["written", "rendered"])
+@pytest.mark.parametrize("value", [True, False])
+def test_setting_refuses_a_bool(field, validate, value):
+    """The number branch reads one as 1 or 0: `"repeat": true` would run one
+    iteration, and `"max_concurrency": "{{ flag }}"` rendering true run the
+    iterations one at a time; `false` was refused as no positive number. Both
+    are refused once, saying what goes there."""
+    with pytest.raises(ValidationError) as exc_info:
+        validate({"repeat": 2, field: value})
+    assert [(error["loc"], error["msg"]) for error in exc_info.value.errors()] == [
+        ((field,), f"Value error, A parallel setting is a number or a template, got {str(value).lower()}")
+    ]
 
 
 @pytest.mark.parametrize(

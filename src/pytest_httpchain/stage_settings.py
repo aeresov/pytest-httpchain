@@ -39,10 +39,11 @@ def setting_number(setting: str, value: Any, must_be: str = "a positive number",
     """
     if isinstance(value, bool):
         # float(True) is 1.0: read as it is, a bool would configure one
-        # attempt or a one-second wait. The retry model refuses one, written
-        # or rendered, so none of its settings brings one here; the parallel
-        # model reads one as 1 before it gets here. Kept so that whatever a
-        # model lets through, this never reads a bool as a number.
+        # attempt or a one-second wait. The retry and parallel models refuse
+        # one, written or rendered (`types.refuse_bool`), so none of their
+        # settings brings one here. A connection's timeouts can: the carrier
+        # renders their templates alone, not through the model, and a
+        # template rendering a flag there is refused here.
         raise StageExecutionError(f"{setting} must be {must_be}, got {value!r}")
     try:
         number = float(value)

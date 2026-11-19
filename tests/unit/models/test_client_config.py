@@ -1,6 +1,7 @@
 """Unit tests for the ClientConfig model (a scenario's ``client`` block)."""
 
 import re
+from functools import partial
 
 import pytest
 from pydantic import ValidationError
@@ -147,6 +148,19 @@ def test_numbers_must_be_positive(field, value):
     with pytest.raises(ValidationError) as exc_info:
         ClientConfig.model_validate({field: value})
     assert_error_types(exc_info, "greater_than", at=field)
+
+
+@pytest.mark.parametrize("field", ["timeout", "max_redirects", "max_connections", "max_keepalive_connections"])
+@pytest.mark.parametrize("validate", [ClientConfig.model_validate, partial(validate_rendered, ClientConfig)], ids=["written", "rendered"])
+@pytest.mark.parametrize("value", [True, False])
+def test_numbers_refuse_a_bool(field, validate, value):
+    """The number branch reads one as 1 or 0: `"timeout": true` would wait a
+    second, and `"max_connections": "{{ pooled }}"` rendering true open one
+    connection at a time; `false` was refused as no positive number. Both are
+    refused once, saying what goes there."""
+    with pytest.raises(ValidationError) as exc_info:
+        validate({field: value})
+    assert [(error["loc"], error["msg"]) for error in exc_info.value.errors()] == [((field,), f"Value error, A client setting is a number or a template, got {str(value).lower()}")]
 
 
 @pytest.mark.parametrize("field", ["timeout", "follow_redirects", "max_redirects", "http2"])

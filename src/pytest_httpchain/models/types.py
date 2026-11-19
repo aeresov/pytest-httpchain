@@ -998,6 +998,25 @@ NumberOrTemplate = Annotated[
     WithJsonSchema({"type": "string", "pattern": _NUMBER_OR_TEMPLATE_PATTERN}),
 ]
 
+
+def refuse_bool(setting: str, kind: str = "a number or a template") -> Callable[[Any], Any]:
+    """A numeric ``setting`` written or rendered as true or false, refused
+    ahead of its type, saying the setting is ``kind``. A number takes a
+    bool as 1 (pydantic's lax mode), so a retry's `"attempts": true`, or
+    `"{{ poll }}"` rendering a flag, would attempt once and turn retry off
+    without a word, `"delay": true` wait a second, a threshold's
+    `"min_success_ratio": true` have every iteration pass, and a parallel
+    stage's `"repeat": true` run one iteration. The JSON Schema's integer
+    and number refuse a boolean already."""
+
+    def refuse(v: Any) -> Any:
+        if isinstance(v, bool):
+            raise ValueError(f"{setting} is {kind}, got {str(v).lower()}")
+        return v
+
+    return refuse
+
+
 # Any RFC 9110 token is a legal method (PROPFIND, PURGE, vendor verbs). The
 # ``HTTPMethod`` branch before it only feeds the JSON Schema's verb autocompletion:
 # the smart union keeps a str input a plain str (only the default is the enum).
