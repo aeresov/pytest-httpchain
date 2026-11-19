@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A verify, save or auth function, a function a template calls, or a connection's adapter as it is
+  built, connects or sends, that calls `pytest.exit()` ends the run there, as it does from a test,
+  with pytest's interrupt exit status (or the `returncode` given). `pytest.exit()` raises an
+  `Exception`, which the plugin took for the function's failure: the stage failed (`Error calling
+  function '...': ...`), the stages after it skipped, and the session went on. One reached at
+  collection, where a `parametrize` renders the scenario's substitutions, still fails the file's
+  collection, its message now the reason given.
+- At collection, a mark pytest refuses is reported as `HTTPCHAIN019`, beside the file's other
+  diagnostics: one the run does not register under strict markers (`--strict-markers`, or `strict =
+  true`), and a misspelt `parametrize` (`parameterize(...)`). pytest refuses both with its own
+  `Failed`, which went past the validator: the file failed collection with pytest's uncoded message
+  (with a traceback through the plugin for the misspelling), and its other diagnostics and warnings
+  were lost. `validate` is unchanged: outside a pytest session, pytest refuses neither.
+- `import curl` reads a `-:` (curl's `--next`) in a cluster of short options as curl does: `-L:`
+  sets `-L`, then ends the request, the words after it giving the next request's options. It was
+  dropped without a word, merging the two requests into one, each sent with every option of both:
+  `curl https://x.test/a -L: -X POST https://x.test/b` imported two POSTs that both followed
+  redirects. What follows the `-:` in its word, which curl does not read either, is ignored with a
+  warning naming it, and a `-:` before any URL (`curl -L: https://x.test/`) fails as `The curl
+  command has no URL`, as curl refuses it.
+- `import curl` joins a command's `-d` and `--json` data as curl does: a `&` before each piece but
+  the first, none before a `--json` piece, and the JSON `Content-Type` and `Accept` as soon as any
+  `--json` gives data. A mix was joined with `&` throughout and sent as a form: `-d a=1 --json
+  '{"b":2}'` now imports as `a=1{"b":2}`, and `--json '{"b":2}' -d a=1` as `{"b":2}&a=1`, both as
+  `application/json`. A command using only `-d` options, or only `--json`, imports as before.
+- `import har stdin`, on a HAR file named `stdin` (or `./stdin`), describes the scenario by the
+  file's name, `Imported from stdin`, as it does any other file. It said `Imported from a HAR file`,
+  the description of `import har -`, which reads standard input.
+- A JMESPath matcher's `eq`, `ne`, `contains` and `not_contains` take a `vars` object holding bytes
+  (a namespace a template rendered) as the object it stands for, as a connection message and a value
+  expectation do. Validated on its own, the matcher refused it (`input was not a valid JSON value`)
+  while taking the same object as a dict. Under `verify.jmespath` the expectation converts a
+  namespace first, so only code using the models directly met the refusal.
+- A user function's `kwargs` take any keyword argument name, soft keywords included: `type`,
+  `match`, `case` and `_` were refused (`Python keyword is used as variable name`), as a template
+  variable's name is, although a function can take them and a connection adapter's `params` did. A
+  key that is no keyword argument name (`class`, `not-an-id`) is still refused, now as `Invalid
+  keyword argument name: 'class'`.
+- A JMESPath expression, a regex, an `xml` body or a `base64` body that its check refuses names the
+  check in the error's location (`HTTPCHAIN000`, in `validate` and at collection):
+  `function-after[validate_xml(), str]`, and likewise `validate_regex_pattern`,
+  `validate_jmespath_expression` and `validate_base64`, where all four read
+  `function-after[validator(), str]`.
+- A `body.msgpack` that MessagePack cannot encode (a set a template rendered) fails its stage as
+  `Cannot encode MessagePack body: cannot encode set as MessagePack`, no longer naming the
+  `msgpack_pack()` template helper, which the scenario never called. The helper's own failure still
+  names it: `msgpack_pack() cannot encode set as MessagePack` (it said `msgpack_pack() cannot encode
+  set`).
+- `response_steps.process_verify`, on a connection stage's message, no longer renders the values of
+  the checks only an HTTP response has (`status`, `headers`, and the body's `contains`,
+  `not_contains`, `matches` and `not_matches`), which fail there without reading them. A
+  `pytest.skip()` or `pytest.fail()` a template raised in one ended the rendering, and the next
+  check failed with a bare `KeyError`. Only code calling it directly met this: collection refuses
+  such a step (`HTTPCHAIN041`). As they are no longer rendered, a template in one that does not
+  render is no longer one of the step's failures either, so a user function's `pytest.skip()` or
+  `pytest.fail()` in the same step now skips or fails it as written, where it was listed among them.
+
 ## [0.21.1] - 2026-11-19
 
 ### Fixed
