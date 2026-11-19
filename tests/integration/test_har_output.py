@@ -154,6 +154,7 @@ def test_timeout_after_passing_stage_shows_no_stale_response(run_scenario):
     result.stdout.no_fnmatch_line("*HTTP Response*")
 
 
+@pytest.mark.slow  # its rate limit spreads the requests over about a second
 def test_har_entries_carry_real_start_times(run_scenario, har_dir):
     """startedDateTime must be each request's actual start, not export time:
     a rate-limited stage (3 iterations at 2/sec) spreads real starts over

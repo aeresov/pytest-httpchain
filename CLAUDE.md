@@ -18,12 +18,12 @@ uv run pytest tests/unit/test_foo.py::test_specific -v
 
 # Faster full run. Almost all the wall time is integration tests that each spawn
 # a pytester session and its own HTTP server, and they are independent, so the
-# suite parallelizes cleanly (~4 min -> ~2 min on 4 cores). CI passes `-n auto`.
+# suite parallelizes cleanly. CI passes `-n auto`.
 uv run pytest -n auto
 
-# Faster feedback loop while iterating. The unit suite alone is ~1000 tests in
-# under 10 seconds; `-m "not slow"` then drops the subprocess-spawning and
-# sleep-bound integration families (~27 tests, ~40% of integration wall time).
+# Faster feedback loop while iterating. The unit suite alone is ~5,400 tests in
+# ~45 seconds; `-m "not slow"` then drops the subprocess-spawning and
+# sleep-bound integration tests (47 of the ~340).
 # Both are for iterating only — run the whole suite before pushing.
 uv run pytest tests/unit
 uv run pytest -m "not slow"

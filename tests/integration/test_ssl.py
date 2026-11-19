@@ -23,10 +23,6 @@ import pytest
 # alive for every run, so the fixtures' lazy import is always a cache hit.
 import trustme  # noqa: F401
 
-# Real TLS handshakes plus per-scenario CA generation (trustme issues actual
-# keys), so these belong with the suite's slower families.
-pytestmark = pytest.mark.slow
-
 
 def test_ca_bundle_is_trusted(run_scenario):
     """``ssl.verify: <path>`` makes the throwaway CA's certificate acceptable,

@@ -21,8 +21,9 @@ immediately.
 
 import pytest
 
-# Every test here spawns pytester subprocesses (runpytest_subprocess).
-pytestmark = pytest.mark.slow
+# The tests marked slow spawn pytester subprocesses (runpytest_subprocess).
+# `test_selection_dropping_earlier_stages_warns` and
+# `test_full_chain_selection_does_not_warn` run in-process and wait on nothing.
 
 CHAIN_SCENARIOS = [
     "xdist/test_chain_a.http.json",
@@ -35,12 +36,14 @@ def run_chains(run_scenario, *args):
     return run_scenario(*CHAIN_SCENARIOS, args=args, subprocess=True)
 
 
+@pytest.mark.slow
 def test_multiple_scenarios_plain_run(run_scenario):
     """Several multi-stage scenarios in one plain pytest run stay contiguous."""
     result = run_chains(run_scenario)
     result.assert_outcomes(passed=18)
 
 
+@pytest.mark.slow
 def test_user_order_marks_with_pytest_order(run_scenario):
     """User-authored ``order(...)`` marks plus active pytest-order cannot split chains.
 
@@ -57,6 +60,7 @@ def test_user_order_marks_with_pytest_order(run_scenario):
     result.assert_outcomes(passed=6)
 
 
+@pytest.mark.slow
 def test_items_reordered_by_another_plugin(pytester, run_scenario):
     """Stage order survives arbitrary reordering by other plugins.
 
@@ -76,6 +80,7 @@ def test_items_reordered_by_another_plugin(pytester, run_scenario):
     result.assert_outcomes(passed=18)
 
 
+@pytest.mark.slow
 def test_parametrized_stage_instances_keep_order(pytester, run_scenario):
     """Parametrized instances of one stage keep collection order through regrouping.
 
@@ -93,6 +98,7 @@ def test_parametrized_stage_instances_keep_order(pytester, run_scenario):
     result.assert_outcomes(passed=3)
 
 
+@pytest.mark.slow
 def test_failed_first_keeps_chains_contiguous(pytester, run_scenario):
     """A partially-failed chain replays identically under pytest --ff.
 
@@ -122,6 +128,7 @@ def test_full_chain_selection_does_not_warn(run_scenario):
     result.stdout.no_fnmatch_line("*were deselected*")
 
 
+@pytest.mark.slow
 def test_split_chain_warning_survives_filterwarnings_error(pytester, run_scenario):
     """The split-chain warning fires from pytest_collection_finish, which has no
     warning-to-error recovery: under `filterwarnings = error` an escaping

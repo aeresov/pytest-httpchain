@@ -21,6 +21,7 @@ def test_parallel_stage_passes(run_scenario, scenario, passed):
     run_scenario(f"parallel/test_{scenario}.http.json").assert_outcomes(passed=passed)
 
 
+@pytest.mark.slow  # its iterations wait out max_rate_limit_delay for a slot
 def test_rate_limit_exceeded(run_scenario):
     """Exceeding max_rate_limit_delay fails cleanly, not with a raw traceback (M2)."""
     result = run_scenario("parallel/test_rate_limit_exceeded.http.json")
