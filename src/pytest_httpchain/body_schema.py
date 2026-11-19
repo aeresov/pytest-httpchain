@@ -24,7 +24,7 @@ import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import Any, NamedTuple, NoReturn, cast
 from urllib.parse import unquote, urljoin, urlsplit
 
 import attrs
@@ -72,6 +72,19 @@ class ReferenceBounds:
 
 
 UNBOUNDED = ReferenceBounds()
+
+
+class _Visit(NamedTuple):
+    """A schema `BodySchema.unresolvable` is to walk: its ``contents``, the
+    ``resolver`` its references resolve with (referencing's Resolver is not
+    public), the ``dialect`` it is reached under, and whether it is
+    ``nested``, a subschema, whose own ``$id`` moves the base, rather than
+    the start or a reference's target, whose base is set."""
+
+    contents: Any
+    resolver: Any
+    dialect: Dialect
+    nested: bool
 
 
 class BodySchema:
@@ -220,11 +233,7 @@ class BodySchema:
             yield self.why_unresolvable(e)
             return
         rendered = _dict_ids(self._rendered)
-        # (a schema, the resolver its references resolve with, the dialect it is
-        # reached under, and whether it is a subschema, whose own $id moves the
-        # base, or the start or a reference's target, whose base is set):
-        # referencing's Resolver is not public.
-        pending: list[tuple[Any, Any, Dialect, bool]] = [(schema, resolver, self._dialect, False)]
+        pending: list[_Visit] = [_Visit(schema, resolver, self._dialect, nested=False)]
         seen = {id(schema)}
         while pending:
             contents, resolver, dialect, nested = pending.pop()
@@ -268,9 +277,9 @@ class BodySchema:
             for subresource in reversed(list(resource.subresources())):
                 if id(subresource.contents) not in seen:
                     seen.add(id(subresource.contents))
-                    pending.append((subresource.contents, resolver, dialect, True))
+                    pending.append(_Visit(subresource.contents, resolver, dialect, nested=True))
 
-    def _follow(self, keyword: str, ref: Any, resolver: Any, dialect: Dialect, seen: set[int], pending: list[tuple[Any, Any, Dialect, bool]]) -> tuple[str, bool] | None:
+    def _follow(self, keyword: str, ref: Any, resolver: Any, dialect: Dialect, seen: set[int], pending: list[_Visit]) -> tuple[str, bool] | None:
         """`unresolvable`'s step through one reference: why it does not
         resolve, or why its target is not a valid schema, or None, the target
         then queued to walk if it is new."""
@@ -285,7 +294,7 @@ class BodySchema:
             reached.check_schema(resolved.contents)
         except Exception as e:
             return str(_invalid_target(keyword, ref, e)), False
-        pending.append((resolved.contents, resolved.resolver, reached, False))
+        pending.append(_Visit(resolved.contents, resolved.resolver, reached, nested=False))
         return None
 
     def _start(self) -> tuple[Any, Any]:
