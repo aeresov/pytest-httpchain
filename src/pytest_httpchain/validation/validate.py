@@ -5,14 +5,23 @@ command line's paths stand for, directories searched."""
 import os
 from collections.abc import Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 from pytest_httpchain.body_schema import ReferenceBounds
 from pytest_httpchain.constants import DEFAULT_REF_PARENT_TRAVERSAL_DEPTH, SCENARIO_FILE_EXTENSIONS
 from pytest_httpchain.validation.deep import check_scenario_deep
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, ValidateResult, diag, result
-from pytest_httpchain.validation.discovery import configured_depth, configured_suffix, find_scenario_files, pytest_rootdir
+from pytest_httpchain.validation.discovery import absolute, configured_depth, configured_suffix, find_scenario_files, pytest_rootdir
 from pytest_httpchain.validation.loader import load_with_diagnostics, resolve_root_path
 from pytest_httpchain.validation.semantic import check_scenario, describe_scenario
+
+
+class _Bounds(NamedTuple):
+    """The root and the parent traversal depth a file's references are held
+    to."""
+
+    root: Path
+    depth: int
 
 
 def validate_scenario(
@@ -36,10 +45,11 @@ def validate_scenario(
         return result([diag(DiagnosticCode.NOT_A_FILE, f"Path is not a file: {path}")])
 
     if path.suffix.lower() not in SCENARIO_FILE_EXTENSIONS:
+        expected = " or ".join(f"'{extension}'" for extension in SCENARIO_FILE_EXTENSIONS)
         diagnostics.append(
             diag(
                 DiagnosticCode.WRONG_EXTENSION,
-                f"File has extension '{path.suffix}' but expected '.json' or '.jsonc'. Consider renaming to use one of these extensions.",
+                f"File has extension '{path.suffix}' but expected {expected}. Consider renaming to use one of these extensions.",
                 location=str(path),
             )
         )
@@ -111,24 +121,24 @@ def validate_paths(
     run_root = root_path if root_path is not None else pytest_rootdir(paths)
     run_depth = ref_parent_traversal_depth if ref_parent_traversal_depth is not None else configured_depth(paths)
 
-    def bounds(path: Path) -> tuple[Path, int]:
+    def bounds(path: Path) -> _Bounds:
         """The root and the depth ``path``'s references are held to. A path
         that is no file is reported as such before either is used: it takes
         the run's, and no configuration is read for it."""
-        if root_path is not None or not os.path.isfile(path) or Path(os.path.abspath(path)).is_relative_to(run_root):
-            return run_root, run_depth
+        if root_path is not None or not os.path.isfile(path) or absolute(path).is_relative_to(run_root):
+            return _Bounds(run_root, run_depth)
         depth = ref_parent_traversal_depth if ref_parent_traversal_depth is not None else configured_depth([path])
-        return pytest_rootdir([path]), depth
+        return _Bounds(pytest_rootdir([path]), depth)
 
     # Each path's result, a directory's found in the search, or the root and
     # the depth the file is to be validated with.
-    targets: list[tuple[Path, ValidateResult | tuple[Path, int]]] = []
+    targets: list[tuple[Path, ValidateResult | _Bounds]] = []
     seen: set[str] = set()
 
     def add(path: Path, found: ValidateResult | None = None) -> None:
-        # Compared as pytest compares arguments: absolute, with `..` and `.`
-        # dropped from the text, not resolved through symlinks.
-        key = os.path.abspath(path)
+        # Compared as pytest compares arguments (`absolute`), and as text: a
+        # Path compares case-insensitively on Windows.
+        key = str(absolute(path))
         if key not in seen:
             seen.add(key)
             # A file's bounds are read here, before the first file is
@@ -153,7 +163,7 @@ def validate_paths(
     return [
         (
             path,
-            target if isinstance(target, ValidateResult) else validate_scenario(path, ref_parent_traversal_depth=target[1], root_path=target[0], deep=deep, syspaths=syspaths),
+            target if isinstance(target, ValidateResult) else validate_scenario(path, ref_parent_traversal_depth=target.depth, root_path=target.root, deep=deep, syspaths=syspaths),
         )
         for path, target in targets
     ]

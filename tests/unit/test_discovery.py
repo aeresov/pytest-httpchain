@@ -149,6 +149,17 @@ def test_passes_over_a_symlink_to_itself(tmp_path):
     assert _found(tmp_path) == ["test_b.http.json"]
 
 
+@symlinks
+def test_absolute_drops_dots_from_the_text_and_keeps_symlinks(tmp_path, monkeypatch):
+    """An argument made absolute as pytest makes one: from the current
+    directory, ``..`` and ``.`` dropped as text, a symlink kept (resolved,
+    ``link/x/..`` would be ``real``)."""
+    (tmp_path / "real" / "x").mkdir(parents=True)
+    (tmp_path / "link").symlink_to(tmp_path / "real", target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+    assert discovery.absolute(Path("link/x/../.")) == tmp_path / "link"
+
+
 class _Unreadable:
     """A directory entry named like a scenario that cannot be looked at."""
 

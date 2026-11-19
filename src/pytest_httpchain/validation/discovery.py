@@ -109,6 +109,12 @@ def find_scenario_files(directory: Path, suffix: str) -> Iterator[Path]:
             yield Path(entry.path)
 
 
+def absolute(path: Path) -> Path:
+    """``path`` made absolute as pytest makes an argument absolute: ``..``
+    and ``.`` are dropped from the text, not resolved through symlinks."""
+    return Path(os.path.abspath(path))
+
+
 def _ignored(error: OSError) -> bool:
     """Whether pytest's collection passes over an entry looking at which raised ``error``."""
     return error.errno in _IGNORED_ERRNOS or getattr(error, "winerror", None) in _IGNORED_WINERRORS
@@ -307,11 +313,9 @@ def _setup(paths: Sequence[Path], *, strict: bool) -> tuple[Path, _Config | None
     (`_find_config`)."""
     dirs: list[Path] = []
     for path in paths:
-        # Made absolute as pytest makes an argument absolute: `..` and `.`
-        # are dropped from the text, not resolved through symlinks.
-        absolute = Path(os.path.abspath(path))
-        if os.path.exists(absolute):
-            dirs.append(absolute if os.path.isdir(absolute) else absolute.parent)
+        argument = absolute(path)
+        if os.path.exists(argument):
+            dirs.append(argument if os.path.isdir(argument) else argument.parent)
     ancestor = _common_ancestor(dirs) if dirs else Path.cwd()
     if (found := _find_config([ancestor], strict=strict)) is not None:
         return found.file.parent, found
