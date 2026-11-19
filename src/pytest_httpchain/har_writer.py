@@ -17,7 +17,7 @@ from urllib.parse import parse_qsl, urlparse
 
 import httpx
 
-from pytest_httpchain.redaction import NO_REDACTION, REDACTED, Redaction
+from pytest_httpchain.redaction import NO_REDACTION, Redaction
 from pytest_httpchain.utils import request_content
 
 # One wire exchange: the request, its response (None when none arrived), and when
@@ -42,13 +42,12 @@ def _format_cookies(cookies: httpx.Cookies, redaction: Redaction) -> list[dict[s
     ``CookieConflict`` when the same name exists at different paths/domains — a
     valid and common response. Iterating the jar preserves each scoped cookie.
     """
-    # The jar is parsed from Set-Cookie, so that header's rule covers it.
-    redact = redaction.redacts_header("set-cookie")
     result: list[dict[str, Any]] = []
     for cookie in cookies.jar:
         item: dict[str, Any] = {
             "name": cookie.name,
-            "value": REDACTED if redact and cookie.value else cookie.value or "",
+            # The jar is parsed from Set-Cookie, so that header's rule covers it.
+            "value": redaction.cookie_value("set-cookie", cookie.value or ""),
             "secure": bool(cookie.secure),
             "httpOnly": cookie.has_nonstandard_attr("HttpOnly"),
         }
@@ -65,8 +64,7 @@ def _format_cookies(cookies: httpx.Cookies, redaction: Redaction) -> list[dict[s
 def _parse_cookie_header(cookie_header: str, redaction: Redaction) -> list[dict[str, str]]:
     # An empty header splits to [""], which carries no "=" and so yields nothing.
     pairs = (pair.partition("=") for pair in cookie_header.split(";"))
-    redact = redaction.redacts_header("cookie")
-    return [{"name": name.strip(), "value": REDACTED if redact and value.strip() else value.strip()} for name, separator, value in pairs if separator]
+    return [{"name": name.strip(), "value": redaction.cookie_value("cookie", value.strip())} for name, separator, value in pairs if separator]
 
 
 def _format_headers(headers: httpx.Headers, redaction: Redaction) -> list[dict[str, str]]:
@@ -94,12 +92,12 @@ def _body_text(content: bytes) -> dict[str, str]:
         return {"text": base64.b64encode(content).decode("ascii"), "encoding": "base64"}
 
 
-def _format_post_data(request: httpx.Request) -> dict[str, Any] | None:
-    content = request_content(request)
+def _format_post_data(content: bytes | None, content_type: str) -> dict[str, Any] | None:
+    """HAR ``postData`` for a request body as `request_content` captured it,
+    sent as ``content_type``; None for no body, or one not captured."""
     if not content:
         return None
 
-    content_type = request.headers.get("content-type", "")
     body_text = _body_text(content)
     post_data: dict[str, Any] = {"mimeType": _mime_type(content_type), **body_text}
 
@@ -214,7 +212,7 @@ def request_response_to_har_entry(
     if response is None:
         entry["comment"] = "No response received (request failed or timed out)"
 
-    post_data = _format_post_data(request)
+    post_data = _format_post_data(content, request.headers.get("content-type", ""))
     if post_data:
         entry["request"]["postData"] = post_data  # ty: ignore[invalid-assignment]
 

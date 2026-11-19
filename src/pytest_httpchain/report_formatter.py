@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 
 from pytest_httpchain.connections import LATE_WINDOW, Arrival, ConnectionExchange, count, dumped_match
-from pytest_httpchain.redaction import DEFAULT_REDACTION, Redaction
+from pytest_httpchain.redaction import DEFAULT_REDACTION, REDACTED, Redaction
 from pytest_httpchain.utils import JSON_PARSE_ERRORS, request_content
 from pytest_httpchain.wire_codec import MSGPACK_DECODE_ERRORS, RESPONSE_CODEC_EXTENSION, is_msgpack_content_type, selected_codec, unpack_msgpack
 
@@ -447,7 +447,7 @@ def format_curl(request: httpx.Request, redaction: Redaction = DEFAULT_REDACTION
         options.append(data)
 
     if redacted:
-        notes.insert(0, "[REDACTED] stands for a value this report hides: fill it in before running.")
+        notes.insert(0, f"{REDACTED} stands for a value this report hides: fill it in before running.")
     # -X HEAD leaves curl waiting for a body; --head refuses one to send.
     method = "--head" if request.method == "HEAD" and data is None else f"-X {shlex.quote(request.method)}"
     command = " \\\n  ".join([f"curl {method} {_shell_word(shown_url)}", *options])

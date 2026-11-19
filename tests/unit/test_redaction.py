@@ -134,6 +134,22 @@ def test_query_param(redaction, name, value, expected):
     assert redaction.query_param(name, value) == expected
 
 
+@pytest.mark.parametrize(
+    ("redaction", "header", "value", "expected"),
+    [
+        pytest.param(DEFAULT_REDACTION, "Cookie", "s3cret", REDACTED, id="cookie"),
+        pytest.param(DEFAULT_REDACTION, "set-cookie", "s3cret", REDACTED, id="set-cookie"),
+        pytest.param(DEFAULT_REDACTION, "cookie", "", "", id="empty"),
+        pytest.param(Redaction(headers=["Cookie"]), "set-cookie", "s3cret", "s3cret", id="its-own-header-rule"),
+        pytest.param(NO_REDACTION, "cookie", "s3cret", "s3cret", id="disabled"),
+    ],
+)
+def test_cookie_value(redaction, header, value, expected):
+    """A cookie listed apart from its header, as a HAR entry lists it, goes
+    by the rule of the header it came in."""
+    assert redaction.cookie_value(header, value) == expected
+
+
 def test_header_items_keep_repeated_lines_apart():
     """Each Set-Cookie wire line is redacted on its own, never comma-folded."""
     headers = httpx.Headers([("set-cookie", "a=1; Path=/"), ("set-cookie", f"b=2; {_EXPIRES}"), ("x-id", "7")])

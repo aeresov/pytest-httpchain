@@ -97,6 +97,12 @@ class Redaction:
         separate wire lines it was sent as."""
         return [(name, self.header(name, value)) for name, value in headers.multi_items()]
 
+    def cookie_value(self, header: str, value: str) -> str:
+        """One cookie's value as it may be shown where it is listed apart
+        from the ``Cookie`` or ``Set-Cookie`` header it came in (``header``),
+        as a HAR entry's cookies are: hidden when that header is listed."""
+        return REDACTED if value and self.redacts_header(header) else value
+
     def query_param(self, name: str, value: str) -> str:
         """One decoded query parameter's value as it may be shown."""
         return REDACTED if value and self.redacts_query_param(name) else value
