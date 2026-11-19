@@ -1811,9 +1811,8 @@ class Carrier:
             subject = NO_MESSAGE
             session: Any = None
             # A stage that would only close a connection never opened again
-            # does not connect for that.
-            only_closes = step.close and step.send is None and step.expect is None
-            if step.open or (not only_closes and cls.connections.never_opened(step.name)):
+            # does not connect for that (`ConnectionStep.only_closes`).
+            if step.open or (not step.only_closes and cls.connections.never_opened(step.name)):
                 session, connected = cls._open_connection(stage, step.name, config)
                 record.opened, record.connected = True, connected
                 if step.open and step.expect is None:
