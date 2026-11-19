@@ -22,7 +22,7 @@ from pytest_httpchain.importers import ImportResult, ImportSourceError, build_sc
 from pytest_httpchain.jsonref import ReferenceResolverError
 from pytest_httpchain.models import Scenario
 from pytest_httpchain.schema import build_schema
-from pytest_httpchain.validation import DiagnosticCode, DiscoveryError, ValidateResult, configured_depth, load_scenario, load_scenario_json, validate_paths
+from pytest_httpchain.validation import Diagnostic, DiagnosticCode, DiscoveryError, ValidateResult, configured_depth, load_scenario, load_scenario_json, validate_paths
 
 
 def _hide_flag_value_types(command: typer.core.TyperCommand | typer.core.TyperGroup, ctx: typer.Context) -> None:
@@ -230,6 +230,18 @@ def _summary(results: list[tuple[Path, ValidateResult]]) -> str | None:
     return line
 
 
+def _diagnostic_line(diagnostic: Diagnostic) -> str:
+    """A diagnostic as `validate` and an import report it, on a line of its
+    own: ``severity [code]: message (at location)``."""
+    # Some diagnostics already name the location inside the message;
+    # repeating it makes the suffix look untrustworthy everywhere else. The
+    # field itself stays — it is the machine-readable form of what the
+    # message spells out in prose, so a JSON consumer can route on it
+    # without parsing English.
+    at = f" (at {diagnostic.location})" if diagnostic.location and diagnostic.location not in diagnostic.message else ""
+    return f"{diagnostic.severity} [{diagnostic.code}]: {diagnostic.message}{at}"
+
+
 @app.command()
 def validate(
     paths: Annotated[list[Path], typer.Argument(help="Scenario files to validate, or directories to search for them.")],
@@ -286,13 +298,7 @@ def validate(
                 status = "OK"
             typer.echo(f"{path}: {status}")
             for diagnostic in result.diagnostics:
-                # Some diagnostics already name the location inside the
-                # message; repeating it makes the suffix look untrustworthy
-                # everywhere else. The field itself stays — it is the
-                # machine-readable form of what the message spells out in prose,
-                # so a JSON consumer can route on it without parsing English.
-                at = f" (at {diagnostic.location})" if diagnostic.location and diagnostic.location not in diagnostic.message else ""
-                typer.echo(f"  {diagnostic.severity} [{diagnostic.code}]: {diagnostic.message}{at}")
+                typer.echo(f"  {_diagnostic_line(diagnostic)}")
         if summary := _summary(results):
             typer.echo(summary)
 
@@ -529,6 +535,12 @@ def _read_text(source: str, read: Callable[[], str]) -> str:
         _fail(f"cannot read {source}: {e}")
 
 
+def _read_stdin() -> str:
+    """The text standard input holds, less a byte-order mark: one is
+    allowed there, as in a file."""
+    return sys.stdin.read().removeprefix("\ufeff")
+
+
 def _emit(result: ImportResult, warnings: list[str], output: Path | None) -> None:
     """Validate the scenario an import built, report on it on stderr, and
     write it: to ``output``, else to stdout.
@@ -549,8 +561,7 @@ def _emit(result: ImportResult, warnings: list[str], output: Path | None) -> Non
         _fail(str(e))
     checked = validate_text(text)
     for diagnostic in checked.diagnostics:
-        at = f" (at {diagnostic.location})" if diagnostic.location and diagnostic.location not in diagnostic.message else ""
-        typer.echo(f"{diagnostic.severity} [{diagnostic.code}]: {diagnostic.message}{at}", err=True)
+        typer.echo(_diagnostic_line(diagnostic), err=True)
     if not checked.valid:
         _fail("the imported scenario would not pass validate, so it was not written")
     if result.placeholders:
@@ -590,7 +601,7 @@ def import_har(
     _refuse_existing(output, force)
     source = "stdin" if str(har) == "-" else str(har)
     # A byte-order mark is allowed, from stdin as from a file.
-    text = _read_text(source, lambda: sys.stdin.read().removeprefix("\ufeff") if str(har) == "-" else har.read_bytes().decode("utf-8-sig"))
+    text = _read_text(source, lambda: _read_stdin() if str(har) == "-" else har.read_bytes().decode("utf-8-sig"))
     try:
         requests, notes = read_har(text, source=source, keep_all=keep_all, include=included, exclude=excluded)
     except ImportSourceError as e:
@@ -635,7 +646,7 @@ def import_curl(
     try:
         # curl reads a -d @file from the directory it runs in.
         if len(command) == 1:
-            text = _read_text("stdin", lambda: sys.stdin.read().removeprefix("\ufeff")) if command[0] == "-" else command[0]
+            text = _read_text("stdin", _read_stdin) if command[0] == "-" else command[0]
             requests, warnings = parse_curl(text, data_dir=Path.cwd())
         else:
             requests, warnings = parse_curl_words(command, data_dir=Path.cwd())
