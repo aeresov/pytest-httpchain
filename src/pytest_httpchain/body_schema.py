@@ -26,7 +26,7 @@ import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NamedTuple, NoReturn, cast
+from typing import Any, NamedTuple, NoReturn, cast, override
 from urllib.parse import unquote, urljoin, urlsplit
 
 import attrs
@@ -337,6 +337,7 @@ class SchemaFile:
         parsed = parse_schema_file_ref(ref)
         return cls(resolve_scenario_path(scenario_dir, parsed.path), parsed.fragment, parsed.pointer)
 
+    @override
     def __str__(self) -> str:
         return _shown(f"{self.path}#{self.fragment}" if self.fragment else str(self.path))
 
@@ -1171,9 +1172,11 @@ class _Same:
     def __init__(self, value: Any) -> None:
         self.value = value
 
+    @override
     def __hash__(self) -> int:
         return id(self.value)
 
+    @override
     def __eq__(self, other: object) -> bool:
         return isinstance(other, _Same) and other.value is self.value
 

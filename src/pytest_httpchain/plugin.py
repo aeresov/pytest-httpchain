@@ -15,7 +15,7 @@ import types
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, override
 
 import httpx
 import pytest
@@ -44,6 +44,7 @@ class JsonModule(pytest.Module):
     # Seeded in collect(); consumed by _getobj().
     _generated_module: types.ModuleType
 
+    @override
     def _getobj(self) -> types.ModuleType:
         """Return the in-memory module built in ``collect``.
 
@@ -73,6 +74,7 @@ class JsonModule(pytest.Module):
                 f"or deselect scenario files when running with -n."
             )
 
+    @override
     def collect(self) -> Iterable[pytest.Item | pytest.Collector]:
         ref_parent_traversal_depth = self.config.getini(ConfigOptions.REF_PARENT_TRAVERSAL_DEPTH)
 
@@ -317,6 +319,7 @@ class JsonClass(pytest.Class):
     for `_regroup_carrier_items`, and every stage's test id is checked here.
     """
 
+    @override
     def collect(self) -> Iterable[pytest.Item | pytest.Collector]:
         collected = list(super().collect())
         items = [node for node in collected if isinstance(node, pytest.Item)]
@@ -721,6 +724,7 @@ class _HttpxUrlRedaction(logging.Filter):
         super().__init__()
         self.redaction = redaction
 
+    @override
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.args, tuple) and any(isinstance(arg, httpx.URL) for arg in record.args):
             record.args = tuple(self.redaction.url(arg) if isinstance(arg, httpx.URL) else arg for arg in record.args)

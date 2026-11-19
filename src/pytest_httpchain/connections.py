@@ -26,7 +26,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, NamedTuple, Protocol
+from typing import Any, Literal, NamedTuple, Protocol, override
 
 from pydantic import BaseModel
 
@@ -808,6 +808,7 @@ class Connections:
     def __init__(self) -> None:
         self._entries: dict[str, _Entry] = {}
 
+    @override
     def __eq__(self, other: object) -> bool:
         """The same state: two fresh registries are equal (`carrier.fresh_chain_state`)."""
         return isinstance(other, Connections) and self._entries == other._entries

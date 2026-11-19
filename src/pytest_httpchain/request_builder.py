@@ -15,7 +15,7 @@ import threading
 from collections.abc import Generator, Iterable, Iterator, Mapping
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 from urllib.parse import unquote_plus, urlencode
 
 import httpx
@@ -154,6 +154,7 @@ class _BearerAuth(httpx.Auth):
     def __init__(self, token: str) -> None:
         self._auth_header = f"Bearer {token}"
 
+    @override
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:
         request.headers["Authorization"] = self._auth_header
         yield request
@@ -195,6 +196,7 @@ class _DigestAuth(httpx.DigestAuth):
         super().__init__(username, password)
         self._lock = threading.Lock()
 
+    @override
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:
         flow = super().auth_flow(request)
         with self._lock:

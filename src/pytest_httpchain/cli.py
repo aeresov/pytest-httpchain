@@ -10,7 +10,7 @@ from collections import Counter
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, NoReturn, override
 
 import typer
 import typer.core
@@ -64,10 +64,12 @@ class _Command(typer.core.TyperCommand):
     making the apps plain ``typer.Typer`` again (`_OwnOptionsFirst` then
     derives from typer.core.TyperCommand), only once both are gone."""
 
+    @override
     def get_help(self, ctx: typer.Context) -> str:  # ty: ignore[incompatible-method-override]
         _hide_flag_value_types(self, ctx)
         return super().get_help(ctx)
 
+    @override
     def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:  # ty: ignore[incompatible-method-override]
         """A value an option refuses is reported in the same words on every
         typer. typer 0.29 converts values through pydantic, which puts
@@ -92,6 +94,7 @@ class _Group(typer.core.TyperGroup):
     """A group whose help lists no value type beside a flag: it goes with
     `_hide_flag_value_types` (see there)."""
 
+    @override
     def get_help(self, ctx: typer.Context) -> str:  # ty: ignore[incompatible-method-override]
         _hide_flag_value_types(self, ctx)
         return super().get_help(ctx)
@@ -107,6 +110,7 @@ class _Typer(typer.Typer):
     def __init__(self, *, cls: type[typer.core.TyperGroup] | None = _Group, **kwargs) -> None:
         super().__init__(cls=cls, **kwargs)
 
+    @override
     def command(self, name: str | None = None, *, cls: type[typer.core.TyperCommand] | None = _Command, **kwargs):
         return super().command(name, cls=cls, **kwargs)
 
@@ -475,6 +479,7 @@ class _OwnOptionsFirst(_Command):
     (``-sSL -o page.html https://...``) as the import's own, and write the
     scenario where curl was to write its answer."""
 
+    @override
     def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:
         own = {name: param for param in self.get_params(ctx) if param.param_type_name == "option" for name in (*param.opts, *param.secondary_opts)}
         index = 0

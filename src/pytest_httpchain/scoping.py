@@ -62,7 +62,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from enum import IntEnum
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, override
 
 import pytest
 
@@ -829,19 +829,24 @@ class NameUnion(AbstractSet[str]):
     def __init__(self, *parts: AbstractSet[str]) -> None:
         self._parts = parts
 
+    @override
     def __contains__(self, name: object) -> bool:
         return any(name in part for part in self._parts)
 
+    @override
     def __iter__(self) -> Iterator[str]:
         return iter(dict.fromkeys(name for part in self._parts for name in part))
 
+    @override
     def __len__(self) -> int:
         return len(frozenset().union(*self._parts))
 
+    @override
     def __or__(self, other: AbstractSet[str]) -> "NameUnion":
         return NameUnion(*self._parts, other)
 
     @classmethod
+    @override
     def _from_iterable(cls, iterable: Iterable[str]) -> frozenset[str]:
         return frozenset(iterable)
 

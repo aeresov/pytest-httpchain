@@ -4,7 +4,7 @@ import inspect
 import os
 from collections.abc import Callable, Mapping
 from types import MethodType, SimpleNamespace
-from typing import Any
+from typing import Any, override
 from uuid import uuid4
 
 import simpleeval
@@ -194,16 +194,19 @@ class _Evaluator(EvalWithCompoundTypes):
     # thread (see `walker`), as simpleeval's own ``expr`` requires.
     _tree: ast.AST
 
+    @override
     def eval(self, expr: str, previously_parsed: ast.AST | None = None) -> Any:
         self._tree = previously_parsed if previously_parsed is not None else self.parse(expr)
         return super().eval(expr, self._tree)
 
+    @override
     def _eval_attribute(self, node: ast.Attribute) -> Any:
         value = super()._eval_attribute(node)
         if _is_object_method(value) and not _takes_a_method(self._tree, node):
             raise _MethodNotCalled(value, self.expr)
         return value
 
+    @override
     def _eval_subscript(self, node: ast.Subscript) -> Any:
         container = self._eval(node.value)
         key = self._eval(node.slice)

@@ -13,7 +13,7 @@ import types
 import xml.etree.ElementTree
 from collections.abc import Callable, ItemsView, Iterable, Iterator, KeysView, Mapping, ValuesView
 from pathlib import Path, PurePath
-from typing import Annotated, Any, Literal, NamedTuple, get_args
+from typing import Annotated, Any, Literal, NamedTuple, get_args, override
 from urllib.parse import unquote
 
 import graphql
@@ -745,6 +745,7 @@ class VarsNamespace(types.SimpleNamespace):
     def get(self, key: str, default: Any = None) -> Any:
         return vars(self).get(key, default)
 
+    @override
     def __repr__(self) -> str:
         # A SimpleNamespace's own text (whose repr names a subclass by its
         # class), so a `vars` object interpolated into text reads as it

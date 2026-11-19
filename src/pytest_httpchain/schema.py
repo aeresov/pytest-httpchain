@@ -2,7 +2,7 @@
 so editors accept a reference directive wherever a named type or a root-level
 property is expected."""
 
-from typing import Any
+from typing import Any, override
 
 from pydantic.json_schema import GenerateJsonSchema, JsonSchemaValue
 from pydantic_core import core_schema
@@ -21,6 +21,7 @@ class _AnyOfTaggedUnions(GenerateJsonSchema):
     accept set otherwise, since members forbid each other's tag fields.
     """
 
+    @override
     def tagged_union_schema(self, schema: core_schema.TaggedUnionSchema) -> JsonSchemaValue:
         json_schema = super().tagged_union_schema(schema)
         if "oneOf" in json_schema:
