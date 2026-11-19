@@ -1,7 +1,8 @@
 """A stage's ``parallel`` and ``retry`` blocks once rendered, as its
 iterations use them: each setting coerced, or refused as a stage failure
 naming it (`setting_number`), the iteration matrix
-(`build_iteration_substitutions`), and the retry policy (`retry_policy`).
+(`build_iteration_substitutions`), the retry policy (`retry_policy`), and
+how the iterations are paced (`rate_settings`).
 
 Pure: the carrier renders each block (`rendering.render_declared`) and hands
 it here before any request, so a setting the stage cannot use fails it
@@ -72,12 +73,12 @@ def _setting_int(setting: str, value: Any) -> int:
     return int(number)
 
 
-def parallel_number(field: str, value: Any) -> float:
+def _parallel_number(field: str, value: Any) -> float:
     """A walk()-resolved ``parallel`` setting as a positive float, or a stage failure."""
     return setting_number(f"parallel.{field}", value)
 
 
-def parallel_int(field: str, value: Any) -> int:
+def _parallel_int(field: str, value: Any) -> int:
     """A walk()-resolved ``parallel`` setting as a positive int, or a stage failure."""
     return _setting_int(f"parallel.{field}", value)
 
@@ -173,13 +174,11 @@ class RetryPolicy:
 NO_RETRY = RetryPolicy()
 
 
-def retry_policy(config: RetryConfig | None) -> RetryPolicy:
+def retry_policy(config: RetryConfig) -> RetryPolicy:
     """A walk()-resolved ``retry`` as the policy the iterations follow, or a
     stage failure naming a setting it cannot use. Resolved before any request,
     as the ``parallel`` config is: a setting a template rendered to template
     text fails the stage then, not once the first attempt has failed."""
-    if config is None:
-        return NO_RETRY
     return RetryPolicy(
         attempts=_setting_int("retry.attempts", config.attempts),
         delay=setting_number("retry.delay", config.delay, "a number of seconds, 0 or more", lambda number: number >= 0),
@@ -215,7 +214,7 @@ def build_iteration_substitutions(parallel_config: ParallelConfig | None, max_pa
         case ParallelRepeatConfig(repeat=repeat_count):
             # int(): the field is `PositiveInt | NumberOrTemplate`, but the
             # config arrives walk()-resolved.
-            repeat_total = parallel_int("repeat", repeat_count)
+            repeat_total = _parallel_int("repeat", repeat_count)
             check_cap(repeat_total)
             iteration_substitutions = [{} for _ in range(repeat_total)]
         case ParallelForeachConfig(foreach=foreach_steps):
@@ -242,3 +241,38 @@ def build_iteration_substitutions(parallel_config: ParallelConfig | None, max_pa
         case _:
             raise RuntimeError(f"Unhandled parallel config: {type(parallel_config).__name__}")
     return iteration_substitutions
+
+
+@dataclass(frozen=True, slots=True)
+class RateSettings:
+    """How a stage's iterations are paced (`rate_settings`): the requests per
+    second a limiter admits, None for no limiter; how long an attempt waits
+    for a slot; and how many iterations run at once, None for a stage that
+    runs one, inline."""
+
+    calls_per_sec: int | None = None
+    max_rate_limit_delay: float = 60
+    max_concurrency: int | None = None
+
+
+def rate_settings(parallel_config: ParallelConfig | None, total: int, retry: RetryPolicy) -> RateSettings:
+    """A walk()-resolved ``parallel`` config's rate and concurrency settings
+    for ``total`` iterations, each making the attempts ``retry`` allows, or a
+    stage failure naming one it cannot use: ``calls_per_sec``, then
+    ``max_rate_limit_delay``, then ``max_concurrency``.
+
+    Each is read only where it applies: a single iteration's only attempt
+    cannot block on a fresh bucket, so without retries the rate-limiting
+    settings have nothing to do, and only more than one iteration runs in a
+    pool.
+    """
+    if parallel_config is None or not (total > 1 or retry.attempts > 1):
+        return RateSettings()
+    # Guarded rather than cast: the config arrives walk()-resolved, and a
+    # resolved value can still be unusable (see `setting_number`). None is
+    # "never declared" here: `rendering.render_declared` already refused a
+    # template that rendered to None.
+    calls_per_sec = _parallel_int("calls_per_sec", parallel_config.calls_per_sec) if parallel_config.calls_per_sec is not None else None
+    max_rate_limit_delay = _parallel_number("max_rate_limit_delay", parallel_config.max_rate_limit_delay)
+    max_concurrency = _parallel_int("max_concurrency", parallel_config.max_concurrency) if total > 1 else None
+    return RateSettings(calls_per_sec, max_rate_limit_delay, max_concurrency)

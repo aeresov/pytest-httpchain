@@ -13,7 +13,7 @@ import pytest
 
 from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import IndividualParameter, ParallelForeachConfig, ParallelRepeatConfig, RetryConfig
-from pytest_httpchain.stage_settings import build_iteration_substitutions, parallel_int, parallel_number, retry_policy
+from pytest_httpchain.stage_settings import NO_RETRY, _parallel_int, _parallel_number, build_iteration_substitutions, rate_settings, retry_policy
 
 
 class TestResolvedParallelSettings:
@@ -31,25 +31,44 @@ class TestResolvedParallelSettings:
         # A bool is rejected outright: float(True) == 1.0 would silently
         # configure one worker / one call per second.
         with pytest.raises(StageExecutionError) as excinfo:
-            parallel_int("calls_per_sec", value)
+            _parallel_int("calls_per_sec", value)
         assert "calls_per_sec" in str(excinfo.value)
         assert repr(value) in str(excinfo.value)
 
     @pytest.mark.parametrize("value", [2, 2.0, pytest.param("2", id="str")])
     def test_whole_number_count_accepted_as_int(self, value):
         """A template may resolve to 2.0 or "2"; both are the whole number 2."""
-        assert parallel_int("max_concurrency", value) == 2
+        assert _parallel_int("max_concurrency", value) == 2
 
     @pytest.mark.parametrize("value", [0, -0.5, float("inf"), float("nan"), "abc", True])
     def test_bad_delay_rejected(self, value):
         with pytest.raises(StageExecutionError, match="max_rate_limit_delay must be a positive number"):
-            parallel_number("max_rate_limit_delay", value)
+            _parallel_number("max_rate_limit_delay", value)
 
     @pytest.mark.parametrize("value", [0.5, pytest.param("0.5", id="str")])
     def test_fractional_delay_is_kept(self, value):
         # Unlike the two counts, the delay is a duration: half a second is a
         # meaningful budget, so only the counts demand whole numbers.
-        assert parallel_number("max_rate_limit_delay", value) == 0.5
+        assert _parallel_number("max_rate_limit_delay", value) == 0.5
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            # int(0.5) == 0, which is falsy: a plain cast turned "one call
+            # every two seconds" into no rate limiting at all.
+            ("calls_per_sec", 0.5),
+            # int(0.5) == 0 workers, and ThreadPoolExecutor(max_workers=0)
+            # raises a bare ValueError rather than failing the stage.
+            ("max_concurrency", 0),
+            ("max_concurrency", 0.5),
+            ("max_concurrency", "{{ 2 }}"),
+            ("max_rate_limit_delay", "{{ 5 }}"),
+        ],
+    )
+    def test_rate_settings_reject_unusable_setting(self, field, value):
+        settings = {"repeat": 2, "max_concurrency": 2, "calls_per_sec": None, "max_rate_limit_delay": 60, field: value}
+        with pytest.raises(StageExecutionError, match=field):
+            rate_settings(ParallelRepeatConfig.model_construct(**settings), 2, NO_RETRY)
 
 
 class TestRetryPolicy:

@@ -89,11 +89,11 @@ from pytest_httpchain.scoping import (
 )
 from pytest_httpchain.stage_settings import (
     NO_RETRY,
+    RateSettings,
     RetryPolicy,
     build_iteration_substitutions,
     parallel_flag,
-    parallel_int,
-    parallel_number,
+    rate_settings,
     retry_policy,
     setting_number,
     threshold_limits,
@@ -311,7 +311,9 @@ def _with_stats(saves: dict[str, Any], name: str, stats: ParallelStats, declared
         try:
             warnings.warn(
                 ScenarioValidationWarning(f"parallel.stats_as '{name}' is also a name the stage's response saves: the stats replace what it saved (HTTPCHAIN040)"),
-                stacklevel=3,
+                # The frame that called `Carrier.execute_stage`, past
+                # `Carrier._settle_iterations`, which calls this.
+                stacklevel=4,
             )
         except ScenarioValidationWarning as promoted:
             # Promoted by filterwarnings=error: a stage failure, so that
@@ -477,6 +479,23 @@ def fresh_scenario_state() -> dict[str, Any]:
         "_client_config": None,
         "_chain_key": None,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class _StagePlan:
+    """What a stage runs, resolved before any request (`Carrier._stage_plan`):
+    its ``parallel`` config rendered (None without one), each iteration's
+    substitutions (`build_iteration_substitutions`), whether it collects its
+    saves (``collect_saves``), the limits its stats are held to
+    (`threshold_limits`), its retry policy, and how its iterations are paced
+    (`rate_settings`)."""
+
+    parallel: ParallelConfig | None
+    iterations: list[dict[str, Any]]
+    collect_saves: bool
+    limits: dict[str, float]
+    retry: RetryPolicy
+    rate: RateSettings
 
 
 @dataclass(slots=True, frozen=True)
@@ -900,10 +919,11 @@ class Carrier:
         """Execute one stage end to end.
 
         Gates on the abort/``always_run`` flow, layers the stage context, skips
-        the stage when its ``skip_if`` holds, runs the iteration matrix, each
-        iteration making the attempts its ``retry`` allows, holds a parallel
-        stage's stats to its ``thresholds``, and on success commits the
-        iterations' saves (`_merged_saves`), and the stats under
+        the stage when its ``skip_if`` holds, resolves its settings
+        (`_stage_plan`), runs the iteration matrix, each iteration making the
+        attempts its ``retry`` allows, holds a parallel stage's stats to its
+        ``thresholds``, and on success commits the iterations' saves
+        (`_settle_iterations`, `_merged_saves`), and the stats under
         ``stats_as``, as a new global-context layer. A ``min_success_ratio``
         below 1 lets it run on after failed iterations, whose saves are none.
         A failure is reported via ``pytest.fail`` and commits no saves, so the
@@ -987,68 +1007,11 @@ class Carrier:
                     raise StageExecutionError(f"Stage '{stage.name}': parallel is not supported on a connection stage")
                 cls._connection_params_context = cls._params_context(stage_fixtures)
 
-            parallel_config: ParallelConfig | None = render_declared(stage.parallel, local_context, "parallel") if stage.parallel else None
-            iteration_substitutions = build_iteration_substitutions(parallel_config, cls.max_parallel_iterations)
-
-            total = len(iteration_substitutions)
-            if total == 0:
-                # The models reject the static empty cases, but a template- or
-                # $ref-sourced config can still resolve to empty at runtime.
-                raise StageExecutionError("Parallel configuration produced zero iterations; foreach/repeat must yield at least one item")
-            # Before any request: a switch the stage cannot read must fail it
-            # before its iterations send anything, not once they all have.
-            collect_saves = parallel_flag("collect_saves", parallel_config.collect_saves) if parallel_config is not None else False
-            limits = threshold_limits(parallel_config.thresholds) if parallel_config is not None else {}
-            # Against the same context as the parallel config, and before any
-            # request too: a setting the stage cannot use fails it now.
-            retry = retry_policy(render_declared(stage.retry, local_context, "retry")) if stage.retry is not None else NO_RETRY
-
-            if parallel_config is not None:
-                run = _ParallelRun(stage.name, total, tolerate=limits.get("min_success_ratio", 1) < 1)
-            results, first_error = cls._run_iterations(stage, local_context, iteration_substitutions, parallel_config, iteration_exit_errors, retry, secondary_exchanges, run)
-            completed = [iter_result for iter_result in results if iter_result is not None]
-
-            if first_error is None:
-                # No iteration ended the stage: every one ran to its end, and
-                # the thresholds are checked against what they measured. One
-                # not met fails the stage, listing the failures it ran on after.
-                stats = cls.last_parallel_stats = run.stats(limits) if run is not None else None
-                violated = stats.violated if stats is not None else ()
-                tolerated = run.failures() if run is not None else []
-                # The report shows the first failure that sent a request when
-                # too few passed, as a stage failing at an iteration shows
-                # that one's, and when none passed, which leaves no passed
-                # exchange to show. The others' exchanges went on the wire too.
-                shown = _first_sent(failure for _, failure in tolerated) if not completed or any(check.name == "min_success_ratio" for check in violated) else None
-                if cls.record_all_exchanges and run is not None:
-                    secondary_exchanges.extend(run.failure_exchanges(but=shown))
-                cls._record_exchanges(completed, failed=shown, attempted=total, attempts=retry.attempts, secondary=secondary_exchanges)
-                if violated:
-                    raise StageExecutionError(threshold_failure(violated, [(idx, str(failure)) for idx, failure in tolerated]))
-                # Every iteration passed, or failed and was tolerated, so
-                # `results` holds a result for each that passed, None for the
-                # others: entry i of a collected list is iteration i's.
-                assert len(completed) + len(tolerated) == total, "a stage whose iterations all ended has every one's result or failure"
-                saves = _merged_saves(
-                    [iter_result.saved_context if iter_result is not None else {} for iter_result in results],
-                    collect_saves,
-                    # Sorted: the order a stage commits in never depends on a set's.
-                    sorted(saved_in_response(stage)) if tolerated else (),
-                )
-                if parallel_config is not None and parallel_config.stats_as is not None:
-                    assert stats is not None, "a parallel stage has stats"
-                    saves = _with_stats(saves, parallel_config.stats_as, stats, saved_in_response(stage))
-            else:
-                idx, exc = first_error
-                if run is not None:
-                    # Ended at an iteration: no threshold is checked.
-                    cls.last_parallel_stats = run.stats()
-                cls._record_exchanges(completed, failed=exc, attempted=total, attempts=retry.attempts, secondary=secondary_exchanges)
-                # Label the failure as parallel only when the user asked for
-                # parallel, else a plain stage failure would be misreported.
-                if parallel_config is not None:
-                    raise StageExecutionError(_parallel_failure(idx, exc, run.failures() if run is not None else ())) from exc
-                raise exc
+            plan = cls._stage_plan(stage, local_context)
+            if plan.parallel is not None:
+                run = _ParallelRun(stage.name, len(plan.iterations), tolerate=plan.limits.get("min_success_ratio", 1) < 1)
+            results, first_error = cls._run_iterations(stage, local_context, plan, iteration_exit_errors, secondary_exchanges, run)
+            saves = cls._settle_iterations(stage, plan, run, results, first_error, secondary_exchanges)
 
         except _STAGE_OUTCOMES as e:
             # Held back, a skip or an xfail too: exiting the context managers may fail the stage.
@@ -1074,25 +1037,7 @@ class Carrier:
         # The iterations' exit errors go in, so that an interrupt raised by one
         # of these exits logs them rather than dropping them.
         exit_errors = _exit_context_managers(cls.active_context_managers, iteration_exit_errors)
-        # A wait that timed out and failed the stage: what arrived just after
-        # its deadline goes in the report. Asked once, here, where the failure
-        # is final, and before any close: not by every attempt.
-        if isinstance(outcome, _STAGE_FAILURE_EXCEPTIONS) and (record := cls._connection_record) is not None and (exchange := cls.last_connection_exchange) is not None:
-            if late := record.late():
-                cls.last_connection_exchange = replace(exchange, late=late)
-        # A stage whose attempt passed took its snapshot light, for a section
-        # nobody reads. One that fails yet (an exit that raised) or still may
-        # (its close) is reported: its snapshot is taken in full now, the
-        # adapter's debug_info() asked before the close.
-        if (record := cls._connection_record) is not None and (exchange := cls.last_connection_exchange) is not None and not exchange.full:
-            if (exit_errors or closing is not None) and not isinstance(outcome, pytest.skip.Exception):
-                cls.last_connection_exchange = record.freeze()
-        # With them, and as they do: a close that fails fails the stage, its
-        # own failure first, and no saves commit.
-        if closing is not None and not isinstance(outcome, pytest.skip.Exception):
-            close_error = cls.connections.close(closing, stage.name)
-            if close_error is not None:
-                exit_errors.append(close_error)
+        cls._finish_connection_stage(stage, outcome, closing, exit_errors)
 
         # Deliberately outside the handler: raising there would set
         # `Failed.__context__` to the original exception, and pytest's
@@ -1120,6 +1065,130 @@ class Carrier:
         """Wrap callable (factory) fixtures so templates can invoke them; plain
         values pass through."""
         return {name: cls._wrap_factory_fixture(name, value) if callable(value) and not inspect.isclass(value) else value for name, value in fixture_kwargs.items()}
+
+    @classmethod
+    def _stage_plan(cls, stage: Stage, local_context: ChainMap[str, Any]) -> _StagePlan:
+        """What the stage runs (`_StagePlan`), resolved against the
+        stage-local context before any request: its ``parallel`` config
+        rendered and expanded into the iterations, ``collect_saves``, the
+        thresholds, its ``retry`` rendered and resolved, then the rate and
+        concurrency settings, in that order. A setting the stage cannot use
+        fails it before its iterations send anything, not once they all have."""
+        parallel_config: ParallelConfig | None = render_declared(stage.parallel, local_context, "parallel") if stage.parallel else None
+        iteration_substitutions = build_iteration_substitutions(parallel_config, cls.max_parallel_iterations)
+
+        total = len(iteration_substitutions)
+        if total == 0:
+            # The models reject the static empty cases, but a template- or
+            # $ref-sourced config can still resolve to empty at runtime.
+            raise StageExecutionError("Parallel configuration produced zero iterations; foreach/repeat must yield at least one item")
+        # Before any request: a switch the stage cannot read must fail it
+        # before its iterations send anything, not once they all have.
+        collect_saves = parallel_flag("collect_saves", parallel_config.collect_saves) if parallel_config is not None else False
+        limits = threshold_limits(parallel_config.thresholds) if parallel_config is not None else {}
+        # Against the same context as the parallel config, and before any
+        # request too: a setting the stage cannot use fails it now.
+        retry = retry_policy(render_declared(stage.retry, local_context, "retry")) if stage.retry is not None else NO_RETRY
+        rate = rate_settings(parallel_config, total, retry)
+        return _StagePlan(parallel=parallel_config, iterations=iteration_substitutions, collect_saves=collect_saves, limits=limits, retry=retry, rate=rate)
+
+    @classmethod
+    def _settle_iterations(
+        cls,
+        stage: Stage,
+        plan: _StagePlan,
+        run: _ParallelRun | None,
+        results: list[IterationResult | None],
+        first_error: tuple[int, Exception] | None,
+        secondary_exchanges: list[Exchange],
+    ) -> dict[str, Any]:
+        """What the stage commits once its iterations have run
+        (`_run_iterations`), or the failure it ends in.
+
+        Either way its exchanges are recorded for the report and the HAR file
+        (`_record_exchanges`, ``secondary_exchanges`` among them), and a
+        parallel stage's stats go on ``last_parallel_stats`` first. When no
+        iteration ended the stage, the stats are held to its thresholds, and
+        the stage commits its iterations' saves (`_merged_saves`), with the
+        stats under ``stats_as``. When one did (``first_error``), its failure
+        is raised, as a parallel one where the stage is parallel
+        (`_parallel_failure`).
+        """
+        total = len(plan.iterations)
+        completed = [iter_result for iter_result in results if iter_result is not None]
+
+        if first_error is None:
+            # No iteration ended the stage: every one ran to its end, and
+            # the thresholds are checked against what they measured. One
+            # not met fails the stage, listing the failures it ran on after.
+            stats = cls.last_parallel_stats = run.stats(plan.limits) if run is not None else None
+            violated = stats.violated if stats is not None else ()
+            tolerated = run.failures() if run is not None else []
+            # The report shows the first failure that sent a request when
+            # too few passed, as a stage failing at an iteration shows
+            # that one's, and when none passed, which leaves no passed
+            # exchange to show. The others' exchanges went on the wire too.
+            shown = _first_sent(failure for _, failure in tolerated) if not completed or any(check.name == "min_success_ratio" for check in violated) else None
+            if cls.record_all_exchanges and run is not None:
+                secondary_exchanges.extend(run.failure_exchanges(but=shown))
+            cls._record_exchanges(completed, failed=shown, attempted=total, attempts=plan.retry.attempts, secondary=secondary_exchanges)
+            if violated:
+                raise StageExecutionError(threshold_failure(violated, [(idx, str(failure)) for idx, failure in tolerated]))
+            # Every iteration passed, or failed and was tolerated, so
+            # `results` holds a result for each that passed, None for the
+            # others: entry i of a collected list is iteration i's.
+            assert len(completed) + len(tolerated) == total, "a stage whose iterations all ended has every one's result or failure"
+            saves = _merged_saves(
+                [iter_result.saved_context if iter_result is not None else {} for iter_result in results],
+                plan.collect_saves,
+                # Sorted: the order a stage commits in never depends on a set's.
+                sorted(saved_in_response(stage)) if tolerated else (),
+            )
+            if plan.parallel is not None and plan.parallel.stats_as is not None:
+                assert stats is not None, "a parallel stage has stats"
+                saves = _with_stats(saves, plan.parallel.stats_as, stats, saved_in_response(stage))
+            return saves
+
+        idx, exc = first_error
+        if run is not None:
+            # Ended at an iteration: no threshold is checked.
+            cls.last_parallel_stats = run.stats()
+        cls._record_exchanges(completed, failed=exc, attempted=total, attempts=plan.retry.attempts, secondary=secondary_exchanges)
+        # Label the failure as parallel only when the user asked for
+        # parallel, else a plain stage failure would be misreported.
+        if plan.parallel is not None:
+            raise StageExecutionError(_parallel_failure(idx, exc, run.failures() if run is not None else ())) from exc
+        raise exc
+
+    @classmethod
+    def _finish_connection_stage(cls, stage: Stage, outcome: BaseException | None, closing: str | None, exit_errors: list[str]) -> None:
+        """A connection stage's last steps, once the context managers the
+        stage entered have exited (``exit_errors``, what their exits raised),
+        for a stage that ended in ``outcome`` (None: it succeeded): its report
+        gets what arrived just after the deadline of a wait that timed out and
+        failed it, and its full snapshot where it is reported, before the
+        connection it closes (``closing``, ``close: true``) is closed, a
+        close's failure going on ``exit_errors``. A stage that ran no
+        connection step has none of these to do."""
+        # A wait that timed out and failed the stage: what arrived just after
+        # its deadline goes in the report. Asked once, here, where the failure
+        # is final, and before any close: not by every attempt.
+        if isinstance(outcome, _STAGE_FAILURE_EXCEPTIONS) and (record := cls._connection_record) is not None and (exchange := cls.last_connection_exchange) is not None:
+            if late := record.late():
+                cls.last_connection_exchange = replace(exchange, late=late)
+        # A stage whose attempt passed took its snapshot light, for a section
+        # nobody reads. One that fails yet (an exit that raised) or still may
+        # (its close) is reported: its snapshot is taken in full now, the
+        # adapter's debug_info() asked before the close.
+        if (record := cls._connection_record) is not None and (exchange := cls.last_connection_exchange) is not None and not exchange.full:
+            if (exit_errors or closing is not None) and not isinstance(outcome, pytest.skip.Exception):
+                cls.last_connection_exchange = record.freeze()
+        # With the exits' errors, and as they do: a close that fails fails the
+        # stage, its own failure first, and no saves commit.
+        if closing is not None and not isinstance(outcome, pytest.skip.Exception):
+            close_error = cls.connections.close(closing, stage.name)
+            if close_error is not None:
+                exit_errors.append(close_error)
 
     @classmethod
     def _record_exchanges(cls, completed: list[IterationResult], failed: Exception | None, attempted: int, attempts: int = 1, secondary: Sequence[Exchange] = ()) -> None:
@@ -1168,20 +1237,18 @@ class Carrier:
         cls,
         stage: Stage,
         local_context: ChainMap[str, Any],
-        iteration_substitutions: list[dict[str, Any]],
-        parallel_config: ParallelConfig | None,
+        plan: _StagePlan,
         exit_errors: list[str],
-        retry: RetryPolicy = NO_RETRY,
         secondary_exchanges: list[Exchange] | None = None,
         run: _ParallelRun | None = None,
     ) -> tuple[list[IterationResult | None], tuple[int, Exception] | None]:
-        """Run the iterations and return ``(results_by_index, first_error)``.
+        """Run the ``plan``'s iterations and return ``(results_by_index, first_error)``.
 
         One iteration runs inline; many run in a pool capped at
         ``max_concurrency`` with an optional global rate limiter, which every
-        attempt of an iteration (``retry``) takes a slot of. The first
-        iteration to end in anything but success cancels the pool, and its
-        outcome is the stage's whenever it is read (`_PoolCancel`), unless
+        attempt of an iteration (the plan's ``retry``) takes a slot of. The
+        first iteration to end in anything but success cancels the pool, and
+        its outcome is the stage's whenever it is read (`_PoolCancel`), unless
         another iteration raises an interrupt (or, read first, a plugin bug).
         Where ``run`` tolerates failures (a ``min_success_ratio`` below 1), an
         iteration's own failure goes on ``run.tolerated`` instead, whenever it
@@ -1197,6 +1264,7 @@ class Carrier:
         every iteration ended, the stage takes those in itself, once it knows
         which one its report shows.
         """
+        iteration_substitutions, retry, rate = plan.iterations, plan.retry, plan.rate
         total = len(iteration_substitutions)
         # Only for the HAR file: an ordinary run keeps one exchange per stage.
         secondary = secondary_exchanges if cls.record_all_exchanges else None
@@ -1205,23 +1273,14 @@ class Carrier:
         limiter: Limiter | None = None
 
         try:
-            # A single iteration's only attempt cannot block on a fresh bucket,
-            # so without retries the rate-limiting settings have nothing to do.
-            max_rate_limit_delay: float = 60
-            if parallel_config is not None and (total > 1 or retry.attempts > 1):
-                # Guarded rather than cast: the config arrives walk()-resolved,
-                # and a resolved value can still be unusable (see `setting_number`).
-                # None is "never declared" here: `render_declared` already
-                # refused a template that rendered to None.
-                calls_per_sec = parallel_int("calls_per_sec", parallel_config.calls_per_sec) if parallel_config.calls_per_sec is not None else None
-                max_rate_limit_delay = parallel_number("max_rate_limit_delay", parallel_config.max_rate_limit_delay)
-                limiter = Limiter(Rate(calls_per_sec, Duration.SECOND)) if calls_per_sec is not None else None
+            # The plan resolved a rate only where one applies (`rate_settings`).
+            limiter = Limiter(Rate(rate.calls_per_sec, Duration.SECOND)) if rate.calls_per_sec is not None else None
 
             if total == 1:
                 if run is not None:
                     run.begin()
                 try:
-                    results[0] = cls._run_iteration(stage, local_context, iteration_substitutions[0], limiter, max_rate_limit_delay, retry=retry, run=run)
+                    results[0] = cls._run_iteration(stage, local_context, iteration_substitutions[0], limiter, rate.max_rate_limit_delay, retry=retry, run=run)
                 except _STAGE_FAILURE_EXCEPTIONS as e:
                     if run is not None and run.tolerates(e):
                         run.run_on(0, e)
@@ -1229,11 +1288,11 @@ class Carrier:
                         first_error = (0, e)
             else:
                 # Only a parallel config can yield more than one iteration:
-                # `build_iteration_substitutions(None, ...)` returns exactly one.
-                assert parallel_config is not None, "more than one iteration implies a parallel config"
-                max_concurrency = parallel_int("max_concurrency", parallel_config.max_concurrency)
+                # `build_iteration_substitutions(None, ...)` returns exactly one,
+                # and the plan resolved its max_concurrency (`rate_settings`).
+                assert rate.max_concurrency is not None, "more than one iteration implies a parallel config"
 
-                workers = min(max_concurrency, total)
+                workers = min(rate.max_concurrency, total)
                 cancel = _PoolCancel()
                 futures: dict[Future[IterationResult], int] = {}
                 read: set[int] = set()
@@ -1242,7 +1301,7 @@ class Carrier:
                 try:
                     with ThreadPoolExecutor(max_workers=workers) as executor:
                         for idx, iter_vars in enumerate(iteration_substitutions):
-                            future = executor.submit(cls._run_iteration, stage, local_context, iter_vars, limiter, max_rate_limit_delay, cancel, idx, retry, run)
+                            future = executor.submit(cls._run_iteration, stage, local_context, iter_vars, limiter, rate.max_rate_limit_delay, cancel, idx, retry, run)
                             futures[future] = idx
 
                         try:

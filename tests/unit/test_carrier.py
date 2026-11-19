@@ -41,6 +41,7 @@ from pytest_httpchain.carrier import (
     IterationResult,
     _context_dump,
     _merged_saves,
+    _StagePlan,
     fresh_chain_state,
     fresh_scenario_state,
 )
@@ -72,6 +73,7 @@ from pytest_httpchain.redaction import DEFAULT_REDACTION, NO_REDACTION, Redactio
 from pytest_httpchain.rendering import render_declared
 from pytest_httpchain.request_builder import build_client_kwargs
 from pytest_httpchain.scoping import base_global_context
+from pytest_httpchain.stage_settings import NO_RETRY, rate_settings
 from pytest_httpchain.templates import TemplatesError, walk
 from pytest_httpchain.utils import process_substitutions
 from pytest_httpchain.warnings import ScenarioValidationWarning
@@ -298,25 +300,6 @@ class TestResolvedParallelSettings:
         finally:
             client.close()
         assert sorted(str(request.url) for request in requests) == ["http://mock/item/1/a", "http://mock/item/2/b"]
-
-    @pytest.mark.parametrize(
-        ("field", "value"),
-        [
-            # int(0.5) == 0, which is falsy: a plain cast turned "one call
-            # every two seconds" into no rate limiting at all.
-            ("calls_per_sec", 0.5),
-            # int(0.5) == 0 workers, and ThreadPoolExecutor(max_workers=0)
-            # raises a bare ValueError rather than failing the stage.
-            ("max_concurrency", 0),
-            ("max_concurrency", 0.5),
-            ("max_concurrency", "{{ 2 }}"),
-            ("max_rate_limit_delay", "{{ 5 }}"),
-        ],
-    )
-    def test_run_iterations_rejects_unusable_setting(self, field, value):
-        settings = {"repeat": 2, "max_concurrency": 2, "calls_per_sec": None, "max_rate_limit_delay": 60, field: value}
-        with pytest.raises(StageExecutionError, match=field):
-            _make_carrier_subclass()._run_iterations(make_stage(), ChainMap(), [{}, {}], ParallelRepeatConfig.model_construct(**settings), [])
 
 
 def _header_matcher(field: str) -> Verify:
@@ -3737,9 +3720,10 @@ class TestParallelCancellation:
         monkeypatch.setattr(carrier_module, "ThreadPoolExecutor", Executor)
         cls = _make_carrier_subclass(_execute_single_iteration=classmethod(fake_iteration))
         config = ParallelRepeatConfig.model_validate({"repeat": 40, "max_concurrency": 1})
+        plan = _StagePlan(parallel=config, iterations=[{"i": i} for i in range(40)], collect_saves=False, limits={}, retry=NO_RETRY, rate=rate_settings(config, 40, NO_RETRY))
 
         with pytest.raises(RuntimeError, match="plugin bug"):
-            cls._run_iterations(None, ChainMap(), [{"i": i} for i in range(40)], config, [])
+            cls._run_iterations(None, ChainMap(), plan, [])
 
         # Iteration 1 ran only where the worker took it before the shutdown.
         assert started in ([0], [0, 1])
