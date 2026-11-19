@@ -346,12 +346,6 @@ def format_connection_exchange(exchange: ConnectionExchange, redaction: Redactio
     return "\n".join(lines)
 
 
-# The headers curl writes itself: Host from the URL, Content-Length and
-# Transfer-Encoding for the body it sends, Connection for its own connection.
-# And Accept-Encoding, with `--compressed`, where it is httpx's own
-# (`_DEFAULT_CODINGS`).
-_CURL_WRITES = frozenset({"host", "content-length", "transfer-encoding", "connection"})
-
 # The codings of the Accept-Encoding httpx sends unless told otherwise: gzip
 # and deflate, then br and zstd where their decoders are installed. curl's
 # --compressed asks for those of them it was built to decode.
@@ -402,53 +396,42 @@ def format_curl(request: httpx.Request, redaction: Redaction = DEFAULT_REDACTION
         # a query's filter[id]=1, or the [REDACTED] above.
         options.append("--globoff")
 
-    compressed = False
+    # httpx decodes whatever encoding the answer comes in; curl only with
+    # --compressed, which asks for its own list unless -H gives one.
+    compressed = "accept-encoding" in request.headers
     for name, value in request.headers.multi_items():
-        lowered = name.lower()
-        if lowered == "host":
-            # Unless it is a Host the request set itself, for a virtual host.
-            if value == request.url.netloc.decode("ascii"):
+        match name.lower():
+            case "host" if value == request.url.netloc.decode("ascii"):
+                # A header curl writes itself is left to it: Host from the URL,
+                # unless the request set its own, for a virtual host.
                 continue
-        elif lowered == "content-length":
-            # curl writes it for the body it sends, or the one a comment says
-            # to add; for none at all (a bodyless POST's 0) it writes none.
-            if content != b"":
+            case "content-length" if content != b"":
+                # Content-Length for the body it sends, or the one a comment
+                # says to add; for none at all (a bodyless POST's 0) it writes
+                # none.
                 continue
-        elif lowered in _CURL_WRITES:
-            continue
-        if lowered == "accept-encoding":
-            # httpx decodes whatever encoding the answer comes in; curl only
-            # with --compressed, which asks for its own list unless -H gives one.
-            compressed = True
-            if _is_default_accept_encoding(value):
+            case "transfer-encoding" | "connection":
+                # Transfer-Encoding for the body it sends, Connection for its
+                # own connection.
                 continue
-        if lowered == "authorization" and value[: len(_DIGEST_SCHEME)].lower() == _DIGEST_SCHEME:
-            notes.append("The Digest Authorization answered one challenge and is left out: add --digest -u 'user:password' to answer a new one.")
-            continue
-        if lowered == "content-type" and content is None and value.lower().startswith("multipart/"):
-            # Its boundary is the uncaptured body's: -F writes its own.
-            continue
+            case "accept-encoding" if _is_default_accept_encoding(value):
+                # Accept-Encoding with --compressed, where it is httpx's own
+                # (`_DEFAULT_CODINGS`).
+                continue
+            case "authorization" if value[: len(_DIGEST_SCHEME)].lower() == _DIGEST_SCHEME:
+                notes.append("The Digest Authorization answered one challenge and is left out: add --digest -u 'user:password' to answer a new one.")
+                continue
+            case "content-type" if content is None and value.lower().startswith("multipart/"):
+                # Its boundary is the uncaptured body's: -F writes its own.
+                continue
         shown = redaction.header(name, value)
         redacted = redacted or shown != value
         # `Name:` would remove a header curl writes, `Name;` sends it empty.
         options.append(f"-H {_shell_word(f'{name}: {shown}' if shown else f'{name};')}")
 
-    data: str | None = None
-    if content is None:
-        if content_type is not None and content_type.lower().startswith("multipart/"):
-            notes.append("The multipart body was not captured: add each part with -F 'name=@file'.")
-        else:
-            notes.append("The streamed body was not captured: add it with --data-binary @file.")
-    elif content:
-        text = _curl_text(content)
-        if text is None:
-            notes.append(f"The body is {len(content)} bytes of binary data: save it as body.bin to send it.")
-            data = "--data-binary @body.bin"
-        elif len(text) > _MAX_CURL_BODY_CHARS:
-            notes.append(f"The body, {len(text)} characters, is too long to show: save it as body.txt to send it.")
-            data = "--data-binary @body.txt"
-        else:
-            data = f"--data-raw {_shell_word(text)}"
+    data, body_note = _curl_body(content, content_type)
+    if body_note is not None:
+        notes.append(body_note)
     if data is not None and content_type is None:
         # Given a body without one, curl labels it a form.
         options.append(f"-H {_shell_word('Content-Type:')}")
@@ -463,6 +446,25 @@ def format_curl(request: httpx.Request, redaction: Redaction = DEFAULT_REDACTION
     method = "--head" if request.method == "HEAD" and data is None else f"-X {shlex.quote(request.method)}"
     command = " \\\n  ".join([f"curl {method} {_shell_word(shown_url)}", *options])
     return "\n".join([*(f"# {note}" for note in notes), command])
+
+
+def _curl_body(content: bytes | None, content_type: str | None) -> tuple[str | None, str | None]:
+    """The option sending a body, and a note on what the command cannot hold,
+    each None where there is none: a body `request_content` did not capture
+    gets a note alone, a binary one or one longer than `_MAX_CURL_BODY_CHARS`
+    an option reading it from a file and a note to save it there."""
+    if content is None:
+        if content_type is not None and content_type.lower().startswith("multipart/"):
+            return None, "The multipart body was not captured: add each part with -F 'name=@file'."
+        return None, "The streamed body was not captured: add it with --data-binary @file."
+    if not content:
+        return None, None
+    text = _curl_text(content)
+    if text is None:
+        return "--data-binary @body.bin", f"The body is {len(content)} bytes of binary data: save it as body.bin to send it."
+    if len(text) > _MAX_CURL_BODY_CHARS:
+        return "--data-binary @body.txt", f"The body, {len(text)} characters, is too long to show: save it as body.txt to send it."
+    return f"--data-raw {_shell_word(text)}", None
 
 
 def _is_default_accept_encoding(value: str) -> bool:
