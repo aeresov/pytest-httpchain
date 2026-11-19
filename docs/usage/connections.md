@@ -240,7 +240,7 @@ receive() returned tuple at body.items; return a list
 
 Protobuf's `MessageToDict` turns 64-bit integers into strings and bytes into base64. Convert them back, or compare against strings.
 
-`pytest-httpchain validate --deep` imports each adapter and checks three things: that it has these methods, that each method takes these arguments, and that its constructor accepts the declared `params` (`HTTPCHAIN046`). For type checking, `pytest_httpchain.ProtocolAdapter` is the matching `typing.Protocol`.
+`pytest-httpchain validate --deep` imports each adapter and checks three things: that it has the four methods the plugin calls (`connect`, `send`, `receive` and `close`; the optional `debug_info()` is not checked), that each takes the arguments above, and that its constructor accepts the declared `params` (`HTTPCHAIN046`). For type checking, `pytest_httpchain.ProtocolAdapter` is the matching `typing.Protocol`.
 
 ## Lifetime and teardown
 
