@@ -643,30 +643,37 @@ def _holds_schemas(node: Any) -> bool:
     return members is not None and all(isinstance(member, dict | bool | list) for member in members)
 
 
-def _enters(nodes: list[Any], keys: list[int | str], specification: referencing.Specification[Any]) -> bool:
-    """Whether referencing's pointer walk from ``nodes[0]`` through ``keys``
-    (to ``nodes[1:]``) ends in a schema, one ``maybe_in_subresource``
-    enters: through JSON Schema's keywords alone. Where the walk passes an
-    ``$id``, it starts over from there, as referencing's does."""
+def _pointer_walk(nodes: list[Any], keys: list[int | str], specification: referencing.Specification[Any]) -> Iterator[tuple[Any, bool]]:
+    """referencing's pointer walk from ``nodes[0]`` through ``keys``: each
+    node it reaches (``nodes[1:]``), and whether it enters it, as a schema
+    of its own (`_entered`). Where it enters one that declares an ``$id``
+    (`_declares_id`), it starts over from there, as referencing's does."""
     segments: list[int | str] = []
-    entered = True
     for key, node in zip(keys, nodes[1:], strict=True):
         segments.append(key)
         entered = _entered(segments, node, specification)
+        yield node, entered
         if entered and _declares_id(node, specification):
             segments = []
-    return entered
+
+
+def _enters(nodes: list[Any], keys: list[int | str], specification: referencing.Specification[Any]) -> bool:
+    """Whether referencing's pointer walk from ``nodes[0]`` through ``keys``
+    (`_pointer_walk`) ends in a schema, one ``maybe_in_subresource``
+    enters: through JSON Schema's keywords alone. Through no keys it ends
+    at ``nodes[0]``, which counts as one."""
+    steps = list(_pointer_walk(nodes, keys, specification))
+    return steps[-1][1] if steps else True
 
 
 def _descend(base: str, nodes: list[Any], keys: list[int | str], specification: referencing.Specification[Any]) -> str:
-    """The base URI at the end of `_enters`'s walk, started at ``base``: each
-    schema it enters that declares an ``$id`` moves it (`_moved`)."""
-    segments: list[int | str] = []
-    for key, node in zip(keys, nodes[1:], strict=True):
-        segments.append(key)
-        if _entered(segments, node, specification) and _schema_id(node, specification) is not None:
+    """The base URI at the end of the pointer walk (`_pointer_walk`), started
+    at ``base``: each schema it enters that declares an ``$id`` moves it, and
+    one whose ``$id`` cannot be read raises the Unresolvable naming it
+    (`_moved`)."""
+    for node, entered in _pointer_walk(nodes, keys, specification):
+        if entered:
             base = _moved(base, node, specification)
-            segments = []
     return base
 
 
@@ -681,7 +688,7 @@ def _entered(segments: list[int | str], node: Any, specification: referencing.Sp
 
 def _declares_id(node: Any, specification: referencing.Specification[Any]) -> bool:
     """Whether ``node`` declares an ``$id``, one that cannot be read too:
-    `_enters` looks for where the walk starts over, not at the base."""
+    `_pointer_walk` looks for where the walk starts over, not at the base."""
     try:
         return _schema_id(node, specification) is not None
     except referencing.exceptions.Unresolvable:
