@@ -1,5 +1,8 @@
-"""Warning types. A leaf module, so the package ``__init__`` can re-export the
-user-facing name without loading the plugin/execution machinery."""
+"""Warning types. A leaf module, importing nothing of the package: the ``$ref``
+resolver, low in the layering, emits `AmbiguousReferenceWarning`
+(`jsonref.plumbing.path` imports it), so this module sits on the lowest layer,
+below jsonref, independent of `errors` and `constants` beside it. The package
+``__init__`` re-exports `ScenarioValidationWarning`, the user-facing name."""
 
 import pytest
 

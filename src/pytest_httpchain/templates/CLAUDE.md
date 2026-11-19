@@ -207,20 +207,21 @@ Safe functions available in expressions:
 - Utilities: `uuid4()`, `env(var, default)`
 - Context helpers: `get(var, default)`, `exists(var)`
 - Time: `now(fmt=None)` (UTC, ISO 8601 with offset and microseconds, or `strftime(fmt)`; `%s` refused, as the C library formats it in local time), `timestamp()`, `timestamp_ms()`
-- Encoding: `b64encode(value, urlsafe=False)`, `b64decode(value, urlsafe=False)` (padding optional, UTF-8 result), `json_dumps(value)` (json.dumps defaults, a `vars` namespace encoded as its object), `json_loads(text)`
+- Encoding: `b64encode(value, urlsafe=False)`, `b64decode(value, urlsafe=False)` (padding optional, UTF-8 result), `b64decode_bytes(value, urlsafe=False)` (the same, bytes result), `hex_bytes(value)` (the bytes hexadecimal text spells), `hexencode(value)` (bytes as lowercase hexadecimal text), `msgpack_pack(value)` (MessagePack bytes, for a raw body or a URL parameter), `json_dumps(value)` (json.dumps defaults, a `vars` namespace encoded as its object), `json_loads(text)`
 - URLs: `urlencode(mapping)` (encoded as httpx encodes `request.params`: list values repeat the key, `true`/`false`, empty for None; bytes percent-encoded as they are, where httpx sends their repr; nested objects and functions refused), `quote(text, safe='')`
 - Hashing: `sha256(value)`, `sha1(value)`, `md5(value)`, `hmac_sha256(key, message, encoding='hex')` (`'hex'` or `'base64'`)
 
 The time, encoding, URL and hashing helpers live in `functions.py`
 (`HELPER_FUNCTIONS`, merged into `SAFE_FUNCTIONS`, so `TEMPLATE_BUILTINS`
-covers them). Each returns a plain value (text, a number, JSON data), never an
-object of a class of its own, so they add nothing an expression can reach
-through; the function objects themselves are reachable as names like every
-built-in, and simpleeval refuses their dunder attributes. Text arguments are
-encoded as UTF-8, and a number where text or bytes is expected is refused, not
-`str()`-ed. A bad argument raises a TypeError or ValueError naming the helper,
-which `_eval_expr` wraps as the template's `TemplatesError`. An expression
-that evaluates to a call-only built-in itself (`CALL_ONLY_BUILTINS`: a helper,
+covers them). Each returns a plain value (text, a number, JSON data, or bytes:
+`b64decode_bytes`, `hex_bytes` and `msgpack_pack`), never an object of a class
+of its own, so they add nothing an expression can reach through; the function
+objects themselves are reachable as names like every built-in, and simpleeval
+refuses their dunder attributes. Text arguments are encoded as UTF-8, and a
+number where text or bytes is expected is refused, not `str()`-ed. A bad
+argument raises a TypeError or ValueError naming the helper, which
+`_eval_expr` wraps as the template's `TemplatesError`. An expression that
+evaluates to a call-only built-in itself (`CALL_ONLY_BUILTINS`: a helper,
 `uuid4`, `env`, `rand`, `randint`; `{{ now }}`, parentheses forgotten) is a
 `TemplatesError` too ("Uncalled function"), not its repr in a request. The
 check is by identity, since a value may be unhashable. The same holds where

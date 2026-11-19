@@ -1,9 +1,10 @@
 """Built-in helper functions for template expressions: time, encoding, hashing
 and URL building, the values a scenario otherwise needed a fixture for.
 
-Each returns a plain value (text, a number, JSON data), never an object of a
-class of its own, so an expression gains values to work with and nothing to
-reach through. A wrong argument raises a TypeError or ValueError naming the
+Each returns a plain value (text, a number, JSON data, or bytes:
+`b64decode_bytes`, `hex_bytes` and `msgpack_pack`), never an object of a class
+of its own, so an expression gains values to work with and nothing to reach
+through. A wrong argument raises a TypeError or ValueError naming the
 function, which ``_eval_expr`` reports as the template's `TemplatesError`.
 """
 
