@@ -11,46 +11,33 @@ a plugin file, not an import target)::
     from tests.unit.models.helpers import make_stage, make_request
 """
 
-from collections.abc import Callable
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
 from pytest_httpchain.models import Request, Stage
-from pytest_httpchain.models.types import (
-    convert_namespace_to_dict,
-    validate_function_import_name,
-    validate_graphql_name,
-    validate_graphql_query,
-    validate_partial_template_str,
-    validate_regex_pattern,
-    validate_xml,
-)
 
-
-def after_tag(validator: Callable[..., Any]) -> str:
-    """The tag pydantic gives a union's member that validates a string with
-    ``validator``, last in its errors' locations: built from the validator's
-    name, as `models.validation_errors` builds the template branch's."""
-    return f"function-after[{validator.__name__}(), str]"
-
+# Each tag is written out, not built from its validator's name: it is text a
+# user reads (an HTTPCHAIN000 location in `validate` and at collection, a
+# stage's failure for a value a template rendered), so renaming a validator
+# changes it, and the tests that hold one of these must then fail.
 
 # The members of the unions a field taking a literal or a template is
 # (`GraphQLQuery | PartialTemplateStr`, ...), and of a user function's name.
-GRAPHQL_QUERY_TAG = after_tag(validate_graphql_query)
-GRAPHQL_NAME_TAG = after_tag(validate_graphql_name)
-TEMPLATE_TAG = after_tag(validate_partial_template_str)
-FUNCTION_NAME_TAG = after_tag(validate_function_import_name)
+GRAPHQL_QUERY_TAG = "function-after[validate_graphql_query(), str]"
+GRAPHQL_NAME_TAG = "function-after[validate_graphql_name(), str]"
+TEMPLATE_TAG = "function-after[validate_partial_template_str(), str]"
+FUNCTION_NAME_TAG = "function-after[validate_function_import_name(), str]"
 
 # The member taking an object (`NamespaceOrDict`), a `vars` object included:
 # what follows the name is how pydantic renders its dict of JSON values.
-OBJECT_TAG = f"function-before[{convert_namespace_to_dict.__name__}(), dict[str,json-or-python[json=any,python=tagged-union[list[...],dict[str,...],str,bool,int,float,none]]]]"
+OBJECT_TAG = "function-before[convert_namespace_to_dict(), dict[str,json-or-python[json=any,python=tagged-union[list[...],dict[str,...],str,bool,int,float,none]]]]"
 
 # Members `types.create_string_validator` builds (`XMLString`, `RegexPattern`),
 # each validator named as the name it is bound to.
-XML_TAG = after_tag(validate_xml)
-REGEX_TAG = after_tag(validate_regex_pattern)
+XML_TAG = "function-after[validate_xml(), str]"
+REGEX_TAG = "function-after[validate_regex_pattern(), str]"
 
 
 def assert_error_types(exc_info: pytest.ExceptionInfo[ValidationError], *expected_types: str, at: str | None = None) -> None:
