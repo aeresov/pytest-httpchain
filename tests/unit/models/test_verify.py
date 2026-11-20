@@ -279,6 +279,17 @@ class TestVerifyJmespath:
         with pytest.raises(ValidationError, match=f"matcher's {key} must not be null"):
             Verify(jmespath={"x": {key: None}})
 
+    def test_of_several_nulls_the_first_in_the_matcher_s_order_is_named(self):
+        """The same one on every run, whatever order the scenario wrote them
+        in. The check walked a set of the keys, so the key it named changed
+        with the interpreter's hash seed, and `validate` gave one file two
+        different diagnostics on two runs."""
+        keys = ["gt", "ge", "lt", "le", "matches", "not_matches", "type", "length"]
+        for i, first in enumerate(keys):
+            for later in keys[i + 1 :]:
+                with pytest.raises(ValidationError, match=f"matcher's {first} must not be null"):
+                    Verify(jmespath={"x": {later: None, first: None}})
+
     @pytest.mark.parametrize(
         ("matcher", "error_type"),
         [

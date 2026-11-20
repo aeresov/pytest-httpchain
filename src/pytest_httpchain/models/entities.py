@@ -987,8 +987,10 @@ class JMESPathMatcher(StrictModel):
     def _checks_something(self) -> Self:
         if not self.model_fields_set:
             raise ValueError(f'JMESPath matcher must set at least one of: {", ".join(type(self).model_fields)}; to compare with an empty object, write {{"eq": {{}}}}')
-        for name in self.model_fields_set - self.NULL_OPERANDS:
-            if getattr(self, name) is None:
+        # In the fields' own order, not a set's: of several nulls, the one
+        # named is the same on every run.
+        for name in type(self).model_fields:
+            if name in self.model_fields_set and name not in self.NULL_OPERANDS and getattr(self, name) is None:
                 raise ValueError(f"JMESPath matcher's {name} must not be null; null is an operand of eq, ne, contains and not_contains only")
         return self
 
