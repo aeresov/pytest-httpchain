@@ -93,9 +93,12 @@ than being skipped or xfailed. A function a template calls is taken the same
 way, except that the templates after that one are not rendered.
 `pytest.exit()` called from any of them, from a save or an auth function, or from a
 connection's adapter as it is built, connects or sends, ends the whole run
-there, as it does from a test, instead of failing the stage. (An adapter's
-`receive()` runs on the connection's reader thread, so there it ends that
-connection's reader only.)
+there, as it does from a test, instead of failing the stage. So does one at
+the top level of the module a function or an adapter is imported from, such as
+a check that the environment is set up, when the first stage to use it runs.
+(An adapter's `receive()` runs on the connection's reader thread, so there it
+ends that connection's reader only. `validate --deep`, which runs no test,
+reports such a module as one it cannot import.)
 
 **Steps run in order, and a step that fails ends the stage.** The steps after
 it do not run, since they may depend on it: a `save` a later `verify` uses, a

@@ -35,6 +35,10 @@ def import_function(name: str, *, quoted: bool = True) -> Callable[..., Any]:
     to put in a sentence of its own, and gives what importing the module
     raised by its type alone, as its message names the module. Nothing is
     chained to it either.
+
+    An interrupt the module's top-level code raises (`INTERRUPTS`,
+    pytest.exit()'s included: a module guarding its environment) is no
+    failure to import: it propagates as it is, as from `call_function`.
     """
     try:
         module_path, function_name = parse_user_function_name(name)
@@ -43,6 +47,8 @@ def import_function(name: str, *, quoted: bool = True) -> Callable[..., Any]:
 
     try:
         module = importlib.import_module(module_path)
+    except INTERRUPTS:
+        raise
     except Exception as e:
         # Importing runs the module's top-level code, which can raise anything.
         if not quoted:
@@ -64,7 +70,8 @@ def import_adapter(name: str) -> type:
 
     The user-function grammar and import, in an adapter's words: a name that
     is no class (a function, an instance) is refused here, before the plugin
-    calls it with the connection's ``params``.
+    calls it with the connection's ``params``. An interrupt the module's
+    top-level code raises propagates as it is, as from `import_function`.
     """
     try:
         module_path, class_name = parse_user_function_name(name, kind="adapter")
@@ -73,6 +80,8 @@ def import_adapter(name: str) -> type:
 
     try:
         module = importlib.import_module(module_path)
+    except INTERRUPTS:
+        raise
     except Exception as e:
         raise UserFunctionError(f"Failed to import module '{module_path}': {e}") from e
 

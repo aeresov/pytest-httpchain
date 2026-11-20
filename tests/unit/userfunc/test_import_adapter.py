@@ -25,3 +25,13 @@ def test_returns_the_named_class():
 def test_refusals_are_worded_for_an_adapter(name, message):
     with pytest.raises(UserFunctionError, match=message):
         import_adapter(name)
+
+
+def test_pytest_exit_at_a_module_s_top_level_propagates_unwrapped(tmp_path, monkeypatch):
+    """As for a user function's module (`import_function`): the stage that
+    first opened the connection failed, and the session went on."""
+    (tmp_path / "guarded_adapter.py").write_text("import pytest\n\npytest.exit('no device attached', returncode=7)\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    with pytest.raises(pytest.exit.Exception, match="^no device attached$") as exc_info:
+        import_adapter("guarded_adapter:Adapter")
+    assert exc_info.value.returncode == 7

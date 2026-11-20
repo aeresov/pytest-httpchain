@@ -3,11 +3,13 @@ from datetime import datetime
 import httpx
 import pytest
 
-# Raised by user code a call runs, these stop the run: never taken for a
-# stage's failure (at collection, plugin.JsonModule.collect still reports one as
-# the file's error). pytest.exit()'s is an Exception, so an `except Exception` must let
-# these through first. Defined here, at the bottom of the layers, as the
-# domain packages that call user code (userfunc, templates) must too.
+# Raised by user code a call runs, or by a user module as it is imported,
+# these stop the run: never taken for a stage's failure (at collection,
+# plugin.JsonModule.collect still reports one as the file's error, and
+# `validate --deep`, in no run, one a module raises as its failure to import).
+# pytest.exit()'s is an Exception, so an `except Exception` must let these
+# through first. Defined here, at the bottom of the layers, as the domain
+# packages that call user code (userfunc, templates) must too.
 INTERRUPTS = (KeyboardInterrupt, SystemExit, pytest.exit.Exception)
 
 

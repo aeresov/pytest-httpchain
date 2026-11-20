@@ -9,6 +9,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from pytest_httpchain.body_schema import UNBOUNDED, ReferenceBounds, SchemaFile, file_body_schema, inline_body_schema, schema_error_text
 from pytest_httpchain.connections import ADAPTER_METHODS, ProtocolAdapter
 from pytest_httpchain.errors import SchemaFileError, SchemaPointerError
@@ -261,8 +263,8 @@ def _function_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
             continue  # template form — the real name is only known at runtime
         try:
             func = import_function(name)
-        except UserFunctionError as e:
-            yield diag(DiagnosticCode.IMPORT_FAILED, f"Cannot import function '{name}': {e}", location)
+        except (UserFunctionError, pytest.exit.Exception) as e:
+            yield diag(DiagnosticCode.IMPORT_FAILED, f"Cannot import function '{name}': {_import_failure(name, e)}", location)
             continue
         if not check_signature:
             continue
@@ -328,6 +330,17 @@ def _method_problem(adapter: type, method: str, args: tuple[str, ...]) -> str | 
     return None
 
 
+def _import_failure(name: str, e: Exception) -> str:
+    """Why ``name``, a function's or an adapter's, does not import.
+
+    pytest.exit() at its module's top level ends a test run, so the import
+    lets it through (`userfunc.import_function`). Here there is no run to
+    end: the module is one that does not import, for the reason it gave."""
+    if isinstance(e, UserFunctionError):
+        return str(e)
+    return f"Failed to import module '{name.partition(':')[0]}': {e}"
+
+
 def _adapter_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
     """HTTPCHAIN046: each connection's adapter, as the plugin uses it when a
     stage opens the connection: imported (`userfunc.import_adapter`, which
@@ -342,8 +355,8 @@ def _adapter_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
         location = f"connections.{name}.adapter"
         try:
             adapter = import_adapter(config.adapter)
-        except UserFunctionError as e:
-            yield diag(DiagnosticCode.ADAPTER_INVALID, f"Connection '{name}': cannot import adapter '{config.adapter}': {e}", location)
+        except (UserFunctionError, pytest.exit.Exception) as e:
+            yield diag(DiagnosticCode.ADAPTER_INVALID, f"Connection '{name}': cannot import adapter '{config.adapter}': {_import_failure(config.adapter, e)}", location)
             continue
         for method, args in ADAPTER_METHODS.items():
             if (problem := _method_problem(adapter, method, args)) is not None:

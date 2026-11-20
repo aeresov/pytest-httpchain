@@ -961,6 +961,20 @@ def test_deep_disabled_does_not_check_imports(datadir):
     assert validate_scenario(datadir / "deep_import_missing.json").diagnostics == []
 
 
+def test_deep_reports_a_module_calling_pytest_exit_as_one_that_does_not_import(tmp_path):
+    """pytest.exit() at a user module's top level ends a test run.
+    `validate --deep` imports the module in no session to end, so it reports
+    one that does not import, with the reason given: a function's module and
+    an adapter's alike."""
+    (tmp_path / "deep_guarded.py").write_text("import pytest\n\npytest.exit('API_TOKEN is not set', returncode=7)\n")
+    stages = [_stage(response=[{"verify": {"status": 200, "user_functions": ["deep_guarded:check"]}}]), {"name": "c", "connection": {"name": "dev", "send": {"a": 1}}}]
+    scenario = _write(tmp_path, stages, connections={"dev": {"adapter": "deep_guarded:Adapter"}})
+    assert [(d.code, d.message) for d in validate_scenario(scenario, deep=True, syspaths=[tmp_path]).diagnostics] == [
+        (C.IMPORT_FAILED, "Cannot import function 'deep_guarded:check': Failed to import module 'deep_guarded': API_TOKEN is not set"),
+        (C.ADAPTER_INVALID, "Connection 'dev': cannot import adapter 'deep_guarded:Adapter': Failed to import module 'deep_guarded': API_TOKEN is not set"),
+    ]
+
+
 class TestDeepSysPath:
     """Where `validate --deep` imports a user module from: the ``--syspath``
     directories in the order given, then the current directory, ahead of the

@@ -42,6 +42,19 @@ def test_module_top_level_error_is_wrapped(tmp_path, monkeypatch):
     assert isinstance(exc_info.value.__cause__, RuntimeError)
 
 
+@pytest.mark.parametrize("quoted", [True, False])
+def test_pytest_exit_at_a_module_s_top_level_propagates_unwrapped(tmp_path, monkeypatch, quoted):
+    """A module that guards its environment with pytest.exit() means to stop
+    the run, as it does when a test module imports it. Exit is an Exception,
+    which the import took for the module's failure: the stage that first used
+    the function failed, and the session went on."""
+    (tmp_path / "guarded_module.py").write_text("import pytest\n\npytest.exit('API_TOKEN is not set', returncode=7)\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    with pytest.raises(pytest.exit.Exception, match="^API_TOKEN is not set$") as exc_info:
+        import_function("guarded_module:check", quoted=quoted)
+    assert exc_info.value.returncode == 7
+
+
 def test_function_not_in_module():
     with pytest.raises(UserFunctionError, match="Function 'nonexistent_function_xyz' not found in module 'json'"):
         import_function("json:nonexistent_function_xyz")
