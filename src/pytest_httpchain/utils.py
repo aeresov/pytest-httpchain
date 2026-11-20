@@ -102,15 +102,15 @@ def _mark_argument(node: ast.expr, mark_str: str) -> Any:
     """The value of one argument of a mark, which is a literal's.
 
     One that is none (a name, a comparison, a `*args` node) is refused in the
-    words the scenario wrote. ast.literal_eval's own error names the node as
-    Python prints it (``<ast.Compare object at 0x7f...>``): no word of the
+    words the scenario wrote, its own text, quotes and spacing as written.
+    ast.literal_eval's own error names the node as Python prints it
+    (``<ast.Compare object at 0x7f...>`` on Python 3.13): no word of the
     mark, and an address that differs on every run."""
     try:
         return ast.literal_eval(node)
     except ValueError:
-        raise ValueError(
-            f"unsupported marker expression: {mark_str} ({ast.unparse(node)} is no literal: a mark's arguments are literals, a condition written as a string)"
-        ) from None
+        written = ast.get_source_segment(mark_str, node) or ast.unparse(node)
+        raise ValueError(f"unsupported marker expression: {mark_str} ({written} is no literal: a mark's arguments are literals, a condition written as a string)") from None
 
 
 def _mark_name(name: str) -> str:

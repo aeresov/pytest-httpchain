@@ -161,7 +161,10 @@ def test_make_marker_rejects_non_literal_expressions(mark_str, error):
         # A condition written as in Python, where a mark takes it as a string.
         pytest.param("skipif(sys.platform == 'win32', reason='posix only')", "sys.platform == 'win32'", id="condition"),
         pytest.param("skip(reason=some_name)", "some_name", id="keyword-value"),
-        pytest.param('skip(*["x"])', "*['x']", id="unpacked"),
+        pytest.param('skip(*["x"])', '*["x"]', id="unpacked"),
+        # As written: its quotes and its spacing, which Python's own
+        # rendering of the expression would change.
+        pytest.param('skipif(sys.platform=="win32", reason="posix only")', 'sys.platform=="win32"', id="as-written"),
     ],
 )
 def test_make_marker_names_the_argument_that_is_no_literal(mark_str, argument):
