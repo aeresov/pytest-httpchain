@@ -181,17 +181,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--syspath a --syspath b` it checked `b`'s, and a module in the current directory hid a
   `--syspath` directory's. A directory `sys.path` holds already (a `PYTHONPATH` entry) goes in its
   place too, where it stayed behind the others. Each is added once, and `sys.path` is restored
-  afterwards. Heads-up: in pytest's default import mode, a run also puts the directory of each
-  `conftest.py` it loads ahead of its `pythonpath` entries, so where the current directory holds one
-  and a module of the same name as a `--syspath` directory's, the run imports the current
-  directory's copy, which `--deep` checked before. Give such a directory first among the `--syspath`
-  directories for `--deep` to check the copy the run imports.
+  afterwards. Heads-up: in pytest's default import mode, a run also puts the directory it imports
+  each `conftest.py` and test module from ahead of its `pythonpath` entries (their own, or for one
+  in a package, the directory above the outermost package that holds it). So where the current
+  directory holds a `conftest.py` and a module of the same name as a `--syspath` directory's, the
+  run imports the current directory's copy, which `--deep` checked before. Give such a directory
+  first among the `--syspath` directories for `--deep` to check the copy the run imports.
 - `validate --deep` reports a user module whose top level calls `pytest.skip()`, `pytest.fail()` or
   `sys.exit()` as one it cannot import (`HTTPCHAIN022`, or `HTTPCHAIN046` for an adapter's), with
-  the reason given: `Failed to import module 'skipguard': needs the vendor SDK`, and for
-  `sys.exit()` `... SystemExit: 3`. The first two ended `validate` with a `Skipped` or `Failed`
-  traceback, the third with the module's own exit status, and every other file's findings were lost.
-  A test run takes such a module as before: its skip skips the stage that imports it.
+  the reason given: `Failed to import module 'skipguard': needs the vendor SDK`, for `sys.exit()`
+  `... SystemExit: 3`, and for a skip or a fail with no reason its kind (`... Skipped`). The first
+  two ended `validate` with a `Skipped` or `Failed` traceback, the third with the module's own exit
+  status, and every other file's findings were lost. A test run takes such a module as before: its
+  skip skips the stage that imports it.
 - A verify or save function that raises, and a verify function that returns false, are named in the
   stage's failure by their import name: `Error calling user function 'mod:fn': ...` and `Function
   'mod:fn' verification failed`. The call was printed as its model prints, `'root='mod:fn''` or
@@ -203,6 +205,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   16-byte token's 32 hex digits, and `"api_key": 4111111111111111... (253 characters)` every digit
   of the number, where both now read `[REDACTED]... (...)`. A start of fewer than four characters
   stays, as a string's does.
+- A failure line quoting a message hides each listed value in its own written form: a listed int
+  and a listed float of one value (`1234`, `1234.0`) were one secret, and only the first found was
+  hidden, so `"got 1234 and 1234.0"` read `got 1234 and [REDACTED]`. And under `python -bb`, a
+  message whose listed values held a string and bytes of the same ASCII text (`"s3cret"`,
+  `b"s3cret"`) made every such line raise `BytesWarning` instead of showing it.
 - A connection's `expect.match` operand that a template renders to an object holding bytes, such as
   a binary protocol's frame, no longer makes pydantic warn. The stage passed with a serializer
   warning from the plugin's own code; under warnings as errors (`-W error`) it ended in that
