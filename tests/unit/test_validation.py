@@ -1032,10 +1032,20 @@ class TestDeepSysPath:
         monkeypatch.chdir(self._module_in(tmp_path / "cwd", "in_cwd"))
         assert self._deep(tmp_path, [given], "in_given", "in_cwd") == [self._not_found("in_cwd")]
 
+    def test_a_directory_sys_path_holds_already_goes_in_its_place(self, tmp_path, monkeypatch):
+        """pytest puts each ``pythonpath`` entry at the front whether or not
+        ``sys.path`` holds it already (PYTHONPATH, an editable install's
+        ``.pth``). Left where it was, a directory given first lost to one
+        given after it."""
+        first = self._module_in(tmp_path / "first", "in_first")
+        second = self._module_in(tmp_path / "second", "in_second")
+        monkeypatch.setattr(sys, "path", [*sys.path, str(first)])
+        assert self._deep(tmp_path, [first, second], "in_first", "in_second") == [self._not_found("in_second")]
+
     def test_each_entry_once(self, tmp_path, monkeypatch):
         """While the checks run, the directories given and then the current
-        directory, each once, are ahead of what ``sys.path`` held, and one it
-        held already stays where it was."""
+        directory, each once, are ahead of what ``sys.path`` held, one it
+        held already among them."""
         first = self._module_in(tmp_path / "first", "in_first")
         (held := tmp_path / "held").mkdir()
         (cwd := tmp_path / "cwd").mkdir()
@@ -1043,7 +1053,7 @@ class TestDeepSysPath:
         monkeypatch.chdir(cwd)
         before = list(sys.path)
         assert self._deep(tmp_path, [first, held, first], "in_first") == []
-        assert sys.modules[self.MODULE].imported_under == [str(first), str(cwd), *before]
+        assert sys.modules[self.MODULE].imported_under == [str(first), str(held), str(cwd), *before]
 
 
 @pytest.mark.parametrize(
