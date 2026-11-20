@@ -23,7 +23,7 @@ from pytest_httpchain.redaction import (
     cut,
     shown_bytes,
 )
-from tests.unit.helpers import BEYOND_RECURSION_LIMIT, Posing
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, IntAsStr, Proxy, StrAsBytes
 
 _EXPIRES = "Expires=Wed, 21 Oct 2026 07:28:00 GMT"
 
@@ -448,11 +448,11 @@ def test_message_text_passes_over_a_number_too_long_to_write():
 @pytest.mark.parametrize(
     "posing",
     [
-        *(Posing(1234), Mock(spec=int), Posing(12.5), Posing("s3cret"), Mock(spec=str), Mock(spec=bytes), Mock(spec=dict), Mock(spec=list)),
+        *(Proxy(1234), Mock(spec=int), Proxy(12.5), Proxy("s3cret"), Mock(spec=str), Mock(spec=bytes), Mock(spec=dict), Mock(spec=list)),
         # A proxy forwards len() and iterating, which reading bytes or a list
         # needs, so these two read through before as well: they pin that
         # passing over a posing value does not make them raise either.
-        *(Posing(b"s3cret"), Posing([1234])),
+        *(Proxy(b"s3cret"), Proxy([1234])),
     ],
     ids=["posing-int", "mock-int", "posing-float", "posing-str", "mock-str", "mock-bytes", "mock-dict", "mock-list", "posing-bytes", "posing-list"],
 )
@@ -467,6 +467,22 @@ def test_message_text_passes_over_a_value_posing_as_one_it_hides(posing):
     The real values beside it are hidden as ever."""
     text = "JMESPath 'kind' doesn't match: expected 1, got 5678"
     assert DEFAULT_REDACTION.message_text(text, {"token": posing, "api_key": 5678}) == "JMESPath 'kind' doesn't match: expected 1, got [REDACTED]"
+
+
+@pytest.mark.parametrize("posing", [IntAsStr(1234), StrAsBytes("s3cret")], ids=["int-as-str", "str-as-bytes"])
+def test_message_text_passes_over_a_value_whose_class_is_not_its_type(posing):
+    """A real int or str whose ``__class__`` names another type is no secret
+    it reads either: read as what it claims, json.dumps refused an int as a
+    str, and a str had no ``.hex()`` for bytes where the line cuts a value,
+    so the line raised."""
+    text = 'got 5678 and "abcd... (300 characters)'
+    assert DEFAULT_REDACTION.message_text(text, {"token": posing, "api_key": 5678}) == 'got [REDACTED] and "abcd... (300 characters)'
+
+
+def test_message_text_reads_a_key_whose_class_is_not_its_type_as_no_listed_one():
+    """A real int key whose ``__class__`` says str: read as the str it
+    claims, asking whether it is listed (``.lower()``) raised."""
+    assert DEFAULT_REDACTION.message_text("got 5678", {IntAsStr(5): "x", "api_key": 5678}) == "got [REDACTED]"
 
 
 class _Token(str):

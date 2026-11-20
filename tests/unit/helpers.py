@@ -98,7 +98,7 @@ def strict_markers() -> Generator[None]:
         mark._config, mark._markers = saved
 
 
-class Posing:
+class Proxy:
     """``value`` as a proxy object presents it (wrapt's ``ObjectProxy``,
     lazy-object-proxy's ``Proxy``): its ``__class__`` is ``value``'s, so
     ``isinstance`` takes it for one, and it forwards attributes, ``str()``,
@@ -140,3 +140,18 @@ class Posing:
 
     def __bool__(self) -> bool:
         return bool(self._value)
+
+
+def posing_subclass(base: type, claimed: type) -> type:
+    """A subclass of ``base`` whose instances' ``__class__`` is ``claimed``:
+    a real ``base``, which isinstance takes for a ``claimed`` as well. No
+    ordinary class does this; one that does passes a check of its real
+    type, and code that goes by isinstance reads it as what it claims."""
+    return type(f"{base.__name__.title()}As{claimed.__name__.title()}", (base,), {"__class__": property(lambda self: claimed)})
+
+
+IntAsStr = posing_subclass(int, str)
+StrAsBytes = posing_subclass(str, bytes)
+StrAsInt = posing_subclass(str, int)
+ListAsDict = posing_subclass(list, dict)
+DictAsList = posing_subclass(dict, list)

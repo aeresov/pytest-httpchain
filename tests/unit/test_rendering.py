@@ -39,7 +39,7 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION
 from pytest_httpchain.rendering import listed_expectations, render_declared, rendered_match
-from tests.unit.helpers import Posing
+from tests.unit.helpers import IntAsStr, Proxy
 from tests.unit.models.helpers import GRAPHQL_QUERY_TAG, OBJECT_TAG
 
 
@@ -515,8 +515,17 @@ class TestListedExpectations:
         as and raised TypeError in the failure's place."""
         match = ConnectionExpect.model_validate({"match": {"token": "{{ t }}"}, "timeout": 1}).match
         with pytest.raises(VerificationError) as excinfo:
-            rendered_match(match, {"t": Posing("s3cret")}, DEFAULT_REDACTION)
+            rendered_match(match, {"t": Proxy("s3cret")}, DEFAULT_REDACTION)
         assert "s3cret" not in str(excinfo.value)
+
+    def test_a_refused_operand_whose_class_is_not_its_type_is_the_stage_s_failure(self):
+        """A template renders a real int whose ``__class__`` says str into a
+        regex operand on a listed key: refused, as no string, and the
+        redaction showing the refusal read it as the string it claims."""
+        match = ConnectionExpect.model_validate({"match": {"token": {"matches": "{{ t }}"}}, "timeout": 1}).match
+        with pytest.raises(VerificationError) as excinfo:
+            rendered_match(match, {"t": IntAsStr(4111)}, DEFAULT_REDACTION)
+        assert "4111" not in str(excinfo.value)
 
     def test_operands_are_listed_in_the_matcher_s_order(self):
         """Each set one, whatever order the scenario wrote them in."""
