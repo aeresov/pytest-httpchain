@@ -460,6 +460,20 @@ def test_next_in_a_cluster(command, fields, warnings):
             ["Left out the data read from standard input (@-): add it to the scenario"],
             id="stdin-data",
         ),
+        # curl sends --json's headers whatever the data: on a request whose
+        # data the import leaves out, as on one with -G.
+        pytest.param(
+            "curl --json @- https://x.test/a",
+            {"method": "POST", "url": "https://x.test/a", "headers": _JSON},
+            ["Left out the data read from standard input (@-): add it to the scenario"],
+            id="stdin-json",
+        ),
+        pytest.param(
+            "curl --json @a.json --json @b.json https://x.test/a",
+            {"method": "POST", "url": "https://x.test/a", "headers": _JSON, "body": TextData("")},
+            ["Left out the data read from a.json, b.json: add it to the scenario"],
+            id="json-files",
+        ),
         pytest.param(
             "curl -F noequals https://x.test/a", {"method": "GET", "url": "https://x.test/a"}, ["Left out the form part 'noequals', which is no name=content"], id="form-no-name"
         ),
