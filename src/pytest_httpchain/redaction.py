@@ -189,14 +189,15 @@ class Redaction:
         (a PIN, an id): a shorter one is as likely an index or a count the
         line gives.
 
-        A value a line shows cut (`cut`) is replaced by the start of it that
-        is shown, whether the line cut the value or the JSON around it: a
-        long string (``"eyJhbGci... (322 characters)``), bytes cut in their
-        hex (``"0x00112233... (203 characters)``), a number cut in its
-        digits or right after them (``4111... (253 characters)``), where
-        the marker's dot keeps it from standing alone. A start of fewer than
-        four characters, as the line writes them, is as likely another
-        value's: it stays."""
+        Where a line shows a value cut (`cut`), the start of it that is
+        shown is replaced, whether the line cut the value or the JSON around
+        it: a long string (``"eyJhbGci... (322 characters)``), bytes cut in
+        their hex (``"0x00112233... (203 characters)``) or in their
+        ``repr()`` (``b's3cr... (``, which becomes ``'[REDACTED]... (``), a
+        number cut in its digits or right after them (``4111... (253
+        characters)``), where the marker's dot keeps it from standing alone.
+        A start of fewer than four characters, as the line writes them, is
+        as likely another value's: it stays."""
         secrets = self._message_secrets(messages)
         longest_first = sorted((secret for secret in secrets if isinstance(secret, str | bytes)), key=len, reverse=True)
         for secret in longest_first:
@@ -208,13 +209,21 @@ class Redaction:
         # Bytes that a cut shows the start of, once every string and bytes
         # are hidden where the line quotes them whole: one of those may hold
         # a cut marker itself, which is no place to look for a start before.
-        for secret in longest_first:
+        # A line with no cut has none to look for.
+        bytes_secrets = {secret for secret in secrets if isinstance(secret, bytes)}
+        sizes = sorted({len(secret) for secret in bytes_secrets})
+        for secret in longest_first if _CUT_MARKER in text else ():
             if isinstance(secret, bytes):
                 text = _hide_cut(_hide_cut(text, shown_bytes(secret)), repr(secret), repr(REDACTED)[:-1])
                 # Shorter bytes that are the start of these are hidden by
                 # now, there too: what the line shows after them goes as well.
-                for size in range(1, min(len(secret), SHOWN_BYTES)):
-                    if secret[:size] in secrets:
+                # Only another secret's size can be one, and each is looked up
+                # among the bytes alone: ASCII bytes and a string hash alike,
+                # and comparing the two is a BytesWarning.
+                for size in sizes:
+                    if size >= min(len(secret), SHOWN_BYTES):
+                        break
+                    if secret[:size] in bytes_secrets:
                         text = _hide_cut(text, f"{REDACTED}{secret[size:SHOWN_BYTES].hex()}", shortest=len(REDACTED) + 1)
         for secret in secrets:
             if isinstance(secret, int | float) and len(written := json.dumps(secret)) >= _MIN_NUMBER_LENGTH:
@@ -301,11 +310,25 @@ def _hide_cut(text: str, written: str, hidden: str = REDACTED, *, shortest: int 
     ``alone`` is for a number: its start must stand alone on its left
     (`_NUMBER_START`), as the whole number must. That start may be the
     whole number, which the marker's dot keeps from standing alone on its
-    right."""
+    right.
+
+    A start is looked for where the text holds the first ``shortest``
+    characters of ``written``, leftmost (the longest start) first, within
+    ``written``'s length of the marker: one comparison each, where trying
+    every length from the longest down cost one per character of
+    ``written``, at every marker."""
+    if len(written) < shortest:
+        return text
+    head = written[:shortest]
     start = 0
     while (at := text.find(_CUT_MARKER, start)) != -1:
-        starts = (k for k in range(min(len(written), at), shortest - 1, -1) if text.startswith(written[:k], at - k))
-        shown = next((k for k in starts if not alone or _NUMBER_START.match(text, at - k)), 0)
+        shown = 0
+        place = text.find(head, max(0, at - len(written)), at)
+        while place != -1:
+            if written.startswith(text[place:at]) and (not alone or _NUMBER_START.match(text, place)):
+                shown = at - place
+                break
+            place = text.find(head, place + 1, at)
         if shown:
             text = f"{text[: at - shown]}{hidden}{text[at:]}"
             at += len(hidden) - shown

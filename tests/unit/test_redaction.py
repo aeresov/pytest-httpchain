@@ -3,6 +3,8 @@ verification messages show credentials through, and a connection's messages
 by key name."""
 
 import json
+import subprocess
+import sys
 
 import httpx
 import pytest
@@ -344,6 +346,61 @@ def test_message_text_looks_for_no_cut_secret_inside_one_quoted_whole():
     message = {"token": _SESSION_KEY, "password": "0x00... (key)"}
     text = 'got {"token": "0x00112233445566778899aabbccddeeff", "password": "0x00... (key)"}'
     assert DEFAULT_REDACTION.message_text(text, message) == 'got {"token": "[REDACTED]", "password": "[REDACTED]"}'
+
+
+@pytest.mark.parametrize(
+    ("messages", "text", "expected"),
+    [
+        # A shorter secret that is all but the last byte of the one cut:
+        # hidden whole, then what the cut shows after it goes too.
+        pytest.param(
+            ({"token": _SESSION_KEY}, {"password": _SESSION_KEY[:15]}),
+            'got {"token": "0x00112233445566778899aabbccddeef... (203 characters)',
+            'got {"token": "[REDACTED]... (203 characters)',
+            id="start-of-the-cut-one-byte-shorter",
+        ),
+        # After a secret hidden whole inside another value's hex, the rest
+        # stays: it is no longer secret's tail unless the hidden one is that
+        # secret's start.
+        pytest.param(
+            ({"token": b"\xaa", "password": bytes.fromhex("1122334455667788")},),
+            'got {"blob": "0xaa22334455667788... (230 characters)',
+            'got {"blob": "[REDACTED]22334455667788... (230 characters)',
+            id="tail-of-no-secret-after-one-hidden",
+        ),
+        # Bytes cut in their repr: from four characters on, as written.
+        pytest.param(({"token": b"kkkkkk"},), "got b'kk... (73 characters)", "got '[REDACTED]... (73 characters)", id="repr-start-of-four"),
+        pytest.param(({"token": b"kkkkkk"},), "got b'k... (73 characters)", "got b'k... (73 characters)", id="repr-start-of-three"),
+        # A number's digits after a point or a sign are another number's.
+        pytest.param(({"api_key": 41111111},), "ratio: 0.41111111... (200 characters)", "ratio: 0.41111111... (200 characters)", id="digits-after-a-point"),
+        pytest.param(({"api_key": 41111111},), "delta: -41111111... (200 characters)", "delta: -41111111... (200 characters)", id="digits-after-a-minus"),
+        pytest.param(({"api_key": 41111111},), "delta: +41111111... (200 characters)", "delta: +41111111... (200 characters)", id="digits-after-a-plus"),
+        pytest.param(({"api_key": 41111111},), "value: 41111111... (200 characters)", "value: [REDACTED]... (200 characters)", id="digits-standing-alone"),
+        # The secret's first characters twice before the cut: the earlier
+        # are no start of it, the later are.
+        pytest.param(({"token": bytes.fromhex("12121234")},), 'got "0x120x1212... (9 characters)', 'got "0x12[REDACTED]... (9 characters)', id="start-after-a-false-one"),
+        # Two cuts, close together: each is hidden.
+        pytest.param(
+            ({"token": _SESSION_KEY},),
+            '"0x00112233445566778899aabbccddeef... (1) "0x0011223344... (2)',
+            '"[REDACTED]... (1) "[REDACTED]... (2)',
+            id="two-cuts-close-together",
+        ),
+    ],
+)
+def test_message_text_holds_the_cut_rules_to_their_bounds(messages, text, expected):
+    assert DEFAULT_REDACTION.message_text(text, *messages) == expected
+
+
+def test_message_text_compares_no_bytes_with_a_string():
+    """A listed string and listed bytes holding the same ASCII text hash
+    alike, and the bytes' starts were looked up among every secret: a
+    comparison of bytes with a string, a BytesWarning, which an interpreter
+    started with -bb raises. A failure line became that error. Only such an
+    interpreter shows it, so the line is redacted in one."""
+    code = "from pytest_httpchain.redaction import DEFAULT_REDACTION as R; print(R.message_text('got \"bob\"... (9 characters)', {'password': 's3cret', 'token': b's3cret!'}))"
+    done = subprocess.run([sys.executable, "-bb", "-c", code], capture_output=True, text=True, check=False)
+    assert (done.returncode, done.stdout) == (0, 'got "bob"... (9 characters)\n'), done.stderr
 
 
 # Where a failure line cuts a value it shows (`response_steps._shown`).
