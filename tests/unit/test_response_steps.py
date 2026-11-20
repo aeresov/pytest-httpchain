@@ -1476,6 +1476,37 @@ def _shown_chain(error: BaseException | None):
         error = error.__cause__ if error.__cause__ is not None or error.__suppress_context__ else error.__context__
 
 
+@pytest.mark.parametrize(
+    ("call", "name"),
+    [
+        pytest.param(f"{HELPERS}:raises", f"{HELPERS}:raises", id="name"),
+        # What a template rendered into a kwarg is the function's to read: a token, here.
+        pytest.param({"name": f"{HELPERS}:raises_given", "kwargs": {"api_key": "s3cr3t"}}, f"{HELPERS}:raises_given", id="kwargs"),
+    ],
+)
+class TestFunctionThatRaisesIsNamedAsTheScenarioNamesIt:
+    """A verify or save function that raises is named by its import name. Its
+    failure showed the call as pydantic shows the model (``root='m:f'``,
+    ``name=UserFunctionName(root='m:f') kwargs={...}``), every kwarg as its
+    template rendered it, so a token handed to the function was in the report."""
+
+    def test_verify(self, call, name):
+        assert str(_failure({"user_functions": [call]})) == f"Error calling user function '{name}': Error calling function '{name}': boom"
+
+    def test_save(self, call, name):
+        with pytest.raises(SaveError) as excinfo:
+            process_save(UserFunctionsSave.model_validate({"user_functions": [call]}), JSON_BODY, ChainMap())
+        assert str(excinfo.value) == f"Error calling user function '{name}': Error calling function '{name}': boom"
+
+
+def test_verify_function_that_fails_is_named_as_the_scenario_names_it():
+    """As one that raises: the lone failure of a function returning false
+    showed the call's kwargs too."""
+    call = {"name": f"{HELPERS}:returns_false_given", "kwargs": {"api_key": "s3cr3t"}}
+    assert str(_failure({"user_functions": [call]})) == f"Function '{HELPERS}:returns_false_given' verification failed"
+    assert str(_failure({"user_functions": [f"{HELPERS}:returns_false"]})) == f"Function '{HELPERS}:returns_false' verification failed"
+
+
 class TestRender:
     """``render`` renders the step's values (the carrier renders templates),
     once, before the first check runs, given each where it is declared: a

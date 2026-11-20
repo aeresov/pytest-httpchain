@@ -21,11 +21,21 @@ def returns_false(response):
     return False
 
 
+def returns_false_given(response, **given):
+    """As `returns_false`, called with kwargs."""
+    return False
+
+
 def returns_none(response):
     return None
 
 
 def raises(response):
+    raise ValueError("boom")
+
+
+def raises_given(response, **given):
+    """As `raises`, called with kwargs."""
     raise ValueError("boom")
 
 

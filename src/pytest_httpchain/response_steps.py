@@ -159,7 +159,9 @@ def process_save(save_model: Save, response: Subject, context: ChainMap[str, Any
                 try:
                     func_result = call_user_function(func_item, **_function_subject(response))
                 except UserFunctionError as e:
-                    raise SaveError(f"Error calling user function '{func_item}': {e}", retryable=_raised_retryable(e)) from e
+                    # By its import name alone: the call's kwargs are what its
+                    # templates rendered, a credential among them.
+                    raise SaveError(f"Error calling user function '{call_target(func_item)[0]}': {e}", retryable=_raised_retryable(e)) from e
 
                 if not isinstance(func_result, dict):
                     raise SaveError(f"Save function must return dict, got {type(func_result).__name__}")
@@ -422,16 +424,19 @@ def process_verify(
         func_item = rendered("user_functions", i)
         if func_item is _UNRENDERED:
             continue
-        # How a function is named among several failures. A lone failure keeps
-        # the words it always had, which print the model.
-        named = f"'{call_target(func_item)[0]}' (user_functions[{i}])"
+        # A function is named by its import name, never as the model prints:
+        # the call's kwargs are what its templates rendered, a credential
+        # among them. Among several failures its index tells two calls of one
+        # function apart; a lone failure keeps the words it always had.
+        name = call_target(func_item)[0]
+        named = f"'{name}' (user_functions[{i}])"
         try:
             if message is not None and not message.present:
                 failures.add(_no_message(f"call user function {named}"), retryable=False)
                 continue
             result = call_user_function(func_item, **_function_subject(response))
         except UserFunctionError as e:
-            failures.add(f"Error calling user function '{func_item}': {e}", cause=e, listed=f"Error calling user function {named}: {e}", retryable=_raised_retryable(e))
+            failures.add(f"Error calling user function '{name}': {e}", cause=e, listed=f"Error calling user function {named}: {e}", retryable=_raised_retryable(e))
             continue
         except (pytest.skip.Exception, pytest.fail.Exception) as e:
             end_step(e, f"Function {named}", ("user_functions", i))
@@ -440,7 +445,7 @@ def process_verify(
             got = type(result).__name__
             failures.add(f"Verify function must return bool, got {got}", listed=f"Function {named} must return bool, got {got}")
         elif not result:
-            failures.add(f"Function '{func_item}' verification failed", listed=f"Function {named} verification failed")
+            failures.add(f"Function '{name}' verification failed", listed=f"Function {named} verification failed")
 
     if verify_model.body.schema is not None and (schema := rendered("body", "schema")) is not _UNRENDERED:
         _verify_body_schema(schema, body, scenario_dir, ref_bounds, failures)
