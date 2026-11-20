@@ -181,24 +181,45 @@ class Redaction:
         """A failure line quoting values of ``messages``, as it may be shown:
         each string or bytes a listed key holds in them, at any depth, is
         replaced where the line quotes it, as JSON or ``repr()`` write a
-        string (``"s3cret"``, ``'s3cret'``) and as a report writes bytes
-        (``0x`` and their hex, `shown_bytes`). Only those quoted forms, as
-        `error_text`: an unquoted value could match any part of the line. A
-        long string a line shows cut (``"eyJhbGci... (322 characters)``,
-        `cut`) is replaced by the start of it that is shown. A number a
-        listed key holds is replaced where it stands alone, if it is written
-        in four characters or more (a PIN, an id): a shorter one is as likely
-        an index or a count the line gives."""
+        string (``"s3cret"``, ``'s3cret'``) and as a report or ``repr()``
+        writes bytes (``0x`` and their hex, `shown_bytes`; ``b's3cret'``).
+        Only those quoted forms, as `error_text`: an unquoted value could
+        match any part of the line. A number a listed key holds is replaced
+        where it stands alone, if it is written in four characters or more
+        (a PIN, an id): a shorter one is as likely an index or a count the
+        line gives.
+
+        A value a line shows cut (`cut`) is replaced by the start of it that
+        is shown, whether the line cut the value or the JSON around it: a
+        long string (``"eyJhbGci... (322 characters)``), bytes cut in their
+        hex (``"0x00112233... (203 characters)``), a number cut in its
+        digits or right after them (``4111... (253 characters)``), where
+        the marker's dot keeps it from standing alone. A start of fewer than
+        four characters, as the line writes them, is as likely another
+        value's: it stays."""
         secrets = self._message_secrets(messages)
-        for secret in sorted((secret for secret in secrets if isinstance(secret, str | bytes)), key=len, reverse=True):
+        longest_first = sorted((secret for secret in secrets if isinstance(secret, str | bytes)), key=len, reverse=True)
+        for secret in longest_first:
             if isinstance(secret, str):
                 for quoted, hidden in ((json.dumps(secret, ensure_ascii=False), json.dumps(REDACTED)), (repr(secret), repr(REDACTED))):
-                    text = _hide_cut(text.replace(quoted, hidden), quoted)
+                    text = _hide_cut(text.replace(quoted, hidden), quoted[:-1], f"{quoted[0]}{REDACTED}")
             else:
                 text = text.replace(shown_bytes(secret), REDACTED).replace(repr(secret), repr(REDACTED))
+        # Bytes that a cut shows the start of, once every string and bytes
+        # are hidden where the line quotes them whole: one of those may hold
+        # a cut marker itself, which is no place to look for a start before.
+        for secret in longest_first:
+            if isinstance(secret, bytes):
+                text = _hide_cut(_hide_cut(text, shown_bytes(secret)), repr(secret), repr(REDACTED)[:-1])
+                # Shorter bytes that are the start of these are hidden by
+                # now, there too: what the line shows after them goes as well.
+                for size in range(1, min(len(secret), SHOWN_BYTES)):
+                    if secret[:size] in secrets:
+                        text = _hide_cut(text, f"{REDACTED}{secret[size:SHOWN_BYTES].hex()}", shortest=len(REDACTED) + 1)
         for secret in secrets:
             if isinstance(secret, int | float) and len(written := json.dumps(secret)) >= _MIN_NUMBER_LENGTH:
-                text = re.sub(rf"(?<![\w.+-]){re.escape(written)}(?![\w.])", REDACTED, text)
+                text = re.sub(rf"{_NUMBER_START.pattern}{re.escape(written)}(?![\w.])", REDACTED, text)
+                text = _hide_cut(text, written, shortest=_MIN_NUMBER_LENGTH, alone=True)
         return text
 
     def _message_secrets(self, messages: Iterable[Any]) -> set[str | bytes | int | float]:
@@ -244,10 +265,14 @@ SHOWN_BYTES = 64
 # What a value shown cut ends with (`cut`), where `_hide_cut` looks for the
 # start of a secret.
 _CUT_MARKER = "... ("
-# The shortest start of a quoted secret taken for it before a cut, its quote
-# included, and the shortest number hidden where it stands alone.
+# The shortest start of a secret taken for it before a cut, counted as the
+# line writes it (a string's quote, the ``0x`` of bytes), and the shortest
+# number hidden where it stands alone, or as a start before a cut.
 _MIN_CUT_START = 4
 _MIN_NUMBER_LENGTH = 4
+# Where a number that stands alone starts: after no word character, point or
+# sign, which would make it the end of a longer number or of a word.
+_NUMBER_START = re.compile(r"(?<![\w.+-])")
 
 
 def shown_bytes(value: bytes) -> str:
@@ -264,17 +289,26 @@ def cut(text: str, limit: int) -> str:
     return text if len(text) <= limit else f"{text[:limit]}{_CUT_MARKER}{len(text)} characters)"
 
 
-def _hide_cut(text: str, quoted: str) -> str:
-    """``text`` with ``quoted`` (a secret as a line quotes it) hidden where
-    the line shows only its start, cut: before each cut marker, the longest
-    start of it that the text ends with there, of `_MIN_CUT_START`
-    characters or more, is replaced, its opening quote kept."""
+def _hide_cut(text: str, written: str, hidden: str = REDACTED, *, shortest: int = _MIN_CUT_START, alone: bool = False) -> str:
+    """``text`` with ``written`` hidden where the line shows only its start,
+    cut: before each cut marker, the longest start of it that the text ends
+    with there, of ``shortest`` characters or more, is replaced by
+    ``hidden``. ``written`` is a secret as a line writes it: a quoted string
+    without its closing quote (``hidden`` is then its opening quote and
+    ``[REDACTED]``), bytes, a number, or bytes as `Redaction.message_text`
+    has left them where their own start is a shorter secret, hidden already.
+
+    ``alone`` is for a number: its start must stand alone on its left
+    (`_NUMBER_START`), as the whole number must. That start may be the
+    whole number, which the marker's dot keeps from standing alone on its
+    right."""
     start = 0
     while (at := text.find(_CUT_MARKER, start)) != -1:
-        shown = next((k for k in range(min(len(quoted) - 1, at), _MIN_CUT_START - 1, -1) if text.startswith(quoted[:k], at - k)), 0)
+        starts = (k for k in range(min(len(written), at), shortest - 1, -1) if text.startswith(written[:k], at - k))
+        shown = next((k for k in starts if not alone or _NUMBER_START.match(text, at - k)), 0)
         if shown:
-            text = f"{text[: at - shown]}{quoted[0]}{REDACTED}{text[at:]}"
-            at += 1 + len(REDACTED) - shown
+            text = f"{text[: at - shown]}{hidden}{text[at:]}"
+            at += len(hidden) - shown
         start = at + len(_CUT_MARKER)
     return text
 

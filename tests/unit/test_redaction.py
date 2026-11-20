@@ -2,6 +2,8 @@
 verification messages show credentials through, and a connection's messages
 by key name."""
 
+import json
+
 import httpx
 import pytest
 
@@ -13,6 +15,8 @@ from pytest_httpchain.redaction import (
     NO_REDACTION,
     REDACTED,
     Redaction,
+    cut,
+    shown_bytes,
 )
 from tests.unit.helpers import BEYOND_RECURSION_LIMIT
 
@@ -267,6 +271,112 @@ def test_message_text(text, expected):
 def test_message_text_hides_cut_strings_and_numbers(text, expected):
     message = {"token": "A1b2" * 80, "pin": {"password": 1234}, "count": {"api_key": 7}, "flag": {"token": True}}
     assert DEFAULT_REDACTION.message_text(text, message) == expected
+
+
+_SESSION_KEY = bytes.fromhex("00112233445566778899aabbccddeeff")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A cut falls inside a value: what the line shows of it is hidden, as a string's start is.
+        pytest.param(
+            'got {"user": "bob", "token": "0x00112233445566778899aabbccddeef... (203 characters)',
+            'got {"user": "bob", "token": "[REDACTED]... (203 characters)',
+            id="bytes-cut-in-their-hex",
+        ),
+        pytest.param(f"got b'{'k' * 12}... (73 characters)", "got '[REDACTED]... (73 characters)", id="bytes-cut-in-their-repr"),
+        pytest.param(f'got {{"password": "0x{"6b" * 40}... (240 characters)', 'got {"password": "[REDACTED]... (240 characters)', id="long-bytes-cut-in-their-hex"),
+        pytest.param('got {"user": "bob", "api_key": 41111111... (253 characters)', 'got {"user": "bob", "api_key": [REDACTED]... (253 characters)', id="number-cut-in-its-digits"),
+        # The dot the cut marker starts with is no part of the number before it.
+        pytest.param(
+            'got {"user": "bob", "api_key": 4111111111111111... (253 characters)',
+            'got {"user": "bob", "api_key": [REDACTED]... (253 characters)',
+            id="number-ending-at-the-cut",
+        ),
+        pytest.param('got {"client_secret": 1234.56... (212 characters)', 'got {"client_secret": [REDACTED]... (212 characters)', id="float"),
+        pytest.param('got {"client_secret": 1234.... (212 characters)', 'got {"client_secret": [REDACTED]... (212 characters)', id="float-cut-after-its-point"),
+        pytest.param('got {"access_token": -987... (207 characters)', 'got {"access_token": [REDACTED]... (207 characters)', id="negative-number"),
+        pytest.param('got {"refresh_token": 1.5e-0... (210 characters)', 'got {"refresh_token": [REDACTED]... (210 characters)', id="exponent"),
+        # Before a cut, another value that starts as a secret does cannot be told from it.
+        pytest.param('got {"order": 4111... (230 characters)', 'got {"order": [REDACTED]... (230 characters)', id="start-of-another-number-too"),
+        # Bytes longer than a line shows are followed by a marker of their own, whole: hidden once.
+        pytest.param(f"got 0x{'6b' * 64}... (70 bytes) (binary)", "got [REDACTED]... (70 bytes) (binary)", id="long-bytes-whole"),
+        pytest.param(f'got {{"password": "0x{"6b" * 64}... (7... (240 characters)', 'got {"password": "[REDACTED]... (7... (240 characters)', id="long-bytes-cut-in-their-length"),
+        # Fewer than four characters of a value are as likely another value's start.
+        pytest.param('got {"token": "0x0... (203 characters)', 'got {"token": "0x0... (203 characters)', id="bytes-start-too-short"),
+        pytest.param('got {"api_key": 411... (253 characters)', 'got {"api_key": 411... (253 characters)', id="number-start-too-short"),
+        # Another value's cut is left alone, and a longer number or a word that ends in a secret's digits.
+        pytest.param('got {"blob": "0xffee... (230 characters)', 'got {"blob": "0xffee... (230 characters)', id="cut-of-other-bytes"),
+        pytest.param('got {"id": 4222... (230 characters)', 'got {"id": 4222... (230 characters)', id="cut-of-another-number"),
+        pytest.param('got {"order": 94111111111111111... (230 characters)', 'got {"order": 94111111111111111... (230 characters)', id="end-of-a-longer-number"),
+        pytest.param('got {"ref": "sku4111... (230 characters)', 'got {"ref": "sku4111... (230 characters)', id="end-of-a-word"),
+    ],
+)
+def test_message_text_hides_cut_bytes_and_numbers(text, expected):
+    message = {
+        "session": {"token": _SESSION_KEY, "api_key": 4111111111111111},
+        "upload": {"password": b"k" * 70},
+        "account": {"client_secret": 1234.5678, "access_token": -98765, "refresh_token": 1.5e-07},
+    }
+    assert DEFAULT_REDACTION.message_text(text, message) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The shorter secret, replaced whole where the longer one starts, would leave the rest of what is shown of that one.
+        pytest.param('got {"token": "0x00112233445... (203 characters)', 'got {"token": "[REDACTED]... (203 characters)', id="bytes"),
+        pytest.param('got {"api_key": 41111111... (253 characters)', 'got {"api_key": [REDACTED]... (253 characters)', id="number"),
+        # Whichever of the two these four digits are.
+        pytest.param('got {"api_key": 4111... (253 characters)', 'got {"api_key": [REDACTED]... (253 characters)', id="number-either"),
+    ],
+)
+def test_message_text_hides_a_cut_secret_that_starts_as_a_shorter_one(text, expected):
+    message = {"token": _SESSION_KEY, "api_key": 4111111111111111, "previous": {"token": _SESSION_KEY[:5], "api_key": 4111}}
+    assert DEFAULT_REDACTION.message_text(text, message) == expected
+
+
+def test_message_text_looks_for_no_cut_secret_inside_one_quoted_whole():
+    """A string under a listed key that holds a cut marker of its own, after
+    what another key's bytes start as: it is hidden whole. Its marker is no
+    cut to hide a start of those bytes before, which would leave its end."""
+    message = {"token": _SESSION_KEY, "password": "0x00... (key)"}
+    text = 'got {"token": "0x00112233445566778899aabbccddeeff", "password": "0x00... (key)"}'
+    assert DEFAULT_REDACTION.message_text(text, message) == 'got {"token": "[REDACTED]", "password": "[REDACTED]"}'
+
+
+# Where a failure line cuts a value it shows (`response_steps._shown`).
+_SHOWN_MAX = 200
+
+
+@pytest.mark.parametrize(
+    ("key", "secret", "written", "others"),
+    [
+        pytest.param("token", _SESSION_KEY, "0x00112233445566778899aabbccddeeff", {}, id="bytes"),
+        pytest.param("password", b"k" * 70, "0x" + "6b" * 64, {}, id="long-bytes"),
+        pytest.param("api_key", 4111111111111111, "4111111111111111", {}, id="integer"),
+        pytest.param("client_secret", -1234.5678, "-1234.5678", {}, id="negative-float"),
+        pytest.param("refresh_token", 1.5e-07, "1.5e-07", {}, id="exponent"),
+        # Other secrets that are the start of the one cut, hidden whole where the line shows them.
+        pytest.param("token", _SESSION_KEY, "0x00112233445566778899aabbccddeeff", {"token": [_SESSION_KEY[:1], _SESSION_KEY[:5]]}, id="bytes-starting-as-shorter-ones"),
+        pytest.param("api_key", 4111111111111111, "4111111111111111", {"api_key": [4111, 41111111]}, id="integer-starting-as-shorter-ones"),
+    ],
+)
+def test_message_text_hides_bytes_and_numbers_wherever_the_cut_falls(key, secret, written, others):
+    """A message's JSON, cut (`cut`) after each number of the characters a
+    listed key's value is written in, in turn. Fewer than four are as likely
+    another value's start and stay, as a string's do; from four on, nothing
+    of the value is left between its key and the cut marker. A report shows
+    a miss reason through the same redaction again, which changes nothing."""
+    for shown in range(len(written) + 1):
+        message = {"pad": "", key: secret}
+        message["pad"] = "p" * (_SHOWN_MAX - json.dumps(message, default=shown_bytes).index(written) - shown)
+        line = cut(json.dumps(message, default=shown_bytes), _SHOWN_MAX)
+        assert line[_SHOWN_MAX - shown :].startswith(f"{written[:shown]}... ("), "the cut falls where this test means it to"
+        expected = line if shown < 4 else f"{line[: _SHOWN_MAX - shown]}[REDACTED]{line[_SHOWN_MAX:]}"
+        assert DEFAULT_REDACTION.message_text(line, message, others) == expected, f"{shown} of the {len(written)} characters shown"
+        assert DEFAULT_REDACTION.message_text(expected, message, others) == expected
 
 
 def test_message_text_takes_several_messages_and_skips_empty_values():
