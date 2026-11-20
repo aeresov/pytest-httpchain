@@ -205,11 +205,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   16-byte token's 32 hex digits, and `"api_key": 4111111111111111... (253 characters)` every digit
   of the number, where both now read `[REDACTED]... (...)`. A start of fewer than four characters
   stays, as a string's does.
-- A failure line quoting a message hides each listed value in its own written form: a listed int
-  and a listed float of one value (`1234`, `1234.0`) were one secret, and only the first found was
-  hidden, so `"got 1234 and 1234.0"` read `got 1234 and [REDACTED]`. And under `python -bb`, a
-  message whose listed values held a string and bytes of the same ASCII text (`"s3cret"`,
-  `b"s3cret"`) made every such line raise `BytesWarning` instead of showing it.
+- A failure line quoting a message hides each listed value in its own written form: two listed
+  numbers of one value written each their own way (`1234` and `1234.0`, `0.0` and `-0.0`) were one
+  secret, and only the first found was hidden, so `"got 1234 and 1234.0"` read `got 1234 and
+  [REDACTED]`. Two listed numbers written one after the other (`1234-1234`) are both hidden, where
+  the order the message held them in decided whether the second was. A listed int too long to write
+  (past Python's digit limit), which no line can show, no longer makes the line raise `ValueError`,
+  which ended a connection's wait on its first miss. And under `python -bb`, a message whose listed
+  values held a string and bytes of the same ASCII text (`"s3cret"`, `b"s3cret"`) made every such
+  line raise `BytesWarning` instead of showing it.
 - A connection's `expect.match` operand that a template renders to an object holding bytes, such as
   a binary protocol's frame, no longer makes pydantic warn. The stage passed with a serializer
   warning from the plugin's own code; under warnings as errors (`-W error`) it ended in that
