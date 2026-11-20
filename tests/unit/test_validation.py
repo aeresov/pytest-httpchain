@@ -972,6 +972,9 @@ def test_deep_disabled_does_not_check_imports(datadir):
         pytest.param("import pytest\n\npytest.fail('misconfigured')\n", "misconfigured", id="fail"),
         pytest.param("import sys\n\nsys.exit('SDK missing')\n", "SystemExit: SDK missing", id="sys-exit"),
         pytest.param("import sys\n\nsys.exit(3)\n", "SystemExit: 3", id="sys-exit-code"),
+        # With no reason given, the kind of stop: the message ended at its colon.
+        pytest.param("import pytest\n\npytest.skip(allow_module_level=True)\n", "Skipped", id="skip-no-reason"),
+        pytest.param("import pytest\n\npytest.fail()\n", "Failed", id="fail-no-reason"),
     ],
 )
 def test_deep_reports_a_module_that_stops_as_one_that_does_not_import(tmp_path, top_level, why):
@@ -981,11 +984,16 @@ def test_deep_reports_a_module_that_stops_as_one_that_does_not_import(tmp_path, 
     import, with the reason given, a function's module and an adapter's
     alike. A skip or a fail ended `validate` with a traceback, and a
     SystemExit with the module's exit status, where every other file's
-    findings were lost."""
+    findings were lost. One that got through would skip this test, or end
+    the session it runs in, so getting through is this test's failure."""
     (tmp_path / "deep_stops.py").write_text(top_level)
     stages = [_stage(response=[{"verify": {"status": 200, "user_functions": ["deep_stops:check"]}}]), {"name": "c", "connection": {"name": "dev", "send": {"a": 1}}}]
     scenario = _write(tmp_path, stages, connections={"dev": {"adapter": "deep_stops:Adapter"}})
-    assert [(d.code, d.message) for d in validate_scenario(scenario, deep=True, syspaths=[tmp_path]).diagnostics] == [
+    try:
+        diagnostics = validate_scenario(scenario, deep=True, syspaths=[tmp_path]).diagnostics
+    except (pytest.skip.Exception, pytest.exit.Exception) as e:
+        pytest.fail(f"validate --deep let {type(e).__name__} through: {e}")
+    assert [(d.code, d.message) for d in diagnostics] == [
         (C.IMPORT_FAILED, f"Cannot import function 'deep_stops:check': Failed to import module 'deep_stops': {why}"),
         (C.ADAPTER_INVALID, f"Connection 'dev': cannot import adapter 'deep_stops:Adapter': Failed to import module 'deep_stops': {why}"),
     ]

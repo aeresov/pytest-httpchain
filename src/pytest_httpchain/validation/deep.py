@@ -337,21 +337,23 @@ def _method_problem(adapter: type, method: str, args: tuple[str, ...]) -> str | 
 
 
 # What a user module's top level can raise to stop what imports it, past
-# the import's catch-all (`userfunc.import_function`): in a test run,
+# the import's catch-all (`userfunc.import_function`). In a test run,
 # pytest.exit() ends the run, pytest.skip() or pytest.fail() decides the
-# stage, and sys.exit() ends the interpreter. `validate --deep` imports the
-# module in no run, so each is the module's failure to import. A
-# KeyboardInterrupt still ends `validate`.
+# stage that imports the module, and pytest reports a sys.exit() as that
+# stage's failure. `validate --deep` imports the module in no run, so each
+# is the module's failure to import. A KeyboardInterrupt still ends
+# `validate`.
 _STOPS = (pytest.exit.Exception, pytest.skip.Exception, pytest.fail.Exception, SystemExit)
 
 
 def _import_failure(name: str, e: BaseException) -> str:
     """Why ``name``, a function's or an adapter's, does not import: what
     the import says, or for one of `_STOPS` the reason the module gave (a
-    SystemExit's named as one, whose code alone may be a number)."""
+    SystemExit's named as one, whose code alone may be a number), or where
+    it gave none, the kind of stop (``Skipped``)."""
     if isinstance(e, UserFunctionError):
         return str(e)
-    reason = describe_exception(e) if isinstance(e, SystemExit) else str(e)
+    reason = describe_exception(e) if isinstance(e, SystemExit) else str(e) or type(e).__name__
     return f"Failed to import module '{name.partition(':')[0]}': {reason}"
 
 

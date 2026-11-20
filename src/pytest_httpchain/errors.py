@@ -4,13 +4,16 @@ import httpx
 import pytest
 
 # Raised by user code a call runs, or by a user module as it is imported,
-# these stop the run: never taken for a stage's failure. Where no stage runs,
-# pytest.exit()'s is reported instead: at collection, plugin.JsonModule.collect
-# reports it as the file's error, and `validate --deep` reports one a module
-# raises as it is imported, or a SystemExit, as that module's failure to
-# import. pytest.exit()'s is an Exception, so an `except Exception` must let
-# these through first. Defined here, at the bottom of the layers, as the
-# domain packages that call user code (userfunc, templates) must too.
+# these are never taken for a stage's failure by the plugin's catch-alls:
+# they reach pytest as from a test, KeyboardInterrupt and pytest.exit()'s
+# ending the run, a SystemExit failing the test that raised it. Where no
+# stage runs, pytest.exit()'s is reported instead: at collection,
+# plugin.JsonModule.collect reports it as the file's error, and `validate
+# --deep` reports one a module raises as it is imported, or a SystemExit, as
+# that module's failure to import. pytest.exit()'s is an Exception, so an
+# `except Exception` must let these through first. Defined here, at the
+# bottom of the layers, as the domain packages that call user code
+# (userfunc, templates) must too.
 INTERRUPTS = (KeyboardInterrupt, SystemExit, pytest.exit.Exception)
 
 
