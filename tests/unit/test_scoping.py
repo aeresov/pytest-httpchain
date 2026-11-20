@@ -864,13 +864,18 @@ def test_stage_templates_are_each_field_in_its_phase_in_resolution_order():
     ]
     assert templates[0].templates == [{"individual": {"p": ["{{ a }}"]}}]
     assert [template.templates for template in templates if template.field == "connection"] == [{"x": "{{ f }}"}, [1, ["{{ sent.id }}"]]]
-    # The phase indexes a scope's Phases.
+    # The phase indexes a scope's Phases, each member the layer of its name.
     # A stage whose four phases each hold names the one before does not, so
-    # that every Phase value, not only the last, is pinned to its layer.
-    scope = stage_scopes(make_scenario())[0]
-    phases = list(scope.phases())
+    # that every Phase member, not only the last, is pinned to its layer:
+    # two members that swapped their values would each read the other's.
+    phases = stage_scopes(make_scenario())[0].phases()
     assert len({frozenset(names) for names in phases}) == len(phases)
-    assert [scope.phases()[phase] for phase in Phase] == phases
+    assert (phases[Phase.ALWAYS_RUN], phases[Phase.PRE_ITERATION], phases[Phase.REQUEST], phases[Phase.RESPONSE]) == (
+        phases.always_run,
+        phases.pre_iteration,
+        phases.request,
+        phases.response,
+    )
 
 
 def test_stages_with_raw_pair_each_stage_with_its_body():
