@@ -250,7 +250,14 @@ class Redaction:
         alike, so a set would compare them (a BytesWarning); and two equal
         numbers written each their own way (1234 and 1234.0, 0.0 and -0.0)
         would be one, and only the first found hidden. A number too long to
-        write (past Python's digit limit) no line can show: it is left out."""
+        write (past Python's digit limit) no line can show: it is left out.
+
+        Each value by its real type, as `connections.checked_message` reads a
+        message: one posing as a string, bytes, a number or a container (a
+        proxy forwarding ``__class__``, a ``Mock(spec=...)``) passes isinstance,
+        and reading it as one (json.dumps, len(), iterating it) fails. It is
+        no secret to look for: no message holds one, and the line that quotes
+        one a template rendered is pydantic's refusal, its input hidden."""
         found: dict[tuple[object, object], str | bytes | int | float] = {}
         if not self.message_keys:
             return []
@@ -259,17 +266,18 @@ class Redaction:
         pending: list[tuple[Any, bool]] = [(message, False) for message in messages]
         while pending:
             value, listed = pending.pop()
-            if isinstance(value, Mapping | list | tuple):
+            kind = type(value)
+            if issubclass(kind, Mapping | list | tuple):
                 if (id(value), listed) in seen:
                     continue
                 seen.add((id(value), listed))
-                if isinstance(value, Mapping):
+                if issubclass(kind, Mapping):
                     pending.extend((member, listed or (isinstance(key, str) and self.redacts_message_key(key))) for key, member in value.items())
                 else:
                     pending.extend((member, listed) for member in value)
-            elif listed and isinstance(value, str | bytes) and value:
-                found.setdefault((type(value), value), value)
-            elif listed and isinstance(value, int | float) and not isinstance(value, bool):
+            elif listed and issubclass(kind, str | bytes) and value:
+                found.setdefault((kind, value), value)
+            elif listed and issubclass(kind, int | float) and not issubclass(kind, bool):
                 try:
                     found.setdefault(("number", json.dumps(value)), value)
                 except ValueError:  # an int past the digit limit

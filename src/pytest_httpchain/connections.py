@@ -118,8 +118,9 @@ def _path(keys: tuple[str | int, ...]) -> str:
 
 
 def _instead(value: Any) -> str:
-    """What to return in place of ``value``, which no message holds."""
-    if isinstance(value, tuple | set | frozenset):
+    """What to return in place of ``value``, which no message holds: one
+    posing as a list or a dict among them (`checked_message`)."""
+    if isinstance(value, list | tuple | set | frozenset):
         return "a list"
     if isinstance(value, bytearray | memoryview):
         return "bytes"
@@ -134,27 +135,32 @@ def checked_message(value: Any, source: str) -> dict[str, Any]:
     Otherwise a `MessageValueError` naming the first value that is not, in
     document order: ``receive() returned tuple at body.items; return a list``.
 
+    Each by its real type, which what writes a message goes by (json.dumps
+    refuses any other): a value posing as one (a proxy forwarding
+    ``__class__``, a ``Mock(spec=int)``) passes isinstance and is none.
+
     Iterative, so a deep message is no RecursionError. A container met again
     is not walked again: one shared, or one that holds itself, is checked once.
     """
-    if not isinstance(value, dict):
+    if not issubclass(type(value), dict):
         raise MessageValueError(f"{source} returned {type(value).__name__}; return a dict")
     seen: set[int] = set()
     pending: list[tuple[Any, tuple[str | int, ...]]] = [(value, ())]
     while pending:
         current, keys = pending.pop()
-        if isinstance(current, dict | list):
+        kind = type(current)
+        if issubclass(kind, dict | list):
             if id(current) in seen:
                 continue
             seen.add(id(current))
-            members: list[tuple[Any, Any]] = list(current.items()) if isinstance(current, dict) else list(enumerate(current))
-            if isinstance(current, dict):
+            members: list[tuple[Any, Any]] = list(current.items()) if issubclass(kind, dict) else list(enumerate(current))
+            if issubclass(kind, dict):
                 for key, _ in members:
-                    if not isinstance(key, str):
+                    if not issubclass(type(key), str):
                         raise MessageValueError(f"{source} returned a key of type {type(key).__name__} at {_path(keys) or 'the top level'}; keys must be strings")
             # Last first, so the first comes off the stack first.
             pending.extend((member, (*keys, key)) for key, member in reversed(members))
-        elif current is None or isinstance(current, str | bool | int | float | bytes):
+        elif current is None or issubclass(kind, str | bool | int | float | bytes):
             continue
         else:
             raise MessageValueError(f"{source} returned {type(current).__name__} at {_path(keys)}; return {_instead(current)}")

@@ -96,3 +96,27 @@ def strict_markers() -> Generator[None]:
         yield
     finally:
         mark._config, mark._markers = saved
+
+
+class Posing:
+    """``value`` as a proxy object presents it (wrapt's ``ObjectProxy``,
+    lazy-object-proxy's ``Proxy``): its ``__class__`` is ``value``'s, so
+    ``isinstance`` takes it for one, while its type is its own, which what
+    reads an object's real type goes by (``json.dumps``, ``len()``, a
+    ``str`` method given it). Its other attributes are ``value``'s.
+    ``unittest.mock.Mock(spec=...)`` passes ``isinstance`` the same way."""
+
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    @property
+    def __class__(self) -> type:
+        return type(self._value)
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "_value":  # not set yet: no value to forward to
+            raise AttributeError(name)
+        return getattr(self._value, name)
+
+    def __str__(self) -> str:
+        return str(self._value)

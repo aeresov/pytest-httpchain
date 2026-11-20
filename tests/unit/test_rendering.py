@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from pydantic_core import PydanticCustomError
 
 import pytest_httpchain.rendering as rendering_module
-from pytest_httpchain.errors import StageExecutionError
+from pytest_httpchain.errors import StageExecutionError, VerificationError
 from pytest_httpchain.models import (
     AuthCredentials,
     BearerAuth,
@@ -39,6 +39,7 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.redaction import DEFAULT_REDACTION
 from pytest_httpchain.rendering import listed_expectations, render_declared, rendered_match
+from tests.unit.helpers import Posing
 from tests.unit.models.helpers import GRAPHQL_QUERY_TAG, OBJECT_TAG
 
 
@@ -506,6 +507,16 @@ class TestListedExpectations:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             assert listed_expectations(rendered, DEFAULT_REDACTION) == [{key: self.FRAME}]
+
+    def test_a_refused_operand_posing_as_a_string_is_the_stage_s_failure(self):
+        """A template on a listed key renders a value posing as a string (a
+        proxy): validated again, it is refused, and the refusal is shown
+        through the redaction, which read the value as the string it poses
+        as and raised TypeError in the failure's place."""
+        match = ConnectionExpect.model_validate({"match": {"token": "{{ t }}"}, "timeout": 1}).match
+        with pytest.raises(VerificationError) as excinfo:
+            rendered_match(match, {"t": Posing("s3cret")}, DEFAULT_REDACTION)
+        assert "s3cret" not in str(excinfo.value)
 
     def test_operands_are_listed_in_the_matcher_s_order(self):
         """Each set one, whatever order the scenario wrote them in."""

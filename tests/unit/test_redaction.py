@@ -5,6 +5,7 @@ by key name."""
 import json
 import subprocess
 import sys
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -20,7 +21,7 @@ from pytest_httpchain.redaction import (
     cut,
     shown_bytes,
 )
-from tests.unit.helpers import BEYOND_RECURSION_LIMIT
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, Posing
 
 _EXPIRES = "Expires=Wed, 21 Oct 2026 07:28:00 GMT"
 
@@ -440,6 +441,23 @@ def test_message_text_passes_over_a_number_too_long_to_write():
     Writing it to look for it raised, and the line became that error."""
     text = "JMESPath 'token' doesn't match: expected 1, got (a int too long to show)"
     assert DEFAULT_REDACTION.message_text(text, {"token": 10**5000}) == text
+
+
+@pytest.mark.parametrize(
+    "posing",
+    [Posing(1234), Mock(spec=int), Posing(12.5), Posing("s3cret"), Mock(spec=str), Posing(b"s3cret"), Mock(spec=bytes), Mock(spec=dict), Posing([1234]), Mock(spec=list)],
+    ids=["posing-int", "mock-int", "posing-float", "posing-str", "mock-str", "posing-bytes", "mock-bytes", "mock-dict", "posing-list", "mock-list"],
+)
+def test_message_text_passes_over_a_value_posing_as_one_it_hides(posing):
+    """A value a listed key holds that poses as a string, bytes, a number or
+    a container (a proxy, a ``Mock(spec=...)``), passing isinstance, is not
+    read as one: what reading it calls goes by its real type (json.dumps,
+    len(), iterating it) and refused it, so the line raised in its place.
+    No message holds one, as `connections.checked_message` goes by the real
+    type too, and the line quoting one a template rendered is pydantic's,
+    with its input hidden. The real values beside it are hidden as ever."""
+    text = "JMESPath 'kind' doesn't match: expected 1, got 5678"
+    assert DEFAULT_REDACTION.message_text(text, {"token": posing, "api_key": 5678}) == "JMESPath 'kind' doesn't match: expected 1, got [REDACTED]"
 
 
 # Where a failure line cuts a value it shows (`response_steps._shown`).

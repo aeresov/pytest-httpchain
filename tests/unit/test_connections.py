@@ -11,6 +11,7 @@ import time
 import types
 from collections.abc import Iterator
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -37,6 +38,7 @@ from pytest_httpchain.errors import RequestError, StageExecutionError, Verificat
 from pytest_httpchain.models import ConnectionExpect
 from pytest_httpchain.redaction import NO_REDACTION
 from tests.unit import connections_test_helpers as helpers
+from tests.unit.helpers import Posing
 
 ADAPTER = "tests.unit.connections_test_helpers:FakeAdapter"
 
@@ -106,11 +108,26 @@ class TestCheckedMessage:
             ({"a": {2: "x"}}, "receive() returned a key of type int at a; keys must be strings"),
             ({None: "x", 7: "also invalid"}, "receive() returned a key of type NoneType at the top level; keys must be strings"),
             ({"a": {None: object()}}, "receive() returned a key of type NoneType at a; keys must be strings"),
+            # A value posing as one a message holds, as a proxy or a Mock(spec=...)
+            # does, passes isinstance, and nothing that goes by its real type:
+            # json.dumps, which a failure line writes a message with, refuses it.
+            ({"token": Posing(1234)}, "receive() returned Posing at token; return a JSON value or bytes"),
+            ({"token": Mock(spec=int)}, "receive() returned Mock at token; return a JSON value or bytes"),
+            ({"a": [Posing("s3cret")]}, "receive() returned Posing at a[0]; return a JSON value or bytes"),
+            ({"raw": Posing(b"\x00")}, "receive() returned Posing at raw; return a JSON value or bytes"),
+            ({"meta": Posing({"a": 1})}, "receive() returned Posing at meta; return a dict"),
+            ({"items": Posing([1])}, "receive() returned Posing at items; return a list"),
+            ({Posing("k"): 1}, "receive() returned a key of type Posing at the top level; keys must be strings"),
+            (Posing({"a": 1}), "receive() returned Posing; return a dict"),
             ([1, 2], "receive() returned list; return a dict"),
             ((1, 2), "receive() returned tuple; return a dict"),
             ("text", "receive() returned str; return a dict"),
         ],
-        ids=["tuple", "set-in-list", "bytearray", "object", "quoted-key", "int-key", "nested-int-key", "none-before-int-key", "nested-none-key", "list", "top-tuple", "text"],
+        ids=[
+            *("tuple", "set-in-list", "bytearray", "object", "quoted-key", "int-key", "nested-int-key", "none-before-int-key", "nested-none-key"),
+            *("posing-int", "mock-int", "posing-str-in-list", "posing-bytes", "posing-dict", "posing-list", "posing-key", "posing-message"),
+            *("list", "top-tuple", "text"),
+        ],
     )
     def test_refuses_what_no_message_holds(self, value, message):
         with pytest.raises(MessageValueError) as excinfo:
