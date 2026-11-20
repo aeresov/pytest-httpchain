@@ -225,10 +225,18 @@ class Redaction:
                         break
                     if secret[:size] in bytes_secrets:
                         text = _hide_cut(text, f"{REDACTED}{secret[size:SHOWN_BYTES].hex()}", shortest=len(REDACTED) + 1)
-        for secret in secrets:
-            if isinstance(secret, int | float) and len(written := json.dumps(secret)) >= _MIN_NUMBER_LENGTH:
+        numbers = [written for secret in secrets if isinstance(secret, int | float) and len(written := json.dumps(secret)) >= _MIN_NUMBER_LENGTH]
+        # Hiding one number can leave the next standing alone ("1234-1234",
+        # the first hidden): repeated until the line holds still, so that the
+        # order the numbers are found in decides nothing. Each round that
+        # changes the line hides digits, so the rounds end.
+        while numbers:
+            before = text
+            for written in numbers:
                 text = re.sub(rf"{_NUMBER_START.pattern}{re.escape(written)}(?![\w.])", REDACTED, text)
                 text = _hide_cut(text, written, shortest=_MIN_NUMBER_LENGTH, alone=True)
+            if text == before:
+                break
         return text
 
     def _message_secrets(self, messages: Iterable[Any]) -> list[str | bytes | int | float]:
@@ -237,11 +245,13 @@ class Redaction:
         once more where a listed key holds it).
 
         Each once, in the order found, which decides between two of one
-        length, and kept apart by type: a string and bytes of the same ASCII
-        text, or an int and a float of one value, are equal or hash alike, so
-        a set would compare the first two (a BytesWarning) and keep one of
-        the others, whose written forms differ."""
-        found: dict[tuple[type, str | bytes | int | float], str | bytes | int | float] = {}
+        length: a string or bytes by its type and value, a number by the form
+        a line writes it in. A string and bytes of the same ASCII text hash
+        alike, so a set would compare them (a BytesWarning); and two equal
+        numbers written each their own way (1234 and 1234.0, 0.0 and -0.0)
+        would be one, and only the first found hidden. A number too long to
+        write (past Python's digit limit) no line can show: it is left out."""
+        found: dict[tuple[object, object], str | bytes | int | float] = {}
         if not self.message_keys:
             return []
         seen: set[tuple[int, bool]] = set()
@@ -257,8 +267,13 @@ class Redaction:
                     pending.extend((member, listed or (isinstance(key, str) and self.redacts_message_key(key))) for key, member in value.items())
                 else:
                     pending.extend((member, listed) for member in value)
-            elif listed and ((isinstance(value, str | bytes) and value) or (isinstance(value, int | float) and not isinstance(value, bool))):
+            elif listed and isinstance(value, str | bytes) and value:
                 found.setdefault((type(value), value), value)
+            elif listed and isinstance(value, int | float) and not isinstance(value, bool):
+                try:
+                    found.setdefault(("number", json.dumps(value)), value)
+                except ValueError:  # an int past the digit limit
+                    pass
         return list(found.values())
 
     def _query(self, query: str) -> str:

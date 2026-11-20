@@ -412,11 +412,34 @@ def test_message_text_compares_no_bytes_with_a_string():
     assert (done.returncode, done.stdout) == (0, "".join(f"{text}\n" for text, _ in lines)), done.stderr
 
 
-def test_message_text_hides_an_int_and_a_float_of_one_value_each():
-    """Each in its own written form. Two listed values that are equal as
-    numbers were one secret: only the first found was hidden, here the
-    float, and the int's digits stayed."""
-    assert DEFAULT_REDACTION.message_text("got 1234 and 1234.0", {"api_key": 1234, "token": 1234.0}) == "got [REDACTED] and [REDACTED]"
+@pytest.mark.parametrize(
+    ("text", "message", "expected"),
+    [
+        # Equal as numbers, written each its own way: they were one secret,
+        # only the first found hidden, here the float, the int's digits shown.
+        pytest.param("got 1234 and 1234.0", {"api_key": 1234, "token": 1234.0}, "got [REDACTED] and [REDACTED]", id="int-and-float"),
+        # 0.0 is written in three characters, too few to hide, and -0.0 in
+        # four: found after 0.0, it was merged into it and shown.
+        pytest.param("got 0.0 and -0.0", {"token": -0.0, "api_key": 0.0}, "got 0.0 and [REDACTED]", id="zero-and-minus-zero"),
+    ],
+)
+def test_message_text_hides_each_number_in_its_own_written_form(text, message, expected):
+    assert DEFAULT_REDACTION.message_text(text, message) == expected
+
+
+@pytest.mark.parametrize("message", [{"api_key": 1234, "token": -1234}, {"token": -1234, "api_key": 1234}], ids=["int-found-last", "int-found-first"])
+def test_message_text_hides_numbers_written_one_after_the_other_whatever_their_order(message):
+    """Hidden, the first leaves the second standing alone: the order the
+    message holds them in decided whether that one was hidden too."""
+    assert DEFAULT_REDACTION.message_text("got 1234-1234", message) == "got [REDACTED][REDACTED]"
+
+
+def test_message_text_passes_over_a_number_too_long_to_write():
+    """An int past Python's digit limit cannot be turned into text, so no
+    line shows its digits (a dump shows ``(a int too long to show)``).
+    Writing it to look for it raised, and the line became that error."""
+    text = "JMESPath 'token' doesn't match: expected 1, got (a int too long to show)"
+    assert DEFAULT_REDACTION.message_text(text, {"token": 10**5000}) == text
 
 
 # Where a failure line cuts a value it shows (`response_steps._shown`).
