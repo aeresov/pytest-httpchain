@@ -257,9 +257,11 @@ class Redaction:
         Each value by its real type, as `connections.checked_message` reads a
         message: one posing as a string, bytes, a number or a container (a
         proxy forwarding ``__class__``, a ``Mock(spec=...)``) passes isinstance,
-        and reading it as one (json.dumps, len(), iterating it) fails. It is
-        no secret to look for: no message holds one, and the line that quotes
-        one a template rendered is pydantic's refusal, its input hidden."""
+        and reading it as one can fail: json.dumps and a str method given it
+        refuse a proxy by its real type, and a Mock forwards nothing reading
+        calls (len(), iterating it). It is no secret to look for: no message
+        holds one, and the line that quotes one a template rendered is
+        pydantic's refusal, its input hidden."""
         found: dict[tuple[object, object], str | bytes | int | float] = {}
         if not self.message_keys:
             return []

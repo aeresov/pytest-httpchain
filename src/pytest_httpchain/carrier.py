@@ -1406,10 +1406,11 @@ class Carrier:
         ``results`` for the HAR; each failure is secondary (`_fold_in_secondary`),
         what it sent going on ``exchanges``, but one ``run`` tolerates
         (`_ParallelRun.tolerates`), which goes with the others it tolerated.
-        An interrupt one of them raised on exit still stops the run, once
-        every other one is taken in: pytest.exit()'s, an Exception, was taken
-        for a failure and dropped, and a KeyboardInterrupt left the rest's
-        exit errors unreported.
+        An interrupt one of them raised on exit still reaches pytest, once
+        every other one is taken in (a KeyboardInterrupt or pytest.exit() ends
+        the run, a SystemExit fails the test): pytest.exit()'s, an Exception,
+        was taken for a failure and dropped, and a KeyboardInterrupt left the
+        rest's exit errors unreported.
         """
         interrupt: BaseException | None = None
         for future, idx in futures.items():
@@ -1435,8 +1436,9 @@ class Carrier:
         The catch-all is deliberate: ``request()`` runs user auth code and httpx
         raises non-HTTPError types, and anything escaping raw would bypass the
         chain-abort machinery. The assert sits inside the try for the same reason.
-        An interrupt that auth code raised (`INTERRUPTS`) is no failure: it
-        stops the run.
+        An interrupt that auth code raised (`INTERRUPTS`) is no failure of
+        the request: it reaches pytest as from a test (a KeyboardInterrupt or
+        pytest.exit() ends the run, a SystemExit fails the test).
         """
         try:
             assert cls.client is not None, "_ensure_initialized() builds cls.client before any request"

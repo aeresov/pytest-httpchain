@@ -10,17 +10,18 @@ import pytest
 # adapter's receive() is the exception: it runs on the connection's reader
 # thread, whose catch-all takes any of them, as any exception receive()
 # raises, for the end of that connection only, and the run goes on: a wait
-# for a message, or for none (absent), fails that attempt (a retry that
-# reopens the connection may then pass), a `closed: true` wait passes, its
-# message naming the interrupt, and an end no stage sees is logged as a
-# warning when the session ends. At collection, plugin.JsonModule.collect
-# reports pytest.exit()'s as the file's error, while a SystemExit ends the
-# session with pytest's internal error; and `validate --deep`, in no run,
-# reports a module's pytest.exit() or SystemExit at import as that module's
-# failure to import. pytest.exit()'s is an Exception, so an
-# `except Exception` must let these through first. Defined here, at the
-# bottom of the layers, as the domain packages that call user code
-# (userfunc, templates) must too.
+# for a message that none queued before the end matches, or for none
+# (absent), fails that attempt (a retry that reopens the connection may then
+# pass), a `closed: true` wait passes, its message naming the interrupt, and
+# an end no stage sees is logged as a warning when that connection's session
+# ends (the scenario's end, a close or a reopening). At collection,
+# plugin.JsonModule.collect reports pytest.exit()'s as the file's error,
+# while a SystemExit ends pytest's session with its internal error; and
+# `validate --deep`, in no run, reports a module's pytest.exit() or
+# SystemExit at import as that module's failure to import. pytest.exit()'s
+# is an Exception, so an `except Exception` must let these through first.
+# Defined here, at the bottom of the layers, as the domain packages that
+# call user code (userfunc, templates) must too.
 INTERRUPTS = (KeyboardInterrupt, SystemExit, pytest.exit.Exception)
 
 

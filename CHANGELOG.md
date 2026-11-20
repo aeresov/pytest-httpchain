@@ -210,8 +210,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first found was hidden, so `"got 1234 and 1234.0"` read `got 1234 and [REDACTED]`, and a listed
   `-0.0` found after a listed `0.0` was shown (`0.0`, in three characters, is too short to hide, and
   still is). Two listed numbers written one after the other (`1239-1234`, for 1239 and -1234) are
-  both hidden: hiding the one looked for first could leave the other shown, `got [REDACTED]-1234`,
-  and which pairs did so, in which order, followed how the numbers were stored. A listed int too
+  both hidden. The one looked for first could not stand alone yet, and hiding the other after it
+  left it shown, `got [REDACTED]-1234`; which pairs did so, in which order, followed how the numbers
+  were stored. A listed int too
   long to write (past Python's digit limit), which no line can show, no longer makes the line raise
   `ValueError`, which ended a connection's wait on its first miss. And under `python -bb`, a message
   whose listed values held a string and bytes of the same ASCII text (`"s3cret"`, `b"s3cret"`) made
@@ -219,9 +220,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A connection message holding a value that only poses as one a message holds, passing `isinstance`
   but no check of its real type, such as a proxy object (wrapt's `ObjectProxy`, lazy-object-proxy's
   `Proxy`) or a `Mock(spec=int)`, ends the connection as any value no message holds does, naming its
-  path: `receive() returned ObjectProxy at token; return a JSON value or bytes`. It was taken for a
-  message, and a failure line quoting one under a listed key raised `TypeError`, which ended a
-  connection's wait on its first miss. A template on a listed key that renders such a string into
+  path: `receive() returned ObjectProxy at token; return a JSON value or bytes`. A failure line
+  quoting a proxy of a string or a number, or a `Mock`, under a listed key raised `TypeError`, which
+  ended a connection's wait on its first miss. Heads-up: a proxy of bytes, a list or an object was
+  read as what it wraps, and a message holding one, which 0.21.1 took, now ends the connection too.
+  What `debug_info()` returns is read the same way: text posing as a `str` is shown as
+  `<debug_info() returned ObjectProxy, not text>`, where a proxy turned the report's Connection
+  Exchange section into one formatting error and a `Mock(spec=str)` raised `TypeError` in the
+  stage's outcome's place. A template on a listed key that renders such a string into
   `expect.match` fails the stage with its refusal, `Input should be a valid string`, where it failed
   with that `TypeError`.
 - A connection's `expect.match` operand that a template renders to an object holding bytes, such as
