@@ -45,22 +45,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `body_schema` reads a schema file (`read_json_schema_file`, `schema_error_text`), which
   `utils` no longer does. A connection's session class is public as `connections.Session` (it was
   `_Session`). Import-linter layers updated accordingly. No behavior changes beyond the Fixed
-  entries.
+  entries, and the next one for code using the models directly.
+- Models: a JMESPath matcher refused as a scenario loads (in `verify.jmespath`, or a connection's
+  `expect.match`) raises its errors as pydantic's own, beside the `jmespath_matcher` hint: in
+  `ValidationError.errors()` the built-in ones carry their `url` and `ctx`, and `str()` adds
+  pydantic's `For further information visit ...` line under each. A `value_error`'s `ctx` holds its
+  exception, so `json.dumps(e.errors())` fails on one, where `e.json()` writes it. This changes no
+  error's type, location or message, and so no diagnostic, which is built from those.
+- The `jmespath` floor is raised to 1.0.1. On Python 3.11 and later, jmespath 1.0.0's expression
+  cache raises `TypeError` once a process has compiled 128 distinct expressions, which the
+  validators took for the expression's fault: from the 129th on, every new expression was refused as
+  `Invalid JMESPath expression` (`HTTPCHAIN000`, in `validate` and at collection). Heads-up: an
+  environment that pins jmespath to 1.0.0 has to lift the pin to upgrade.
 
 ### Removed
 
 - `connections.OPTIONAL_ADAPTER_METHODS`, which nothing read: `validate --deep` checks an adapter
   against `connections.ADAPTER_METHODS` alone, and an adapter's `debug_info()` stays optional.
+- Internal names, none of them documented, which code importing the plugin's modules meets:
+  `scoping.raw_stages` (`scoping.stages_with_raw` pairs each validated stage with its raw body),
+  `StageScopes.always_run_shadows`, `.pre_iteration_shadows` and `.request_shadows`
+  (`StageScopes.shadows()` gives each phase's),
+  `validation.loader.is_jmespath_expectations_position` (it was `expectations_field(path) is not
+  None`), the six `models.entities.get_*_discriminator` functions (a tagged union's tags are read
+  from its members), `ReferenceResolver.resolve_document`, and the re-exports
+  `carrier.VerifyRender`, `dataflow.SENT_NAME` and `har_writer.REDACTED` (import them from
+  `response_steps`, `scoping` and `redaction`). `models.types.create_string_validator` requires a
+  keyword-only `name`, the validator's.
 
 ### Fixed
 
 - A verify, save or auth function, a function a template calls, or a connection's adapter as it is
   built, connects or sends, that calls `pytest.exit()` ends the run there, as it does from a test,
-  with pytest's interrupt exit status (or the `returncode` given). `pytest.exit()` raises an
-  `Exception`, which the plugin took for the function's failure: the stage failed (`Error calling
-  function '...': ...`), the stages after it skipped, and the session went on. One reached at
-  collection, where a `parametrize` renders the scenario's substitutions, still fails the file's
-  collection, its message now the reason given.
+  with pytest's interrupt exit status (or the `returncode` given), and so does a `pytest.exit()` at
+  the top level of the module one of them is imported from (a check that the environment is set up),
+  run when the first stage to use it imports it. `pytest.exit()` raises an `Exception`, which the
+  plugin took for the function's failure: the stage failed (`Error calling function '...': ...`, or
+  `Failed to import module '...': ...`), the stages after it skipped, and the session went on. One
+  reached at collection, where a `parametrize` renders the scenario's substitutions, still fails the
+  file's collection, its message now the reason given, and `validate --deep`, which runs no test,
+  reports a module that calls it as one it cannot import (`HTTPCHAIN022`, or `HTTPCHAIN046` for an
+  adapter's).
 - At collection, a mark pytest refuses is reported as `HTTPCHAIN019`, beside the file's other
   diagnostics: one the run does not register under strict markers (`--strict-markers`, or `strict =
   true`), and a misspelt `parametrize` (`parameterize(...)`). pytest refuses both with its own
@@ -78,7 +103,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first, none before a `--json` piece, and the JSON `Content-Type` and `Accept` as soon as any
   `--json` gives data. A mix was joined with `&` throughout and sent as a form: `-d a=1 --json
   '{"b":2}'` now imports as `a=1{"b":2}`, and `--json '{"b":2}' -d a=1` as `{"b":2}&a=1`, both as
-  `application/json`. A command using only `-d` options, or only `--json`, imports as before.
+  `application/json`. With `-G`, which sends the data as the query, the two JSON headers are sent
+  as well, as curl sends them; they were left out, for a `--json` alone as for a mix. A command
+  using only `-d` options, or only `--json` without `-G`, imports as before.
 - `import har stdin`, on a HAR file named `stdin` (or `./stdin`), describes the scenario by the
   file's name, `Imported from stdin`, as it does any other file. It said `Imported from a HAR file`,
   the description of `import har -`, which reads standard input.
@@ -92,18 +119,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variable's name is, although a function can take them and a connection adapter's `params` did. A
   key that is no keyword argument name (`class`, `not-an-id`) is still refused, now as `Invalid
   keyword argument name: 'class'`.
-- A `save.jmespath` expression, a regex, an `xml` body or a `base64` value that its check refuses,
-  where the field also takes a template, names the check in the error's location (`HTTPCHAIN000`,
-  in `validate` and at collection): `function-after[validate_xml(), str]`, and likewise
-  `validate_regex_pattern`, `validate_jmespath_expression` and `validate_base64`, where all four
-  read `function-after[validator(), str]`. A regex of `verify.body`'s `matches` or `not_matches`,
-  and a JMESPath expression written as a key (`verify.jmespath`, a connection's `expect.match`),
-  are located as before, by their place alone.
+- A `save.jmespath` expression, a regex, an `xml` body or a `base64` value that is refused, where
+  the field also takes a template, names its check in the error's location, wherever that is
+  printed: `HTTPCHAIN000` in `validate` and at collection, a stage's failure for a value a template
+  rendered, and `import`'s refusal of a scenario it would write. It reads
+  `function-after[validate_xml(), str]`, and likewise `validate_regex_pattern`,
+  `validate_jmespath_expression` and `validate_base64`, where all four read
+  `function-after[validator(), str]`, for any error of that member, one for the value's type
+  included. A regex of `verify.body`'s `matches` or `not_matches`, and a JMESPath expression written
+  as a key (`verify.jmespath`, a connection's `expect.match`), are located as before, by their place
+  alone.
 - A `body.msgpack` that MessagePack cannot encode (a set a template rendered) fails its stage as
   `Cannot encode MessagePack body: cannot encode set as MessagePack`, no longer naming the
   `msgpack_pack()` template helper, which the scenario never called. The helper's own failure still
   names it: `msgpack_pack() cannot encode set as MessagePack` (it said `msgpack_pack() cannot encode
-  set`).
+  set`). An int outside MessagePack's range, which both called a type it cannot encode (`cannot
+  encode int`), is refused for its size: `cannot encode int outside MessagePack's range, -2**63 to
+  2**64 - 1`, an `OverflowError` in a template.
 - `response_steps.process_verify`, on a connection stage's message, no longer renders the values of
   the checks only an HTTP response has (`status`, `headers`, and the body's `contains`,
   `not_contains`, `matches` and `not_matches`), which fail there without reading them. A
@@ -128,22 +160,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused both already.
 - `client.timeout` and `request.timeout` refuse infinity, which a template can render and text reads
   as (`"inf"`, `"Infinity"`, `"1e999"`). httpx cannot wait forever, and the first request the
-  timeout applied to failed with `Unexpected error during HTTP request: timestamp out of range for
-  platform time_t`. Written, the scenario now fails validation (`HTTPCHAIN000`); rendered, the stage
-  fails before its request is sent, or for `client.timeout` the scenario's initialization. Either
-  way the report reads `Input should be a finite number`, beside the template branch's own error
-  (`Input should be a valid string` for a rendered value, `Must be a complete template expression
-  like '{{ expr }}', got: 'inf'` for text written in the file). NaN and `-inf`, refused already as
-  `Input should be greater than 0`, now read `Input should be a finite number`, as the retry,
-  threshold and connection settings word it.
+  timeout applied to failed with `Unexpected error during HTTP request: timestamp out of range for C
+  PyTime_t` (`... for platform time_t` on Python 3.14). Written, the scenario now fails validation
+  (`HTTPCHAIN000`); rendered, the stage fails before its request is sent, or for `client.timeout`
+  the scenario's initialization. Either way the report reads `Input should be a finite number`,
+  beside the template branch's own error (`Input should be a valid string` for a rendered value,
+  `Must be a complete template expression like '{{ expr }}', got: 'inf'` for text written in the
+  file). NaN and `-inf`, refused already as `Input should be greater than 0`, now read `Input should
+  be a finite number`, as the retry, threshold and connection settings word it. A finite timeout
+  past what the clock takes, about 9.2e9 seconds (`1e10`), is still accepted, and its first request
+  still fails that way.
 - `validate --deep` puts its `--syspath` directories at the front of `sys.path` in the order given,
-  and the current directory right after them, as pytest orders its `pythonpath` entries ahead of the
-  current directory under `python -m pytest`. The current directory came first and the `--syspath`
-  directories followed in reverse order, so where two of them held a module of the same name,
-  `--deep` checked another copy than a test run imports: with `--syspath a --syspath b` it checked
-  `b`'s, and a module in the current directory hid a `--syspath` directory's. Each directory is
-  still added once, one already on `sys.path` stays where it is, and `sys.path` is restored
-  afterwards.
+  and the current directory right after them, as pytest puts its `pythonpath` entries at the front
+  in the order listed, ahead of the current directory under `python -m pytest`. The current
+  directory came first and the `--syspath` directories followed in reverse order, so where two of
+  them held a module of the same name, `--deep` checked another copy than a test run imports: with
+  `--syspath a --syspath b` it checked `b`'s, and a module in the current directory hid a
+  `--syspath` directory's. A directory `sys.path` holds already (a `PYTHONPATH` entry) goes in its
+  place too, where it stayed behind the others. Each is added once, and `sys.path` is restored
+  afterwards. Heads-up: in pytest's default import mode, a run also puts the directory of each
+  `conftest.py` it loads ahead of its `pythonpath` entries, so where the current directory holds one
+  and a module of the same name as a `--syspath` directory's, the run imports the current
+  directory's copy, which `--deep` checked before. Give such a directory first among the `--syspath`
+  directories for `--deep` to check the copy the run imports.
+- A verify or save function that raises, and a verify function that returns false, are named in the
+  stage's failure by their import name: `Error calling user function 'mod:fn': ...` and `Function
+  'mod:fn' verification failed`. The call was printed as its model prints, `'root='mod:fn''` or
+  `'name=UserFunctionName(root='mod:fn') kwargs={'api_key': '...'}'`, each kwarg as its template
+  rendered it, so a token handed to the function was in the report.
+- A connection stage's failure line that quotes a message, such as a miss reason in the report's
+  Connection Exchange section, hides a listed key's bytes and numbers where the line cuts them, as
+  it hid strings: `"token": "0x00112233445566778899aabbccddeef... (203 characters)` showed 31 of a
+  16-byte token's 32 hex digits, and `"api_key": 4111111111111111... (253 characters)` every digit
+  of the number, where both now read `[REDACTED]... (...)`. A start of fewer than four characters
+  stays, as a string's does.
+- A connection's `expect.match` operand that a template renders to an object holding bytes, such as
+  a binary protocol's frame, no longer makes pydantic warn. The stage passed with a serializer
+  warning from the plugin's own code; under warnings as errors (`-W error`) it ended in that
+  warning, with a traceback; and the warning quoted the operand, so the value of a listed key, which
+  the failure line beside it hides, was in pytest's warnings summary.
+- A JMESPath matcher with several null operands where only `eq`, `ne`, `contains` and `not_contains`
+  take one (`{"gt": null, "lt": null}`) is refused naming the first of them in the matcher's own
+  order. Which one `HTTPCHAIN000` named followed the interpreter's hash seed, so one file gave
+  `validate` two different diagnostics on two runs.
+- A mark whose argument is no literal, such as a condition written as in Python
+  (`skipif(sys.platform == 'win32', reason='posix only')`) or a name (`skip(reason=x)`), is refused
+  (`HTTPCHAIN019`) quoting that argument as written: `unsupported marker expression: ...
+  (sys.platform == 'win32' is no literal: a mark's arguments are literals, a condition written as a
+  string)`. It read `malformed node or string on line 1: <ast.Compare object at 0x7f...>`, which
+  named nothing the scenario wrote and, holding an address, read differently on every run.
+- A mark named as an attribute `pytest.mark` holds itself (`_config`, `__class__`, `__init__()`) is
+  refused as pytest refuses any name starting with an underscore, `Marker name must NOT start with
+  underscore`, as `HTTPCHAIN019` in `validate` and at collection. The attribute was taken for a
+  mark, and both ended in an `AttributeError` traceback; `__init__()` also reset pytest's marks,
+  which turned strict markers off for the files collected after it.
 
 ## [0.21.1] - 2026-11-19
 
