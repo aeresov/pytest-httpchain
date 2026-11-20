@@ -205,15 +205,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   16-byte token's 32 hex digits, and `"api_key": 4111111111111111... (253 characters)` every digit
   of the number, where both now read `[REDACTED]... (...)`. A start of fewer than four characters
   stays, as a string's does.
-- A failure line quoting a message hides each listed value in its own written form: two listed
-  numbers of one value written each their own way (`1234` and `1234.0`, `0.0` and `-0.0`) were one
-  secret, and only the first found was hidden, so `"got 1234 and 1234.0"` read `got 1234 and
-  [REDACTED]`. Two listed numbers written one after the other (`1234-1234`) are both hidden, where
-  the order the message held them in decided whether the second was. A listed int too long to write
-  (past Python's digit limit), which no line can show, no longer makes the line raise `ValueError`,
-  which ended a connection's wait on its first miss. And under `python -bb`, a message whose listed
-  values held a string and bytes of the same ASCII text (`"s3cret"`, `b"s3cret"`) made every such
-  line raise `BytesWarning` instead of showing it.
+- A failure line quoting a message hides each listed value in its own written form. Two listed
+  numbers of one value written each their own way were one secret: of `1234` and `1234.0` only the
+  first found was hidden, so `"got 1234 and 1234.0"` read `got 1234 and [REDACTED]`, and a listed
+  `-0.0` found after a listed `0.0` was shown (`0.0`, in three characters, is too short to hide, and
+  still is). Two listed numbers written one after the other (`1239-1234`, for 1239 and -1234) are
+  both hidden: hiding the one looked for first could leave the other shown, `got [REDACTED]-1234`,
+  and which pairs did so, in which order, followed how the numbers were stored. A listed int too
+  long to write (past Python's digit limit), which no line can show, no longer makes the line raise
+  `ValueError`, which ended a connection's wait on its first miss. And under `python -bb`, a message
+  whose listed values held a string and bytes of the same ASCII text (`"s3cret"`, `b"s3cret"`) made
+  every such line raise `BytesWarning` instead of showing it.
+- A connection message holding a value that only poses as one a message holds, passing `isinstance`
+  but no check of its real type, such as a proxy object (wrapt's `ObjectProxy`, lazy-object-proxy's
+  `Proxy`) or a `Mock(spec=int)`, ends the connection as any value no message holds does, naming its
+  path: `receive() returned ObjectProxy at token; return a JSON value or bytes`. It was taken for a
+  message, and a failure line quoting one under a listed key raised `TypeError`, which ended a
+  connection's wait on its first miss. A template on a listed key that renders such a string into
+  `expect.match` fails the stage with its refusal, `Input should be a valid string`, where it failed
+  with that `TypeError`.
 - A connection's `expect.match` operand that a template renders to an object holding bytes, such as
   a binary protocol's frame, no longer makes pydantic warn. The stage passed with a serializer
   warning from the plugin's own code; under warnings as errors (`-W error`) it ended in that
