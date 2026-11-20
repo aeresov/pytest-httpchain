@@ -1218,7 +1218,7 @@ requires-dist = [
     { name = "graphql-core", specifier = ">=3.2.10" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.0" },
     { name = "iniconfig", specifier = ">=1.0.1" },
-    { name = "jmespath", specifier = ">=1.0.0" },
+    { name = "jmespath", specifier = ">=1.0.1" },
     { name = "jsonschema", specifier = ">=4.18.0" },
     { name = "jsonschema-specifications", specifier = ">=2023.3.6" },
     { name = "msgpack", specifier = ">=1.2.0" },
