@@ -426,7 +426,8 @@ def _eval_expr(evaluator: _Evaluator, expr: str, *, as_text: bool = False) -> An
     except InvalidExpression as e:
         raise TemplatesError(f"Invalid expression '{display}': {e}") from e
     except INTERRUPTS:
-        # A context callable's pytest.exit() stops the run: no failure.
+        # An interrupt is no template failure: it propagates as it is (what
+        # pytest then does: CLAUDE.md, Trust model).
         raise
     except Exception as e:
         # A context callable can raise anything, and everything out of here must
