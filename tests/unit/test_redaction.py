@@ -437,9 +437,9 @@ def test_message_text_hides_numbers_written_one_after_the_other_whatever_their_o
 
 def test_message_text_passes_over_a_number_too_long_to_write():
     """An int past Python's digit limit cannot be turned into text, so no
-    line shows its digits (a dump shows ``(a int too long to show)``).
+    line shows its digits (a dump shows ``(a number too long to show)``).
     Writing it to look for it raised, and the line became that error."""
-    text = "JMESPath 'token' doesn't match: expected 1, got (a int too long to show)"
+    text = "JMESPath 'token' doesn't match: expected 1, got (a number too long to show)"
     assert DEFAULT_REDACTION.message_text(text, {"token": 10**5000}) == text
 
 

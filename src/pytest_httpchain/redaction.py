@@ -229,7 +229,9 @@ class Redaction:
         # Hiding one number can leave the next standing alone ("1234-1234",
         # the first hidden): repeated until the line holds still, so that the
         # order the numbers are found in decides nothing. Each round that
-        # changes the line hides digits, so the rounds end.
+        # changes the line replaces four or more of the characters a number is
+        # written in (digits, a sign, a point, an exponent, Infinity's letters)
+        # with [REDACTED], which holds none of them, so the rounds end.
         while numbers:
             before = text
             for written in numbers:

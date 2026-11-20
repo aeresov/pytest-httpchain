@@ -337,14 +337,17 @@ def _method_problem(adapter: type, method: str, args: tuple[str, ...]) -> str | 
 
 
 # What a user module's top level can raise to stop what imports it, past
-# the import's catch-all (`userfunc.import_function`). In a test run,
-# pytest.exit() ends the run. Imported by a stage, the module's
+# the import's catch-all (`userfunc.import_function`). In a test run, where
+# a stage imports the module, its pytest.exit() ends the run, its
 # pytest.skip() or pytest.fail() decides that stage, and pytest reports its
-# sys.exit() as that stage's failure; imported at collection (a template a
-# parametrize renders), a skip skips the file, a fail is the file's
-# collection error, and a sys.exit() ends the session with pytest's
-# internal error. `validate --deep` imports the module in no run, so each is
-# the module's failure to import. A KeyboardInterrupt still ends `validate`.
+# sys.exit() as that stage's failure. Where collection imports it (a
+# template rendered there calls a function from it: a parametrize's own, or
+# one in the scenario's substitutions, which a parametrize holding a
+# template resolves at collection), a skip skips the file, a fail or a
+# pytest.exit() is the file's collection error, and a sys.exit() ends the
+# session with pytest's internal error. `validate --deep` imports the module
+# in no run, so each is the module's failure to import. A KeyboardInterrupt
+# still ends `validate`.
 _STOPS = (pytest.exit.Exception, pytest.skip.Exception, pytest.fail.Exception, SystemExit)
 
 
