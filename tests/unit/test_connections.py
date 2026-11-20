@@ -5,6 +5,8 @@ sockets: the round trip over TCP is tests/integration/test_connections.py,
 and how the carrier runs a connection step is test_carrier.py's.
 """
 
+import collections
+import enum
 import logging
 import threading
 import time
@@ -94,6 +96,29 @@ def _is(expected: dict[str, Any]):
     return lambda message: None if message == expected else Miss(f"not {expected}")
 
 
+class _Text(str):
+    """A real subclass of str, as a message or an adapter may hold one."""
+
+
+class _Raw(bytes): ...
+
+
+class _Ratio(float): ...
+
+
+class _Code(enum.IntEnum):
+    READY = 1
+
+
+class _State(enum.StrEnum):
+    OPEN = "open"
+
+
+class _Flags(enum.IntFlag):
+    A = 1
+    B = 2
+
+
 class TestCheckedMessage:
     @pytest.mark.parametrize(
         ("value", "message"),
@@ -141,6 +166,24 @@ class TestCheckedMessage:
     def test_takes_json_values_and_bytes_at_any_depth(self):
         message = {"a": [None, True, 1, 1.5, "s", b"\x00", {"b": [b"\xff"]}]}
         assert checked_message(message, "connect()") is message
+
+    def test_takes_a_subclass_of_what_a_message_holds(self):
+        """A value is read by its real type, and a subclass of a JSON type or
+        of bytes is one: an enum's member, a str or dict subclass."""
+
+        class Ints(list): ...
+
+        message = collections.OrderedDict(
+            code=_Code.READY,
+            state=_State.OPEN,
+            flags=_Flags.A | _Flags.B,
+            name=_Text("dev"),
+            raw=_Raw(b"\x00"),
+            ratio=_Ratio(0.5),
+            items=Ints([1, 2]),
+            nested={_Text("key"): collections.defaultdict(list)},
+        )
+        assert checked_message(message, "receive()") is message
 
     def test_deep_and_cyclic_messages_are_no_recursion_error(self):
         deep: dict[str, Any] = {}
@@ -895,9 +938,18 @@ class TestDebugText:
             ("raw: 00ff", "raw: 00ff"),
             (RuntimeError("no buffer"), "<debug_info() failed: RuntimeError: no buffer>"),
             (b"bytes", "<debug_info() returned bytes, not text>"),
+            # Text only by isinstance: the report joins its lines with it, which
+            # a proxy's real type refuses, and cutting a Mock raised in the
+            # stage's outcome's place. A real subclass of str is text.
+            (Posing("raw: 00ff"), "<debug_info() returned Posing, not text>"),
+            (Mock(spec=str), "<debug_info() returned Mock, not text>"),
+            (_Text("raw: 00ff"), "raw: 00ff"),
             # Nothing to say, as an adapter without the method says nothing.
             (None, None),
         ],
+        # Named here: pytest names a parametrized value by reading it, as
+        # what passes isinstance for str, and a Mock(spec=str) is none to read.
+        ids=["text", "raises", "bytes", "posing-text", "mock-text", "text-subclass", "none"],
     )
     def test_guarded(self, debug, text):
         helpers.peer("debug", debug=debug)

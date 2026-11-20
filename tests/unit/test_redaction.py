@@ -2,6 +2,8 @@
 verification messages show credentials through, and a connection's messages
 by key name."""
 
+import collections
+import enum
 import json
 import subprocess
 import sys
@@ -445,19 +447,51 @@ def test_message_text_passes_over_a_number_too_long_to_write():
 
 @pytest.mark.parametrize(
     "posing",
-    [Posing(1234), Mock(spec=int), Posing(12.5), Posing("s3cret"), Mock(spec=str), Posing(b"s3cret"), Mock(spec=bytes), Mock(spec=dict), Posing([1234]), Mock(spec=list)],
-    ids=["posing-int", "mock-int", "posing-float", "posing-str", "mock-str", "posing-bytes", "mock-bytes", "mock-dict", "posing-list", "mock-list"],
+    [
+        *(Posing(1234), Mock(spec=int), Posing(12.5), Posing("s3cret"), Mock(spec=str), Mock(spec=bytes), Mock(spec=dict), Mock(spec=list)),
+        # A proxy forwards len() and iterating, which reading bytes or a list
+        # needs, so these two read through before as well: they pin that
+        # passing over a posing value does not make them raise either.
+        *(Posing(b"s3cret"), Posing([1234])),
+    ],
+    ids=["posing-int", "mock-int", "posing-float", "posing-str", "mock-str", "mock-bytes", "mock-dict", "mock-list", "posing-bytes", "posing-list"],
 )
 def test_message_text_passes_over_a_value_posing_as_one_it_hides(posing):
     """A value a listed key holds that poses as a string, bytes, a number or
     a container (a proxy, a ``Mock(spec=...)``), passing isinstance, is not
-    read as one: what reading it calls goes by its real type (json.dumps,
-    len(), iterating it) and refused it, so the line raised in its place.
-    No message holds one, as `connections.checked_message` goes by the real
-    type too, and the line quoting one a template rendered is pydantic's,
-    with its input hidden. The real values beside it are hidden as ever."""
+    read as one. Read as one, the line raised in its place: json.dumps and a
+    str method refuse a proxy by its real type, and a Mock forwards nothing
+    reading it calls (len(), iterating it). No message holds one, as
+    `connections.checked_message` goes by the real type too, and the line
+    quoting one a template rendered is pydantic's, with its input hidden.
+    The real values beside it are hidden as ever."""
     text = "JMESPath 'kind' doesn't match: expected 1, got 5678"
     assert DEFAULT_REDACTION.message_text(text, {"token": posing, "api_key": 5678}) == "JMESPath 'kind' doesn't match: expected 1, got [REDACTED]"
+
+
+class _Token(str):
+    """A real subclass of str, as a message may hold one."""
+
+
+class _Pin(enum.IntEnum):
+    CARD = 4111
+
+
+@pytest.mark.parametrize(
+    ("message", "text", "shown"),
+    [
+        ({"token": _Token("s3cret")}, 'got "s3cret"', 'got "[REDACTED]"'),
+        ({"api_key": _Pin.CARD}, "got 4111", "got [REDACTED]"),
+        ({"token": [_Token("s3cret")]}, "got ['s3cret']", "got ['[REDACTED]']"),
+        (collections.OrderedDict(password="hunter22"), 'got "hunter22"', 'got "[REDACTED]"'),
+        ({"auth": collections.OrderedDict(token="s3cret")}, 'got "s3cret"', 'got "[REDACTED]"'),
+    ],
+    ids=["str-subclass", "int-enum", "in-a-list", "ordered-dict", "nested-ordered-dict"],
+)
+def test_message_text_hides_a_value_of_a_subclass_of_what_it_reads(message, text, shown):
+    """A value is read by its real type, and a subclass of str, bytes, int,
+    float or a container is one of those: hidden, and walked, as they are."""
+    assert DEFAULT_REDACTION.message_text(text, message) == shown
 
 
 # Where a failure line cuts a value it shows (`response_steps._shown`).

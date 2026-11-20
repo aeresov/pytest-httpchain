@@ -214,7 +214,9 @@ def debug_text(adapter: Any) -> str | None:
     """What the adapter's optional ``debug_info()`` says, cut at
     `DEBUG_INFO_LIMIT`, or None without one, or when it returns None: nothing
     to say. Whatever it raises is its text instead: a report must not fail
-    for it."""
+    for it. Text by its real type, as `checked_message` reads a message: one
+    posing as a str (a proxy, a ``Mock(spec=str)``) is none, as the report
+    joining its lines with it would refuse it."""
     method = getattr(adapter, "debug_info", None)
     if method is None:
         return None
@@ -226,7 +228,7 @@ def debug_text(adapter: Any) -> str | None:
         return f"<debug_info() failed: {describe_exception(e)}>"
     if text is None:
         return None
-    if not isinstance(text, str):
+    if not issubclass(type(text), str):
         return f"<debug_info() returned {type(text).__name__}, not text>"
     return cut(text, DEBUG_INFO_LIMIT)
 

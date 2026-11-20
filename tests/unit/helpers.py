@@ -101,10 +101,12 @@ def strict_markers() -> Generator[None]:
 class Posing:
     """``value`` as a proxy object presents it (wrapt's ``ObjectProxy``,
     lazy-object-proxy's ``Proxy``): its ``__class__`` is ``value``'s, so
-    ``isinstance`` takes it for one, while its type is its own, which what
-    reads an object's real type goes by (``json.dumps``, ``len()``, a
-    ``str`` method given it). Its other attributes are ``value``'s.
-    ``unittest.mock.Mock(spec=...)`` passes ``isinstance`` the same way."""
+    ``isinstance`` takes it for one, and it forwards attributes, ``str()``,
+    ``len()``, iterating, indexing, ``hash()``, ``==`` and truth to
+    ``value``, as those do. Its type is its own, which what goes by an
+    object's real type reads: ``json.dumps`` refuses it, and so does a
+    ``str`` method given it as an argument. ``unittest.mock.Mock(spec=...)``
+    passes ``isinstance`` the same way and forwards none of these."""
 
     def __init__(self, value: Any) -> None:
         self._value = value
@@ -120,3 +122,21 @@ class Posing:
 
     def __str__(self) -> str:
         return str(self._value)
+
+    def __len__(self) -> int:
+        return len(self._value)
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self._value)
+
+    def __getitem__(self, key: Any) -> Any:
+        return self._value[key]
+
+    def __hash__(self) -> int:
+        return hash(self._value)
+
+    def __eq__(self, other: object) -> bool:
+        return self._value == other
+
+    def __bool__(self) -> bool:
+        return bool(self._value)
