@@ -384,7 +384,7 @@ The options that shape the request are mapped as curl would send it:
 
 | curl | Scenario |
 | --- | --- |
-| URL (or `--url`), `-X`/`--request`, `-I`/`--head`, `-G`/`--get` | `url` and `method`, as curl picks it: `POST` with a body, `GET` with `-G`, which moves the data to the query. A word curl takes for a URL whose host has no dot or port (and is not `localhost`) is named in a warning: it is most likely no URL |
+| URL (or `--url`), `-X`/`--request`, `-I`/`--head`, `-G`/`--get` | `url` and `method`, as curl picks it: `POST` with a body, `GET` with `-G`, which moves the data to the query (the `Content-Type` and `Accept` a `--json` gives stay on the request, as curl sends them). A word curl takes for a URL whose host has no dot or port (and is not `localhost`) is named in a warning: it is most likely no URL |
 | URL globbing, `-g`/`--globoff` | a stage per URL curl makes of one with sets and ranges (`{a,b}`, `[1-3]`, `[01-10:2]`, `[a-z]`), with a warning; a URL curl refuses (`{}`, `[x]`) or one making more than 100 requests is refused. `-g` sends the URL as written, and so do an IPv6 address's brackets and `[]` |
 | `-:`/`--next` | the requests after it, with options of their own, as curl sends them; a `-:` in a cluster (`-L:`) ends the request there too, and the rest of that word, which curl does not read, is ignored with a warning |
 | `-H`/`--header` | `headers`; `Name;` sends it empty, and `Name:` removes one curl would send itself, such as its default `Content-Type` |

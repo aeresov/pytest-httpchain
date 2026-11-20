@@ -1098,9 +1098,11 @@ def _requests(options: _Options, warnings: list[str], data_dir: Path | None, sou
     given = {name.lower() for name, _ in options.headers} | options.removed
     headers = list(options.headers)
     defaults: list[tuple[str, str]] = []
-    if isinstance(body, (TextData, FileData)):
-        # curl's JSON headers, as soon as any --json gives data.
-        is_json = any(name == "json" for name, _ in options.data)
+    # curl's JSON headers, as soon as any --json gives data: on the body the
+    # data options send, and on the request whose query -G moves them to,
+    # which has no body to give a form's Content-Type.
+    is_json = any(name == "json" for name, _ in options.data)
+    if isinstance(body, (TextData, FileData)) or (is_json and options.get and parts is None):
         defaults.append(("Content-Type", "application/json" if is_json else "application/x-www-form-urlencoded"))
         if is_json:
             defaults.append(("Accept", "application/json"))

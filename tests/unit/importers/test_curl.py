@@ -261,6 +261,19 @@ _JSON = [("Content-Type", "application/json"), ("Accept", "application/json")]
             {"method": "POST", "url": "https://x.test/a", "headers": _JSON, "body": TextData('{"b":2}&a=1')},
             id="--json-then--d",
         ),
+        # -G moves the data to the query, and curl sends --json's headers all
+        # the same; a header the command gives or removes still wins.
+        pytest.param("curl -G --json '{\"b\":2}' https://x.test/a", {"method": "GET", "url": 'https://x.test/a?{"b":2}', "headers": _JSON}, id="-G---json"),
+        pytest.param(
+            "curl -G -d a=1 --json '{\"b\":2}' https://x.test/a",
+            {"method": "GET", "url": 'https://x.test/a?a=1{"b":2}', "headers": _JSON},
+            id="-G--d-then---json",
+        ),
+        pytest.param(
+            "curl -G --json '{\"b\":2}' -H 'Accept:' https://x.test/a",
+            {"method": "GET", "url": 'https://x.test/a?{"b":2}', "headers": [("Content-Type", "application/json")]},
+            id="-G---json-accept-removed",
+        ),
         # A header the command gives wins over curl's own.
         pytest.param(
             "curl -H 'Content-Type: text/plain' -d hi https://x.test/a",
