@@ -113,13 +113,25 @@ def _mark_argument(node: ast.expr, mark_str: str) -> Any:
         ) from None
 
 
+def _mark_name(name: str) -> str:
+    """``name``, for pytest.mark to make a mark of.
+
+    One starting with an underscore is refused, in pytest's words for one it
+    would have to make (``_foo``). pytest.mark holds attributes of its own
+    under such names (``_config``, ``__class__``, ``__init__``), and a getattr
+    gives one of those back, or a call runs it, in a mark's place."""
+    if name.startswith("_"):
+        raise AttributeError("Marker name must NOT start with underscore")
+    return name
+
+
 def make_marker(mark_str: str) -> pytest.MarkDecorator:
     """Create a pytest marker from a string like 'skip(reason="foo")' or 'geofencing'."""
     tree = ast.parse(mark_str, mode="eval")
     node = tree.body
 
     if isinstance(node, ast.Name):
-        return getattr(pytest.mark, node.id)
+        return getattr(pytest.mark, _mark_name(node.id))
 
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         args = [_mark_argument(a, mark_str) for a in node.args]
@@ -131,7 +143,7 @@ def make_marker(mark_str: str) -> pytest.MarkDecorator:
             if kw.arg is None:
                 raise ValueError(f"unsupported marker expression: {mark_str} (** unpacking)")
             kwargs[kw.arg] = _mark_argument(kw.value, mark_str)
-        return getattr(pytest.mark, node.func.id)(*args, **kwargs)
+        return getattr(pytest.mark, _mark_name(node.func.id))(*args, **kwargs)
 
     raise ValueError(f"unsupported marker expression: {mark_str}")
 

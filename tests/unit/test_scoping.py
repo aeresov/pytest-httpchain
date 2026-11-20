@@ -410,6 +410,9 @@ class TestContextBuilders:
         pytest.param("slow", None, id="unrelated"),
         # A mark that does not parse is HTTPCHAIN019's to report.
         pytest.param("skip(", None, id="unparseable"),
+        # So is a name pytest.mark holds an attribute of its own under, which
+        # was read in a mark's place: `show` and `graph` ended in a traceback.
+        pytest.param("_config", None, id="pytest-marks-own-name"),
     ],
 )
 def test_marks_skip_cause(mark, expected):

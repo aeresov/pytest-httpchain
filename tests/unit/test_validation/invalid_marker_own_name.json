@@ -1,0 +1,3 @@
+{
+    "stages": {"s": {"marks": ["_config"], "request": {"url": "https://example.com"}, "response": [{"verify": {"status": 200}}]}}
+}

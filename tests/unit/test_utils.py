@@ -174,6 +174,20 @@ def test_make_marker_names_the_argument_that_is_no_literal(mark_str, argument):
     assert str(excinfo.value) == f"unsupported marker expression: {mark_str} ({argument} is no literal: a mark's arguments are literals, a condition written as a string)"
 
 
+@pytest.mark.parametrize("mark_str", ["_config", "_markers", "__class__", "__doc__", "__dict__", "_config()", "__init__()"])
+def test_make_marker_refuses_a_name_that_is_pytest_marks_own(mark_str, monkeypatch):
+    """In pytest's words for a name it refuses to make a mark of (``_foo``).
+    pytest.mark holds attributes of its own under such names, and a getattr
+    gave one back in a mark's place: ``_config`` read as None, ``__class__``
+    as a type, and ``__init__()`` ran, which reset the generator, so that
+    strict markers were checked no more."""
+    # Whatever a call does to the generator is undone after the test.
+    monkeypatch.setattr(pytest.mark, "_config", pytest.mark._config)
+    monkeypatch.setattr(pytest.mark, "_markers", pytest.mark._markers)
+    with pytest.raises(AttributeError, match="^Marker name must NOT start with underscore$"):
+        make_marker(mark_str)
+
+
 @pytest.mark.parametrize(
     ("mark_str", "raised"),
     [

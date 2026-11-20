@@ -268,6 +268,9 @@ DIAGNOSED = [
     ("invalid_scenario_marker.json", [(C.INVALID_MARKER, "marks", r"'skip\('")]),
     ("invalid_stage_marker.json", [(C.INVALID_MARKER, "stages[0].marks", "'foo.bar'")]),
     ("invalid_marker_unpacking.json", [(C.INVALID_MARKER, "stages[0].marks", r"\*\* unpacking")]),
+    # A name pytest.mark holds an attribute of its own under is no mark's:
+    # reading it in one's place crashed the check.
+    ("invalid_marker_own_name.json", [(C.INVALID_MARKER, "stages[0].marks", "'_config': Marker name must NOT start with underscore")]),
     # xdist joins a stage's own group with the scenario's, so --dist loadgroup
     # ran the stage on another worker than the rest of its chain.
     ("stage_xdist_group_mark.json", [(C.STAGE_XDIST_GROUP, "stages[0].marks", r"marker \"xdist_group\('db'\)\"")]),
