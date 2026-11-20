@@ -123,17 +123,25 @@ _HELD = dict | list | str | bool | int | float | bytes
 _BUILTINS = frozenset({dict, list, str, bool, int, float, bytes})
 
 
-def _claimed(value: Any) -> type | None:
-    """``value``'s ``__class__``, or None where reading it raises or gives
-    no class: on a proxy, reading it runs the proxy's own code (a lazy
-    one's factory)."""
+def _untrue_claim(value: Any) -> str | None:
+    """None where ``value``'s ``__class__`` is its type or a base of it, a
+    true claim; otherwise the name of the class it claims, or ``""`` where
+    the claim cannot be read or checked, which counts as untrue: reading it
+    runs a proxy's own code (a lazy one's factory), and checking it the
+    claimed class's metaclass (a Protocol's raises)."""
+    kind = type(value)
     try:
         claimed = value.__class__
+        if not issubclass(type(claimed), type):
+            return ""
+        if issubclass(kind, claimed):
+            return None
+        name = claimed.__name__
     except _INTERRUPTS:
         raise
     except Exception:
-        return None
-    return claimed if issubclass(type(claimed), type) else None
+        return ""
+    return name if issubclass(type(name), str) else ""
 
 
 def _plain(value: Any, kinds: type | UnionType) -> bool:
@@ -145,25 +153,23 @@ def _plain(value: Any, kinds: type | UnionType) -> bool:
     forwarding ``__class__`` (wrapt's ``ObjectProxy``, lazy-object-proxy's
     ``Proxy``) or a ``Mock(spec=...)``, whose real type is none a message
     holds, which json.dumps refuses; or a subclass whose ``__class__`` names
-    another type, which what reads a message after the gate, going by
+    a type it is not, which what reads a message after the gate, going by
     isinstance, reads as the type it claims. The real type is read first:
-    a value of none of ``kinds`` is refused without running a proxy's code."""
+    a value of none of ``kinds`` is refused without running a proxy's code.
+    A claim is read once (`_untrue_claim`)."""
     kind = type(value)
     if not issubclass(kind, kinds):
         return False
-    if kind in _BUILTINS:
-        return True
-    claimed = _claimed(value)
-    return claimed is not None and issubclass(kind, claimed)
+    return kind in _BUILTINS or _untrue_claim(value) is None
 
 
 def _described(value: Any) -> str:
     """The name of ``value``'s type and, where its real type is one a
-    message holds and it was refused for what it claims, the type it poses
-    as (`_plain`). A proxy's claim is not read: that runs its code."""
+    message holds and it claims to be a type it is not, the type it poses
+    as (`_untrue_claim`). A proxy's claim is not read: that runs its code."""
     kind = type(value)
-    if issubclass(kind, _HELD) and kind not in _BUILTINS and (claimed := _claimed(value)) is not None and claimed is not kind:
-        return f"{kind.__name__} posing as {claimed.__name__}"
+    if issubclass(kind, _HELD) and kind not in _BUILTINS and (claim := _untrue_claim(value)):
+        return f"{kind.__name__} posing as {claim}"
     return kind.__name__
 
 
@@ -236,8 +242,8 @@ def shown_message(message: Any) -> str:
     """A message as a failure line shows it: as JSON, bytes as hex, cut."""
 
     def default(value: Any) -> str:
-        if isinstance(value, bytes):
-            return shown_bytes(value) + ("..." if len(value) > SHOWN_BYTES else "")
+        if issubclass(type(value), bytes):
+            return shown_bytes(value) + ("..." if bytes.__len__(value) > SHOWN_BYTES else "")
         return repr(value)
 
     try:

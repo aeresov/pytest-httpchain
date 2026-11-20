@@ -23,7 +23,23 @@ from pytest_httpchain.redaction import (
     cut,
     shown_bytes,
 )
-from tests.unit.helpers import BEYOND_RECURSION_LIMIT, BytesAsStr, IntAsStr, ListAsDict, Proxy, StrAsBytes, StrAsInt, Unreadable
+from pytest_httpchain.response_steps import _shown
+from tests.unit.helpers import (
+    BEYOND_RECURSION_LIMIT,
+    BytesAsStr,
+    FloatAsInt,
+    FloatAsStr,
+    IntAsBool,
+    IntAsStr,
+    ListAsDict,
+    LowerKey,
+    Proxy,
+    ShiftedBytes,
+    StrAsBytes,
+    StrAsInt,
+    Unreadable,
+    UpperHexBytes,
+)
 
 _EXPIRES = "Expires=Wed, 21 Oct 2026 07:28:00 GMT"
 
@@ -479,8 +495,11 @@ def test_message_text_passes_over_a_value_posing_as_one_it_hides(posing):
         ({"token": BytesAsStr(b"s3cret-key")}, f"expected {shown_bytes(b's3cret-key')}, got 1", "expected [REDACTED], got 1"),
         ({"token": ListAsDict([1234])}, "got 1234", "got [REDACTED]"),
         ({StrAsInt("token"): "s3cret"}, 'got "s3cret"', 'got "[REDACTED]"'),
+        ({"token": IntAsBool(98765432)}, "got 98765432", "got [REDACTED]"),
+        ({"token": FloatAsInt(98765432.5)}, "got 98765432.5", "got [REDACTED]"),
+        ({"token": FloatAsStr(98765432.5)}, "got 98765432.5", "got [REDACTED]"),
     ],
-    ids=["int-as-str", "str-as-bytes", "bytes-as-str", "list-as-dict", "key-str-as-int"],
+    ids=["int-as-str", "str-as-bytes", "bytes-as-str", "list-as-dict", "key-str-as-int", "int-as-bool", "float-as-int", "float-as-str"],
 )
 def test_message_text_hides_a_value_whose_class_is_not_its_type_as_its_real_type(message, text, shown):
     """A real int, str, bytes or list whose ``__class__`` names another type
@@ -495,6 +514,26 @@ def test_message_text_reads_a_key_whose_class_is_not_its_type_as_no_listed_one()
     """A real int key whose ``__class__`` says str: read as the str it
     claims, asking whether it is listed (``.lower()``) raised."""
     assert DEFAULT_REDACTION.message_text("got 5678", {IntAsStr(5): "x", "api_key": 5678}) == "got [REDACTED]"
+
+
+@pytest.mark.parametrize("cls", [UpperHexBytes, ShiftedBytes])
+@pytest.mark.parametrize("size", [9, 70], ids=["short", "cut"])
+def test_message_text_hides_bytes_of_a_subclass_in_the_form_the_line_writes(cls, size):
+    """A failure line writes bytes with bytes' own methods (`shown_bytes`),
+    as the redaction keeps them (an exact copy), whatever a subclass's
+    slicing or ``hex()`` would write: the two agree, and the value is hidden."""
+    value = cls(bytes(range(0xA0, 0xA0 + size)))
+    assert DEFAULT_REDACTION.message_text(f"got {_shown(value)}", {"token": value}) == f"got [REDACTED]{'... (70 bytes)' if size > 64 else ''}"
+
+
+def test_listed_keys_are_read_with_str_s_own_lower():
+    """A key is listed or not as str's own ``lower()`` says, in a failure line
+    and in the report's copy alike, whatever a subclass's ``lower()`` says."""
+    message = {LowerKey("Token"): "s3cret"}
+    assert DEFAULT_REDACTION.message_text('got "s3cret"', message) == 'got "[REDACTED]"'
+    assert DEFAULT_REDACTION.message(message) == {"Token": REDACTED}
+    # A key posing as a str is no listed one, whose lower() str's own would refuse.
+    assert DEFAULT_REDACTION.message({IntAsStr(5): "x"}) == {5: "x"}
 
 
 class _Token(str):

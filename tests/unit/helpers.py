@@ -11,7 +11,7 @@ from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Protocol, SupportsIndex
 
 import pytest
 
@@ -159,6 +159,73 @@ DictAsList = posing_subclass(dict, list)
 # A subclass claiming its own base says nothing untrue: isinstance reads it
 # as what it is.
 StrAsStr = posing_subclass(str, str)
+IntAsInt = posing_subclass(int, int)
+IntAsBool = posing_subclass(int, bool)
+FloatAsInt = posing_subclass(float, int)
+FloatAsStr = posing_subclass(float, str)
+
+
+class Named(Protocol):
+    """A Protocol, which no class check takes unless runtime_checkable:
+    ``issubclass(str, Named)`` raises TypeError."""
+
+    name: str
+
+
+# Claims a class whose check raises: whether the claim is true cannot be told.
+StrAsNamed = posing_subclass(str, Named)
+# Claims no class at all.
+StrClaimsText = type("StrClaimsText", (str,), {"__class__": property(lambda self: "str")})
+
+
+def counting_reads(base: type) -> tuple[type, list[int]]:
+    """A class whose instances count the reads of their ``__class__`` (a
+    proxy's runs its own code): ``base`` itself for ``object``, a stand-in
+    proxy, else a subclass of ``base`` claiming ``base``, an honest one."""
+    reads = [0]
+
+    def claimed(self: Any) -> type:
+        reads[0] += 1
+        return str if base is object else base
+
+    return type(f"Counting{base.__name__.title()}", (base,), {"__class__": property(claimed)}), reads
+
+
+def exiting_claim() -> Any:
+    """A str whose ``__class__``, read, calls pytest.exit()."""
+
+    def claimed(self: Any) -> type:
+        pytest.exit("exit while reading __class__")
+
+    return type("ExitingClaim", (str,), {"__class__": property(claimed)})("x")
+
+
+class UpperHexBytes(bytes):
+    """Bytes whose slices keep the class and write upper-case hex: the line
+    and the redaction must write it the same way, whatever its methods."""
+
+    def __getitem__(self, key: Any) -> Any:
+        item = super().__getitem__(key)
+        return UpperHexBytes(item) if isinstance(key, slice) else item
+
+    def hex(self, sep: str | bytes = "", bytes_per_sep: SupportsIndex = 1) -> str:
+        return (super().hex(sep, bytes_per_sep) if sep else super().hex()).upper()
+
+
+class ShiftedBytes(bytes):
+    """Bytes whose slices start one byte late."""
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, slice):
+            return bytes.__getitem__(self, slice((key.start or 0) + 1, None if key.stop is None else key.stop + 1, key.step))
+        return super().__getitem__(key)
+
+
+class LowerKey(str):
+    """A key whose ``lower()`` is its own: listed or not is str's to say."""
+
+    def lower(self) -> str:
+        return "not-a-listed-key"
 
 
 class Unreadable:

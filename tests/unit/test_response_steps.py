@@ -41,6 +41,7 @@ from pytest_httpchain.response_steps import (
     NoMatch,
     RenderFailure,
     RenderOutcome,
+    _shown,
     is_json_type,
     message_matches,
     process_save,
@@ -49,7 +50,7 @@ from pytest_httpchain.response_steps import (
 from pytest_httpchain.templates import TemplatesError
 from pytest_httpchain.userfunc import UserFunctionError
 from tests.unit import response_steps_test_helpers
-from tests.unit.helpers import LOADABLE_BUT_DEEP, NOT_FOUND, TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, nested, on_bounded_stack
+from tests.unit.helpers import LOADABLE_BUT_DEEP, NOT_FOUND, TOO_DEEP_TO_PARSE, TOO_DEEP_TO_WALK, Proxy, nested, on_bounded_stack
 
 NOT_JSON = httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
 # The decoder raises RecursionError, which is not a ValueError: a narrower except
@@ -1920,3 +1921,17 @@ class TestMessageMatches:
         rendered = validate_rendered_expectations(declared, {"meta": {"type": "object"}})
         assert message_matches(declared, rendered, {"meta": {"type": "object"}}) == MATCH
         assert isinstance(message_matches(declared, rendered, {"meta": {"a": 1}}), NoMatch)
+
+
+class _LiesAboutItsLength(bytes):
+    def __len__(self) -> int:
+        return 0
+
+
+def test_shown_writes_bytes_by_their_real_type():
+    """Bytes are written with bytes' own methods, as `shown_bytes` writes
+    them and the redaction keeps them: the size a subclass's ``len()`` gives
+    is not the one shown. A proxy of bytes is no bytes: it is not JSON either,
+    and writing it as bytes raised."""
+    assert _shown(_LiesAboutItsLength(bytes(70))).endswith("... (70 bytes)")
+    assert _shown(Proxy(b"x")).startswith("(not JSON")

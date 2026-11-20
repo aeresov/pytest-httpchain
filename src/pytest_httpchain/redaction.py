@@ -23,7 +23,7 @@ real type, as the line writes it.
 import json
 import re
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote_plus
 
 import httpx
@@ -140,8 +140,11 @@ class Redaction:
                 text = text.replace(repr(value), repr(shown))
         return text
 
-    def redacts_message_key(self, key: str) -> bool:
-        return key.lower() in self.message_keys
+    def redacts_message_key(self, key: object) -> bool:
+        """Whether ``key`` names a listed message key: a str by its real type,
+        read with str's own ``lower()``, whatever a subclass's says, so a
+        key posing as a str (its ``__class__`` naming str) is none."""
+        return issubclass(type(key), str) and str.lower(cast(str, key)) in self.message_keys
 
     def message(self, value: Any) -> Any:
         """A connection message (or what ``send()`` returned) as it may be
@@ -163,7 +166,7 @@ class Redaction:
             original, copied = pending.pop()
             members = original.items() if isinstance(original, Mapping) else enumerate(original)
             for key, member in members:
-                if isinstance(original, Mapping) and isinstance(key, str) and self.redacts_message_key(key) and not _empty(member):
+                if isinstance(original, Mapping) and self.redacts_message_key(key) and not _empty(member):
                     shown = REDACTED
                 elif isinstance(member, Mapping | list | tuple):
                     shown = copies.get(id(member))
@@ -280,7 +283,7 @@ class Redaction:
                     continue
                 seen.add((id(value), listed))
                 if issubclass(kind, Mapping):
-                    pending.extend((member, listed or (issubclass(type(key), str) and self.redacts_message_key(str.__str__(key)))) for key, member in value.items())
+                    pending.extend((member, listed or self.redacts_message_key(key)) for key, member in value.items())
                 else:
                     pending.extend((member, listed) for member in value)
             elif listed and issubclass(kind, str | bytes):
@@ -326,9 +329,11 @@ _NUMBER_START = re.compile(r"(?<![\w.+-])")
 
 def shown_bytes(value: bytes) -> str:
     """Bytes as a failure line shows them: ``0x`` and the hex of their first
-    `SHOWN_BYTES`, the form `Redaction.message_text` hides a listed key's
-    bytes in. Whether there are more is the line's to say."""
-    return f"0x{value[:SHOWN_BYTES].hex()}"
+    `SHOWN_BYTES`, written with bytes' own methods whatever a subclass's
+    slicing or ``hex()`` would write, which is the form
+    `Redaction.message_text` hides a listed key's bytes in (it keeps an
+    exact copy). Whether there are more is the line's to say."""
+    return f"0x{bytes.hex(bytes.__getitem__(value, slice(SHOWN_BYTES)))}"
 
 
 def cut(text: str, limit: int) -> str:

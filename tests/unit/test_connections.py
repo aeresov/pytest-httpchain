@@ -7,6 +7,7 @@ and how the carrier runs a connection step is test_carrier.py's.
 
 import collections
 import enum
+import http
 import logging
 import threading
 import time
@@ -40,7 +41,22 @@ from pytest_httpchain.errors import RequestError, StageExecutionError, Verificat
 from pytest_httpchain.models import ConnectionExpect
 from pytest_httpchain.redaction import NO_REDACTION
 from tests.unit import connections_test_helpers as helpers
-from tests.unit.helpers import DictAsList, IntAsStr, ListAsDict, Proxy, StrAsBytes, StrAsInt, StrAsStr, StrUnreadable, Unreadable
+from tests.unit.helpers import (
+    DictAsList,
+    IntAsInt,
+    IntAsStr,
+    ListAsDict,
+    Proxy,
+    StrAsBytes,
+    StrAsInt,
+    StrAsNamed,
+    StrAsStr,
+    StrClaimsText,
+    StrUnreadable,
+    Unreadable,
+    counting_reads,
+    exiting_claim,
+)
 
 ADAPTER = "tests.unit.connections_test_helpers:FakeAdapter"
 
@@ -103,6 +119,9 @@ class _Text(str):
 class _Raw(bytes): ...
 
 
+class _Items(list): ...
+
+
 class _Ratio(float): ...
 
 
@@ -161,6 +180,14 @@ class TestCheckedMessage:
             (DictAsList({"a": 1}), "receive() returned DictAsList posing as list; return a dict"),
             # A dict subclass's keys are checked as a dict's are.
             (collections.OrderedDict({1: "x"}), "receive() returned a key of type int at the top level; keys must be strings"),
+            # A claim that cannot be checked (a Protocol's class check raises), or
+            # names no class, counts as untrue, and what it is goes unnamed.
+            ({"token": StrAsNamed("x")}, "receive() returned StrAsNamed at token; return a JSON value or bytes"),
+            ({"token": StrClaimsText("x")}, "receive() returned StrClaimsText at token; return a JSON value or bytes"),
+            # Honest about its class, refused where it stands: no pose to name.
+            ({IntAsInt(1): "x"}, "receive() returned a key of type IntAsInt at the top level; keys must be strings"),
+            ({http.HTTPStatus.OK: "x"}, "receive() returned a key of type HTTPStatus at the top level; keys must be strings"),
+            (_Items([1]), "receive() returned _Items; return a dict"),
             ([1, 2], "receive() returned list; return a dict"),
             ((1, 2), "receive() returned tuple; return a dict"),
             ("text", "receive() returned str; return a dict"),
@@ -170,6 +197,7 @@ class TestCheckedMessage:
             *("posing-int", "mock-int", "posing-str-in-list", "posing-bytes", "posing-dict", "posing-list", "posing-key", "posing-message"),
             *("unreadable", "unreadable-key", "unreadable-message", "str-unreadable"),
             *("int-as-str", "str-as-bytes", "list-as-dict", "key-str-as-int", "message-dict-as-list", "dict-subclass-int-key"),
+            *("claims-a-protocol", "claims-no-class", "honest-int-key", "enum-key", "honest-list-message"),
             *("list", "top-tuple", "text"),
         ],
     )
@@ -177,6 +205,26 @@ class TestCheckedMessage:
         with pytest.raises(MessageValueError) as excinfo:
             checked_message(value, "receive()")
         assert str(excinfo.value) == message
+
+    def test_reads_a_claim_only_where_the_real_type_passes_and_once(self):
+        """A proxy's ``__class__`` runs its own code (a lazy one's factory):
+        refused by its real type, it is never read, by the gate or by
+        debug_info(). A subclass of a type a message holds is read once."""
+        proxy_class, proxy_reads = counting_reads(object)
+        with pytest.raises(MessageValueError):
+            checked_message({"token": proxy_class()}, "receive()")
+        helpers.peer("counting", debug=proxy_class())
+        assert debug_text(helpers.FakeAdapter("counting")) == f"<debug_info() returned {proxy_class.__name__}, not text>"
+        assert proxy_reads == [0]
+        text_class, text_reads = counting_reads(str)
+        assert checked_message({"token": text_class("x")}, "receive()") == {"token": "x"}
+        assert text_reads == [1]
+
+    def test_lets_pytest_exit_from_a_claim_through(self):
+        """What reading a claim raises is taken as an untrue claim, but an
+        interrupt, pytest.exit()'s an Exception among them, ends the run."""
+        with pytest.raises(pytest.exit.Exception):
+            checked_message({"token": exiting_claim()}, "receive()")
 
     def test_first_violation_in_document_order(self):
         with pytest.raises(MessageValueError, match=r"at a; return a list"):
@@ -966,13 +1014,19 @@ class TestDebugText:
             (Unreadable(), "<debug_info() returned Unreadable, not text>"),
             (StrAsBytes("raw"), "<debug_info() returned StrAsBytes posing as bytes, not text>"),
             (StrAsStr("raw"), "raw"),
+            (StrAsNamed("raw"), "<debug_info() returned StrAsNamed, not text>"),
+            (StrClaimsText("raw"), "<debug_info() returned StrClaimsText, not text>"),
+            (_Code.READY, "<debug_info() returned _Code, not text>"),
             (_Text("raw: 00ff"), "raw: 00ff"),
             # Nothing to say, as an adapter without the method says nothing.
             (None, None),
         ],
         # Named here: pytest names a parametrized value by reading it, as
         # what passes isinstance for str, and a Mock(spec=str) is none to read.
-        ids=["text", "raises", "bytes", "posing-text", "mock-text", "unreadable", "str-as-bytes", "str-as-str", "text-subclass", "none"],
+        ids=[
+            *("text", "raises", "bytes", "posing-text", "mock-text", "unreadable", "str-as-bytes", "str-as-str"),
+            *("claims-a-protocol", "claims-no-class", "int-enum", "text-subclass", "none"),
+        ],
     )
     def test_guarded(self, debug, text):
         helpers.peer("debug", debug=debug)

@@ -904,8 +904,9 @@ def _shown(value: Any) -> str:
     back an expression reference (``&name``) as it is, from ``not_null(&a)``
     or ``to_array(&a)``, or names one in a type error (``length(&a)``).
     """
-    if isinstance(value, bytes):
-        suffix = f"... ({len(value)} bytes)" if len(value) > SHOWN_BYTES else ""
+    if issubclass(type(value), bytes):
+        size = bytes.__len__(value)
+        suffix = f"... ({size} bytes)" if size > SHOWN_BYTES else ""
         return f"{shown_bytes(value)}{suffix}"
     try:
         text = json.dumps(value, ensure_ascii=False, default=_shown_non_json)
@@ -917,7 +918,7 @@ def _shown(value: Any) -> str:
 
 
 def _shown_non_json(value: Any) -> str:
-    if isinstance(value, bytes):
+    if issubclass(type(value), bytes):
         return _shown(value)
     raise TypeError(f"Cannot show {type(value).__name__} as JSON")
 
