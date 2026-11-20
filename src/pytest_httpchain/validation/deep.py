@@ -32,7 +32,7 @@ from pytest_httpchain.models import (
 )
 from pytest_httpchain.templates import contains_template, unescape
 from pytest_httpchain.userfunc import UserFunctionError, call_target, import_adapter, import_function
-from pytest_httpchain.utils import path_segment, resolve_scenario_path
+from pytest_httpchain.utils import describe_exception, path_segment, resolve_scenario_path
 from pytest_httpchain.validation.diagnostics import Diagnostic, DiagnosticCode, diag
 
 
@@ -267,7 +267,7 @@ def _function_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
             continue  # template form — the real name is only known at runtime
         try:
             func = import_function(name)
-        except (UserFunctionError, pytest.exit.Exception) as e:
+        except (UserFunctionError, *_STOPS) as e:
             yield diag(DiagnosticCode.IMPORT_FAILED, f"Cannot import function '{name}': {_import_failure(name, e)}", location)
             continue
         if not check_signature:
@@ -334,15 +334,23 @@ def _method_problem(adapter: type, method: str, args: tuple[str, ...]) -> str | 
     return None
 
 
-def _import_failure(name: str, e: Exception) -> str:
-    """Why ``name``, a function's or an adapter's, does not import.
+# What a user module's top level can raise to stop what imports it, past
+# the import's catch-all (`userfunc.import_function`): in a test run,
+# pytest.exit() ends the run, pytest.skip() or pytest.fail() decides the
+# stage, and sys.exit() ends the interpreter. `validate --deep` imports the
+# module in no run, so each is the module's failure to import. A
+# KeyboardInterrupt still ends `validate`.
+_STOPS = (pytest.exit.Exception, pytest.skip.Exception, pytest.fail.Exception, SystemExit)
 
-    pytest.exit() at its module's top level ends a test run, so the import
-    lets it through (`userfunc.import_function`). Here there is no run to
-    end: the module is one that does not import, for the reason it gave."""
+
+def _import_failure(name: str, e: BaseException) -> str:
+    """Why ``name``, a function's or an adapter's, does not import: what
+    the import says, or for one of `_STOPS` the reason the module gave (a
+    SystemExit's named as one, whose code alone may be a number)."""
     if isinstance(e, UserFunctionError):
         return str(e)
-    return f"Failed to import module '{name.partition(':')[0]}': {e}"
+    reason = describe_exception(e) if isinstance(e, SystemExit) else str(e)
+    return f"Failed to import module '{name.partition(':')[0]}': {reason}"
 
 
 def _adapter_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
@@ -359,7 +367,7 @@ def _adapter_diagnostics(scenario: Scenario) -> Iterator[Diagnostic]:
         location = f"connections.{name}.adapter"
         try:
             adapter = import_adapter(config.adapter)
-        except (UserFunctionError, pytest.exit.Exception) as e:
+        except (UserFunctionError, *_STOPS) as e:
             yield diag(DiagnosticCode.ADAPTER_INVALID, f"Connection '{name}': cannot import adapter '{config.adapter}': {_import_failure(config.adapter, e)}", location)
             continue
         for method, args in ADAPTER_METHODS.items():
