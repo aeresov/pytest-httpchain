@@ -222,19 +222,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lazy-object-proxy's `Proxy`) or a `Mock(spec=int)`, whose real type is none a message holds
   (`receive() returned ObjectProxy at token; return a JSON value or bytes`), and a subclass whose
   `__class__` names a type it is not (`receive() returned IntAsStr posing as str at token; ...`). A
-  failure line quoting a proxy of a string or a number, or a `Mock`, under a listed key raised
-  `TypeError`, which ended a connection's wait on its first miss. Heads-up: 0.21.1 took a message
-  holding a proxy, a `Mock` or most such subclasses wherever no failure line quoted the value under
-  a listed key, and read a proxy of bytes, a list or an object as what it wraps; such a message now
-  ends the connection. What `debug_info()` returns is read the same way, and text posing as a `str`
-  is shown as `<debug_info() returned ObjectProxy, not text>`: a proxy of up to 4000 characters
-  turned the report's Connection Exchange section into one formatting error, a `Mock(spec=str)`
-  raised `TypeError` in the stage's outcome's place, and a proxy of longer text, which 0.21.1 cut
-  and showed, is not shown either. A template on a listed key that renders a proxy of a string, or
-  an int posing as one, where `expect.match` takes a string, fails the stage with its refusal,
-  `Input should be a valid string`, where it failed with that `TypeError`; and a bytes subclass
-  posing as a str, which `expect.match` keeps, is hidden in a miss line as the bytes it is, where
-  the line raised.
+  message holding, under a listed key, a proxy of a string or a number, most `Mock`s, or an int or
+  bytes posing as a str raised `TypeError` the first time a wait missed it, whatever the miss reason
+  quoted: the reason's redaction read every value a listed key holds in the message. Heads-up:
+  0.21.1 took such a message wherever no wait missed it or no listed key held the value, and a proxy
+  of bytes, a list or an object even then, read as what it wraps; such a message now ends the
+  connection. What `debug_info()` returns is read the same way, and text posing as a `str` is shown
+  as `<debug_info() returned ObjectProxy, not text>`: a proxy of up to 4000 characters turned the
+  report's Connection Exchange section into one formatting error, a `Mock(spec=str)` raised
+  `TypeError` in the stage's outcome's place, and a proxy of longer text, which 0.21.1 cut and
+  showed, is not shown either. A template on a listed key that renders a proxy of a string, or an
+  int posing as one, where `expect.match` takes a string, fails the stage with its refusal,
+  `Input should be a valid string`, where it failed with that `TypeError`; and a bytes subclass,
+  which `expect.match` keeps as it is, is hidden in a miss line whatever its class says, its slicing
+  or its `hex()` writes: a line writes bytes with bytes' own methods.
 - A connection's `expect.match` operand that a template renders to an object holding bytes, such as
   a binary protocol's frame, no longer makes pydantic warn. The stage passed with a serializer
   warning from the plugin's own code; under warnings as errors (`-W error`) it ended in that
