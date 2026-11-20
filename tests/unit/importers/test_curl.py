@@ -489,6 +489,14 @@ def test_next_in_a_cluster(command, fields, warnings):
             ["Left out the -d data beside the -F form parts, which curl refuses to send together"],
             id="form-and-data",
         ),
+        # --json's data is left out the same way, and its headers with it:
+        # they would call the form parts JSON.
+        pytest.param(
+            "curl -F a=1 --json '{\"b\":2}' https://x.test/a",
+            {"method": "POST", "url": "https://x.test/a", "body": PartsData((Part("a", value="1"),))},
+            ["Left out the -d data beside the -F form parts, which curl refuses to send together"],
+            id="form-and-json",
+        ),
         pytest.param(
             "curl -m soon https://x.test/a", {"method": "GET", "url": "https://x.test/a"}, ["Ignored --max-time 'soon', which is no number of seconds"], id="bad-max-time"
         ),
