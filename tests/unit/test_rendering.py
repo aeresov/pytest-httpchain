@@ -9,6 +9,7 @@ Where the carrier applies the guard, at each render site of a stage, is
 pinned in test_carrier.py.
 """
 
+import warnings
 from collections import ChainMap
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ from pytest_httpchain.errors import StageExecutionError
 from pytest_httpchain.models import (
     AuthCredentials,
     BearerAuth,
+    ConnectionExpect,
     DigestAuth,
     FilesBody,
     FileSpec,
@@ -35,7 +37,8 @@ from pytest_httpchain.models import (
     VarsSubstitution,
     Verify,
 )
-from pytest_httpchain.rendering import render_declared
+from pytest_httpchain.redaction import DEFAULT_REDACTION
+from pytest_httpchain.rendering import listed_expectations, render_declared, rendered_match
 from tests.unit.models.helpers import GRAPHQL_QUERY_TAG, OBJECT_TAG
 
 
@@ -482,3 +485,30 @@ class TestEscapedBraces:
         """A literal judged as it renders loads, and renders to that text."""
         declared = Request.model_validate({"url": "http://t/", "method": "POST", "body": {"graphql": {"query": r'query { render(template: "Hello \{{name}}") }'}}})
         assert render_declared(declared, {}, "request").body.graphql.query == 'query { render(template: "Hello {{name}}") }'
+
+
+class TestListedExpectations:
+    """What a connection's rendered ``expect.match`` expects, as the
+    redaction of a miss reads it (`listed_expectations`)."""
+
+    FRAME = {"token": "s3cret", "raw": b"\x00\x01"}
+
+    @pytest.mark.parametrize("key", ["eq", "ne", "contains", "not_contains"])
+    def test_an_operand_holding_bytes_is_read_as_it_is(self, key):
+        """A binary protocol's frame, an object holding bytes, rendered into
+        a matcher's operand. Each operand was read by dumping the matcher,
+        whose serializer takes JSON or bytes and no object holding them:
+        pydantic warned, which under warnings as errors ended the stage with
+        a traceback, and its warning quoted the operand, a listed key's value
+        among it, where the miss beside it shows [REDACTED]."""
+        match = ConnectionExpect.model_validate({"match": {"frame": {key: "{{ frame }}"}}, "timeout": 1}).match
+        rendered = rendered_match(match, {"frame": self.FRAME})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert listed_expectations(rendered, DEFAULT_REDACTION) == [{key: self.FRAME}]
+
+    def test_operands_are_listed_in_the_matcher_s_order(self):
+        """Each set one, whatever order the scenario wrote them in."""
+        match = ConnectionExpect.model_validate({"match": {"n": {"lt": "{{ high }}", "gt": 1, "ne": 5}}, "timeout": 1}).match
+        [listed] = listed_expectations(rendered_match(match, {"high": 9}), DEFAULT_REDACTION)
+        assert list(listed.items()) == [("ne", 5), ("gt", 1), ("lt", 9)]

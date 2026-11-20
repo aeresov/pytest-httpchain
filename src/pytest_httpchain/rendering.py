@@ -510,7 +510,10 @@ def listed_expectations(rendered: Mapping[str, Any] | None, redaction: Redaction
     if not rendered or not redaction.message_keys:
         return listed
     for expression, expected in rendered.items():
-        dumped = expected.model_dump(mode="python", exclude_unset=True) if isinstance(expected, BaseModel) else expected
+        # A matcher's operands as they are, each set one in the matcher's
+        # order: never through its serializer, which takes JSON or bytes,
+        # and warns, quoting the operand, on an object holding bytes.
+        dumped = {name: getattr(expected, name) for name in type(expected).model_fields if name in expected.model_fields_set} if isinstance(expected, BaseModel) else expected
         if isinstance(dumped, dict | list):
             listed.append(dumped)
         try:
