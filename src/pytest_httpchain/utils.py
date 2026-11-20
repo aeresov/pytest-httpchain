@@ -98,6 +98,21 @@ def request_content(request: httpx.Request) -> bytes | None:
         return None
 
 
+def _mark_argument(node: ast.expr, mark_str: str) -> Any:
+    """The value of one argument of a mark, which is a literal's.
+
+    One that is none (a name, a comparison, a `*args` node) is refused in the
+    words the scenario wrote. ast.literal_eval's own error names the node as
+    Python prints it (``<ast.Compare object at 0x7f...>``): no word of the
+    mark, and an address that differs on every run."""
+    try:
+        return ast.literal_eval(node)
+    except ValueError:
+        raise ValueError(
+            f"unsupported marker expression: {mark_str} ({ast.unparse(node)} is no literal: a mark's arguments are literals, a condition written as a string)"
+        ) from None
+
+
 def make_marker(mark_str: str) -> pytest.MarkDecorator:
     """Create a pytest marker from a string like 'skip(reason="foo")' or 'geofencing'."""
     tree = ast.parse(mark_str, mode="eval")
@@ -107,14 +122,15 @@ def make_marker(mark_str: str) -> pytest.MarkDecorator:
         return getattr(pytest.mark, node.id)
 
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-        args = [ast.literal_eval(a) for a in node.args]
+        args = [_mark_argument(a, mark_str) for a in node.args]
         kwargs: dict[str, Any] = {}
         for kw in node.keywords:
-            # literal_eval already rejects a `*args` node; a `**kwargs` entry
-            # (arg None) must fail too rather than silently drop its keys.
+            # A `*args` node is no literal, so it is refused already; a
+            # `**kwargs` entry (arg None) must fail too rather than silently
+            # drop its keys.
             if kw.arg is None:
                 raise ValueError(f"unsupported marker expression: {mark_str} (** unpacking)")
-            kwargs[kw.arg] = ast.literal_eval(kw.value)
+            kwargs[kw.arg] = _mark_argument(kw.value, mark_str)
         return getattr(pytest.mark, node.func.id)(*args, **kwargs)
 
     raise ValueError(f"unsupported marker expression: {mark_str}")

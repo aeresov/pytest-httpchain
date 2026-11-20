@@ -156,6 +156,25 @@ def test_make_marker_rejects_non_literal_expressions(mark_str, error):
 
 
 @pytest.mark.parametrize(
+    ("mark_str", "argument"),
+    [
+        # A condition written as in Python, where a mark takes it as a string.
+        pytest.param("skipif(sys.platform == 'win32', reason='posix only')", "sys.platform == 'win32'", id="condition"),
+        pytest.param("skip(reason=some_name)", "some_name", id="keyword-value"),
+        pytest.param('skip(*["x"])', "*['x']", id="unpacked"),
+    ],
+)
+def test_make_marker_names_the_argument_that_is_no_literal(mark_str, argument):
+    """As the scenario wrote it. The error was ast.literal_eval's own, which
+    names the node as Python prints it, `<ast.Compare object at 0x7f...>`: no
+    word of the mark, and an address that made `validate` and a collection
+    error read differently on every run."""
+    with pytest.raises(ValueError) as excinfo:  # noqa: PT011 - the message is compared whole, below
+        make_marker(mark_str)
+    assert str(excinfo.value) == f"unsupported marker expression: {mark_str} ({argument} is no literal: a mark's arguments are literals, a condition written as a string)"
+
+
+@pytest.mark.parametrize(
     ("mark_str", "raised"),
     [
         ("skip(", SyntaxError),
