@@ -150,7 +150,8 @@ class FakeAdapter:
             raise self.peer.close_error
 
     def debug_info(self) -> Any:
-        if isinstance(self.peer.debug, BaseException):
+        # By its real type: isinstance would read a stand-in proxy's __class__.
+        if issubclass(type(self.peer.debug), BaseException):
             raise self.peer.debug
         return self.peer.debug
 

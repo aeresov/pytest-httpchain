@@ -23,7 +23,7 @@ from pytest_httpchain.redaction import (
     cut,
     shown_bytes,
 )
-from tests.unit.helpers import BEYOND_RECURSION_LIMIT, IntAsStr, Proxy, StrAsBytes
+from tests.unit.helpers import BEYOND_RECURSION_LIMIT, BytesAsStr, IntAsStr, ListAsDict, Proxy, StrAsBytes, StrAsInt, Unreadable
 
 _EXPIRES = "Expires=Wed, 21 Oct 2026 07:28:00 GMT"
 
@@ -449,12 +449,14 @@ def test_message_text_passes_over_a_number_too_long_to_write():
     "posing",
     [
         *(Proxy(1234), Mock(spec=int), Proxy(12.5), Proxy("s3cret"), Mock(spec=str), Mock(spec=bytes), Mock(spec=dict), Mock(spec=list)),
+        # In a ParameterSet: pytest reads a bare value's __class__ itself.
+        pytest.param(Unreadable()),
         # A proxy forwards len() and iterating, which reading bytes or a list
         # needs, so these two read through before as well: they pin that
         # passing over a posing value does not make them raise either.
         *(Proxy(b"s3cret"), Proxy([1234])),
     ],
-    ids=["posing-int", "mock-int", "posing-float", "posing-str", "mock-str", "mock-bytes", "mock-dict", "mock-list", "posing-bytes", "posing-list"],
+    ids=["posing-int", "mock-int", "posing-float", "posing-str", "mock-str", "mock-bytes", "mock-dict", "mock-list", "unreadable", "posing-bytes", "posing-list"],
 )
 def test_message_text_passes_over_a_value_posing_as_one_it_hides(posing):
     """A value a listed key holds that poses as a string, bytes, a number or
@@ -469,14 +471,24 @@ def test_message_text_passes_over_a_value_posing_as_one_it_hides(posing):
     assert DEFAULT_REDACTION.message_text(text, {"token": posing, "api_key": 5678}) == "JMESPath 'kind' doesn't match: expected 1, got [REDACTED]"
 
 
-@pytest.mark.parametrize("posing", [IntAsStr(1234), StrAsBytes("s3cret")], ids=["int-as-str", "str-as-bytes"])
-def test_message_text_passes_over_a_value_whose_class_is_not_its_type(posing):
-    """A real int or str whose ``__class__`` names another type is no secret
-    it reads either: read as what it claims, json.dumps refused an int as a
-    str, and a str had no ``.hex()`` for bytes where the line cuts a value,
-    so the line raised."""
-    text = 'got 5678 and "abcd... (300 characters)'
-    assert DEFAULT_REDACTION.message_text(text, {"token": posing, "api_key": 5678}) == 'got [REDACTED] and "abcd... (300 characters)'
+@pytest.mark.parametrize(
+    ("message", "text", "shown"),
+    [
+        ({"token": IntAsStr(1234)}, "got 1234", "got [REDACTED]"),
+        ({"token": StrAsBytes("s3cret")}, 'got "s3cr... (300 characters)', 'got "[REDACTED]... (300 characters)'),
+        ({"token": BytesAsStr(b"s3cret-key")}, f"expected {shown_bytes(b's3cret-key')}, got 1", "expected [REDACTED], got 1"),
+        ({"token": ListAsDict([1234])}, "got 1234", "got [REDACTED]"),
+        ({StrAsInt("token"): "s3cret"}, 'got "s3cret"', 'got "[REDACTED]"'),
+    ],
+    ids=["int-as-str", "str-as-bytes", "bytes-as-str", "list-as-dict", "key-str-as-int"],
+)
+def test_message_text_hides_a_value_whose_class_is_not_its_type_as_its_real_type(message, text, shown):
+    """A real int, str, bytes or list whose ``__class__`` names another type
+    is hidden as what it is, as the line writes it by its real type. Read
+    as what it claims, json.dumps refused an int as a str and a str had no
+    ``.hex()`` for bytes where the line cuts a value, so the line raised;
+    skipped, a bytes subclass ``expect.match`` keeps as it is was shown."""
+    assert DEFAULT_REDACTION.message_text(text, message) == shown
 
 
 def test_message_text_reads_a_key_whose_class_is_not_its_type_as_no_listed_one():

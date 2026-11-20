@@ -153,5 +153,27 @@ def posing_subclass(base: type, claimed: type) -> type:
 IntAsStr = posing_subclass(int, str)
 StrAsBytes = posing_subclass(str, bytes)
 StrAsInt = posing_subclass(str, int)
+BytesAsStr = posing_subclass(bytes, str)
 ListAsDict = posing_subclass(list, dict)
 DictAsList = posing_subclass(dict, list)
+# A subclass claiming its own base says nothing untrue: isinstance reads it
+# as what it is.
+StrAsStr = posing_subclass(str, str)
+
+
+class Unreadable:
+    """A proxy whose wrapped value cannot be had, as lazy-object-proxy's
+    ``Proxy`` of a factory that raises: reading its ``__class__`` runs the
+    factory."""
+
+    @property
+    def __class__(self) -> type:
+        raise RuntimeError("factory failed")
+
+
+class StrUnreadable(str):
+    """A real str whose ``__class__`` cannot be read."""
+
+    @property
+    def __class__(self) -> type:
+        raise RuntimeError("factory failed")

@@ -26,12 +26,13 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from types import UnionType
 from typing import Any, Literal, NamedTuple, Protocol, override
 
 from pydantic import BaseModel
 
 from pytest_httpchain.errors import RequestError, StageExecutionError, VerificationError
-from pytest_httpchain.redaction import DEFAULT_REDACTION, SHOWN_BYTES, Redaction, cut, is_plain, shown_bytes
+from pytest_httpchain.redaction import DEFAULT_REDACTION, SHOWN_BYTES, Redaction, cut, shown_bytes
 from pytest_httpchain.userfunc import UserFunctionError, import_adapter
 from pytest_httpchain.utils import INTERRUPTS as _INTERRUPTS
 from pytest_httpchain.utils import describe_exception, exception_text
@@ -117,21 +118,64 @@ def _path(keys: tuple[str | int, ...]) -> str:
     return text
 
 
+# The types a message holds. A builtin's instances name it as their class.
+_HELD = dict | list | str | bool | int | float | bytes
+_BUILTINS = frozenset({dict, list, str, bool, int, float, bytes})
+
+
+def _claimed(value: Any) -> type | None:
+    """``value``'s ``__class__``, or None where reading it raises or gives
+    no class: on a proxy, reading it runs the proxy's own code (a lazy
+    one's factory)."""
+    try:
+        claimed = value.__class__
+    except _INTERRUPTS:
+        raise
+    except Exception:
+        return None
+    return claimed if issubclass(type(claimed), type) else None
+
+
+def _plain(value: Any, kinds: type | UnionType) -> bool:
+    """Whether ``value`` is one of ``kinds`` by its real type, and what it
+    claims to be, its ``__class__``, is its type or a base of it: isinstance,
+    which answers for the claim as well, then reads it as what it is.
+
+    A value posing as another type passes isinstance for that type: a proxy
+    forwarding ``__class__`` (wrapt's ``ObjectProxy``, lazy-object-proxy's
+    ``Proxy``) or a ``Mock(spec=...)``, whose real type is none a message
+    holds, which json.dumps refuses; or a subclass whose ``__class__`` names
+    another type, which what reads a message after the gate, going by
+    isinstance, reads as the type it claims. The real type is read first:
+    a value of none of ``kinds`` is refused without running a proxy's code."""
+    kind = type(value)
+    if not issubclass(kind, kinds):
+        return False
+    if kind in _BUILTINS:
+        return True
+    claimed = _claimed(value)
+    return claimed is not None and issubclass(kind, claimed)
+
+
 def _described(value: Any) -> str:
-    """The name of ``value``'s type, and of the type it poses as where its
-    ``__class__`` names another (`redaction.is_plain`)."""
-    kind, claimed = type(value), value.__class__
-    return kind.__name__ if claimed is kind else f"{kind.__name__} posing as {claimed.__name__}"
+    """The name of ``value``'s type and, where its real type is one a
+    message holds and it was refused for what it claims, the type it poses
+    as (`_plain`). A proxy's claim is not read: that runs its code."""
+    kind = type(value)
+    if issubclass(kind, _HELD) and kind not in _BUILTINS and (claimed := _claimed(value)) is not None and claimed is not kind:
+        return f"{kind.__name__} posing as {claimed.__name__}"
+    return kind.__name__
 
 
 def _instead(value: Any) -> str:
-    """What to return in place of ``value``, which no message holds: one
-    posing as a list or a dict among them (`checked_message`)."""
-    if isinstance(value, list | tuple | set | frozenset):
+    """What to return in place of ``value``, which no message holds, by its
+    real type (`_plain`)."""
+    kind = type(value)
+    if issubclass(kind, list | tuple | set | frozenset):
         return "a list"
-    if isinstance(value, bytearray | memoryview):
+    if issubclass(kind, bytearray | memoryview):
         return "bytes"
-    if isinstance(value, Mapping):
+    if issubclass(kind, Mapping):
         return "a dict"
     return "a JSON value or bytes"
 
@@ -143,32 +187,32 @@ def checked_message(value: Any, source: str) -> dict[str, Any]:
     document order: ``receive() returned tuple at body.items; return a list``.
 
     Each by its real type, which what writes a message goes by (json.dumps
-    refuses any other), and saying so (`redaction.is_plain`): a value posing
-    as one (a proxy forwarding ``__class__``, a ``Mock(spec=int)``, a
+    refuses any other), and by what it claims to be (`_plain`): a value
+    posing as one (a proxy forwarding ``__class__``, a ``Mock(spec=int)``, a
     subclass whose ``__class__`` names another type) passes isinstance and
     is none, as what reads the message after this goes by isinstance.
 
     Iterative, so a deep message is no RecursionError. A container met again
     is not walked again: one shared, or one that holds itself, is checked once.
     """
-    if not is_plain(value, dict):
+    if not _plain(value, dict):
         raise MessageValueError(f"{source} returned {_described(value)}; return a dict")
     seen: set[int] = set()
     pending: list[tuple[Any, tuple[str | int, ...]]] = [(value, ())]
     while pending:
         current, keys = pending.pop()
-        if is_plain(current, dict | list):
+        if _plain(current, dict | list):
             if id(current) in seen:
                 continue
             seen.add(id(current))
             members: list[tuple[Any, Any]] = list(current.items()) if isinstance(current, dict) else list(enumerate(current))
             if isinstance(current, dict):
                 for key, _ in members:
-                    if not is_plain(key, str):
+                    if not _plain(key, str):
                         raise MessageValueError(f"{source} returned a key of type {_described(key)} at {_path(keys) or 'the top level'}; keys must be strings")
             # Last first, so the first comes off the stack first.
             pending.extend((member, (*keys, key)) for key, member in reversed(members))
-        elif current is None or is_plain(current, str | bool | int | float | bytes):
+        elif current is None or _plain(current, str | bool | int | float | bytes):
             continue
         else:
             raise MessageValueError(f"{source} returned {_described(current)} at {_path(keys)}; return {_instead(current)}")
@@ -222,8 +266,8 @@ def debug_text(adapter: Any) -> str | None:
     """What the adapter's optional ``debug_info()`` says, cut at
     `DEBUG_INFO_LIMIT`, or None without one, or when it returns None: nothing
     to say. Whatever it raises is its text instead: a report must not fail
-    for it. Text by its real type, as `checked_message` reads a message
-    (`redaction.is_plain`): one posing as a str (a proxy, a
+    for it. Text by its real type and what it claims, as `checked_message`
+    reads a message (`_plain`): one posing as a str (a proxy, a
     ``Mock(spec=str)``) is none, as the report joining its lines with it
     would refuse it."""
     method = getattr(adapter, "debug_info", None)
@@ -237,7 +281,7 @@ def debug_text(adapter: Any) -> str | None:
         return f"<debug_info() failed: {describe_exception(e)}>"
     if text is None:
         return None
-    if not is_plain(text, str):
+    if not _plain(text, str):
         return f"<debug_info() returned {_described(text)}, not text>"
     return cut(text, DEBUG_INFO_LIMIT)
 

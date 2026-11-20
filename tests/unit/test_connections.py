@@ -40,7 +40,7 @@ from pytest_httpchain.errors import RequestError, StageExecutionError, Verificat
 from pytest_httpchain.models import ConnectionExpect
 from pytest_httpchain.redaction import NO_REDACTION
 from tests.unit import connections_test_helpers as helpers
-from tests.unit.helpers import DictAsList, IntAsStr, ListAsDict, Proxy, StrAsBytes, StrAsInt
+from tests.unit.helpers import DictAsList, IntAsStr, ListAsDict, Proxy, StrAsBytes, StrAsInt, StrAsStr, StrUnreadable, Unreadable
 
 ADAPTER = "tests.unit.connections_test_helpers:FakeAdapter"
 
@@ -136,14 +136,21 @@ class TestCheckedMessage:
             # A value posing as one a message holds, as a proxy or a Mock(spec=...)
             # does, passes isinstance, and nothing that goes by its real type:
             # json.dumps, which a failure line writes a message with, refuses it.
-            ({"token": Proxy(1234)}, "receive() returned Proxy posing as int at token; return a JSON value or bytes"),
-            ({"token": Mock(spec=int)}, "receive() returned Mock posing as int at token; return a JSON value or bytes"),
-            ({"a": [Proxy("s3cret")]}, "receive() returned Proxy posing as str at a[0]; return a JSON value or bytes"),
-            ({"raw": Proxy(b"\x00")}, "receive() returned Proxy posing as bytes at raw; return a JSON value or bytes"),
-            ({"meta": Proxy({"a": 1})}, "receive() returned Proxy posing as dict at meta; return a dict"),
-            ({"items": Proxy([1])}, "receive() returned Proxy posing as list at items; return a list"),
-            ({Proxy("k"): 1}, "receive() returned a key of type Proxy posing as str at the top level; keys must be strings"),
-            (Proxy({"a": 1}), "receive() returned Proxy posing as dict; return a dict"),
+            # Refused by its real type, which is no type a message holds: what it
+            # claims is not read, as reading a proxy's __class__ runs its code.
+            ({"token": Proxy(1234)}, "receive() returned Proxy at token; return a JSON value or bytes"),
+            ({"token": Mock(spec=int)}, "receive() returned Mock at token; return a JSON value or bytes"),
+            ({"a": [Proxy("s3cret")]}, "receive() returned Proxy at a[0]; return a JSON value or bytes"),
+            ({"raw": Proxy(b"\x00")}, "receive() returned Proxy at raw; return a JSON value or bytes"),
+            ({"meta": Proxy({"a": 1})}, "receive() returned Proxy at meta; return a JSON value or bytes"),
+            ({"items": Proxy([1])}, "receive() returned Proxy at items; return a JSON value or bytes"),
+            ({Proxy("k"): 1}, "receive() returned a key of type Proxy at the top level; keys must be strings"),
+            (Proxy({"a": 1}), "receive() returned Proxy; return a dict"),
+            # A proxy whose factory raises, where the gate would read its __class__.
+            ({"token": Unreadable()}, "receive() returned Unreadable at token; return a JSON value or bytes"),
+            ({Unreadable(): 1}, "receive() returned a key of type Unreadable at the top level; keys must be strings"),
+            (Unreadable(), "receive() returned Unreadable; return a dict"),
+            ({"token": StrUnreadable("x")}, "receive() returned StrUnreadable at token; return a JSON value or bytes"),
             # A real JSON type whose __class__ names another: it passes a check of
             # its real type, and what reads the message after the gate goes by
             # isinstance, reading it as what it claims.
@@ -161,6 +168,7 @@ class TestCheckedMessage:
         ids=[
             *("tuple", "set-in-list", "bytearray", "object", "quoted-key", "int-key", "nested-int-key", "none-before-int-key", "nested-none-key"),
             *("posing-int", "mock-int", "posing-str-in-list", "posing-bytes", "posing-dict", "posing-list", "posing-key", "posing-message"),
+            *("unreadable", "unreadable-key", "unreadable-message", "str-unreadable"),
             *("int-as-str", "str-as-bytes", "list-as-dict", "key-str-as-int", "message-dict-as-list", "dict-subclass-int-key"),
             *("list", "top-tuple", "text"),
         ],
@@ -193,6 +201,7 @@ class TestCheckedMessage:
             ratio=_Ratio(0.5),
             items=Ints([1, 2]),
             nested={_Text("key"): collections.defaultdict(list)},
+            honest=StrAsStr("claims its own base"),
         )
         assert checked_message(message, "receive()") is message
 
@@ -952,16 +961,18 @@ class TestDebugText:
             # Text only by isinstance: the report joins its lines with it, which
             # a proxy's real type refuses, and cutting a Mock raised in the
             # stage's outcome's place. A real subclass of str is text.
-            (Proxy("raw: 00ff"), "<debug_info() returned Proxy posing as str, not text>"),
-            (Mock(spec=str), "<debug_info() returned Mock posing as str, not text>"),
+            (Proxy("raw: 00ff"), "<debug_info() returned Proxy, not text>"),
+            (Mock(spec=str), "<debug_info() returned Mock, not text>"),
+            (Unreadable(), "<debug_info() returned Unreadable, not text>"),
             (StrAsBytes("raw"), "<debug_info() returned StrAsBytes posing as bytes, not text>"),
+            (StrAsStr("raw"), "raw"),
             (_Text("raw: 00ff"), "raw: 00ff"),
             # Nothing to say, as an adapter without the method says nothing.
             (None, None),
         ],
         # Named here: pytest names a parametrized value by reading it, as
         # what passes isinstance for str, and a Mock(spec=str) is none to read.
-        ids=["text", "raises", "bytes", "posing-text", "mock-text", "str-as-bytes", "text-subclass", "none"],
+        ids=["text", "raises", "bytes", "posing-text", "mock-text", "unreadable", "str-as-bytes", "str-as-str", "text-subclass", "none"],
     )
     def test_guarded(self, debug, text):
         helpers.peer("debug", debug=debug)

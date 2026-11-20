@@ -16,14 +16,13 @@ as ``[REDACTED]`` in the Connection Exchange section and in the failure
 messages that quote a message (`Redaction.message`, `Redaction.message_text`).
 What the stage's checks and saves see is never redacted. A failure line
 `Redaction.message_text` redacts shows bytes and long text as `shown_bytes` and
-`cut` write them: the forms it looks for a secret in. A message's values are
-read by their real type (`is_plain`), as the connection gate takes them.
+`cut` write them: the forms it looks for a secret in, each value taken by its
+real type, as the line writes it.
 """
 
 import json
 import re
 from collections.abc import Iterable, Mapping
-from types import UnionType
 from typing import Any
 from urllib.parse import unquote_plus
 
@@ -256,15 +255,17 @@ class Redaction:
         would be one, and only the first found hidden. A number too long to
         write (past Python's digit limit) no line can show: it is left out.
 
-        Each value, and each key, as `is_plain` reads it, as
-        `connections.checked_message` does: one posing as a string, bytes, a
-        number or a container (a proxy, a ``Mock(spec=...)``, a subclass whose
-        ``__class__`` names another type) passes isinstance, and reading it as
-        what it claims can fail: json.dumps and a str method given it refuse
-        a proxy, a Mock forwards nothing reading calls (len(), iterating it),
-        and a real int read as a str is refused as one. It is no secret to
-        look for: no message holds one, and the line that quotes one a
-        template rendered is pydantic's refusal, its input hidden."""
+        Each value, and each key, by its real type, which is how a line
+        writes it (`response_steps._shown`), never by what it claims to be,
+        and a string, bytes or number kept as an exact copy made by its base
+        type's own method: one posing as another type passes isinstance, and
+        read as what it claims it is misread (json.dumps refuses a real int
+        claiming str, a real str claiming bytes has no ``.hex()``), or, left
+        out, a real bytes subclass ``expect.match`` keeps is shown. A value
+        whose real type is none of these (a proxy, a ``Mock(spec=...)``)
+        holds no secret to look for: no message holds one
+        (`connections.checked_message`), and pydantic takes one a template
+        rendered as an exact value, or refuses it with its input hidden."""
         found: dict[tuple[object, object], str | bytes | int | float] = {}
         if not self.message_keys:
             return []
@@ -273,19 +274,23 @@ class Redaction:
         pending: list[tuple[Any, bool]] = [(message, False) for message in messages]
         while pending:
             value, listed = pending.pop()
-            if is_plain(value, Mapping | list | tuple):
+            kind = type(value)
+            if issubclass(kind, Mapping | list | tuple):
                 if (id(value), listed) in seen:
                     continue
                 seen.add((id(value), listed))
-                if isinstance(value, Mapping):
-                    pending.extend((member, listed or (is_plain(key, str) and self.redacts_message_key(key))) for key, member in value.items())
+                if issubclass(kind, Mapping):
+                    pending.extend((member, listed or (issubclass(type(key), str) and self.redacts_message_key(str.__str__(key)))) for key, member in value.items())
                 else:
                     pending.extend((member, listed) for member in value)
-            elif listed and is_plain(value, str | bytes) and value:
-                found.setdefault((type(value), value), value)
-            elif listed and is_plain(value, int | float) and not isinstance(value, bool):
+            elif listed and issubclass(kind, str | bytes):
+                exact = str.__str__(value) if issubclass(kind, str) else bytes.__bytes__(value)
+                if exact:
+                    found.setdefault((type(exact), exact), exact)
+            elif listed and issubclass(kind, int | float) and kind is not bool:
+                number = int.__int__(value) if issubclass(kind, int) else float.__float__(value)
                 try:
-                    found.setdefault(("number", json.dumps(value)), value)
+                    found.setdefault(("number", json.dumps(number)), number)
                 except ValueError:  # an int past the digit limit
                     pass
         return list(found.values())
@@ -317,22 +322,6 @@ _MIN_NUMBER_LENGTH = 4
 # Where a number that stands alone starts: after no word character, point or
 # sign, which would make it the end of a longer number or of a word.
 _NUMBER_START = re.compile(r"(?<![\w.+-])")
-
-
-def is_plain(value: Any, kinds: type | UnionType) -> bool:
-    """Whether ``value`` is one of ``kinds`` by its real type, and says so:
-    its ``__class__`` is its type.
-
-    A value posing as another type passes isinstance for the type it claims:
-    a proxy forwarding ``__class__`` (wrapt's ``ObjectProxy``,
-    lazy-object-proxy's ``Proxy``), a ``Mock(spec=...)``, a subclass whose
-    ``__class__`` names another type. What goes by the real type refuses it
-    (json.dumps, a str method given it), and what goes by isinstance reads
-    it as the type it claims, which it is not. A connection message holds
-    none (`connections.checked_message`), and a message's secrets are read
-    by this (`Redaction.message_text`)."""
-    kind = type(value)
-    return value.__class__ is kind and issubclass(kind, kinds)
 
 
 def shown_bytes(value: bytes) -> str:
