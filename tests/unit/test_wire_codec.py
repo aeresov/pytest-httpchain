@@ -8,12 +8,16 @@ How a stage's checks and the report read a body with these is pinned in
 test_response_steps.py and test_report_formatter.py.
 """
 
+import re
 from types import SimpleNamespace
 
 import msgpack
 import pytest
 
 from pytest_httpchain.wire_codec import RESPONSE_CODEC_EXTENSION, is_msgpack_content_type, pack_msgpack, selected_codec, unpack_msgpack
+
+# Why an int MessagePack cannot hold is refused.
+INT_OUT_OF_RANGE = "cannot encode int outside MessagePack's range, -2**63 to 2**64 - 1"
 
 
 @pytest.mark.parametrize(
@@ -53,6 +57,21 @@ def test_value_it_cannot_encode_is_refused_by_its_type():
     does, and the helper names itself (test_functions.py)."""
     with pytest.raises(TypeError, match=r"^cannot encode set as MessagePack$"):
         pack_msgpack({1, 2})
+
+
+@pytest.mark.parametrize("value", [2**64, -(2**63) - 1, [1, 2**70], {"id": 2**70}], ids=["past-the-top", "past-the-bottom", "in-a-list", "in-a-map"])
+def test_int_outside_its_range_is_refused_for_its_size(value):
+    """An int is a type MessagePack has: one it cannot hold is refused as
+    out of its range, as msgpack refuses it, never as a type it lacks. The
+    codec's hook, which msgpack calls for such an int too, said `cannot
+    encode int`."""
+    with pytest.raises(OverflowError, match=rf"^{re.escape(INT_OUT_OF_RANGE)}$"):
+        pack_msgpack(value)
+
+
+@pytest.mark.parametrize("value", [2**64 - 1, -(2**63)], ids=["top", "bottom"])
+def test_int_at_its_range_s_ends_is_encoded(value):
+    assert unpack_msgpack(pack_msgpack(value)) == value
 
 
 def test_map_key_that_is_not_text_is_refused():

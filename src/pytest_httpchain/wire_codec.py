@@ -24,13 +24,19 @@ def _pack_default(value: Any) -> Any:
     if isinstance(value, SimpleNamespace):
         return vars(value)
     # Naming no caller: a body.msgpack packs it as the msgpack_pack() helper
-    # does, and the helper names itself (`templates.functions`).
+    # does, and the helper names itself (`templates.functions`). msgpack asks
+    # here for an int it cannot hold too, which is a type it has: refused for
+    # its size, as msgpack refuses it with no hook (its value is not shown:
+    # an int that long may not even turn into text).
+    if isinstance(value, int):
+        raise OverflowError("cannot encode int outside MessagePack's range, -2**63 to 2**64 - 1")
     raise TypeError(f"cannot encode {type(value).__name__} as MessagePack")
 
 
 def pack_msgpack(value: Any) -> bytes:
     """Pack a value, keeping text and binary distinct on the wire. A value
-    of no type MessagePack has is a TypeError saying so."""
+    of no type MessagePack has is a TypeError saying so, and an int outside
+    MessagePack's 64-bit range an OverflowError."""
     return msgpack.packb(value, use_bin_type=True, default=_pack_default)
 
 

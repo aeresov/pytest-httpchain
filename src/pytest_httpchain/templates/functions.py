@@ -149,8 +149,8 @@ def msgpack_pack(value: Any) -> bytes:
     """MessagePack bytes for a raw body or a URL parameter."""
     try:
         return pack_msgpack(value)
-    except TypeError as e:
-        raise TypeError(f"msgpack_pack() {e}") from None
+    except (TypeError, OverflowError) as e:
+        raise type(e)(f"msgpack_pack() {e}") from None
 
 
 def _namespace_to_dict(value: Any) -> Any:

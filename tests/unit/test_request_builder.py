@@ -149,6 +149,14 @@ def test_msgpack_body_that_cannot_be_encoded_names_no_helper():
         build_request_kwargs(Request(url="http://t/", method="POST", body={"msgpack": {"tags": {1, 2}}}))
 
 
+def test_msgpack_body_with_an_int_outside_messagepack_s_range_says_so():
+    """An int is a type MessagePack has: one too large for it is refused for
+    its size, never as `cannot encode int`."""
+    message = r"^Cannot encode MessagePack body: cannot encode int outside MessagePack's range, -2\*\*63 to 2\*\*64 - 1$"
+    with pytest.raises(RequestError, match=message):
+        build_request_kwargs(Request(url="http://t/", method="POST", body={"msgpack": {"id": 2**70}}))
+
+
 def test_msgpack_body_overrides_client_content_type_but_not_stage_content_type():
     request = Request(url="http://t/", method="POST", body={"msgpack": None})
     assert _sent(request, ClientConfig(headers={"Content-Type": "application/json"})).headers["content-type"] == "application/msgpack"

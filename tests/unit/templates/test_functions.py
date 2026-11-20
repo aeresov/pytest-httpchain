@@ -159,6 +159,14 @@ def test_msgpack_pack_names_itself_for_what_it_cannot_encode(context):
         walk("{{ msgpack_pack(x) }}", context)
 
 
+def test_msgpack_pack_names_itself_for_an_int_outside_messagepack_s_range():
+    """As for what it cannot encode by type, in msgpack's own words for why:
+    it said `msgpack_pack() cannot encode int`, though it encodes ints."""
+    message = r"^OverflowError in expression '\{\{ msgpack_pack\(x\) \}\}': msgpack_pack\(\) cannot encode int outside MessagePack's range, -2\*\*63 to 2\*\*64 - 1$"
+    with pytest.raises(TemplatesError, match=message):
+        walk("{{ msgpack_pack(x) }}", {"x": {"id": 2**70}})
+
+
 @pytest.mark.parametrize(
     ("template", "expected"),
     [
