@@ -68,10 +68,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`StageScopes.shadows()` gives each phase's),
   `validation.loader.is_jmespath_expectations_position` (it was `expectations_field(path) is not
   None`), the six `models.entities.get_*_discriminator` functions (a tagged union's tags are read
-  from its members), `ReferenceResolver.resolve_document`, and the re-exports
-  `carrier.VerifyRender`, `dataflow.SENT_NAME` and `har_writer.REDACTED` (import them from
-  `response_steps`, `scoping` and `redaction`). `models.types.create_string_validator` requires a
-  keyword-only `name`, the validator's.
+  from its members), and `ReferenceResolver.resolve_document`. `ReferenceResolver` takes
+  `max_parent_traversal_depth`, `root_path`, `opaque` and `atomic` without defaults, and
+  `models.types.create_string_validator` requires a keyword-only `name`, the validator's. A name a
+  module only imported for its own use (`carrier.Verify`, `utils.loads_jsonc`,
+  `har_writer.REDACTED`) was never its own, and some of those are gone too: import a name from the
+  module that defines it.
 
 ### Fixed
 
@@ -103,9 +105,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first, none before a `--json` piece, and the JSON `Content-Type` and `Accept` as soon as any
   `--json` gives data. A mix was joined with `&` throughout and sent as a form: `-d a=1 --json
   '{"b":2}'` now imports as `a=1{"b":2}`, and `--json '{"b":2}' -d a=1` as `{"b":2}&a=1`, both as
-  `application/json`. With `-G`, which sends the data as the query, the two JSON headers are sent
-  as well, as curl sends them; they were left out, for a `--json` alone as for a mix. A command
-  using only `-d` options, or only `--json` without `-G`, imports as before.
+  `application/json`. With `-G`, which sends the data as the query, and where the import leaves the
+  data out (`--json @-` with no standard input it can read), the two JSON headers are sent all the
+  same, as curl sends them; they were left out. Any other command using only `-d` options, or only
+  `--json`, imports as before.
 - `import har stdin`, on a HAR file named `stdin` (or `./stdin`), describes the scenario by the
   file's name, `Imported from stdin`, as it does any other file. It said `Imported from a HAR file`,
   the description of `import har -`, which reads standard input.
@@ -183,6 +186,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a module of the same name as a `--syspath` directory's, the run imports the current
   directory's copy, which `--deep` checked before. Give such a directory first among the `--syspath`
   directories for `--deep` to check the copy the run imports.
+- `validate --deep` reports a user module whose top level calls `pytest.skip()`, `pytest.fail()` or
+  `sys.exit()` as one it cannot import (`HTTPCHAIN022`, or `HTTPCHAIN046` for an adapter's), with
+  the reason given: `Failed to import module 'skipguard': needs the vendor SDK`, and for
+  `sys.exit()` `... SystemExit: 3`. The first two ended `validate` with a `Skipped` or `Failed`
+  traceback, the third with the module's own exit status, and every other file's findings were lost.
+  A test run takes such a module as before: its skip skips the stage that imports it.
 - A verify or save function that raises, and a verify function that returns false, are named in the
   stage's failure by their import name: `Error calling user function 'mod:fn': ...` and `Function
   'mod:fn' verification failed`. The call was printed as its model prints, `'root='mod:fn''` or
@@ -207,8 +216,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`skipif(sys.platform == 'win32', reason='posix only')`) or a name (`skip(reason=x)`), is refused
   (`HTTPCHAIN019`) quoting that argument as written: `unsupported marker expression: ...
   (sys.platform == 'win32' is no literal: a mark's arguments are literals, a condition written as a
-  string)`. It read `malformed node or string on line 1: <ast.Compare object at 0x7f...>`, which
-  named nothing the scenario wrote and, holding an address, read differently on every run.
+  string)`. It read `malformed node or string on line 1: <ast.Compare object at 0x7f...>` on Python
+  3.13, which named nothing the scenario wrote and, holding an address, read differently on every
+  run; Python 3.14 printed the node's structure (`Compare(left=Attribute(...), ...)`).
 - A mark named as an attribute `pytest.mark` holds itself (`_config`, `__class__`, `__init__()`) is
   refused as pytest refuses any name starting with an underscore, `Marker name must NOT start with
   underscore`, as `HTTPCHAIN019` in `validate` and at collection. The attribute was taken for a

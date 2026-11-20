@@ -54,9 +54,11 @@ def check_scenario_deep(
     of these directories hold a module of the same name, the one imported
     is the one a test run with them as its ``pythonpath`` imports. Not
     modelled: in pytest's default import mode (``prepend``), a run also puts
-    the directory of each ``conftest.py`` it loads first, ahead of its
-    ``pythonpath``; such a directory goes first among ``syspaths`` for the
-    copy the run imports to be the one checked. ``sys.path`` is restored
+    the directory it imports each ``conftest.py`` and test module from
+    first, ahead of its ``pythonpath``: their own, or for one in a package,
+    the directory above the outermost package holding it. Such a directory
+    goes first among ``syspaths`` for the copy the run imports to be the
+    one checked. ``sys.path`` is restored
     afterwards. ``ref_bounds`` is what a body schema's references to files
     are held to, the root and the parent traversal depth the scenario's own
     references were loaded under.
