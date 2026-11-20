@@ -379,6 +379,8 @@ def test_message_text_looks_for_no_cut_secret_inside_one_quoted_whole():
         # The secret's first characters twice before the cut: the earlier
         # are no start of it, the later are.
         pytest.param(({"token": bytes.fromhex("12121234")},), 'got "0x120x1212... (9 characters)', 'got "0x12[REDACTED]... (9 characters)', id="start-after-a-false-one"),
+        # A string shorter than a start: what the line shows of it stays.
+        pytest.param(({"token": "ab"},), 'got "ab... (9 characters)', 'got "ab... (9 characters)', id="string-shorter-than-a-start"),
         # Two cuts, close together: each is hidden.
         pytest.param(
             ({"token": _SESSION_KEY},),
@@ -394,13 +396,27 @@ def test_message_text_holds_the_cut_rules_to_their_bounds(messages, text, expect
 
 def test_message_text_compares_no_bytes_with_a_string():
     """A listed string and listed bytes holding the same ASCII text hash
-    alike, and the bytes' starts were looked up among every secret: a
-    comparison of bytes with a string, a BytesWarning, which an interpreter
-    started with -bb raises. A failure line became that error. Only such an
-    interpreter shows it, so the line is redacted in one."""
-    code = "from pytest_httpchain.redaction import DEFAULT_REDACTION as R; print(R.message_text('got \"bob\"... (9 characters)', {'password': 's3cret', 'token': b's3cret!'}))"
+    alike, so a set holding both compares them, and so does a lookup of one
+    among the other: a BytesWarning, which an interpreter started with -bb
+    raises. A failure line became that error, cut or not: where one value's
+    text was the other's, and where a bytes value's start was a string's,
+    looked up among every secret. Only such an interpreter shows it, so the
+    lines are redacted in one."""
+    lines = [
+        ('got "bob"... (9 characters)', {"password": "s3cret", "token": b"s3cret"}),
+        ('got "bob" whole', {"password": "s3cret", "token": b"s3cret"}),
+        ('got "bob"... (9 characters)', {"password": "s3cret", "token": b"s3cret!", "api_key": b"other!"}),
+    ]
+    code = f"from pytest_httpchain.redaction import DEFAULT_REDACTION as R\nfor text, message in {lines!r}:\n    print(R.message_text(text, message))\n"
     done = subprocess.run([sys.executable, "-bb", "-c", code], capture_output=True, text=True, check=False)
-    assert (done.returncode, done.stdout) == (0, 'got "bob"... (9 characters)\n'), done.stderr
+    assert (done.returncode, done.stdout) == (0, "".join(f"{text}\n" for text, _ in lines)), done.stderr
+
+
+def test_message_text_hides_an_int_and_a_float_of_one_value_each():
+    """Each in its own written form. Two listed values that are equal as
+    numbers were one secret: only the first found was hidden, here the
+    float, and the int's digits stayed."""
+    assert DEFAULT_REDACTION.message_text("got 1234 and 1234.0", {"api_key": 1234, "token": 1234.0}) == "got [REDACTED] and [REDACTED]"
 
 
 # Where a failure line cuts a value it shows (`response_steps._shown`).

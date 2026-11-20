@@ -231,13 +231,19 @@ class Redaction:
                 text = _hide_cut(text, written, shortest=_MIN_NUMBER_LENGTH, alone=True)
         return text
 
-    def _message_secrets(self, messages: Iterable[Any]) -> set[str | bytes | int | float]:
+    def _message_secrets(self, messages: Iterable[Any]) -> list[str | bytes | int | float]:
         """The non-empty strings and bytes, and the numbers, listed keys hold in ``messages``,
         at any depth, under them too: iteratively, each container once (and
-        once more where a listed key holds it)."""
-        secrets: set[str | bytes | int | float] = set()
+        once more where a listed key holds it).
+
+        Each once, in the order found, which decides between two of one
+        length, and kept apart by type: a string and bytes of the same ASCII
+        text, or an int and a float of one value, are equal or hash alike, so
+        a set would compare the first two (a BytesWarning) and keep one of
+        the others, whose written forms differ."""
+        found: dict[tuple[type, str | bytes | int | float], str | bytes | int | float] = {}
         if not self.message_keys:
-            return secrets
+            return []
         seen: set[tuple[int, bool]] = set()
         # Each value, and whether a listed key holds it, or a value that one does.
         pending: list[tuple[Any, bool]] = [(message, False) for message in messages]
@@ -252,8 +258,8 @@ class Redaction:
                 else:
                     pending.extend((member, listed) for member in value)
             elif listed and ((isinstance(value, str | bytes) and value) or (isinstance(value, int | float) and not isinstance(value, bool))):
-                secrets.add(value)
-        return secrets
+                found.setdefault((type(value), value), value)
+        return list(found.values())
 
     def _query(self, query: str) -> str:
         """``query`` with the listed parameters' values replaced, the rest (and
