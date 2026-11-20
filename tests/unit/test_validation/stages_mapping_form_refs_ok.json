@@ -1,0 +1,15 @@
+{
+    "stages": {
+        "login": {
+            "request": { "url": "https://example.com/login" },
+            "response": [
+                { "save": { "jmespath": { "token": "token" } } },
+                { "verify": { "status": 200 } }
+            ]
+        },
+        "profile": {
+            "request": { "url": "https://example.com/me", "headers": { "X-Token": "{{ token }}" } },
+            "response": [ { "verify": { "status": 200 } } ]
+        }
+    }
+}

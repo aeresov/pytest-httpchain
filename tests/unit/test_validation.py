@@ -119,6 +119,9 @@ def _skip_if_ancestors_set_a_rootdir(tmp_path):
         # `ids` are never substituted: no collection-resolution info, no
         # undefined-variable warning for display-only text.
         "parametrize_ids_template_no_info.json",
+        # The `{name: stage}` form reads each stage's templates from its own
+        # raw body, in order: the second stage reads what the first saves.
+        "stages_mapping_form_refs_ok.json",
         # Steps resolve in order; each may read what an EARLIER step produced.
         "substitution_prior_step_ok.json",
         "response_step_prior_save_ok.json",

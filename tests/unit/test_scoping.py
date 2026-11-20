@@ -880,9 +880,13 @@ def test_stage_templates_are_each_field_in_its_phase_in_resolution_order():
 
 def test_stages_with_raw_pair_each_stage_with_its_body():
     """In the list form and in the ``{name: stage}`` form alike; where there
-    is no body to read, each stage gets ``{}``, as the connections do."""
-    body = {"request": {"url": "http://x/"}}
-    for stages, raws in (([{"name": "a", **body}, {"name": "b", **body}], [{"name": "a", **body}, {"name": "b", **body}]), ({"a": body, "b": body}, [body, body])):
+    is no body to read, each stage gets ``{}``, as the connections do. The
+    two bodies differ, so a stage paired with the other's is told apart."""
+    first, second = {"request": {"url": "http://x/a"}}, {"request": {"url": "http://x/b"}}
+    for stages, raws in (
+        ([{"name": "a", **first}, {"name": "b", **second}], [{"name": "a", **first}, {"name": "b", **second}]),
+        ({"a": first, "b": second}, [first, second]),
+    ):
         data = {"stages": stages}
         scenario = Scenario.model_validate(data)
         assert [(stage.name, raw) for stage, raw in stages_with_raw(scenario, data)] == [("a", raws[0]), ("b", raws[1])]
