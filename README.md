@@ -273,7 +273,7 @@ uvx pytest-httpchain graph tests/test_login.http.json
 ## Documentation
 
 -   [Full Documentation](https://aeresov.github.io/pytest-httpchain) - Complete usage guide
--   [Changelog](CHANGELOG.md) - Release notes
+-   [Changelog](https://github.com/aeresov/pytest-httpchain/blob/main/CHANGELOG.md) - Release notes
 
 ## Thanks
 

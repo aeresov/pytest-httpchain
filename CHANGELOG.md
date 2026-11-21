@@ -214,11 +214,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still is). Two listed numbers written one after the other (`1239-1234`, for 1239 and -1234) are
   both hidden. The one looked for first could not stand alone yet, and hiding the other after it
   left it shown, `got [REDACTED]-1234`; which pairs did so, in which order, followed how the numbers
-  were stored. A listed int too
-  long to write (past Python's digit limit), which no line can show, no longer makes the line raise
-  `ValueError`, which ended a connection's wait on its first miss. And under `python -bb`, a message
-  whose listed values held a string and bytes of the same ASCII text (`"s3cret"`, `b"s3cret"`) made
-  every such line raise `BytesWarning` instead of showing it.
+  were stored. A listed int too long to write (past Python's digit limit), which no line can show,
+  no longer makes the line raise `ValueError`, which ended a connection's wait on its first miss.
+  And under `python -bb`, a message whose listed values held a string and bytes of the same ASCII
+  text (`"s3cret"`, `b"s3cret"`) made every such line raise `BytesWarning` instead of showing it.
 - A connection message holding a value that only poses as one a message holds is refused like any
   value no message holds, naming its path: a proxy object (wrapt's `ObjectProxy`,
   lazy-object-proxy's `Proxy`) or a `Mock(spec=int)`, whose real type is none a message holds
